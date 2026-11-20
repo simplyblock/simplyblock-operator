@@ -37,13 +37,26 @@ type VolumeInfo struct {
 	// NQN is the volume's NVMe subsystem NQN. Namespaced volumes share it with
 	// their siblings, and it is the identity a batch migration is addressed by
 	// (see MigrationRef).
-	NQN                   string       `json:"nqn"`
-	PrimaryNodeUUID       string       `json:"storage_node_id"`
+	NQN             string `json:"nqn"`
+	PrimaryNodeUUID string `json:"storage_node_id"`
+	// Nodes are the storage nodes holding the volume's replicas, primary
+	// included, each as the control plane's URL of that node, which ends in the
+	// node's UUID.
+	Nodes                 []string     `json:"nodes"`
 	Status                string       `json:"status"`
 	Migrating             bool         `json:"migrating"`
 	Capacity              CapacityStat `json:"capacity"`
 	IOPS                  float64      `json:"iops"`
 	ThroughputBytesPerSec float64      `json:"throughput_bytes_per_sec"`
+	// GroupID is the consistency group the volume belongs to, "" for a
+	// non-member. The migration webhook reads it to refuse migrating a member
+	// (design §9.5, §10).
+	GroupID string `json:"group_id"`
+	// DoReplicate is the volume's do_replicate flag: whether its snapshot
+	// replication is running. The control plane clears it when replication is
+	// stopped -- a detached replication policy, a completed cutover. nil when
+	// the control plane does not report the field.
+	DoReplicate *bool `json:"do_replicate,omitempty"`
 }
 
 // StoragePoolInfo holds the fields needed from GET /api/v2/clusters/{id}/storage-pools/.
@@ -168,7 +181,7 @@ const (
 )
 
 // MigrationIsTerminal reports whether a migration status is terminal
-// (done, failed, or cancelled) and therefore no longer in flight.
+// (done, failed, or canceled) and therefore no longer in flight.
 func MigrationIsTerminal(status string) bool {
 	switch status {
 	case MigrationStatusDone, MigrationStatusFailed, MigrationStatusCancelled:
@@ -308,7 +321,7 @@ func (c *Client) GetVolume(
 
 // StorageNodeNIC is one network interface entry returned by the storage-node
 // /nics endpoint. Address is the data-network IP the lvol subsystem listens on
-// (the management IP is reported separately). Field tags match the capitalised,
+// (the management IP is reported separately). Field tags match the capitalized,
 // space-containing keys the control plane emits for this endpoint.
 type StorageNodeNIC struct {
 	ID         string `json:"ID"`
@@ -346,9 +359,9 @@ func (c *Client) GetStorageNodeNICs(
 // validate those paths before calling ContinueMigration.
 //
 // If the API reports that a migration already exists for the subsystem, any
-// existing migrations are cancelled and the request is retried once. The API
-// signals this as either 409 or 400 with an "...already exists... Cancel it
-// first" detail depending on deployment, so both are handled.
+// existing migrations are canceled and the request is retried once. The API
+// signals this as either 409 or 400 with an already-exists / cancel-it-first
+// detail depending on deployment, so both are handled.
 func (c *Client) CreateMigration(
 	ctx context.Context,
 	clusterUUID, nqn, targetNodeID string,

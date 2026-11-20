@@ -13,7 +13,8 @@
 # lives in scripts/tools.manifest (single source of truth). The install targets
 # omit the version so tools.sh resolves it from the manifest. The one exception
 # is setup-envtest, whose version the operator derives from its go.mod and
-# passes via $(ENVTEST_VERSION).
+# passes via $(ENVTEST_VERSION), along with the Kubernetes version of the
+# envtest assets in $(ENVTEST_K8S_VERSION).
 
 # Resolve the repo root from this fragment's own path so BIN_DIR / TOOLS_SH are
 # absolute no matter which component directory `make` runs in.
@@ -67,3 +68,27 @@ buf: ## Install buf and the protoc-gen-go plugins (manifest-pinned) into .bin.
 	@"$(TOOLS_SH)" install buf
 	@"$(TOOLS_SH)" install protoc-gen-go
 	@"$(TOOLS_SH)" install protoc-gen-go-grpc
+
+# ── envtest assets ───────────────────────────────────────────────────────────
+# setup-envtest installs the Kubernetes binaries (etcd, kube-apiserver, kubectl)
+# read-only, the files and their version directory alike, only to keep them
+# from being edited by accident. It has no option to skip that, and a read-only
+# directory is one rm -rf and `git worktree remove` cannot delete, which leaves
+# every worktree that ran the envtest suites half-removed. setup-envtest never
+# checks the permissions when it reuses an installed version, so the target
+# gives the owner write access back after every install.
+
+# ENVTEST_ASSETS is the installed asset directory, for KUBEBUILDER_ASSETS. It
+# only looks a version up (-i) and never downloads one, so setup-envtest stays
+# the one place assets are installed, and with it the chmod. Recursive, so it is
+# resolved when a recipe uses it, after setup-envtest has run.
+ENVTEST_ASSETS = $(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(BIN_DIR)" -i -p path)
+
+.PHONY: setup-envtest
+setup-envtest: envtest ## Install envtest's Kubernetes binaries ($(ENVTEST_K8S_VERSION) from the caller) into .bin.
+	@echo "Setting up envtest binaries for Kubernetes $(ENVTEST_K8S_VERSION)..."
+	@assets=$$("$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(BIN_DIR)" -p path) || { \
+		echo "Error: failed to set up envtest binaries for Kubernetes $(ENVTEST_K8S_VERSION)." >&2; \
+		exit 1; \
+	}; \
+	chmod -R u+w "$$assets"

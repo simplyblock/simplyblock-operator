@@ -45,6 +45,13 @@ type LVMPhysicalVolumeConfig struct {
 	// that exactly the one carrying the source's name is renamed.
 	PreserveLogicalVolumes []string
 
+	// RecognizeStack answers whether a group carrying no ownership tag is a
+	// stack of this driver's from before the tag existed, by its names. It is
+	// consulted for a clone whose source predates the tag, and nowhere else:
+	// a tagged clone is known by its tag, and a group that is neither is
+	// somebody's and is refused.
+	RecognizeStack lvm.StackRecognizer
+
 	Manager *lvm.Manager
 	Content ContentReader
 }
@@ -73,6 +80,18 @@ func (l *LVMPhysicalVolume) Name() string { return "lvmPhysicalVolume" }
 func (l *LVMPhysicalVolume) Observe(
 	ctx context.Context, below volstack.Artifact,
 ) (volstack.State, volstack.Artifact, error) {
+	if len(below.Devices) == 0 {
+		// Total path loss, not an interrupted bring-up: there is no device left
+		// to read a label from at all, which is a different question from a
+		// probe that failed on a device that is there. Release is
+		// unconditionally a no-op for this layer regardless of what Observe
+		// reports, so answering Absent here costs nothing, and it is what lets a
+		// Down walk continue to the volume-group layer above, whose Release has
+		// real work to do and must not be skipped on the strength of an error
+		// from this layer.
+		return volstack.StateAbsent, volstack.Artifact{}, nil
+	}
+
 	surveyed, err := l.survey(ctx, below)
 	if err != nil {
 		return volstack.StateAbsent, volstack.Artifact{}, err
@@ -183,32 +202,27 @@ func (l *LVMPhysicalVolume) identify(ctx context.Context, pv lvm.PhysicalVolume)
 
 // Ensure labels a blank device and re-identifies a clone, and does nothing at all
 // to a device already carrying this volume's label.
-// Each device is acted on for what it is rather than for what the set is, so a
-// bring-up resuming over a half-labeled set labels the rest and leaves the
-// already-labeled alone.
+// A label is acted on for what each device is, so a bring-up resuming over a
+// half-labeled set labels the rest and leaves the already-labeled alone. A
+// clone is the exception and is acted on for what the set is (resolveClone).
 func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
 	surveyed, err := l.survey(ctx, below)
 	if err != nil {
 		return volstack.Artifact{}, err
 	}
 
+	if err := l.resolveClone(ctx, surveyed); err != nil {
+		return volstack.Artifact{}, err
+	}
+
 	for _, d := range surveyed {
 		switch d.state {
-		case volstack.StateReady:
+		case volstack.StateReady, volstack.StateForeign:
+			// A foreign member is resolveClone's, which re-stamped the whole set.
 			continue
 
 		case volstack.StateAbsent:
 			if _, err := l.cfg.Manager.CreatePhysicalVolume(ctx, d.pv); err != nil {
-				return volstack.Artifact{}, fmt.Errorf("lvmPhysicalVolume: %w", err)
-			}
-
-		case volstack.StateForeign:
-			// The data is the clone's own, and the only thing wrong with it is
-			// whose name is on it, so this re-stamps the identity and touches
-			// nothing else.
-			if _, err := l.cfg.Manager.ResolveClonedVolumeGroup(ctx, d.pv,
-				lvm.VolumeGroup{Name: l.cfg.VolumeGroup}, l.cfg.LogicalVolume,
-				l.cfg.PreserveLogicalVolumes...); err != nil {
 				return volstack.Artifact{}, fmt.Errorf("lvmPhysicalVolume: %w", err)
 			}
 
@@ -220,6 +234,42 @@ func (l *LVMPhysicalVolume) Ensure(ctx context.Context, below volstack.Artifact)
 	}
 
 	return volstack.Artifact{Devices: below.Devices}, nil
+}
+
+// resolveClone re-stamps a set of devices that arrived carrying another volume's
+// group, which is what a clone or a snapshot restore is: the data is the clone's
+// own, and the only thing wrong with it is whose name is on it, so the identity
+// is re-stamped and nothing else is touched.
+//
+// The set is resolved as one, because the group spans it: a striped volume's
+// members are one group, and LVM re-identifies a group only with every one of
+// its devices in the same command. So it is all of them or none. A set where
+// only some members carry a foreign group, beside members already re-stamped or
+// still blank, is what an import that died between two members leaves, or a
+// blank device about to be joined to somebody's group. It is refused rather
+// than finished one member at a time, since a member imported on its own
+// becomes a group of its own.
+func (l *LVMPhysicalVolume) resolveClone(ctx context.Context, surveyed []labeling) error {
+	var foreign []lvm.PhysicalVolume
+	for _, d := range surveyed {
+		if d.state == volstack.StateForeign {
+			foreign = append(foreign, d.pv)
+		}
+	}
+	if len(foreign) == 0 {
+		return nil
+	}
+	if len(foreign) != len(surveyed) {
+		return fmt.Errorf(
+			"lvmPhysicalVolume: %d of %d members carry another volume's group, and a set is re-identified whole or not at all: %w",
+			len(foreign), len(surveyed), lvm.ErrSplitClone)
+	}
+	if _, err := l.cfg.Manager.ResolveClonedVolumeGroupSet(ctx, foreign,
+		lvm.VolumeGroup{Name: l.cfg.VolumeGroup}, l.cfg.LogicalVolume,
+		l.cfg.RecognizeStack, l.cfg.PreserveLogicalVolumes...); err != nil {
+		return fmt.Errorf("lvmPhysicalVolume: %w", err)
+	}
+	return nil
 }
 
 // Release does nothing, and that asymmetry is why physical volumes are a layer of
@@ -237,7 +287,11 @@ func (l *LVMPhysicalVolume) Release(context.Context, volstack.Artifact) error { 
 // every one of them.
 func (l *LVMPhysicalVolume) Destroy(ctx context.Context, below volstack.Artifact) error {
 	if len(below.Devices) == 0 {
-		return errors.New("lvmPhysicalVolume: the layer below exposes no device to unlabel")
+		// Nothing to take a label off, so the label this was asked to remove is
+		// already gone with the device that carried it. A removal that finds
+		// nothing to remove has done what it was asked, the way every removal in
+		// atlas-lib/lvm behind this layer does.
+		return nil
 	}
 	for _, dev := range below.Devices {
 		if err := l.cfg.Manager.RemovePhysicalVolume(ctx, lvm.PhysicalVolume{DevicePath: dev.Path}); err != nil {

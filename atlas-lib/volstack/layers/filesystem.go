@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/volstack"
@@ -43,6 +44,11 @@ type FilesystemOps interface {
 	// IsMountPoint reports whether anything is mounted at path.
 	IsMountPoint(ctx context.Context, path string) (bool, error)
 
+	// OtherMounts lists every mount point other than path that holds the
+	// filesystem mounted at path: a bind mount into a pod shares its
+	// superblock, so unmounting path alone does not let the filesystem go.
+	OtherMounts(ctx context.Context, path string) ([]string, error)
+
 	// Grow runs the filesystem's own resize tool, which the filesystem chose and
 	// pointed at whatever it resizes. It is a command rather than a device and a
 	// size because the tools disagree about both: ext resizes a device, XFS
@@ -63,7 +69,18 @@ type FilesystemConfig struct {
 	// formatted as, and it is also the only filesystem the layer will mount: a
 	// device carrying another is refused, because neither reformatting it nor
 	// serving what is on it is safe.
+	//
+	// Empty, the plan expresses no opinion: a device carrying a filesystem is
+	// mounted as what it carries, and a blank one is formatted as DefaultFsType.
+	// That is what a PersistentVolume without fsType means -- a static PV that
+	// adopts an existing volume (a test fail-over's clone, 2026-10-03), or one
+	// Ramen restored without the field -- and turning it into "ext4" before the
+	// device was looked at made the layer refuse every such XFS volume.
 	FsType string
+
+	// DefaultFsType is what a blank device is formatted as when FsType names
+	// nothing. Empty means ext4.
+	DefaultFsType string
 
 	// StagingPath is where the filesystem is mounted.
 	StagingPath string
@@ -86,6 +103,19 @@ type FilesystemConfig struct {
 	// blank, and a consumer that keeps no such record leaves it nil.
 	PriorFormat func(ctx context.Context) (string, error)
 
+	// Encrypted says the bytes on this device do not mean what they read as.
+	//
+	// The control plane stacks an AES-XTS crypto bdev under the namespace it
+	// exports, so a never-written block arrives decrypted from zeros, which is
+	// pseudo-random plaintext. An empty encrypted volume therefore reads as
+	// content with no known signature, exactly like somebody else's data, and no
+	// read the host can make tells the two apart. What separates them is the
+	// record PriorFormat consults, so on such a volume an unrecognized reading is
+	// referred there rather than refused. A volume with no crypto bdev under it
+	// leaves this false and keeps the stricter guard, which is the one case where
+	// the reading is evidence.
+	Encrypted bool
+
 	Ops     FilesystemOps
 	Content ContentReader
 }
@@ -94,6 +124,43 @@ type FilesystemConfig struct {
 // the volume is, and refuses every other device.
 type Filesystem struct {
 	cfg FilesystemConfig
+	// detected is the filesystem found on the device when the plan named none.
+	detected string
+}
+
+// effective is the filesystem this layer acts with: the one the plan named,
+// else the one the device carries, else the default for a blank device.
+func (f *Filesystem) effective(reading blockdev.Reading) string {
+	if f.cfg.FsType != "" {
+		return f.cfg.FsType
+	}
+	if reading.Content == blockdev.ContentFilesystem && reading.Type != "" {
+		f.detected = reading.Type
+		return reading.Type
+	}
+	if f.detected != "" {
+		return f.detected
+	}
+	return f.defaultFsType()
+}
+
+// known is the filesystem this layer stands for once it has acted: named,
+// detected, or the default it formats with.
+func (f *Filesystem) known() string {
+	if f.cfg.FsType != "" {
+		return f.cfg.FsType
+	}
+	if f.detected != "" {
+		return f.detected
+	}
+	return f.defaultFsType()
+}
+
+func (f *Filesystem) defaultFsType() string {
+	if f.cfg.DefaultFsType != "" {
+		return f.cfg.DefaultFsType
+	}
+	return "ext4"
 }
 
 // NewFilesystem returns the filesystem layer for one volume.
@@ -130,6 +197,24 @@ func (f *Filesystem) observe(
 		return volstack.StateReady, blockdev.Reading{}, mountedArtifact, nil
 	}
 
+	if len(below.Devices) == 0 {
+		// Nothing mounted and no device to read: nothing of this layer is on
+		// this host, which is a state rather than a failure. It is what a
+		// teardown finds, because the release that precedes it detaches the
+		// fabric, and a destroy surveying the same plan afterward reaches this
+		// layer with the device already gone. Answering with an error there
+		// failed the RPC, and kubelet retried it forever against a volume
+		// nothing would ever release.
+		//
+		// The mount is asked about first and not incidentally: total path loss
+		// leaves a mount behind after the device is gone, and reporting that as
+		// absent would have the teardown skip the release that clears it.
+		//
+		// Absent is not permission to format. Ensure refuses an empty artifact
+		// before it observes anything, so no bring-up reaches a mkfs this way.
+		return volstack.StateAbsent, blockdev.Reading{}, volstack.Artifact{}, nil
+	}
+
 	reading, err := f.read(ctx, below)
 	if err != nil {
 		return volstack.StateAbsent, blockdev.Reading{}, volstack.Artifact{}, err
@@ -145,6 +230,14 @@ func (f *Filesystem) observe(
 		// it is, which is what the layer above waits for.
 		return volstack.StateInactive, reading, volstack.Artifact{Devices: below.Devices}, nil
 	case blockdev.ContentStackLayer, blockdev.ContentForeign, blockdev.ContentUnknown:
+		if f.cfg.Encrypted && reading.Content != blockdev.ContentStackLayer {
+			// Unreadable by construction rather than occupied: see Encrypted.
+			// A stack layer is still refused, because a physical-volume or RAID
+			// label is a signature the probe positively recognized, and finding
+			// one under a filesystem plan means the plan is wrong rather than
+			// that the bytes were undecipherable.
+			return f.blank(ctx, reading, below)
+		}
 		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
 			"filesystem: refusing to stage %s, which carries %s: %s",
 			deviceOf(below), reading.Content, reading.Detail)
@@ -167,11 +260,12 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 	// decide the state and again to act on it. The reading itself is not needed
 	// past that, because the filesystem to act on is the one the plan named and
 	// observe has already refused every device carrying another.
-	state, _, own, err := f.observe(ctx, below)
+	state, reading, own, err := f.observe(ctx, below)
 	if err != nil {
 		return volstack.Artifact{}, err
 	}
 	if state == volstack.StateReady {
+		f.effective(reading)
 		return own, nil
 	}
 
@@ -180,7 +274,7 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 	// disagreement, which is the point: the only two ways to reconcile one are to
 	// reformat, which destroys the volume, and to serve the other filesystem,
 	// which hides the misconfiguration until something else acts on it.
-	fsType := f.cfg.FsType
+	fsType := f.effective(reading)
 	if state == volstack.StateAbsent {
 		if err := f.cfg.Ops.Format(ctx, dev.Path, fsType, f.formatOptions(below)); err != nil {
 			return volstack.Artifact{}, fmt.Errorf("filesystem: format %s as %s: %w", dev.Path, fsType, err)
@@ -227,6 +321,44 @@ func (f *Filesystem) clear(ctx context.Context) error {
 	}
 	if err := f.cfg.Ops.ForceUnmount(ctx, f.cfg.StagingPath); err != nil {
 		return fmt.Errorf("filesystem: unmount %s, including its force path: %w", f.cfg.StagingPath, err)
+	}
+	return nil
+}
+
+// Yield unmounts the filesystem so the layer below can heal under it, which a
+// heal asks for after the device lost every path while this mount held it. The
+// mount then carries what the outage did to it, an aborted ext4 journal or a
+// shut-down XFS log, and only a fresh mount replays its way out of that. The
+// rest of the heal finds the path unmounted and mounts it again.
+//
+// It refuses while any other mount holds the same filesystem. A pod's bind
+// mount shares the superblock, so unmounting the staging path under one leaves
+// the damaged filesystem alive, and the next mount of the device picks it up
+// again instead of reading it from the device. The refusal is
+// volstack.ErrHeldElsewhere: the publish that asked retries, and the old pod's
+// unpublish releases the bind in between.
+//
+// It unmounts the ordinary way only, and a refusal is the same wait. The lazy
+// unmount clear falls back to detaches the path and nothing else, so a
+// filesystem something still has open would outlive it, and the next mount of
+// the device would pick it up after the heal had re-pointed the mapping and
+// with that erased the interruption. The fallback is for a device that is gone,
+// and under the indirection this one is not.
+func (f *Filesystem) Yield(ctx context.Context, _, _ volstack.Artifact) error {
+	mounted, err := f.cfg.Ops.IsMountPoint(ctx, f.cfg.StagingPath)
+	if err == nil && !mounted {
+		return nil
+	}
+	others, err := f.cfg.Ops.OtherMounts(ctx, f.cfg.StagingPath)
+	if err != nil {
+		return fmt.Errorf("filesystem: find what else holds %s: %w", f.cfg.StagingPath, err)
+	}
+	if len(others) > 0 {
+		return fmt.Errorf("filesystem: %s is also mounted at %s: %w",
+			f.cfg.StagingPath, strings.Join(others, ", "), volstack.ErrHeldElsewhere)
+	}
+	if err := f.cfg.Ops.Unmount(ctx, f.cfg.StagingPath); err != nil {
+		return fmt.Errorf("filesystem: unmount %s: %w: %w", f.cfg.StagingPath, err, volstack.ErrHeldElsewhere)
 	}
 	return nil
 }
@@ -282,7 +414,7 @@ func (f *Filesystem) Heal(ctx context.Context, below, _ volstack.Artifact) error
 		return err
 	}
 
-	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, f.cfg.FsType, f.mountFlags()); err != nil {
+	if err := f.cfg.Ops.Mount(ctx, dev.Path, f.cfg.StagingPath, f.effective(reading), f.mountFlags()); err != nil {
 		return fmt.Errorf("filesystem: remount %s at %s: %w", dev.Path, f.cfg.StagingPath, err)
 	}
 	return nil
@@ -340,7 +472,7 @@ type FilesystemParams struct {
 // recorded is the one the volume asked for, and a teardown needs no more than
 // that: what is actually on the device is read from the device.
 func (f *Filesystem) Params() any {
-	return FilesystemParams{FsType: f.cfg.FsType}
+	return FilesystemParams{FsType: f.known()}
 }
 
 // agrees reports whether the filesystem on the device is the one the plan asked
@@ -397,13 +529,16 @@ func (f *Filesystem) blank(
 	switch {
 	case prior == "":
 		return volstack.StateAbsent, reading, volstack.Artifact{}, nil
-	case prior != f.cfg.FsType:
+	case f.cfg.FsType != "" && prior != f.cfg.FsType:
 		return volstack.StateAbsent, reading, volstack.Artifact{}, fmt.Errorf(
 			"filesystem: refusing to stage %s, which is recorded as carrying %s where the plan "+
 				"asks for %s: reformatting would destroy the volume, and mounting it as %s would "+
 				"serve a filesystem the plan does not declare",
 			deviceOf(below), prior, f.cfg.FsType, prior)
 	default:
+		if f.cfg.FsType == "" {
+			f.detected = prior
+		}
 		// Recorded as formatted while nothing was found on it: the reading is a
 		// failed probe rather than an empty device, so the filesystem is treated as
 		// present and unmounted. Mounting it is the honest next step, and a mount
@@ -447,7 +582,7 @@ func (f *Filesystem) mountFlags() []string {
 // asked for. That is also the only one the layer acts on, since a device
 // carrying another is refused rather than reconciled.
 func (f *Filesystem) strategy() FilesystemLayerStrategy {
-	return FilesystemStrategyFor(f.cfg.FsType)
+	return FilesystemStrategyFor(f.known())
 }
 
 // deviceOf names the device below for an error message, without asserting there

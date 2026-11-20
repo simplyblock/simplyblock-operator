@@ -2,6 +2,7 @@ package utils
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -9,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 func TestRequiredNodesFromErasureCodingScheme(t *testing.T) {
@@ -50,15 +52,15 @@ func TestShouldActivateCluster(t *testing.T) {
 }
 
 func TestClusterStatusHelpers(t *testing.T) {
-	active := &simplyblockv1alpha1.StorageCluster{
-		Status: simplyblockv1alpha1.StorageClusterStatus{Status: "active"},
+	active := &simplyblockv1alpha2.StorageCluster{
+		Status: simplyblockv1alpha2.StorageClusterStatus{Status: "active"},
 	}
 	if !ClusterAlreadyActive(active) {
 		t.Fatalf("ClusterAlreadyActive should be true")
 	}
 
-	expanding := &simplyblockv1alpha1.StorageCluster{
-		Status: simplyblockv1alpha1.StorageClusterStatus{Status: "in_expansion"},
+	expanding := &simplyblockv1alpha2.StorageCluster{
+		Status: simplyblockv1alpha2.StorageClusterStatus{Status: "in_expansion"},
 	}
 	if !ClusterInExpansion(expanding) {
 		t.Fatalf("ClusterInExpansion should be true")
@@ -70,23 +72,28 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
 		t.Fatalf("add scheme: %v", err)
 	}
+	// The pool is read as the hub, which is the shape every controller reads;
+	// the cluster is not, because StorageCluster has no v1alpha2 yet.
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
 
-	clusterA := &simplyblockv1alpha1.StorageCluster{
+	clusterA := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-a", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
-		Status:     simplyblockv1alpha1.StorageClusterStatus{UUID: "uuid-a"},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "uuid-a"},
 	}
-	clusterNoUUID := &simplyblockv1alpha1.StorageCluster{
+	clusterNoUUID := &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster-b", Namespace: "ns1"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{},
 	}
 
-	poolA := &simplyblockv1alpha1.StoragePool{
+	poolA := &simplyblockv1alpha2.StoragePool{
 		ObjectMeta: metav1.ObjectMeta{Name: "gold", Namespace: "ns1"},
-		Spec: simplyblockv1alpha1.StoragePoolSpec{
-			ClusterName: "cluster-a",
+		Spec: simplyblockv1alpha2.StoragePoolSpec{
+			ClusterRef: "cluster-a",
 		},
-		Status: simplyblockv1alpha1.StoragePoolStatus{UUID: "pool-uuid-a"},
+		Status: simplyblockv1alpha2.StoragePoolStatus{UUID: "pool-uuid-a"},
 	}
 
 	c := fake.NewClientBuilder().
@@ -132,7 +139,165 @@ func TestResolveClusterAndPoolUUID(t *testing.T) {
 		t.Fatalf("ResolveClusterCRByUUID should fail for an unknown UUID")
 	}
 
+	// A ReplicationPair naming a cluster that lives on a different physical
+	// Kubernetes cluster carries only that cluster's backend UUID -- there is
+	// no local StorageCluster object to match by name, because the object
+	// itself only exists on the other cluster's own API server. Passing a raw
+	// UUID through unresolved (rather than requiring a local name match) is
+	// what makes cross-cluster ReplicationPair authoring possible at all.
+	const remoteUUID = "e7afccef-1d5a-4b77-88aa-bfbe90d8b3a3"
+	remoteResolved, err := ResolveClusterUUID(ctx, c, "ns1", remoteUUID)
+	if err != nil {
+		t.Fatalf("ResolveClusterUUID should pass a raw UUID through even with no local match: %v", err)
+	}
+	if remoteResolved != remoteUUID {
+		t.Fatalf("ResolveClusterUUID got %q want pass-through of %q", remoteResolved, remoteUUID)
+	}
+
 	if _, err := ResolveClusterCRByUUID(ctx, c, "ns2", "uuid-a"); err == nil {
 		t.Fatalf("ResolveClusterCRByUUID should not find a cluster from a different namespace")
+	}
+}
+
+// A cluster that is redistributing data refuses every volume migration, and the
+// operator has to know that before it asks rather than from the 400 it gets
+// back. This holds the two ways it can know: the status the control plane
+// reports, and the task list it mirrors when that status is not yet set.
+func TestClusterRebalancing(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status string
+		tasks  []simplyblockv1alpha2.ClusterTask
+		want   bool
+	}{
+		{
+			name:   "the control plane says so",
+			status: "rebalancing",
+			want:   true,
+		},
+		{
+			name:   "a node is being added, which redistributes data",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "running"},
+			},
+			want: true,
+		},
+		{
+			name:   "a node add that has not started yet still blocks",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "new"},
+			},
+			want: true,
+		},
+		{
+			name:   "a finished node add does not",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "done"},
+			},
+			want: false,
+		},
+		{
+			// Every node_add of a deployment can be done while the expansion it
+			// started is still suspended, which is what the cluster that
+			// prompted this reported.
+			name:   "an expansion that has not finished blocks after its node adds have",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "node_add", Status: "done"},
+				{ID: "b", Type: "cluster_expand", Status: "suspended"},
+			},
+			want: true,
+		},
+		{
+			name:   "a deferred device migration blocks",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "new_device_migration", Status: "suspended"},
+			},
+			want: true,
+		},
+		{
+			name:   "a task of another kind does not",
+			status: "active",
+			tasks: []simplyblockv1alpha2.ClusterTask{
+				{ID: "a", Type: "device_test", Status: "running"},
+			},
+			want: false,
+		},
+		{
+			name:   "an idle cluster does not",
+			status: "active",
+			want:   false,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				Status: simplyblockv1alpha2.StorageClusterStatus{
+					Status: tc.status,
+					Tasks:  tc.tasks,
+				},
+			}
+
+			if got := ClusterRebalancing(cluster); got != tc.want {
+				t.Errorf("ClusterRebalancing() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// U-115: a supercluster has no backend cluster, so its identifier is one the
+// control plane does not know. Resolving it is refused with a named error
+// rather than handed to a caller that would send it to the control plane and
+// read the 404 as a missing cluster. It is refused before the supercluster
+// has written its identifier too, because "not ready yet" would have the
+// caller wait for a UUID that is never a backend cluster's.
+func TestResolvingASuperclusterIsRefused(t *testing.T) {
+	s := runtime.NewScheme()
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	const aggregateID = "0d6f1b2e-1f0a-4c71-9a0e-5b7d2c3e4f50"
+	reported := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "ns1"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		},
+		Status: simplyblockv1alpha2.StorageClusterStatus{UUID: aggregateID},
+	}
+	fresh := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: "ns1"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			Supercluster: &simplyblockv1alpha2.SuperclusterSpec{},
+		},
+	}
+	member := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "prod-dense-kqv", Namespace: "ns1"},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{SuperclusterRef: "prod"},
+		Status: simplyblockv1alpha2.StorageClusterStatus{
+			UUID: "4f0c1e70-9a2b-4d51-b1c7-2f6e0d9a4c88",
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(s).
+		WithObjects(reported, fresh, member).Build()
+	ctx := context.Background()
+
+	for _, name := range []string{"prod", "staging"} {
+		if got, err := ResolveClusterUUID(ctx, c, "ns1", name); !errors.Is(err, ErrAggregateCluster) {
+			t.Errorf("ResolveClusterUUID(%s) = %q, %v, want ErrAggregateCluster", name, got, err)
+		}
+		if got, err := ResolveClusterIdentifier(ctx, c, "ns1", name); !errors.Is(err, ErrAggregateCluster) {
+			t.Errorf("ResolveClusterIdentifier(%s) = %q, %v, want ErrAggregateCluster", name, got, err)
+		}
+	}
+	if got, err := ResolveClusterIdentifier(ctx, c, "ns1", aggregateID); !errors.Is(err, ErrAggregateCluster) {
+		t.Errorf("ResolveClusterIdentifier(aggregate id) = %q, %v, want ErrAggregateCluster", got, err)
+	}
+
+	// A member is an ordinary cluster with a backend UUID of its own.
+	if got, err := ResolveClusterUUID(ctx, c, "ns1", "prod-dense-kqv"); err != nil || got != member.Status.UUID {
+		t.Errorf("ResolveClusterUUID(member) = %q, %v, want %q", got, err, member.Status.UUID)
 	}
 }

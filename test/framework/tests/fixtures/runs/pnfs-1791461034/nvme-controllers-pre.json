@@ -1,0 +1,24 @@
+[
+  {
+    "node": "control-plane",
+    "name": "nvme0",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070",
+    "address": "10.10.10.142:4428",
+    "state": "live",
+    "namespaces": {
+      "1": "optimized"
+    },
+    "ctrl_loss_tmo": 60
+  },
+  {
+    "node": "control-plane",
+    "name": "nvme1",
+    "nqn": "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:e500a6c4-a0dc-4413-b0a4-8db8df45c070",
+    "address": "10.10.10.143:4428",
+    "state": "live",
+    "namespaces": {
+      "1": "non-optimized"
+    },
+    "ctrl_loss_tmo": 60
+  }
+]

@@ -1,0 +1,84 @@
+{
+  "volumes": [
+    {
+      "claim": "pnfs-1791488311-pnfs-shared-0",
+      "lvol": "77c06b36-f573-4bfa-986e-52e2a06c600b",
+      "cluster": "06075ebb-8c40-4857-a5f1-40b13bca10a7",
+      "shared": true,
+      "pods": [
+        "pnfs-1791488311-pnfs-0",
+        "pnfs-1791488311-pnfs-1",
+        "pnfs-1791488311-pnfs-2"
+      ],
+      "nodes": [
+        "control-plane",
+        "worker-1",
+        "worker-2"
+      ],
+      "instances": {
+        "pnfs-1791488311-fio-0-c0": "worker-1",
+        "pnfs-1791488311-fio-0-c1": "worker-1",
+        "pnfs-1791488311-fio-1-c0": "control-plane",
+        "pnfs-1791488311-fio-1-c1": "control-plane",
+        "pnfs-1791488311-fio-2-c0": "worker-2",
+        "pnfs-1791488311-fio-2-c1": "worker-2"
+      }
+    },
+    {
+      "claim": "pnfs-1791488311-pnfs-shared-1",
+      "lvol": "0991424e-a48b-496c-928f-d6a6748c116b",
+      "cluster": "06075ebb-8c40-4857-a5f1-40b13bca10a7",
+      "shared": true,
+      "pods": [
+        "pnfs-1791488311-pnfs-3",
+        "pnfs-1791488311-pnfs-4",
+        "pnfs-1791488311-pnfs-5"
+      ],
+      "nodes": [
+        "control-plane",
+        "worker-1",
+        "worker-4"
+      ],
+      "instances": {
+        "pnfs-1791488311-fio-3-c0": "worker-1",
+        "pnfs-1791488311-fio-3-c1": "worker-1",
+        "pnfs-1791488311-fio-4-c0": "control-plane",
+        "pnfs-1791488311-fio-4-c1": "control-plane",
+        "pnfs-1791488311-fio-5-c0": "worker-4",
+        "pnfs-1791488311-fio-5-c1": "worker-4"
+      }
+    },
+    {
+      "claim": "pnfs-1791488311-pnfs-solo-0",
+      "lvol": "c0cd944d-283d-4694-b48d-dd35d1e20429",
+      "cluster": "06075ebb-8c40-4857-a5f1-40b13bca10a7",
+      "shared": false,
+      "pods": [
+        "pnfs-1791488311-pnfs-6"
+      ],
+      "nodes": [
+        "worker-1"
+      ],
+      "instances": {
+        "pnfs-1791488311-fio-6-c0": "worker-1",
+        "pnfs-1791488311-fio-6-c1": "worker-1"
+      }
+    },
+    {
+      "claim": "pnfs-1791488311-pnfs-solo-1",
+      "lvol": "36186e1b-4d52-41f3-a82c-a288c4d219c6",
+      "cluster": "06075ebb-8c40-4857-a5f1-40b13bca10a7",
+      "shared": false,
+      "pods": [
+        "pnfs-1791488311-pnfs-7"
+      ],
+      "nodes": [
+        "control-plane"
+      ],
+      "instances": {
+        "pnfs-1791488311-fio-7-c0": "control-plane",
+        "pnfs-1791488311-fio-7-c1": "control-plane"
+      }
+    }
+  ]
+}

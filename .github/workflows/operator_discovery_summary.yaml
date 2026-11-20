@@ -1,0 +1,61 @@
+# Posts a grouped summary of how a pull request changes the recorded discovery
+# expectations, so a default that rewrites hundreds of expected files reads as a
+# few rows instead of a diff GitHub may not render at all.
+#
+# It checks nothing and never fails a build. The summary goes to the job summary
+# on every run, and to a single comment on the pull request that is updated in
+# place. A pull request from a fork gets a read-only token, so it gets the job
+# summary only.
+
+name: "Operator: Discovery Expectation Summary"
+
+on:
+  pull_request:
+    paths:
+      - "operator/internal/controllers/deployment/testdata/discovery/**"
+      - "operator/hack/summarize-discovery-expectations.sh"
+      - ".github/workflows/operator_discovery_summary.yaml"
+
+jobs:
+  summarize:
+    name: Summarize
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Clone the code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Summarize the expectation changes
+        run: |
+          operator/hack/summarize-discovery-expectations.sh "origin/${{ github.base_ref }}" HEAD > summary.md
+          cat summary.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Post or update the comment
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          marker='<!-- discovery-expectation-summary -->'
+          existing="$(gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id" | head -n1)"
+
+          if [[ -s summary.md ]]; then
+            { echo "$marker"; cat summary.md; } > body.md
+          elif [[ -n "$existing" ]]; then
+            # The branch no longer changes any expectation, so the old summary
+            # is replaced rather than left behind describing a past push.
+            printf '%s\n### Discovery expectations\n\nThis branch no longer changes any expected file.\n' "$marker" > body.md
+          else
+            exit 0
+          fi
+
+          if [[ -n "$existing" ]]; then
+            gh api -X PATCH "repos/$GITHUB_REPOSITORY/issues/comments/$existing" -F body=@body.md > /dev/null
+          else
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$PR/comments" -F body=@body.md > /dev/null
+          fi

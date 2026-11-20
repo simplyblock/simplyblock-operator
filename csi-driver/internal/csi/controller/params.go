@@ -5,6 +5,7 @@ package controller
 import (
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -16,24 +17,23 @@ import (
 const (
 	annotationNvmfModelID = "simplyblock.io/nvmf-model-id"
 	annotationLvolID      = "simplyblock.io/lvol-id"
-	annotationQoSRWIOPS   = "simplyblock.io/qos-rw-iops"
-	annotationQoSRWMBps   = "simplyblock.io/qos-rw-mbps"
-	annotationQoSRMBps    = "simplyblock.io/qos-r-mbps"
-	annotationQoSWMBps    = "simplyblock.io/qos-w-mbps"
 	annotationPodAffinity = "simplyblock.io/pod-affinity"
 
 	// Deprecated annotation keys, still supported for backward compatibility.
 	deprecatedAnnotationNvmfModelID = "simplybk/nvmf-model-id"
 	deprecatedAnnotationLvolID      = "simplybk/lvol-id"
-	deprecatedAnnotationQoSRWIOPS   = "simplybk/qos-rw-iops"
-	deprecatedAnnotationQoSRWMBps   = "simplybk/qos-rw-mbytes"
-	deprecatedAnnotationQoSRMBps    = "simplybk/qos-r-mbytes"
-	deprecatedAnnotationQoSWMBps    = "simplybk/qos-w-mbytes"
+
+	// The four QoS ceilings are not here. Each of them has three live spellings
+	// and the operator writes one of them, so the keys and the order they are
+	// tried in belong where both components can read them: atlas-lib's
+	// kube.QoSParam and kube.QoSAnnotation.
 
 	paramZoneClusterMap     = "zone_cluster_map"
 	paramRegionClusterMap   = "region_cluster_map"
 	paramDHCHAPNodeSelector = "dhchap_node_selector" // exact DHCHAP allowed-node label key, see kube.PoolNodeLabelKey
 
+	// vdoCapableTrue is the topology segment value vdoCapableSegment returns.
+	vdoCapableTrue = "true"
 )
 
 // dhchapAllowedNodeSegment returns the DHCHAP allowed-node topology key/value
@@ -60,6 +60,27 @@ func dhchapAllowedNodeSegment(req *csi.CreateVolumeRequest) (key, val string) {
 		return "", ""
 	}
 	return key, kube.LabelPoolAllowed
+}
+
+// vdoCapableSegment is the twin of dhchapAllowedNodeSegment above, for
+// client-side compression/deduplication: it pins PersistentVolume.spec.
+// nodeAffinity to a vdo-capable node whenever either StorageClass parameter
+// is set, and returns an empty key and value otherwise.
+//
+// Same reason as dhchapAllowedNodeSegment for reading req.GetParameters()
+// directly rather than req.GetAccessibilityRequirements(): vdo-capable is a
+// node label the csi-node DaemonSet applies after it starts, so it's never in
+// the node's CSINode object at plugin-registration time. That's also why a
+// generated StorageClass carries no allowedTopologies for this (design
+// doc §5).
+func vdoCapableSegment(req *csi.CreateVolumeRequest) (key, val string) {
+	params := req.GetParameters()
+	compression, _ := strconv.ParseBool(params[kube.ParamClientCompression])
+	deduplication, _ := strconv.ParseBool(params[kube.ParamClientDeduplication])
+	if !compression && !deduplication {
+		return "", ""
+	}
+	return kube.LabelVDOCapable, vdoCapableTrue
 }
 
 func parseStringMap(raw, paramName string) (map[string]string, error) {

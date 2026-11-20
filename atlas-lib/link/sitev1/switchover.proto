@@ -1,0 +1,55 @@
+syntax = "proto3";
+
+package atlas.link.site.v1;
+
+option go_package = "github.com/simplyblock/atlas/link/sitev1;sitev1";
+
+// SwitchoverService moves the leadership of a volume of a stretched cluster to
+// a site (design-stretched-sync-replication-ramen.md §9.3). Each site's
+// operator serves it: in process to its VRG follower, which moves a volume when
+// Ramen makes its VolumeReplicationGroup primary on the site, and to the other
+// site's operator over the site link.
+//
+// The operator is the one caller of the backend's sync verbs, and it serializes
+// moves per store, so the volumes of one store produce one demote and one
+// promote. It never polls: its caller asks again.
+service SwitchoverService {
+  // Move moves the volume's leadership to to_site. It does not block on a
+  // promote the backend is still running: the answer is IN_PROGRESS and the
+  // caller asks again.
+  rpc Move(MoveRequest) returns (MoveResponse);
+}
+
+// MoveRequest names a volume and the site to lead it from.
+message MoveRequest {
+  // volume is the volume's handle, cluster:pool:volume.
+  string volume = 1;
+  // to_site is the site the volume is to be led from.
+  string to_site = 2;
+  // allow_forced lets the operator escalate a planned promote that the
+  // backend refuses because the volume's serving site is not online to a
+  // forced one, which the backend permits only once it has proven that site
+  // lost. A node stage always allows it.
+  bool allow_forced = 3;
+}
+
+// MoveResponse is where the move stands.
+message MoveResponse {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // MOVED: the volume is led from to_site.
+    STATE_MOVED = 1;
+    // IN_PROGRESS: the move is under way; ask again.
+    STATE_IN_PROGRESS = 2;
+    // REFUSED: the backend refused the move; reason and blocking_volumes say why.
+    STATE_REFUSED = 3;
+  }
+  State state = 1;
+  // led_from is the site the volume is led from when the answer was given.
+  string led_from = 2;
+  // reason is the backend's message when the move was refused.
+  string reason = 3;
+  // blocking_volumes are the volumes of the store still served on the old
+  // site, which a demote refuses to leave behind.
+  repeated string blocking_volumes = 4;
+}

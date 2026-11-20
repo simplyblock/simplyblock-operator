@@ -11,7 +11,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -109,7 +108,7 @@ func TestFindPVForVolume(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(utilsScheme(t)).WithObjects(tc.objs...).Build()
-			got, err := findPVForVolume(context.Background(), c, tc.volume)
+			got, err := VolumeFronting(context.Background(), c, tc.volume)
 			if tc.wantErr {
 				if err == nil {
 					t.Fatalf("expected an error, got PV %q", got)
@@ -120,78 +119,13 @@ func TestFindPVForVolume(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatalf("findPVForVolume: %v", err)
+				t.Fatalf("VolumeFronting: %v", err)
 			}
 			if got != tc.wantPV {
 				t.Errorf("PV = %q, want %q", got, tc.wantPV)
 			}
 		})
 	}
-}
-
-func TestStartMigration(t *testing.T) {
-	owner := []metav1.OwnerReference{{
-		APIVersion: "storage.simplyblock.io/v1alpha1",
-		Kind:       "StorageCluster",
-		Name:       "cluster",
-		UID:        "uid-1",
-	}}
-	labels := map[string]string{"app.kubernetes.io/created-by": "rebalancer"}
-
-	t.Run("creates the CR pointing at the resolved PV", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(utilsScheme(t)).
-			WithObjects(pvWithHandle("pv-1", utilsCluster+":"+utilsPool+":"+utilsVolume)).Build()
-
-		if err := StartMigration(context.Background(), c, utilsVolume, "target-node",
-			"vmig-1", "sb", owner, labels); err != nil {
-			t.Fatalf("StartMigration: %v", err)
-		}
-
-		var vm simplyblockv1alpha1.VolumeMigration
-		if err := c.Get(context.Background(),
-			types.NamespacedName{Namespace: "sb", Name: "vmig-1"}, &vm); err != nil {
-			t.Fatalf("created VolumeMigration not found: %v", err)
-		}
-		if vm.Spec.PVName != "pv-1" {
-			t.Errorf("PVName = %q, want pv-1 (resolved from the volume UUID)", vm.Spec.PVName)
-		}
-		if vm.Spec.TargetNodeUUID != "target-node" {
-			t.Errorf("TargetNodeUUID = %q, want target-node", vm.Spec.TargetNodeUUID)
-		}
-		// Owner references matter: the CR must be garbage-collected with its owner
-		// rather than outliving the cluster that scheduled it.
-		if len(vm.OwnerReferences) != 1 || vm.OwnerReferences[0].Name != "cluster" {
-			t.Errorf("OwnerReferences = %+v, want the passed owner", vm.OwnerReferences)
-		}
-		if vm.Labels["app.kubernetes.io/created-by"] != "rebalancer" {
-			t.Errorf("Labels = %v, want the passed labels", vm.Labels)
-		}
-	})
-
-	t.Run("no PV for the volume", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(utilsScheme(t)).Build()
-		err := StartMigration(context.Background(), c, utilsVolume, "target-node",
-			"vmig-1", "sb", nil, nil)
-		if err == nil {
-			t.Fatalf("expected an error when no PV backs the volume")
-		}
-		if !strings.Contains(err.Error(), "resolve PV") {
-			t.Errorf("error = %q, want it to say the PV could not be resolved", err)
-		}
-	})
-
-	t.Run("a CR of that name already exists", func(t *testing.T) {
-		existing := &simplyblockv1alpha1.VolumeMigration{
-			ObjectMeta: metav1.ObjectMeta{Name: "vmig-1", Namespace: "sb"},
-		}
-		c := fake.NewClientBuilder().WithScheme(utilsScheme(t)).
-			WithObjects(pvWithHandle("pv-1", utilsCluster+":"+utilsPool+":"+utilsVolume), existing).Build()
-
-		if err := StartMigration(context.Background(), c, utilsVolume, "target-node",
-			"vmig-1", "sb", nil, nil); err == nil {
-			t.Errorf("expected the duplicate create to be reported, not silently ignored")
-		}
-	})
 }
 
 func TestPollMigration(t *testing.T) {

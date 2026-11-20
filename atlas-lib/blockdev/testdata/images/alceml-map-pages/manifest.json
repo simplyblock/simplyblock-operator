@@ -1,0 +1,15 @@
+{
+  "name": "alceml-map-pages",
+  "tool": "(unknown: captured from a device in service)",
+  "tool_version": "unknown",
+  "command": "(not reproducible locally: this device was read, not written)",
+  "device_size": 1610612736000,
+  "logical_block_size": 512,
+  "region_size": 2097152,
+  "captured": "2026-09-30T14:55:59Z",
+  "captured_on": "CentOS Stream CoreOS 10.0.20251023-0 (Coughlan), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "11dd7fb04bfd0ee188c9fab125c239fecfee9c848c194b3b1d2142d4bb1b48e2",
+  "tail_sha256": "ea9c6f54df009780ce6a450b9ba2ae727696c5d4cb8f75dcb6a4670dd886faf9",
+  "note": "worker-4 /dev/sda of the OKD lab cluster on 2026-09-30: a device a previous simplyblock deployment took, whose ALCEML_STORAGE superblock at offset 0 has been zeroed while the rest of the device was left. Only the first 4096 bytes are zero; the mapping region starts at 4096 and runs to the end of the head, and the page grid at 1060864 carries _UNMAPPED_ headers repeating every 2105344 bytes, so the data pages were never written. Unlike the alceml-pages capture, whose whole 1060864-byte head was zero and which therefore reads Blank, this one reads Foreign at any region size and discovery declined it: the fleet came up with worker-4 contributing one 1.5 TB disk where every other worker contributed two."
+}

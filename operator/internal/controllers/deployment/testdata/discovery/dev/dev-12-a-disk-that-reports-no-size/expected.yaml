@@ -1,0 +1,23 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-dev-12
+  name: discovered-discover-dev-12
+spec:
+  cluster:
+    enableNodeAffinity: true
+    name: discovered-discover-dev-12-cluster
+    stripe:
+      dataChunks: 1
+  nodeSets:
+  - groups:
+    - dataInterfaces:
+      - eth1
+      devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5f:00.0
+      mgmtInterface: eth0
+      name: group-1-nvme-2xunsized
+      workers:
+      - worker-01
+    name: discovered

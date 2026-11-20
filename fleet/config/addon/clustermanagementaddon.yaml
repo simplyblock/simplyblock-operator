@@ -1,0 +1,30 @@
+# The hub-side declaration of the simplyblock fleet add-on.
+#
+# The lifecycle annotation hands the add-on to OCM's own addon-manager, which is
+# what makes the template in this directory a delivered payload without a
+# controller of ours in the path.
+#
+# The install strategy is Manual rather than Automatic: a member is enrolled by
+# creating a FleetMember, and installing the add-on into every cluster an
+# unrelated team registered on the same hub is not what enrolling means. The
+# fleet manager creates the ManagedClusterAddOn for the members it owns.
+apiVersion: addon.open-cluster-management.io/v1alpha1
+kind: ClusterManagementAddOn
+metadata:
+  name: simplyblock-fleet
+  annotations:
+    addon.open-cluster-management.io/lifecycle: "addon-manager"
+spec:
+  addOnMeta:
+    displayName: simplyblock fleet
+    description: >-
+      Carries the fleet's payloads into an enrolled member, guards the
+      storage.simplyblock.io group against writers the fleet does not know, and
+      reports back what only the member can observe.
+  supportedConfigs:
+    - group: addon.open-cluster-management.io
+      resource: addontemplates
+      defaultConfig:
+        name: simplyblock-fleet-0.1.0
+  installStrategy:
+    type: Manual

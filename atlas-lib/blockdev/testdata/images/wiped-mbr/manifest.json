@@ -1,0 +1,16 @@
+{
+  "name": "wiped-mbr",
+  "tool": "fdisk",
+  "tool_version": "fdisk from util-linux 2.41.5",
+  "command": "fdisk: o, n, p, 1, defaults, w, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:47Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "84dc4368cff8935968c191d0ae80fac1bc808bb2e57c27f277b3ac7a8157c04c",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 2 bytes were erased at offset 0x000001fe (dos): 55 aa;calling ioctl to re-read partition table: Invalid argument. "
+}

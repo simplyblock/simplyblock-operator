@@ -9,6 +9,7 @@ import (
 	jsonpatch "gomodules.xyz/jsonpatch/v2"
 	admissionv1 "k8s.io/api/admission/v1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -16,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -33,23 +35,32 @@ func newScheme(t *testing.T) *runtime.Scheme {
 	if err := simplyblockv1alpha1.AddToScheme(s); err != nil {
 		t.Fatalf("add simplyblock scheme: %v", err)
 	}
+	// The kinds the data-protection band's validators read are all v1alpha2.
+	if err := simplyblockv1alpha2.AddToScheme(s); err != nil {
+		t.Fatalf("add the v1alpha2 simplyblock scheme: %v", err)
+	}
+	// The conversion webhook's CA bundle is injected into CRDs, so the fake
+	// client has to know that kind too.
+	if err := apiextensionsv1.AddToScheme(s); err != nil {
+		t.Fatalf("add apiextensions scheme: %v", err)
+	}
 	return s
 }
 
 const testClusterUUID = "c03e1571-75e8-46d6-b76f-d08a4e2abe2f"
 
-func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func makeCluster(benchmarkEnabled bool, image string) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
-		Spec: simplyblockv1alpha1.StorageClusterSpec{
-			VolumeMigrationSettings: &simplyblockv1alpha1.VolumeMigrationSettings{
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			VolumeMigrationSettings: &simplyblockv1alpha2.VolumeMigrationSettings{
 				RebalancerImage: ptr.To(image),
 			},
-			VolumeAutoPlacement: &simplyblockv1alpha1.VolumeAutoPlacementSettings{
-				LatencyBenchmarkEnabled: ptr.To(benchmarkEnabled),
+			VolumeAutoPlacement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{
+				EnableLatencyBenchmark: ptr.To(benchmarkEnabled),
 			},
 		},
-		Status: simplyblockv1alpha1.StorageClusterStatus{UUID: testClusterUUID},
+		Status: simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterUUID},
 	}
 }
 
@@ -117,7 +128,7 @@ func TestSimplyblockRebalancerInjector_Handle(t *testing.T) {
 	cases := []struct {
 		name        string
 		pod         *corev1.Pod
-		cluster     *simplyblockv1alpha1.StorageCluster
+		cluster     *simplyblockv1alpha2.StorageCluster
 		wantAllowed bool
 		wantPatch   bool
 	}{
@@ -290,4 +301,57 @@ func extractImageAndConfigMap(t *testing.T, patches []jsonpatch.JsonPatchOperati
 		}
 	}
 	return image, configMapName
+}
+
+// TestTheLatencyBenchmarkStaysOptIn. The rebalancer image now always resolves
+// on an installed operator, from the operator's own release, so an image being
+// available must not be what turns the benchmark on. Only
+// enableLatencyBenchmark does.
+func TestTheLatencyBenchmarkStaysOptIn(t *testing.T) {
+	const podName = "snode-spdk-pod-4420-c03e15"
+	spdkLabels := map[string]string{"app": "spdk-app-4420"}
+	t.Setenv("SB_OPERATOR_IMAGE", "quay.io/simplyblock-io/simplyblock-operator:v26.4.0-beta2")
+	t.Setenv("SIMPLYBLOCK_REBALANCER_IMAGE", "")
+
+	cases := []struct {
+		name      string
+		placement *simplyblockv1alpha2.VolumeAutoPlacementSettings
+		wantImage string
+	}{
+		{name: "no auto-placement settings", placement: nil},
+		{name: "enableLatencyBenchmark unset", placement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{}},
+		{
+			name:      "enableLatencyBenchmark true",
+			placement: &simplyblockv1alpha2.VolumeAutoPlacementSettings{EnableLatencyBenchmark: ptr.To(true)},
+			wantImage: "quay.io/simplyblock-io/simplyblock-rebalancer:v26.4.0-beta2",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-cluster", Namespace: "default"},
+				Spec:       simplyblockv1alpha2.StorageClusterSpec{VolumeAutoPlacement: tc.placement},
+				Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: testClusterUUID},
+			}
+			c := fake.NewClientBuilder().WithScheme(newScheme(t)).
+				WithObjects(cluster).WithStatusSubresource(cluster).Build()
+
+			pod := makePod(podName, spdkLabels, nil)
+			resp := (&SimplyblockRebalancerInjector{Client: c}).
+				Handle(context.Background(), admissionRequest(t, pod))
+			if !resp.Allowed {
+				t.Fatalf("the pod was refused: %v", resp.Result)
+			}
+
+			var image string
+			for _, container := range applyPatches(t, pod, resp.Patches).Spec.Containers {
+				if container.Name == testContainerName {
+					image = container.Image
+				}
+			}
+			if image != tc.wantImage {
+				t.Errorf("benchmark sidecar image = %q, want %q (empty: not injected)", image, tc.wantImage)
+			}
+		})
+	}
 }

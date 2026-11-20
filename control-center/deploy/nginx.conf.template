@@ -4,16 +4,12 @@
 #
 # Two jobs:
 #   1. serve the static document
-#   2. reverse-proxy the APIs the console is allowed to talk to, so the browser
-#      makes same-origin requests and never holds a cluster credential
+#   2. reverse-proxy the three APIs the console is allowed to talk to, so the
+#      browser makes same-origin requests and never holds a cluster credential
 #
-# Everything else is refused. The upstreams are the local Kubernetes API
-# (/k8s/), the local control plane v2 API (/cp/local/), the operator API,
-# Prometheus, and, per configured context, one remote Kubernetes API
-# (/k8s/<name>/) and one remote control plane (/cp/<name>/). On a DR-only hub
-# only the Kubernetes API exists. The static locations are here; the ones that
-# depend on the environment are rendered by sb-entrypoint into the two
-# includes at the end of the server block.
+# Everything else is refused. The console has exactly three upstreams by design:
+# the Kubernetes API, the operator API, and Prometheus — and on a DR-only hub
+# only the first one exists.
 
 server {
   listen ${SB_LISTEN_PORT};
@@ -93,19 +89,11 @@ server {
   }
 
   # ---- optional upstreams --------------------------------------------------
-  # The control plane v2 API (/cp/local/), the operator API, the Helm release
-  # view, and Prometheus are optional: the DR-only console on a hub without a
-  # simplyblock control plane has none of them. sb-entrypoint renders one
-  # location per configured upstream (and a 503 Status for each missing one)
-  # into this include at startup.
+  # The operator API, the Helm release view and Prometheus are optional: the
+  # DR-only console on a hub without a simplyblock control plane has none of
+  # them. sb-entrypoint renders one location per configured upstream (and a
+  # 503 Status for each missing one) into this include at startup.
   include /tmp/nginx/upstreams.conf;
-
-  # ---- contexts ------------------------------------------------------------
-  # One /k8s/<name>/ and one /cp/<name>/ location per context in
-  # SB_CONTEXTS_FILE, each with that cluster's CA, SNI, and mounted token.
-  # Context names are validated at startup so none can shadow /k8s/apis/ or
-  # /cp/local/. Empty when no contexts are configured.
-  include /tmp/nginx/contexts.conf;
 
   # Single-page document: any unknown path renders the shell, which restores its
   # own location from localStorage.

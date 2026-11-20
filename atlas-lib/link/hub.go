@@ -64,7 +64,10 @@ type HubConfig struct {
 
 	// Register adds the services the hub serves *back* to its peers, for peers
 	// that call the operator as well as answer it. Nil registers none, and the
-	// link still works in the direction that matters.
+	// link still works in the direction that matters. A call to one of them
+	// from a session that has not completed Hello is refused with
+	// Unauthenticated, and an admitted call carries the caller's verified
+	// identity, read with [PeerFromContext].
 	Register func(grpc.ServiceRegistrar)
 
 	// Capabilities names those services in the Hello answer.
@@ -79,6 +82,12 @@ type HubConfig struct {
 
 	// Logger receives session lifecycle events. Nil means slog.Default.
 	Logger *slog.Logger
+
+	// Registry is where the hub registers its peers. Nil means a new one.
+	// Pass one when a service the hub registers needs the registry before the
+	// hub exists, as a [Relay] does: build the registry, then the relay over
+	// it, then the hub with both.
+	Registry *Registry
 }
 
 // Hub accepts peer links and keeps a [Registry] of who is reachable.
@@ -114,10 +123,13 @@ func NewHub(cfg HubConfig) (*Hub, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
+	if cfg.Registry == nil {
+		cfg.Registry = NewRegistry()
+	}
 	return &Hub{
 		cfg:      cfg,
 		log:      cfg.Logger,
-		registry: NewRegistry(),
+		registry: cfg.Registry,
 		sessions: make(map[*Session]struct{}),
 	}, nil
 }
@@ -187,8 +199,9 @@ func (h *Hub) handle(raw net.Conn) {
 	hs := &handshake{hub: h, ready: make(chan struct{})}
 
 	sess, err := newSession(raw, false, sessionConfig{
-		name:  remote.String(),
-		yamux: h.cfg.Yamux,
+		name:          remote.String(),
+		yamux:         h.cfg.Yamux,
+		serverOptions: identifiedOnly(hs.identity),
 		register: func(srv grpc.ServiceRegistrar) {
 			linkv1.RegisterLinkServiceServer(srv, hs)
 			if h.cfg.Register != nil {

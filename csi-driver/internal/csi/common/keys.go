@@ -22,9 +22,54 @@ const (
 	CSIStorageNameKey      = CSIStorageBaseKey + "/name"
 	CSIStorageNamespaceKey = CSIStorageBaseKey + "/namespace"
 
+	// CSIStoragePVNameKey is how external-provisioner names the PersistentVolume
+	// in the same context. The node service writes it, with the claim's two
+	// keys above, into the volume's LVM metadata as informational tags.
+	CSIStoragePVNameKey = "csi.storage.k8s.io/pv/name"
+
 	// ParamClusterID names the simplyblock cluster a StorageClass provisions
 	// into.
 	ParamClusterID = "cluster_id"
+
+	// ParamEncryption names the StorageClass parameter that asks for an
+	// encrypted volume, and the volume-context key the controller sends it on
+	// under. Both halves are the same word because they are one fact read
+	// at two moments: the control plane consumes the parameter at creation, and
+	// the node service needs the answer at every stage, where the bytes on an
+	// encrypted volume mean nothing and the guard against formatting somebody's
+	// data has to defer to the record instead.
+	ParamEncryption = "encryption"
+
+	// The volume-context keys a pNFS export is mounted from. They are written
+	// by the controller service and read by the node service, which is the
+	// same reason the topology keys are here: two packages spelling one wire
+	// contract separately eventually spell it differently, and a key that
+	// differs by a character leaves the node taking the block branch for a
+	// volume that has no block device.
+	CtxAccessProtocol = "access_protocol"
+	CtxExportService  = "export_service"
+	CtxExportPath     = "export_path"
+
+	// AccessProtocolNFS is what CtxAccessProtocol carries for a pNFS volume,
+	// and the value the node branches on.
+	AccessProtocolNFS = "nfs"
+
+	// The volume-context keys a striped volume is staged from, written by the
+	// controller service and read by the node service. CtxStripeMembers lists
+	// the members' logical-volume UUIDs, comma separated, in stripe order: the
+	// first is the volume's own identity, and the order is the order the node
+	// stripes them in, so it is never rewritten after the volume is created.
+	// CtxStripeChunkBytes is the chunk each member takes, in bytes.
+	CtxStripeWidth      = "stripeWidth"
+	CtxStripeMembers    = "stripeMembers"
+	CtxStripeChunkBytes = "stripeChunkBytes"
+
+	// CtxVDOLogicalBytes is the size the node creates a client-side compressed
+	// or deduplicated volume's VDO volume at, the capacity the volume reports,
+	// written by the controller service. The pool under it is larger by what VDO
+	// and LVM keep for themselves. A volume created before it existed carries
+	// none, and its VDO volume was sized by VDO.
+	CtxVDOLogicalBytes = "vdoLogicalBytes"
 
 	// The topology keys the node service reports and the controller service
 	// places against. The beta zone key is still read because clusters upgraded
@@ -54,10 +99,27 @@ const (
 //
 // Both services parse it: the controller to address the volume it was asked
 // about, the node to address the one it is staging.
+//
+// A striped volume's id carries a fourth segment naming its width
+// (lvol.ParseStripedHandle), and parses to its first member, which is the
+// volume's identity: the logical volume its PersistentVolume is found by, its
+// lock, and the one whose name the other members are named after. A caller that
+// acts on the volume's data rather than its identity has to ask StripeWidth as
+// well, or it acts on the first member alone.
 func ParseVolumeHandle(csiVolumeID string) (*lvol.Handle, error) {
-	handle, ok := lvol.ParseHandle(lvol.VolumeHandle(csiVolumeID))
+	handle, _, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(csiVolumeID))
 	if !ok {
 		return nil, fmt.Errorf("invalid volume handle %q (expected {clusterID}:{poolID}:{lvolID})", csiVolumeID)
 	}
 	return &handle, nil
+}
+
+// StripeWidth is how many members the volume an id names is striped across,
+// and 1 for an ordinary volume and for an id that does not parse.
+func StripeWidth(csiVolumeID string) int {
+	_, width, ok := lvol.ParseStripedHandle(lvol.VolumeHandle(csiVolumeID))
+	if !ok {
+		return 1
+	}
+	return width
 }

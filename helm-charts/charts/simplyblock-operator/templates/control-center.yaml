@@ -10,20 +10,6 @@
 {{- if .Values.controlCenter.enabled }}
 {{- $cc := .Values.controlCenter }}
 {{- $name := include "sbcc.fullname" . }}
-{{- $localCpTls := include "sbcc.localCpTls" . }}
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: {{ $name }}-contexts
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- include "sbcc.labels" . | nindent 4 }}
-data:
-  # The contexts the console pod proxies, without their credentials: those
-  # are mounted from each context's Secret. Rendered by sbcc.contextsJson,
-  # which also swaps every URL for the mock's when the mock is enabled.
-  contexts.json: {{ include "sbcc.contextsJson" . | quote }}
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -58,13 +44,10 @@ spec:
     metadata:
       labels:
         {{- include "sbcc.selectorLabels" . | nindent 8 }}
+      {{- with $cc.podAnnotations }}
       annotations:
-        # The contexts file is read once at container start, so a change to
-        # it has to roll the pods.
-        checksum/contexts: {{ include "sbcc.contextsJson" . | sha256sum }}
-        {{- with $cc.podAnnotations }}
         {{- toYaml . | nindent 8 }}
-        {{- end }}
+      {{- end }}
     spec:
       serviceAccountName: {{ $name }}
       automountServiceAccountToken: true
@@ -104,6 +87,8 @@ spec:
               value: {{ $cc.mode | default "full" | quote }}
             - name: SB_DR_NAMESPACE
               value: {{ $cc.drNamespace | default "ramen-ops" | quote }}
+            - name: SB_DR_HUB_NAMESPACE
+              value: {{ $cc.drHubNamespace | default "dr-simplyblock" | quote }}
             - name: SB_AUTH_MODE
               value: {{ $cc.authMode | quote }}
             {{- /* With the mock enabled every upstream is the sb-mock service:
@@ -124,28 +109,37 @@ spec:
               value: {{ ternary $mockURL ($cc.helmUrl | default (include "sbcc.operatorUrl" .)) $cc.mock.enabled | quote }}
             - name: SB_PROMETHEUS_URL
               value: {{ ternary $mockURL (include "sbcc.prometheusUrl" .) $cc.mock.enabled | quote }}
-            # The local control plane v2 API, /cp/local/. The token is the
-            # projected ServiceAccount token; the CA is mounted only when the
-            # URL is the chart's own service over TLS.
-            - name: SB_CP_URL
-              value: {{ include "sbcc.controlPlaneUrl" . | quote }}
-            {{- if $localCpTls }}
-            - name: SB_CP_CA_FILE
-              value: /etc/sb/cp-ca/ca.crt
+            {{- $cpURL := include "sbcc.controlPlaneUrl" . }}
+            - name: SB_CONTROLPLANE_URL
+              value: {{ $cpURL | quote }}
+            {{- if and $cpURL $cc.controlPlane.tokenSecret }}
+            - name: SB_CONTROLPLANE_TOKEN_FILE
+              value: /etc/simplyblock/controlplane-token/token
             {{- end }}
-            - name: SB_CONTEXTS_FILE
-              value: /etc/sb/contexts/contexts.json
-            - name: SB_LOCAL_CONTEXT_NAME
-              value: {{ ($cc.localContext).name | default "local" | quote }}
-            - name: SB_LOCAL_LABELS
-              value: {{ include "sbcc.localLabels" . | quote }}
-            {{- with ($cc.localContext).namespaces }}
-            - name: SB_LOCAL_NAMESPACES
-              value: {{ join "," . | quote }}
+            {{- if and $cpURL .Values.tls.enabled }}
+            - name: SB_CONTROLPLANE_CA_FILE
+              value: /etc/simplyblock/tls/ca.crt
+            {{- if .Values.tls.mutual_enabled }}
+            - name: SB_CONTROLPLANE_CLIENT_CERT
+              value: /etc/simplyblock/tls/tls.crt
+            - name: SB_CONTROLPLANE_CLIENT_KEY
+              value: /etc/simplyblock/tls/tls.key
             {{- end }}
-            {{- with $cc.features }}
-            - name: SB_FEATURES
-              value: {{ join "," . | quote }}
+            {{- end }}
+            {{- $glURL := include "sbcc.graylogUrl" . }}
+            # the log store (Graylog search API), read-only via the proxy
+            - name: SB_GRAYLOG_URL
+              value: {{ $glURL | quote }}
+            {{- if $glURL }}
+            - name: SB_GRAYLOG_USER
+              value: {{ $cc.logStore.user | default "admin" | quote }}
+            {{- if $cc.logStore.tokenSecret }}
+            - name: SB_GRAYLOG_TOKEN_FILE
+              value: /etc/simplyblock/graylog/token
+            {{- else }}
+            - name: SB_GRAYLOG_PASSWORD_FILE
+              value: /etc/simplyblock/graylog/password
+            {{- end }}
             {{- end }}
             - name: SB_MOCK
               value: "false"
@@ -177,22 +171,17 @@ spec:
               mountPath: /tmp/nginx
             - name: nginx-confd
               mountPath: /etc/nginx/conf.d
-            # The contexts file, and one directory of credentials per context
-            # (token, ca.crt, and optionally cp-token, cp-ca.crt) next to it.
-            - name: contexts
-              mountPath: /etc/sb/contexts/contexts.json
-              subPath: contexts.json
-              readOnly: true
-            {{- range $ctx := $cc.contexts }}
-            {{- if $ctx.secretName }}
-            - name: ctx-{{ $ctx.name }}
-              mountPath: /etc/sb/contexts/{{ $ctx.name }}
+            {{- if and $cpURL $cc.controlPlane.tokenSecret }}
+            - name: controlplane-token
+              mountPath: /etc/simplyblock/controlplane-token
               readOnly: true
             {{- end }}
+            {{- if $cpURL }}
+            {{- include "simplyblock.tlsVolumeMount" . | nindent 12 }}
             {{- end }}
-            {{- if $localCpTls }}
-            - name: cp-ca
-              mountPath: /etc/sb/cp-ca
+            {{- if $glURL }}
+            - name: graylog-credentials
+              mountPath: /etc/simplyblock/graylog
               readOnly: true
             {{- end }}
       volumes:
@@ -200,24 +189,31 @@ spec:
           emptyDir: {medium: Memory, sizeLimit: 16Mi}
         - name: nginx-confd
           emptyDir: {medium: Memory, sizeLimit: 1Mi}
-        - name: contexts
-          configMap:
-            name: {{ $name }}-contexts
-        {{- range $ctx := $cc.contexts }}
-        {{- if $ctx.secretName }}
-        - name: ctx-{{ $ctx.name }}
+        {{- if and $cpURL $cc.controlPlane.tokenSecret }}
+        - name: controlplane-token
           secret:
-            secretName: {{ $ctx.secretName }}
-            {{- if $cc.mock.enabled }}
-            # the mock needs no credential, so a demo install may omit the Secret
-            optional: true
+            secretName: {{ $cc.controlPlane.tokenSecret }}
+            items:
+              - key: token
+                path: token
+        {{- end }}
+        {{- if $cpURL }}
+        {{- include "simplyblock.clientTlsVolume" (dict "ctx" . "clientSecret" "simplyblock-control-center-client-tls") | nindent 8 }}
+        {{- end }}
+        {{- if $glURL }}
+        - name: graylog-credentials
+          secret:
+            {{- if $cc.logStore.tokenSecret }}
+            secretName: {{ $cc.logStore.tokenSecret }}
+            items:
+              - key: token
+                path: token
+            {{- else }}
+            secretName: {{ include "sbcc.graylogPasswordSecret" . }}
+            items:
+              - key: {{ include "sbcc.graylogPasswordKey" . }}
+                path: password
             {{- end }}
-        {{- else if not $cc.mock.enabled -}}
-        {{- fail (printf "controlCenter.contexts[%s].secretName is required: the console cannot reach a cluster without its token and CA" $ctx.name) }}
-        {{- end }}
-        {{- end }}
-        {{- if $localCpTls }}
-        {{- include "sbcc.cpCaVolume" . | nindent 8 }}
         {{- end }}
 ---
 apiVersion: v1
@@ -233,6 +229,9 @@ spec:
     - name: http
       port: {{ $cc.service.port }}
       targetPort: http
+      {{- with $cc.service.nodePort }}
+      nodePort: {{ . }}
+      {{- end }}
   selector:
     {{- include "sbcc.selectorLabels" . | nindent 4 }}
 {{- if $cc.ingress.enabled }}

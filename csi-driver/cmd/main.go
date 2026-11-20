@@ -48,12 +48,25 @@ func init() {
 	flag.StringVar(&conf.LinkHubAddress, "link-hub-address", "",
 		"The operator's link endpoint, host:port")
 	flag.StringVar(&conf.LinkCAFile, "link-ca-file", "",
-		"CA bundle signing the operator's link certificate; empty uses the system roots")
+		"CA bundle signing the operator's link certificate, re-read on every attempt; empty dials plaintext")
+	flag.StringVar(&conf.LinkCertFile, "link-cert-file", "",
+		"Client certificate presented to an operator that requires mutual TLS on the link")
+	flag.StringVar(&conf.LinkKeyFile, "link-key-file", "",
+		"Key of the client certificate given by --link-cert-file")
 	flag.StringVar(&conf.LinkServerName, "link-server-name", "",
 		"Name to verify against the operator's link certificate, when it differs from the address dialled")
 	flag.StringVar(&conf.LinkTokenFile, "link-token-file",
 		"/var/run/secrets/simplyblock.io/link/token",
 		"Projected ServiceAccount token presented to the operator; must carry the audience it expects")
+	flag.BoolVar(&conf.SiteLinkEnabled, "site-link", false,
+		"Link a controller plugin to its site's fleet agent, the site end of a stretched cluster's site link")
+	flag.StringVar(&conf.SiteLinkAddress, "site-link-address",
+		"simplyblock-site-link.open-cluster-management-agent-addon.svc:9443", "The site's fleet agent, host:port")
+	flag.StringVar(&conf.SiteLinkNamespace, "site-link-namespace", "open-cluster-management-agent-addon",
+		"The fleet agent's namespace, where it publishes the CA it serves with")
+	flag.StringVar(&conf.SiteLinkTokenFile, "site-link-token-file",
+		"/var/run/secrets/simplyblock.io/site-link/token",
+		"Projected ServiceAccount token presented to the site's fleet agent, with the site link's audience")
 	flag.StringVar(&conf.PodUID, "pod-uid", os.Getenv("POD_UID"),
 		"This pod's UID (downward API), so a restart supersedes the previous link session")
 	flag.StringVar(&conf.PodName, "pod-name", os.Getenv("POD_NAME"),

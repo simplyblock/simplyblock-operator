@@ -16,7 +16,7 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
 )
 
@@ -41,6 +41,13 @@ type NodeDTO struct {
 	LvolPort      int32  `json:"lvol_subsys_port"`
 	NVMeOFPort    int32  `json:"nvmf_port"`
 	FailureDomain int    `json:"failure_domain"`
+	// Site is the node's sync-replication site, empty off a sync cluster.
+	Site string `json:"site"`
+
+	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
+	// lvstore replicas, empty when it has none.
+	SecondaryNodeID string `json:"secondary_node_id"`
+	TertiaryNodeID  string `json:"tertiary_node_id"`
 }
 
 // NodeSubscription streams a cluster's storage nodes, decodes them into an
@@ -106,7 +113,7 @@ func (s *NodeSubscription) enqueue(ctx context.Context, nodeID string) {
 	if !ok {
 		return
 	}
-	sn := &simplyblockv1alpha1.StorageNode{}
+	sn := &simplyblockv1alpha2.StorageNode{}
 	sn.SetNamespace(key.Namespace)
 	sn.SetName(key.Name)
 	select {

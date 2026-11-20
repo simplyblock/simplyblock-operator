@@ -84,37 +84,41 @@ File: `operator/internal/controllers/backup/storagebackup_controller_unit_test.g
 
 ### Status Grouping (design §5.2)
 
-| #    | Scenario                                                                             | Type     | Test |
-|------|--------------------------------------------------------------------------------------|----------|------|
-| U-32 | `status.backup` carries the ID, size, and both timestamps                            | Positive | —    |
-| U-33 | `status.source` carries the pool, the logical volume, and the filesystem type        | Positive | —    |
-| U-34 | `status.source` is written once and never updated afterward                          | Negative | —    |
-| U-35 | The source volume moves pool after the backup: `status.source.poolName` is unchanged | Negative | —    |
-| U-36 | `status.backup.previousBackupID` is recorded when the backup is incremental          | Positive | —    |
-| U-37 | A full backup: `previousBackupID` is absent, not empty-string                        | Boundary | —    |
-| U-38 | The control plane returns no size: the field stays absent, not zero                  | Boundary | —    |
+| #    | Scenario                                                                                     | Type       | Test                                   |
+|------|----------------------------------------------------------------------------------------------|------------|----------------------------------------|
+| U-32 | `status.backup` carries the ID, size, and both timestamps                                    | Positive   | —                                      |
+| U-33 | `status.source` carries the pool, the logical volume, and the filesystem type                | Positive   | —                                      |
+| U-34 | `status.source` is written once and never updated afterward                                  | Negative   | —                                      |
+| U-35 | The source volume moves pool after the backup: `status.source.poolName` is unchanged         | Negative   | —                                      |
+| U-36 | `status.backup.previousBackupID` is recorded when the backup is incremental                  | Positive   | —                                      |
+| U-37 | A full backup: `previousBackupID` is absent, not empty-string                                | Boundary   | —                                      |
+| U-38 | The control plane returns no size: the field stays absent, not zero                          | Boundary   | —                                      |
+| U-88 | `status.source.volumeMode` records the source volume's mode (2026-10-28-restore-volume-mode) | Regression | `TestMirrorRecordsTheSourceVolumeMode` |
 
 ### Restore (design §6, §8)
 
 File: `operator/internal/controllers/backup/storagebackupops_restore_test.go`
 
-| #    | Scenario                                                                                                  | Type     | Test |
-|------|-----------------------------------------------------------------------------------------------------------|----------|------|
-| U-39 | A restore into a new claim: the claim is created and bound                                                | Positive | —    |
-| U-40 | The claim already exists at create: the webhook rejects it (design §7)                                    | Negative | —    |
-| U-41 | The claim appears after admission: `Binding` refuses with `ClaimExists`                                   | Negative | —    |
-| U-42 | `spec.restore.targetPool` unset: the backup's own pool is used                                            | Positive | —    |
-| U-43 | The backup's pool no longer exists: refused with `PoolNotFound`, naming it                                | Negative | —    |
-| U-44 | `spec.restore.targetPool` set to a pool that does not exist: refused                                      | Negative | —    |
-| U-45 | The created claim carries `spec.restore.claimLabels`                                                      | Positive | —    |
-| U-46 | The created claim has no owner reference and survives the operation's deletion                            | Positive | —    |
-| U-47 | The restored claim's size matches the backup's                                                            | Positive | —    |
-| U-48 | The restored claim's filesystem matches `status.source.fsType`                                            | Positive | —    |
-| U-49 | The backup is not `Available`: the restore is refused                                                     | Negative | —    |
-| U-50 | `AwaitingVolume` holds until the control plane reports the volume restored                                | Negative | —    |
-| U-51 | An abort during `Validating`: `Aborted`, and nothing was created                                          | Positive | —    |
-| U-52 | An abort during `Binding`: refused by the graph, the operation runs on                                    | Negative | —    |
-| U-71 | A restart mid-`Binding`: the operation completes its own labeled claim rather than tripping `ClaimExists` | Positive | —    |
+| #    | Scenario                                                                                                              | Type       | Test                                                    |
+|------|-----------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------|
+| U-39 | A restore into a new claim: the claim is created and bound                                                            | Positive   | —                                                       |
+| U-40 | The claim already exists at create: the webhook rejects it (design §7)                                                | Negative   | —                                                       |
+| U-41 | The claim appears after admission: `Binding` refuses with `ClaimExists`                                               | Negative   | —                                                       |
+| U-42 | `spec.restore.targetPool` unset: the backup's own pool is used                                                        | Positive   | —                                                       |
+| U-43 | The backup's pool no longer exists: refused with `PoolNotFound`, naming it                                            | Negative   | —                                                       |
+| U-44 | `spec.restore.targetPool` set to a pool that does not exist: refused                                                  | Negative   | —                                                       |
+| U-74 | `spec.restore.targetPool` set to a pool that exists: admitted, the pool read at the stored version                    | Regression | `TestARestoreWithResolvableReferencesIsAdmitted`        |
+| U-45 | The created claim carries `spec.restore.claimLabels`                                                                  | Positive   | —                                                       |
+| U-46 | The created claim has no owner reference and survives the operation's deletion                                        | Positive   | —                                                       |
+| U-47 | The restored claim's size matches the backup's                                                                        | Positive   | —                                                       |
+| U-48 | The restored claim's filesystem matches `status.source.fsType`                                                        | Positive   | —                                                       |
+| U-89 | A Block backup is restored as a Block volume and claim, not formatted on first mount (2026-10-28-restore-volume-mode) | Regression | `TestRestoreOfABlockBackupProducesABlockClaim`          |
+| U-90 | `spec.restore.volumeMode` sets the mode of a backup that recorded none (2026-10-28-restore-volume-mode)               | Regression | `TestRestoreVolumeModeFromTheRequestOverridesTheBackup` |
+| U-49 | The backup is not `Available`: the restore is refused                                                                 | Negative   | —                                                       |
+| U-50 | `AwaitingVolume` holds until the control plane reports the volume restored                                            | Negative   | —                                                       |
+| U-51 | An abort during `Validating`: `Aborted`, and nothing was created                                                      | Positive   | —                                                       |
+| U-52 | An abort during `Binding`: refused by the graph, the operation runs on                                                | Negative   | —                                                       |
+| U-71 | A restart mid-`Binding`: the operation completes its own labeled claim rather than tripping `ClaimExists`             | Positive   | —                                                       |
 
 ### Import (withdrawn)
 
@@ -166,6 +170,26 @@ foreign backup is asserted here about a discovered one.
 |------|------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
 | U-72 | A backup in the store this cluster did not write: one `StorageBackup` is created, carrying the writing cluster's UUID in `status.source` | Positive | —    |
 | U-73 | A discovered foreign backup restores through the ordinary `Restore` action                                                               | Positive | —    |
+
+### Backup Requests (design §5.3)
+
+| #    | Scenario                                                                                                        | Type     | Test                                                           |
+|------|-----------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------|
+| U-75 | A request asks for one backup, records its ID, then follows the copy to its end                                 | Positive | `TestRequestRecordsTheBackupID`                                |
+| U-76 | A request that holds a backup ID asks for no second backup                                                      | Positive | `TestRequestFollowsTheCopyToItsEnd`                            |
+| U-77 | No cluster with a backup location: `Pending` with a reason, no call                                             | Negative | `TestRequestWaitsForAClusterWithABackupLocation`               |
+| U-78 | The mirror leaves a request alone                                                                               | Negative | `TestMirrorLeavesABackupRequestAlone`                          |
+| U-79 | The type admits a record or a request, and rejects both or neither                                              | Negative | `TestStorageBackupSpecIsEitherARecordOrARequest`               |
+| U-80 | A user may create and delete a request, and not a record                                                        | Positive | `TestAUserMayCreateAndDeleteABackupRequest`                    |
+| U-81 | A restore of a requested backup sends the identifier from status                                                | Positive | `TestRestoreOfARequestedBackupUsesTheIdentifierInStatus`       |
+| U-82 | A v1alpha1 backup with a claim and no backup ID converts to a request                                           | Positive | `TestStorageBackupRequestConvertsToTheHubsRequestAndBack`      |
+| U-83 | A backup a request owns gets no record, a record made earlier is removed, and a pruned copy fails the request   | Positive | `TestMirrorDefersToARequestThatOwnsTheBackup`                  |
+| U-84 | Deleting a request queues the record of its backup                                                              | Positive | `TestDeletingARequestQueuesTheRecordOfItsBackup`               |
+| U-85 | A restore reads its backup, cluster, and pool where they are and creates its claim beside the operation         | Positive | `TestRestoreReachesAcrossNamespaces`                           |
+| U-86 | A reference that leaves the operation's namespace needs the requester's access, and one that stays asks nothing | Negative | `TestARestoreReachingAcrossNamespacesNeedsTheRequestersAccess` |
+| U-87 | Operations of one name in different namespaces take turns on one backup                                         | Negative | `TestRestoresOfOneBackupFromTwoNamespacesTakeTurns`            |
+
+---
 
 ---
 

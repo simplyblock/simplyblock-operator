@@ -62,16 +62,13 @@ var _ = ginkgo.Describe("SPDKCSI-RECONNECT", func() {
 			framework.ExpectNoError(waitForControllerReady(f.ClientSet, 4*time.Minute), "controller ready")
 			framework.ExpectNoError(waitForNodeServerReady(f.ClientSet, 3*time.Minute), "node DaemonSet ready")
 
-			ginkgo.By("create a StorageClass pinned to the live cluster, PVC and test pod")
-			// Use a test-owned StorageClass pinned to the live cluster rather than
-			// the operator's default SC, which may reference a stale cluster_id.
+			ginkgo.By("create this spec's StorageClass, PVC and test pod")
 			scName := fmt.Sprintf("reconnect-%s", ns)
 			// max_namespace_per_subsys=1 keeps each volume in its own NVMe-oF
 			// subsystem so its NQN carries this volume's own lvol id.
-			createStorageClassWithParams(f.ClientSet, scName, map[string]string{
-				scParamClusterID:             liveClusterID(f),
+			createStorageClass(f, scName, map[string]string{
 				scParamMaxNamespacePerSubsys: "1",
-			})
+			}, nil)
 			ginkgo.DeferCleanup(func() { deleteStorageClass(f.ClientSet, scName) })
 			framework.ExpectNoError(createModePVC(f.ClientSet, ns, "spdkcsi-pvc", scName, false), "create PVC")
 			framework.ExpectNoError(

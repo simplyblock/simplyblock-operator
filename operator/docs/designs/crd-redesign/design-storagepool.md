@@ -1,14 +1,25 @@
 # Design Document: The StoragePool and Its Operations
 
-**Status:** Draft  
+**Status:** Partially Implemented  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-29 (last updated 2026-09-08)  
+**Date:** 2026-08-29 (last updated 2026-09-17)  
 **Test Plan:** [`tests/test-plan-storagepool.md`](../../tests/test-plan-storagepool.md)
 
-This document specifies the target model. `StoragePool` is registered and in a
-shape that predates the conventions of
-[`design-crd-model.md`](design-crd-model.md), `StoragePoolOps` does not exist,
-and §11 is the single record of what the rework changes against what ships.
+Both kinds are built at `storage.simplyblock.io/v1alpha2`, with a `v1alpha1`
+spoke converting the shape that shipped. §11 is the record of what moved.
+
+What exists: the regrouped spec and its conversion (§3), the controller with its
+creation claim, its resolved node list, and its class index (§4), the label
+assignment (§5), the deletion holds and the owner reference (§6), the
+`StoragePoolOps` lock and its phases (§7), the validator (§3.4), the events and
+the gauges (§9), and `StoragePoolMetrics` in `metrics.simplyblock.io/v1alpha2`.
+
+What does not: the `Rebalance` action, which §7 marks provisional and which the
+controller refuses at run time until `PersistentVolumeOps` exists to fan out
+into; the pool stream of §4.2 and §8, which waits on the control plane's SSE
+work, so status is polled; and the driver's half of `QoSParameterConflict`
+(§5.1), which needs an event recorder the CSI driver does not have — the pool's
+half, which §9.1 specifies, is emitted.
 
 ---
 
@@ -117,7 +128,7 @@ rather than a switch.
 
 ## 3. StoragePool: API
 
-Declared in `operator/api/v1alpha1/storagepool_types.go`, short name `sp`. The
+Declared in `operator/api/v1alpha2/storagepool_types.go`, short name `sp`. The
 type is Appendix A. What follows quotes the field an argument turns on and no
 more.
 
@@ -138,8 +149,12 @@ by default.
 ClusterRef string `json:"clusterRef"`
 ```
 
-`spec.allowedNodes` restricts which storage nodes may host the pool's volumes.
-Empty means every node in the cluster, which is the usual case.
+`spec.allowedNodes` restricts which hosts may carry the pool's volumes, and it
+names Kubernetes `Node` objects rather than `StorageNode`s, for the reason §4.3
+gives. Empty means every node in the cluster, which is the usual case.
+It requires `spec.volumeDefaults.enableDHCHAP`, which a CEL rule on the spec enforces at
+admission: the nodes are registered as the pool's allowed hosts, and the control plane accepts
+that only for a DHCHAP pool.
 
 **The pool's own ceilings, under `spec.limits`.** These are what the pool as a
 whole may consume, enforced by the control plane against the pool.
@@ -166,6 +181,10 @@ type PoolLimits struct {
 }
 ```
 
+`spec.limits.iops` and `spec.limits.throughput` are refused at admission for now, by a CEL
+rule on `PoolLimits`: the data plane's pool-wide QoS is not reliable. `capacity` and
+`maxVolumeSize` are plain admission checks in the control plane and are unaffected.
+
 **The defaults its volumes get, under `spec.volumeDefaults`.** These are the values
 a class assigned to this pool is expected to carry in its `parameters`, which is how
 they reach the CSI driver (§5). The pool states them so that a class can be checked
@@ -184,6 +203,21 @@ Naming the groups for what they limit is what makes that legible.
 ([`design-crd-model.md`](design-crd-model.md) §7.5). It is off by default, so it
 takes the `enable` form, and it moves under `spec.volumeDefaults` because it is a
 property of the volumes the pool creates rather than of the pool.
+
+**`stripeWidth` and `stripeSize` stripe the pool's volumes**
+([`csi-driver/docs/striped-volumes.md`](../../../../csi-driver/docs/striped-volumes.md)).
+They are written as `stripe_width` and `stripe_size`, and a width of 0 or 1 writes
+neither. CEL rules on `VolumeDefaults` refuse what the CSI driver would refuse for
+every claim: a `stripeSize` without a width of 2 or more, and a striped pool with
+client-side compression, deduplication, or replication. What depends on the
+cluster, its storage-node count and whether it is stretched, is the admission
+webhook's (§3.4).
+
+Like every volume default, the stripe reaches a volume only through a class that
+states it, and the operator writes a class for the default pool alone (§4.4). Unlike
+the other defaults, a class assigned to a striped pool may not depart from it: the
+pool's admission checks were made for its stripe, and a class striping otherwise, or
+not at all, would provision volumes nobody checked. §5 says how that is enforced.
 
 ### 3.2 Immutability
 
@@ -223,8 +257,9 @@ between doing the work and declining to redo it.
 
 `status.limits` is what the control plane reports the pool's ceilings actually
 are, which is not necessarily what `spec.limits` asked for.
-`status.allowedNodes` is `spec.allowedNodes` resolved against the nodes that exist,
-which is what the control plane is sent (§4.3). `status.activeOpsRef` is the
+`status.allowedNodes` is `spec.allowedNodes` resolved against the `Node` objects
+that exist, and it is what the host list sent to the control plane and the per-pool
+node labels are both derived from (§4.3). `status.activeOpsRef` is the
 operation lock ([`design-crd-model.md`](design-crd-model.md) §3.2), and
 `status.observedGeneration` is required by that document's §7.9.
 
@@ -250,18 +285,40 @@ ordering, which nothing about the intent justifies.
 So the webhook answers one question, whether the named object exists, and everything
 about the cluster's readiness belongs to the reconcile.
 
+**A striped pool is checked against the cluster that will serve it.** A
+`stripeWidth` of 2 or more is refused on a stretched or sync-replicated cluster, and
+when it is wider than the cluster's storage nodes once there are nodes to count. On a
+supercluster both are checked for every member that takes new volumes, since a
+striped volume is placed in one member and striped there. These checks run on
+`CREATE` and on an `UPDATE` that introduces the stripe: `spec.volumeDefaults` is
+immutable once set, but a pool created without it may gain it. An update that leaves
+the stripe as it was is not checked, for the reason an update is not checked against
+`spec.clusterRef`.
+
 **`failurePolicy: Fail`**, for the reason
 [`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5 gives:
 the webhook server runs in the operator pod, so while it is unavailable nothing
 reconciles a pool anyway, and admitting a pool whose immutable reference cannot be
 resolved creates an object that can only be deleted.
 
+**A `StorageClassValidator` rejects a class that departs from the pool it is
+assigned to** (§5). It sees only classes carrying the `storage.simplyblock.io/pool`
+label: a `matchConditions` expression scopes it, so that its `failurePolicy: Fail`
+cannot block a class that names no pool while the operator is unavailable. A class is
+rejected when it reaches another cluster or pool than its labels assign it to, or when
+its `stripe_width` or `stripe_size` differs from the pool's, both read the way the CSI
+driver reads them. Every other default it overrides is admitted. A pool that does not
+exist yet admits the class, since there is nothing to compare with, and the pool
+controller reports a disagreement once the pool is there. An update is checked only
+when it assigns the class to a pool: `parameters` is immutable, so any other update
+changes nothing the check reads, and a class that predates the webhook stays editable.
+
 ### 3.5 Examples
 
 The smallest useful pool:
 
 ```yaml
-apiVersion: storage.simplyblock.io/v1alpha1
+apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
   name: tenant-a
@@ -370,14 +427,29 @@ returns without patching.
 A node drained and removed through `StorageNodeOps` leaves its name in every pool
 that listed it, and the list is desired state a person wrote.
 
+**The names are Kubernetes `Node` names, not `StorageNode` names.** A pool
+restricts placement to hosts, and the two facts the restriction is expressed with
+both live on the `Node` object: its UID, from which the host NQN is derived, and
+its labels, which is where the per-pool allowance is written. Naming the
+`StorageNode` would mean resolving it to its worker before either could be read,
+and the worker is what the user is choosing in the first place.
+
 **The controller resolves the list on every pass and publishes the result as
-`status.allowedNodes`.** A name that no longer resolves to a `StorageNode` in the
-pool's namespace is dropped from the resolved set, reported once with
-`AllowedNodeMissing` (§9.1), and what the control plane is sent is the resolved set
-rather than the authored one. A pool whose every allowed node has been removed
-resolves to an empty set, which is not the same as an absent list: absent means every
-node, and empty after resolution means the pool can place nothing, so the phase holds
-and the event says which names failed.
+`status.allowedNodes`.** A name that resolves to no `Node` is dropped from the
+resolved set, reported once with `AllowedNodeMissing` (§9.1), and what the control
+plane is sent is the resolved set rather than the authored one. A pool whose every
+allowed node has been removed resolves to an empty set, which is not the same as an
+absent list: absent means every node, and empty after resolution means the pool can
+place nothing, so the phase holds and the event says which names failed.
+
+**The resolved set reaches two places, and neither of them is a name.** The
+control plane is sent one host NQN per node, derived from that node's UID by the
+same formula the CSI node plugin uses, so no NQN is written by hand on either
+side. Kubernetes is given one label per pool on each resolved node, keyed by the
+pool's UUID and removed from every node that leaves the set, which is what the
+class republishes as the DHCHAP node selector (§4.4). Both are derived on every
+pass, so a node added back under the same name is re-derived rather than
+repaired.
 
 **`spec.allowedNodes` itself is left exactly as authored, and the operator does not
 prune it.** Rewriting a user's spec to match the world makes the object stop
@@ -389,10 +461,14 @@ harmful, which is the property the resolution provides and a prune would not.
 
 ### 4.4 A Default Pool Is Created With the Cluster
 
-**Creating a `StorageCluster` creates one `StoragePool` in it.** A cluster with no
-pool can hold no volumes, so the first pool is not a decision worth making a
-prerequisite: the cluster's own creation path creates it, owns it by the same
-controller reference every pool has (§6), and names it for the cluster it belongs to.
+**A `StorageCluster` is given one `StoragePool`.** A cluster with no pool can hold
+no volumes, so the first pool is not a decision worth making a prerequisite: the
+cluster's own reconciler writes it, owns it by the same controller reference every
+pool has (§6), and names it for the cluster it belongs to. It is written on the
+cluster's steady-state pass rather than as a step of the creation machine, because
+the pool's own controller needs the cluster's UUID and a pool written before there
+is one would only wait. An annotation on the cluster records that the pool was
+written, so nothing writes it a second time.
 
 **It is an ordinary pool in every other respect, deletion included.** Its limits are
 the cluster's defaults, it can be edited, and it deletes like any other pool: §6's two
@@ -402,13 +478,33 @@ because a cluster that has outgrown one pool per tenant is not obliged to keep o
 What the default is for is the case where somebody wants storage from a cluster they
 just created and has not yet decided how to divide it.
 
-**One `StorageClass` is created with it, so the cluster is provisionable on arrival.**
-A pool nothing can consume is not a usable default, so the cluster's creation path
-writes both: the pool, and one class assigned to it by the three labels of §5. The
-class needs no ordering against the backend, because its `parameters` name the cluster
-UUID and the pool *name* rather than the pool's UUID, and both are known before the
-pool exists in the control plane. A claim made in the window before it does fails at
-provision time and succeeds afterward.
+**One `StorageClass` is written for it, once the pool exists in the control
+plane.** A pool nothing can consume is not a usable default, so the pool's own
+controller writes one class assigned to it by the three labels of §5, and it does
+so on the first pass where `status.uuid` is set rather than beside the pool. The
+ordering is the DHCHAP node selector's: the parameter republishes the per-pool
+label key so the driver can turn it into the volume's node affinity, and that key
+carries the pool's UUID, which does not exist until the control plane has created
+the pool. A class whose `parameters` are immutable cannot gain the key later, so
+it is written when the key can be stated. A claim made in the window before that
+fails at provision time and succeeds afterward.
+
+**The class is named `simplyblock-<namespace>-<cluster>`, with simplyblock said
+once.** A `StorageClass` is cluster-scoped, so the namespace is in the name. The
+operator's own namespace is `simplyblock`, and a namespace or cluster name may open
+with the word too, so the leading repetitions collapse: namespace `simplyblock` with
+cluster `production` derives `simplyblock-production`, as in the example below. A
+class written under an earlier, repeated name keeps it, because
+`status.defaultStorageClassName` records it and the class is never written again.
+
+**The class is written once, and a name already taken is reported rather than
+overwritten.** A `StorageClass` is cluster-scoped, so an existing object under the
+name may have nothing to do with this pool, and recording it as the pool's default
+would leave the pool pointing at a class that provisions somewhere else and never
+writing the one it needs. The name is adopted only when the occupant is
+recognizably the class this operator would have written. Otherwise
+`StorageClassNameTaken` (§9.1) says so and names the two remedies, which are
+assigning a class by label or deleting the occupant.
 
 ```yaml
 kind: StorageClass
@@ -492,6 +588,25 @@ this class draw from," in either direction: a class names one pool, and the clas
 assigned to a pool are a label selector rather than a computation. `parameters`
 carries what the driver needs to reach the backend, and the operator validates that
 the two agree.
+
+**Agreeing is two tiers, because a class may differ from its pool on purpose.** A pool
+can back an `ext4` class and an `xfs` class, so most of `spec.volumeDefaults` is a
+default a class may override. Two things are not:
+
+- **Where the class provisions.** `cluster_id` and `pool_name` have to reach the pool
+  the labels name, by its name or its UUID. A class reaching another one provisions
+  volumes the pool never sees.
+- **The stripe.** `stripe_width` and `stripe_size` have to be the pool's, as the CSI
+  driver reads them, so `64Ki` and `65536` are one size. The pool's admission checks
+  (§3.4) were made for its stripe, and a class striping otherwise, or not at all,
+  would provision volumes nobody checked: a striped pool whose class did not stripe
+  provisioned ordinary volumes, and nothing said so.
+
+A departure from either is rejected at admission (§3.4) and, for a class written before
+its pool or before the webhook, reported as `StorageClassDisagreesWithPool` (§9.1). An
+override of any other default is reported as `StorageClassOverridesPoolDefault`, as
+information. QoS ceilings are read under every spelling §5.1 names, so a class stating
+the pool's ceiling under an older key agrees with it.
 
 **The class name carries nothing, and that is what makes zero-or-more possible.** A
 class named for its pool (`simplyblock-<namespace>-<cluster>-<pool>`) puts the link
@@ -705,7 +820,7 @@ delete a pool with volumes in it, so the failure surfaces as a
 
 ## 7. StoragePoolOps
 
-Declared in `operator/api/v1alpha1/storagepoolops_types.go`, short name `spops`,
+Declared in `operator/api/v1alpha2/storagepoolops_types.go`, short name `spops`,
 and reconciled by `StoragePoolOpsReconciler` in
 `operator/internal/controllers/pool/storagepoolops_controller.go`, beside the
 entity's own. The type is Appendix B.
@@ -801,25 +916,28 @@ The pool controller emits no events and exports no metric. Both tables are new.
 Events land on the `StoragePool`, which is what an administrator managing tenancy
 has open, and on the `StoragePoolOps` for an operation.
 
-| Event                                                    | Type      | Reason                      | On               |
-|----------------------------------------------------------|-----------|-----------------------------|------------------|
-| The pool was created in the control plane                | `Normal`  | `PoolCreated`               | `StoragePool`    |
-| Creation was rejected by the control plane               | `Warning` | `PoolCreationFailed`        | `StoragePool`    |
-| The cluster is not ready, so creation is held            | `Normal`  | `ClusterNotReady`           | `StoragePool`    |
-| A `StorageClass` was assigned to this pool               | `Normal`  | `StorageClassAssigned`      | `StoragePool`    |
-| The default class was created with the default pool      | `Normal`  | `StorageClassCreated`       | `StoragePool`    |
-| A class assigned to this pool sets both QoS spellings    | `Warning` | `QoSParameterConflict`      | `StoragePool`    |
-| An entry in `spec.allowedNodes` resolves to no node      | `Warning` | `AllowedNodeMissing`        | `StoragePool`    |
-| Deletion is held because a class is still assigned       | `Warning` | `StorageClassStillAssigned` | `StoragePool`    |
-| Deletion is held because volumes are still bound         | `Warning` | `VolumesStillBound`         | `StoragePool`    |
-| The control plane refused to delete the pool             | `Warning` | `PoolDeletionFailed`        | `StoragePool`    |
-| The pool's capacity limit has been reached               | `Warning` | `CapacityExhausted`         | `StoragePool`    |
-| The operation is waiting for another to release the lock | `Normal`  | `OperationQueued`           | `StoragePoolOps` |
-| The operation acquired the lock and started              | `Normal`  | `OperationStarted`          | `StoragePoolOps` |
-| The operation finished successfully                      | `Normal`  | `OperationSucceeded`        | `StoragePoolOps` |
-| The operation failed                                     | `Warning` | `OperationFailed`           | `StoragePoolOps` |
-| The operation was aborted and its unwind finished        | `Normal`  | `OperationAborted`          | `StoragePoolOps` |
-| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`      | `StoragePoolOps` |
+| Event                                                    | Type      | Reason                             | On               |
+|----------------------------------------------------------|-----------|------------------------------------|------------------|
+| The pool was created in the control plane                | `Normal`  | `PoolCreated`                      | `StoragePool`    |
+| Creation was rejected by the control plane               | `Warning` | `PoolCreationFailed`               | `StoragePool`    |
+| The cluster is not ready, so creation is held            | `Normal`  | `ClusterNotReady`                  | `StoragePool`    |
+| A `StorageClass` was assigned to this pool               | `Normal`  | `StorageClassAssigned`             | `StoragePool`    |
+| The default class was created with the default pool      | `Normal`  | `StorageClassCreated`              | `StoragePool`    |
+| The default class's name is taken by another class       | `Warning` | `StorageClassNameTaken`            | `StoragePool`    |
+| A class assigned to this pool sets both QoS spellings    | `Warning` | `QoSParameterConflict`             | `StoragePool`    |
+| A class assigned to this pool departs from it (§5)       | `Warning` | `StorageClassDisagreesWithPool`    | `StoragePool`    |
+| A class assigned to this pool overrides a default (§5)   | `Normal`  | `StorageClassOverridesPoolDefault` | `StoragePool`    |
+| An entry in `spec.allowedNodes` resolves to no node      | `Warning` | `AllowedNodeMissing`               | `StoragePool`    |
+| Deletion is held because a class is still assigned       | `Warning` | `StorageClassStillAssigned`        | `StoragePool`    |
+| Deletion is held because volumes are still bound         | `Warning` | `VolumesStillBound`                | `StoragePool`    |
+| The control plane refused to delete the pool             | `Warning` | `PoolDeletionFailed`               | `StoragePool`    |
+| The pool's capacity limit has been reached               | `Warning` | `CapacityExhausted`                | `StoragePool`    |
+| The operation is waiting for another to release the lock | `Normal`  | `OperationQueued`                  | `StoragePoolOps` |
+| The operation acquired the lock and started              | `Normal`  | `OperationStarted`                 | `StoragePoolOps` |
+| The operation finished successfully                      | `Normal`  | `OperationSucceeded`               | `StoragePoolOps` |
+| The operation failed                                     | `Warning` | `OperationFailed`                  | `StoragePoolOps` |
+| The operation was aborted and its unwind finished        | `Normal`  | `OperationAborted`                 | `StoragePoolOps` |
+| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`             | `StoragePoolOps` |
 
 **`VolumesStillBound` is the load-bearing one**, because it is the only thing
 that explains a `kubectl delete storagecluster` that does not finish (§6). Without
@@ -837,6 +955,11 @@ leaves `spec.allowedNodes` as authored, so a removed node's name stays there and
 otherwise produce an event on every reconcile forever. The event is what tells somebody
 the name is inert, and repeating it would tell them nothing new.
 
+**`StorageClassNameTaken` is the one an administrator has to act on.** The class
+is written once (§4.4), so a name already held by a class this operator would not
+have written leaves the default pool with none until somebody intervenes, and the
+event names both remedies rather than only the collision.
+
 **`QoSParameterConflict` is the proactive half of §5.1's conflict.** The driver emits
 the same reason on the claim it is provisioning, and this one fires when the class is
 first indexed, which is usually well before anybody's claim reaches it.
@@ -847,6 +970,7 @@ first indexed, which is usually well before anybody's claim reaches it.
 |------------------------------------------------------|---------------------------------------|--------------------------------------------------------------------------------|
 | `simplyblock_storagepool_capacity_bytes`             | `cluster`, `pool`                     | Gauge of the pool's capacity limit                                             |
 | `simplyblock_storagepool_used_bytes`                 | `cluster`, `pool`                     | Gauge of what it has allocated, so the ratio is the tenancy alert              |
+| `simplyblock_storagepool_provisioned_bytes`          | `cluster`, `pool`                     | Gauge of what its volumes were promised, which is what fills a pool first      |
 | `simplyblock_storagepool_volumes_count`              | `cluster`, `pool`                     | Gauge of logical volumes in the pool                                           |
 | `simplyblock_storagepool_bound_volumes_count`        | `cluster`, `pool`                     | Gauge of `PersistentVolume` objects bound to its class (§6)                    |
 | `simplyblock_storagepool_phase_state`                | `cluster`, `pool`, `phase`            | Gauge, 1 for the current phase, so a pool stuck in `Deleting` is alertable     |
@@ -855,8 +979,13 @@ first indexed, which is usually well before anybody's claim reaches it.
 | `simplyblock_storagepool_operation_duration_seconds` | `cluster`, `pool`, `action`           | Histogram of operation durations                                               |
 
 **`used_bytes` against `capacity_bytes` is the one a tenant operator watches**,
-and it is the only metric in this group that answers a capacity-planning question
+and it is the only pair in this group that answers a capacity-planning question
 rather than a health one.
+
+**`provisioned_bytes` is what the limit is actually enforced against**, and it
+sits beside `used_bytes` because the two diverge on a thin-provisioned pool: a
+pool can be nearly empty and fully committed at the same time, and only the
+second number says so. `CapacityExhausted` (§9.1) fires on this one.
 
 **Which volume in a pool is the one filling it up is not answered here.** A pool
 reports its own totals, and the per-volume breakdown behind them is served from
@@ -866,12 +995,42 @@ list on the pool or as a series per volume
 volumes there without being granted anything on the pool, and the cardinality of
 the workload stays out of both etcd and the scrape.
 
-**`storageclass_missing` and the gap between `volumes` and `bound_volumes` are
-the two integrity signals.** The first says the join's forward half is broken. The
-second says the control plane holds volumes Kubernetes does not account for,
-which is the unmanaged-volume condition that blocks a node drain
+**`storageclasses_count` at zero and the gap between `volumes` and
+`bound_volumes` are the two integrity signals.** The first says the join has no
+forward half: a pool nothing can consume, which is a valid state for a freshly
+created cluster (§4.4) and a broken one for anything else. The second says the
+control plane holds volumes Kubernetes does not account for, which is the
+unmanaged-volume condition that blocks a node drain
 ([`design-storagenode.md`](design-storagenode.md) §8.1) and is better noticed
 before somebody tries to drain.
+
+### 9.3 `StoragePoolMetrics`
+
+The gauges above are what a dashboard scrapes. `StoragePoolMetrics`, in
+`metrics.simplyblock.io/v1alpha2` beside `LogicalVolumeMetrics` and
+`StorageDeviceMetrics`, is the same numbers as an API resource a tenancy
+administrator can ask for by name: `kubectl get spm tenant-a`.
+
+**It is served rather than stored, for the reason the two readings beside it
+are.** What a pool holds moves with every volume written to it, and putting that
+in a custom resource would charge one etcd write and one wake-up of every
+watcher of the kind for a number nothing reconciles toward. So it is computed
+from the control plane's exported metrics when a client asks and never
+persisted, which is the trade `metrics.k8s.io` makes for `PodMetrics`.
+
+**The object is named after its `StoragePool` and lives in that namespace**, so
+ordinary namespaced RBAC confines a reader to the pools they already administer,
+and the aggregation into the built-in `view` role is what makes that work without
+a per-tenant dashboard. A control-plane pool with no `StoragePool` is not served:
+it has no name in this API and no namespace to be authorized against.
+
+**One asymmetry is the control plane's rather than a choice here.** It exports no
+`pool_date`, unlike the volume and device families, so a pool's reading carries no
+sample time and whether a pool has a reading is decided by its presence in the
+query's result rather than by asking the sample. A deployment with no reachable
+Prometheus serves no pool readings at all, because every field of one is a
+measurement: the pool's own limit is in its spec and is not a reading of
+anything.
 
 ---
 
@@ -904,7 +1063,7 @@ volume keeps serving I/O after its class is gone needs a real data path.
 | `spec.qos.*`                                                                           | `spec.limits.{iops,throughput}` (§3.1)                                                         | Spec regrouping, so that the pool's ceilings are named for what they limit                              |
 | `spec.storageClassParameters.*`                                                        | `spec.volumeDefaults.*` (§3.1)                                                                 | Spec regrouping, and the units align with `spec.limits`                                                 |
 | `spec.dhchap`                                                                          | `spec.volumeDefaults.enableDHCHAP` (§3.1)                                                      | Spec rename, owned by `design-crd-model.md` §9.6                                                        |
-| `encryption`, `replicate` in the class parameters                                      | `enableEncryption`, `enableReplication`                                                        | Spec renames, from the same list                                                                        |
+| `replicate` in the class parameters                                                    | `enableReplication`                                                                            | Spec rename, from the same list. `encryption` stays a class parameter                                   |
 | `qos_rw_iops`, `qos_rw_mbytes`, `qos_r_mbytes`, `qos_w_mbytes` in the class parameters | `max_iops`, `max_mbytes_per_sec`, `max_read_mbytes_per_sec`, `max_write_mbytes_per_sec` (§5.1) | Parameter renames. The old keys are read indefinitely, because a class's parameters cannot be rewritten |
 | `simplyblock.io/qos-*` overrides on a claim                                            | `storage.simplyblock.io/max-*` (§5.1)                                                          | Annotation renames, taking the group's key prefix. Both older spellings stay in the resolver            |
 | Untyped `status`, no phase                                                             | `StoragePoolPhase` (§3.3)                                                                      | Additive                                                                                                |
@@ -927,8 +1086,12 @@ volume keeps serving I/O after its class is gone needs a real data path.
 and `spec.status` are in a shipped CRD, so removing them is breaking in the
 narrow sense that an object setting them stops being accepted. Both are marked
 `FIXME: Unused for now` and neither has ever had an effect, so nothing that set
-them got any behavior from doing so. The group is at `v1alpha1`, which is the
-version where that argument is available.
+them got any behavior from doing so. The kind is at `v1alpha1`, which is the
+version where that argument is available. What was built keeps them anyway: the
+conversion stashes each in a `storage.simplyblock.io/v1alpha1-*` annotation and
+reads it back on the way down, which is the convention §3.3 of
+[`design-property-renames.md`](design-property-renames.md) sets for a lossy
+conversion, and it costs nothing to preserve text nobody acted on.
 
 **The two regroupings are the breaking rows to sequence carefully.** A renamed
 spec field is silently ignored on an object that still sets the old name, so a
@@ -936,6 +1099,36 @@ pool whose `capacityLimit` moved to `limits.capacity` loses its limit rather tha
 failing to apply. `spec.volumeDefaults` is worse, because it is immutable once
 set: a pool that applies with the old spelling gets an empty
 `volumeDefaults`, which then cannot be corrected without deleting the pool.
+
+**Neither regrouping breaks, because the kind gained a version rather than
+changing one.** `v1alpha1` keeps every name that shipped and the conversion
+webhook translates, so a pool applied with `capacityLimit` still has a limit and
+a pool applied with `storageClassParameters` still has its defaults. The
+conversion is what makes the regrouping affordable, and it is also why
+`spec.limits` and `spec.volumeDefaults` are left absent rather than empty when
+their source is: an empty immutable block is a value nobody could correct.
+
+**Nine fields have no `v1alpha1` spelling at all, and they are stashed rather
+than added to it.** `volumeDefaults.enableCompression`, `.enableReplication`,
+and `.priorityClass` are new, and so are six of the status fields. While
+`v1alpha1` is the storage version, anything the hub can express and the spoke
+cannot is dropped on *every write* rather than once at upgrade time — a
+controller writing `status.phase` would read back a pool that never had one — so
+the conversion writes each to
+`storage.simplyblock.io/conversion-<field>` on the way down and restores it on
+the way up ([`design-api-upgrade.md`](design-api-upgrade.md) §6.2). That is the
+opposite direction from `spec.action` and `spec.status`, which are this version's
+and stash under `storage.simplyblock.io/v1alpha1-<field>`, and the two keys are
+separate because the two problems are.
+
+**Growing `v1alpha1` instead would have been the wrong trade.** A field added
+there is a field a `v1alpha1` client can set, which makes it a compatibility
+surface that has to be honored for as long as the version is served; an
+annotation is conversion state that nothing else reads and that goes when
+`v1alpha1` does. The cost is that the stash is not a schema, so a hand-edited
+value is dropped rather than rejected, which is the same trade the QoS ceilings'
+parsing takes and for the same reason: a conversion that errors makes the whole
+object unreadable.
 
 ---
 
@@ -973,11 +1166,10 @@ const (
 	StoragePoolPhaseDeleting StoragePoolPhase = "Deleting"
 )
 
-// ThroughputLimits are throughput ceilings in MiB/s. Zero is unlimited, which is
-// the control plane's own convention for these values.
-// ThroughputLimits are throughput ceilings in megabytes per second. The unit is
-// the field's, not the value's, which is why the class keys these reach spell it
-// out: a parameter map has no type to carry it (§5.1).
+// ThroughputLimits are throughput ceilings in megabytes per second. Zero is
+// unlimited, which is the control plane's own convention for these values. The
+// unit is the field's, not the value's, which is why the class keys these reach
+// spell it out: a parameter map has no type to carry it (§5.1).
 type ThroughputLimits struct {
 	// Read is the read-only ceiling, written as max_read_mbytes_per_sec.
 	// +kubebuilder:validation:Minimum=0
@@ -1046,11 +1238,6 @@ type VolumeDefaults struct {
 	// +optional
 	EnableCompression *bool `json:"enableCompression,omitempty"`
 
-	// EnableEncryption encrypts logical volumes, using the key store the cluster
-	// names in spec.kms.
-	// +optional
-	EnableEncryption *bool `json:"enableEncryption,omitempty"`
-
 	// EnableReplication replicates logical volumes.
 	// +optional
 	EnableReplication *bool `json:"enableReplication,omitempty"`
@@ -1092,9 +1279,15 @@ type StoragePoolSpec struct {
 	// +k8s:immutable
 	ClusterRef string `json:"clusterRef"`
 
-	// AllowedNodes restricts which storage nodes may host this pool's volumes.
-	// Empty means every node in the cluster. Narrowing it stops new volumes
-	// landing on the removed nodes and leaves the existing ones where they are.
+	// AllowedNodes restricts which hosts may carry this pool's volumes, by
+	// Kubernetes Node name. Empty means every node in the cluster. Narrowing it
+	// stops new volumes landing on the removed nodes and leaves the existing
+	// ones where they are.
+	//
+	// The list is left exactly as authored: a name that no longer resolves is
+	// dropped from Status.AllowedNodes rather than pruned from here, so a node
+	// removed for maintenance and added back under the same name returns to the
+	// pools that named it without anybody re-authoring them.
 	// +optional
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
@@ -1120,6 +1313,11 @@ type PoolLimitsStatus struct {
 	// Host is the backend host enforcing the pool's QoS.
 	// +optional
 	Host string `json:"host,omitempty"`
+
+	// Capacity is the capacity limit the control plane is enforcing, read
+	// from the pool's max_size and written as a quantity. Empty is unlimited.
+	// +optional
+	Capacity string `json:"capacity,omitempty"`
 
 	// +optional
 	IOPS *int32 `json:"iops,omitempty"`
@@ -1162,7 +1360,11 @@ type StoragePoolStatus struct {
 	// +optional
 	Limits *PoolLimitsStatus `json:"limits,omitempty"`
 
-	// AllowedNodes is the resolved node list.
+	// AllowedNodes is Spec.AllowedNodes resolved against the Node objects that
+	// exist, which is what the control plane's host list and the per-pool node
+	// labels are derived from. An empty list here is not the same as an absent
+	// Spec.AllowedNodes: absent means every node, and empty after resolution
+	// means the pool can place nothing.
 	// +optional
 	// +listType=set
 	AllowedNodes []string `json:"allowedNodes,omitempty"`
@@ -1183,6 +1385,9 @@ type StoragePoolStatus struct {
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 
+// v1alpha2 is the storage version in the manifests this repository ships, and
+// v1alpha1 is the spoke that keeps the shape which shipped (§11).
+// +kubebuilder:storageversion
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sp
@@ -1205,6 +1410,9 @@ type StoragePool struct {
 	Spec   StoragePoolSpec   `json:"spec,omitempty"`
 	Status StoragePoolStatus `json:"status,omitempty"`
 }
+
+// Hub marks this version as the conversion hub for StoragePool.
+func (*StoragePool) Hub() {}
 
 // +kubebuilder:object:root=true
 

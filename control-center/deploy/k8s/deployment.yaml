@@ -94,29 +94,6 @@ spec:
               value: http://simplyblock-operator:8080
             - name: SB_PROMETHEUS_URL
               value: http://simplyblock-prometheus:9090
-            # The control plane v2 API of this cluster, proxied as /cp/local/
-            # with the pod's own ServiceAccount token (the API accepts a token
-            # of the cluster it runs in). HTTPS with a mounted CA when the
-            # control plane serves TLS: set SB_CP_CA_FILE to it.
-            - name: SB_CP_URL
-              value: http://simplyblock-webappapi:5000
-            # The contexts file: other clusters the console reaches as
-            # /k8s/<name>/ and /cp/<name>/. See contexts-example.yaml. Read
-            # only when present, so this needs no ConfigMap to start.
-            - name: SB_CONTEXTS_FILE
-              value: /etc/sb/contexts/contexts.json
-            # How this cluster appears next to the contexts: its name, its
-            # site/stage/tenant labels (empty ones dropped), and the
-            # namespaces it manages (empty means SB_NAMESPACE).
-            - name: SB_LOCAL_CONTEXT_NAME
-              value: local
-            - name: SB_LOCAL_LABELS
-              value: ""
-            - name: SB_LOCAL_NAMESPACES
-              value: ""
-            # Feature flags handed to the console, comma-separated.
-            - name: SB_FEATURES
-              value: ""
             - name: SB_MOCK
               value: "false"
             - name: SB_LISTEN_PORT
@@ -154,18 +131,6 @@ spec:
               mountPath: /tmp/nginx
             - name: nginx-confd
               mountPath: /etc/nginx/conf.d
-            # Contexts: the ConfigMap holds contexts.json, and each context's
-            # Secret (token, ca.crt, optionally cp-token and cp-ca.crt) is
-            # mounted in a directory named after the context next to it.
-            # Uncomment together with the volumes below once
-            # contexts-example.yaml has been applied with real values.
-            # - name: contexts
-            #   mountPath: /etc/sb/contexts/contexts.json
-            #   subPath: contexts.json
-            #   readOnly: true
-            # - name: ctx-site-b
-            #   mountPath: /etc/sb/contexts/site-b
-            #   readOnly: true
       volumes:
         - name: nginx-tmp
           emptyDir:
@@ -175,12 +140,6 @@ spec:
           emptyDir:
             medium: Memory
             sizeLimit: 1Mi
-        # - name: contexts
-        #   configMap:
-        #     name: simplyblock-control-center-contexts
-        # - name: ctx-site-b
-        #   secret:
-        #     secretName: cc-ctx-site-b
 ---
 apiVersion: v1
 kind: Service

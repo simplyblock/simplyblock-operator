@@ -17,6 +17,7 @@ import (
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/inventory"
+	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/pci"
 )
 
@@ -28,17 +29,82 @@ import (
 // which part of the answer is missing.
 func FromInventory(node string, at time.Time, inv inventory.Inventory, unreadable error) Report {
 	return Report{
-		Version:         ReportVersion,
-		Node:            node,
-		ProbedAt:        metav1.NewTime(at),
-		CPU:             cpuOf(inv.CPU),
-		Memory:          memoryOf(inv.Memory),
-		HugePages:       hugePagesOf(inv.HugePages),
-		Interfaces:      interfacesOf(inv.Interfaces),
-		Devices:         devicesOf(inv.Devices),
-		NVMeControllers: controllersOf(inv.NVMeControllers),
-		Unreadable:      sentences(unreadable),
+		Version:            ReportVersion,
+		Node:               node,
+		ProbedAt:           metav1.NewTime(at),
+		CPU:                cpuOf(inv.CPU),
+		Memory:             memoryOf(inv.Memory),
+		HugePages:          hugePagesOf(inv.HugePages),
+		Interfaces:         interfacesOf(inv.Interfaces),
+		Devices:            devicesOf(inv.Devices),
+		NVMeControllers:    controllersOf(inv.NVMeControllers, inv.NVMeFormats),
+		Reclaimed:          controllersOf(inv.Reclaimed, nil),
+		HostOS:             hostOSOf(inv.HostOS),
+		NetworkAttachments: networkAttachmentsOf(inv.NetworkAttachments),
+		Unreadable:         sentences(unreadable),
 	}
+}
+
+// networkAttachmentsOf renders the definitions, or nothing for a collection
+// that was given no cluster to read them from.
+func networkAttachmentsOf(attachments inventory.NetworkAttachments) *NetworkAttachments {
+	if attachments.State == "" {
+		return nil
+	}
+	out := &NetworkAttachments{
+		State:     string(attachments.State),
+		Detail:    attachments.Detail,
+		Namespace: attachments.Namespace,
+	}
+	for _, definition := range attachments.Definitions {
+		out.Definitions = append(out.Definitions, NetworkAttachment{
+			Namespace:     definition.Namespace,
+			Name:          definition.Name,
+			Type:          definition.Config.Type,
+			HostInterface: definition.Config.HostInterface,
+			PCIAddress:    definition.Config.PCIAddress,
+			Mode:          definition.Config.Mode,
+			IPAM:          definition.Config.IPAM,
+			ResourceName:  definition.ResourceName,
+			Problem:       definition.Config.Problem,
+		})
+	}
+	return out
+}
+
+// hostOSOf renders the OS reading, which is five strings and no judgment:
+// whether a distribution is supported is the operator's question and not the
+// probe's.
+func hostOSOf(os inventory.HostOS) HostOS {
+	return HostOS{
+		Distro:       string(os.Distro),
+		Family:       string(os.Family),
+		Version:      os.Version,
+		PrettyName:   os.PrettyName,
+		Architecture: os.Architecture,
+		Kernel: Kernel{
+			Release:       os.Kernel.Release,
+			Version:       kernelVersionOf(os.Kernel.Version),
+			NVMeMultipath: Fact{State: string(os.Kernel.NVMeMultipath.State), Detail: os.Kernel.NVMeMultipath.Detail},
+			KVM:           capabilityOf(os.Kernel.KVM),
+			TUN:           capabilityOf(os.Kernel.TUN),
+			PNFSBlock:     capabilityOf(os.Kernel.PNFSBlock),
+		},
+	}
+}
+
+// kernelVersionOf is the kernel version in the report, or nil for one that was
+// not read.
+func kernelVersionOf(version inventory.KernelVersion) *KernelVersion {
+	if version == (inventory.KernelVersion{}) {
+		return nil
+	}
+	return &KernelVersion{Major: version.Major, Minor: version.Minor, Patch: version.Patch}
+}
+
+// capabilityOf is one optional kernel capability in the report's vocabulary.
+func capabilityOf(capability inventory.Capability) Fact {
+	return Fact{State: string(capability.State), Detail: capability.Detail}
 }
 
 func cpuOf(cpu inventory.CPU) CPU {
@@ -104,29 +170,58 @@ func interfacesOf(ifaces []inventory.Interface) []Interface {
 			PCIAddress: iface.PCIAddress,
 			NUMANode:   iface.NUMANode,
 			Virtual:    iface.Virtual,
+			Peered:     iface.Peered,
 			Loopback:   iface.Loopback,
+			Bridge:     iface.Bridge,
+			Kind:       string(iface.Kind),
+			Lower:      iface.Lower,
+			Upper:      iface.Upper,
+			VLAN:       vlanOf(iface.VLAN),
+			VXLAN:      vxlanOf(iface.VXLAN),
+			Addresses:  iface.Addresses,
 		})
 	}
 	return out
+}
+
+func vlanOf(tag *inventory.VLANTag) *VLAN {
+	if tag == nil {
+		return nil
+	}
+	return &VLAN{ID: tag.ID, Protocol: tag.Protocol}
+}
+
+func vxlanOf(overlay *inventory.VXLANOverlay) *VXLAN {
+	if overlay == nil {
+		return nil
+	}
+	return &VXLAN{VNI: overlay.VNI}
 }
 
 func devicesOf(candidates []blockdev.Candidate) []Device {
 	out := make([]Device, 0, len(candidates))
 	for _, c := range candidates {
 		device := Device{
-			Name:        c.Name,
-			Path:        c.Path,
-			PCIAddress:  c.PCIAddress,
-			SizeBytes:   c.SizeBytes,
-			Kind:        string(c.Kind),
-			Transport:   string(c.Transport),
-			Vendor:      c.Vendor,
-			Model:       c.Model,
-			Serial:      c.Serial,
-			Rotational:  c.Rotational,
-			NUMANode:    c.NUMANode,
-			Available:   c.Available(),
-			ContentType: c.Reading.Type,
+			Name:       c.Name,
+			Path:       c.Path,
+			StablePath: c.StablePath,
+			PCIAddress: c.PCIAddress,
+			SizeBytes:  c.SizeBytes,
+			Kind:       string(c.Kind),
+			Transport:  string(c.Transport),
+			Vendor:     c.Vendor,
+			Model:      c.Model,
+			Serial:     c.Serial,
+			Rotational: c.Rotational,
+			// The geometry: the block size, and the atomic write units carried
+			// as the scan read them, nil included (see Device).
+			LogicalBlockSize:        c.LogicalBlockSize,
+			AtomicWriteUnitMaxBytes: c.AtomicWriteUnitMaxBytes,
+			AtomicWriteUnitMinBytes: c.AtomicWriteUnitMinBytes,
+			NUMANode:                c.NUMANode,
+			SubsystemNQN:            c.SubsystemNQN,
+			Available:               c.Available(),
+			ContentType:             c.Reading.Type,
 		}
 		// A device refused before anything was opened carries ContentUnknown,
 		// and the report leaves the field empty rather than writing "Unknown":
@@ -146,17 +241,68 @@ func devicesOf(candidates []blockdev.Candidate) []Device {
 	return out
 }
 
-func controllersOf(devices []pci.Device) []Controller {
+// controllersOf renders the controllers, each with the LBA formats read from
+// it. The formats are joined by PCI address, which is the key both readings
+// share.
+func controllersOf(devices []pci.Device, formats []inventory.NVMeControllerFormats) []Controller {
+	byAddress := make(map[string][]NamespaceFormats, len(formats))
+	for _, controller := range formats {
+		for _, namespace := range controller.Namespaces {
+			// A namespace with no formats says nothing a reader can use.
+			if len(namespace.Formats) == 0 {
+				continue
+			}
+			byAddress[controller.Address] = append(byAddress[controller.Address], namespaceFormatsOf(namespace))
+		}
+	}
+
 	out := make([]Controller, 0, len(devices))
 	for _, device := range devices {
 		out = append(out, Controller{
-			Address:          device.Address,
-			Driver:           device.Driver,
-			Vendor:           device.Vendor,
-			Product:          device.Product,
-			NUMANode:         device.NUMANode,
-			TakenByUserspace: device.BoundToUserspace(),
+			Address:    device.Address,
+			Driver:     device.Driver,
+			Vendor:     device.Vendor,
+			Product:    device.Product,
+			NUMANode:   device.NUMANode,
+			InUse:      device.InUse,
+			LBAFormats: byAddress[device.Address],
 		})
+	}
+	return out
+}
+
+// namespaceFormatsOf renders one namespace's formats. The broadcast NSID
+// becomes Common, because 4294967295 in a report reads as a namespace.
+func namespaceFormatsOf(namespace nvme.NamespaceFormats) NamespaceFormats {
+	out := NamespaceFormats{
+		Formats:          make([]LBAFormat, 0, len(namespace.Formats)),
+		ExtendedMetadata: namespace.ExtendedMetadata,
+	}
+	if namespace.NSID == nvme.NSIDAll {
+		out.Common = true
+	} else {
+		out.NSID = uint32(namespace.NSID)
+	}
+	if namespace.InUse >= 0 {
+		current := namespace.InUse
+		out.Current = &current
+	}
+	for _, format := range namespace.Formats {
+		out.Formats = append(out.Formats, LBAFormat{
+			Index:               format.Index,
+			DataSize:            format.DataSize,
+			MetadataSize:        format.MetadataSize,
+			RelativePerformance: format.RelativePerformance.String(),
+		})
+	}
+	if a := namespace.PowerFailAtomicity; a != nil {
+		out.PowerFailAtomicity = &PowerFailAtomicity{
+			NamespaceSpecific: a.NamespaceSpecific,
+			NamespaceBlocks:   a.NamespaceBlocks,
+			ControllerBlocks:  a.ControllerBlocks,
+			BoundaryBlocks:    a.BoundaryBlocks,
+			BoundaryOffset:    a.BoundaryOffset,
+		}
 	}
 	return out
 }
@@ -184,18 +330,29 @@ func sentences(err error) []string {
 // Summary is the one line the probe logs when it is done, so that a
 // kubectl logs of a finished Job says what it found without anybody parsing
 // JSON.
+// orUnknown is what a summary prints for a reading that was not taken, so that
+// a line with a blank in it says which blank it is.
+func orUnknown(value, unknown string) string {
+	if value == "" {
+		return unknown
+	}
+	return value
+}
+
 func Summary(report Report) string {
 	return fmt.Sprintf(
-		"node %s: %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
-			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers taken by a userspace "+
+		"node %s: %s on %s, %d of %d block devices free, %d online CPUs over %d cores (hyperthreading %v), "+
+			"%d MiB of %d MiB memory available, %d MiB of huge pages, %d interfaces, %d NVMe controllers bound to a userspace "+
 			"driver, %d readings unavailable",
 		report.Node,
+		orUnknown(report.HostOS.PrettyName, "an unknown OS"),
+		orUnknown(report.HostOS.Architecture, "an unknown architecture"),
 		len(report.AvailableDevices()), len(report.Devices),
 		report.CPU.OnlineCPUs, report.CPU.PhysicalCores, report.CPU.HyperThreading,
 		report.Memory.AvailableBytes>>20, report.Memory.TotalBytes>>20,
 		report.HugePageBytes()>>20,
 		len(report.Interfaces),
-		len(report.ControllersTakenByUserspace()),
+		len(report.ControllersBoundToUserspace()),
 		len(report.Unreadable),
 	)
 }

@@ -3,9 +3,19 @@
 package node
 
 import (
+	"context"
+
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze"
+	"github.com/simplyblock/atlas/lvol"
+	export "github.com/simplyblock/atlas/nfsexport"
+	"github.com/simplyblock/atlas/nvme"
+
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/fabric"
 	"github.com/simplyblock/csi-driver/internal/guardian"
 	sbkube "github.com/simplyblock/csi-driver/internal/kubernetes"
 	"github.com/simplyblock/csi-driver/internal/mount"
@@ -18,11 +28,46 @@ type Server struct {
 	// injectable so a test can script the probe's answers and observe exactly
 	// which commands staging chose to run, which is how the never-format
 	// contract is asserted.
-	mounter     *mount.Mounter
-	volumeLocks *csicommon.VolumeLocks
-	kubeClient  kubernetes.Interface
-	manager     *sbkube.Manager
-	guardian    *guardian.Guardian
+	mounter *mount.Mounter
+	// stack is the volume stack the node RPCs drive: the host seams a plan is
+	// built with, and the runner that walks it. It is injectable for the same
+	// reason the mounter is, so a test can assert which verb an RPC chose
+	// without a fabric under it.
+	stack *stack
+	// repairFabric diagnoses a subsystem a bring-up could not get a device out
+	// of, and reports whether it tore anything down. It is a field so a test can
+	// drive the retry without a kernel, and because the repair reaches sysfs
+	// directly rather than through the stack.
+	repairFabric func(ctx context.Context, subsystemNQN string, nsID nvme.NamespaceID) bool
+	// identifyStaged names the namespace behind a staging path by reading the
+	// host, for a volume whose stashed context and stack record both fall short.
+	// It is a field for the reason repairFabric is one: it reaches sysfs and the
+	// mount table directly, and a test has neither.
+	identifyStaged func(ctx context.Context, stagingTargetPath string) (lvol.Connection, error)
+	// ensureInitiator reports why this node cannot connect a volume, or nil when
+	// it can. It is a field because it asks the kernel, and a test has none.
+	ensureInitiator func(ctx context.Context) error
+	unstagePNFSFn   func(context.Context, string, export.Spec) error
+	volumeLocks     *csicommon.VolumeLocks
+	// freezes are the striped volumes suspended on this node for a snapshot
+	// (freeze.go).
+	freezes *freeze.Holds
+	// swapGate is the node's swap service, asked whether it is holding a
+	// volume's I/O before a stage, unstage, publish, or expand touches the
+	// mapping it holds. Nil before the service is built, when nothing is held.
+	swapGate   swapGate
+	kubeClient kubernetes.Interface
+	manager    *sbkube.Manager
+	guardian   *guardian.Guardian
+	// deviceMapper is whether this host can run the dmLinear indirection, as
+	// the probe at start found it. Set before the service serves.
+	deviceMapper bool
+
+	// The stretched cluster's stage gate (syncgate.go): this node's site and
+	// whether a cluster is sync, and where a volume is led from. Seams, so the
+	// gate is tested without a cluster.
+	syncSite   func(clusterID string) (site string, sync bool, err error)
+	syncStatus func(ctx context.Context, h lvol.VolumeHandle) (controlplane.VolumeSyncStatus, error)
 }
 
 // New builds the node service. It performs no I/O and starts nothing: the
@@ -32,13 +77,35 @@ type Server struct {
 //
 //nolint:unparam // error return kept for constructor symmetry / future use
 func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, manager *sbkube.Manager) (*Server, error) {
+	mounter := mount.New()
 	return &Server{
 		DefaultNodeServer: csicommon.NewDefaultNodeServer(d),
-		mounter:           mount.New(),
+		mounter:           mounter,
+		stack:             newStack(mounter, stackRecordDir),
+		repairFabric:      fabric.RepairAttach,
+		identifyStaged:    stagedIdentity(nvme.SysfsConfig{}),
+		ensureInitiator:   hostInitiatorCheck().ensure,
 		volumeLocks:       csicommon.NewVolumeLocks(),
+		freezes:           newFreezes(),
 		kubeClient:        kubeClient,
 		manager:           manager,
+		syncSite:          clusters.SyncSite,
+		syncStatus:        syncStatusFromSecret,
 	}, nil
+}
+
+// syncStatusFromSecret reads where a volume is led from, through the cluster
+// the driver's secret names.
+func syncStatusFromSecret(ctx context.Context, h lvol.VolumeHandle) (controlplane.VolumeSyncStatus, error) {
+	cluster, _, _, err := h.Split()
+	if err != nil {
+		return controlplane.VolumeSyncStatus{}, err
+	}
+	c, err := clusters.ReplicationClient(ctx, cluster.String())
+	if err != nil {
+		return controlplane.VolumeSyncStatus{}, err
+	}
+	return c.SyncStatus(ctx, h)
 }
 
 // AttachGuardian gives the node service the guardian to report a volume's total

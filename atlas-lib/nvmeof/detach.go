@@ -2,6 +2,7 @@ package nvmeof
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/simplyblock/atlas/errs"
@@ -71,6 +72,51 @@ func DetachDevice(ctx context.Context, c Connector, dev nvme.Device) (DetachOutc
 
 	if err := c.Disconnect(ctx, nqn); err != nil {
 		return DetachOutcome{}, fmt.Errorf("detach %s: %w", nqn, err)
+	}
+	return DetachOutcome{Disconnected: true}, nil
+}
+
+// ReleaseDeletedVolume releases the fabric connection of a volume the control
+// plane has already deleted, given the NQN of the subsystem named after it.
+//
+// DetachDevice cannot do it. The target removed the subsystem with the volume,
+// so this host's controllers are reconnecting rather than live, and the
+// Identify that tells a dedicated subsystem from a shareable one needs a live
+// controller. Without this the controllers retry against the removed subsystem
+// until their loss timeout, and an unstage that waits on them never finishes.
+//
+// The subsystem is torn down only when nothing says another volume uses it:
+// no namespace with another UUID attached, and no live controller reporting it
+// as shareable. With no live controller left, a shareable subsystem serves no
+// co-tenant either, so reaping it takes nothing away. Nothing attached under
+// subsystemNQN is success: there is nothing to release.
+func ReleaseDeletedVolume(
+	ctx context.Context, c Connector, subs nvme.SubsystemResolver, subsystemNQN, volumeUUID string,
+) (DetachOutcome, error) {
+	s, err := subs.ByNQN(ctx, subsystemNQN)
+	if errors.Is(err, errs.ErrNotFound) {
+		return DetachOutcome{}, nil
+	}
+	if err != nil {
+		return DetachOutcome{}, fmt.Errorf("release %s: %w", subsystemNQN, err)
+	}
+	for _, ns := range s.Namespaces {
+		if ns.UUID != "" && ns.UUID != volumeUUID {
+			return DetachOutcome{SharedSubsystem: true}, nil
+		}
+	}
+
+	shared, err := isMultiNamespace(nvme.Device{Subsystem: s})
+	switch {
+	case err != nil && !errors.Is(err, errs.ErrNotConnected):
+		return DetachOutcome{}, fmt.Errorf("release %s: cannot tell whether the subsystem "+
+			"is shared with other volumes: %w", subsystemNQN, err)
+	case err == nil && shared:
+		return DetachOutcome{SharedSubsystem: true}, nil
+	}
+
+	if err := c.Disconnect(ctx, subsystemNQN); err != nil {
+		return DetachOutcome{}, fmt.Errorf("release %s: %w", subsystemNQN, err)
 	}
 	return DetachOutcome{Disconnected: true}, nil
 }

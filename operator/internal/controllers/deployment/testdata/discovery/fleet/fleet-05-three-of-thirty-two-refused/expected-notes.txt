@@ -1,0 +1,1 @@
+wrote discovered-discover-fleet-05 in Draft: 30 workers with 120 nvme devices, in 1 group(s) across 1 node set(s); 6 refusal(s)

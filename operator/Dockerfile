@@ -24,7 +24,7 @@ COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
 COPY operator/go.mod operator/go.sum ./
 # cache deps before building and copying source so that we don't need to re-download as much
 # and so that source changes don't invalidate our downloaded layer
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 
 # Copy the full sources (operator + the atlas-lib tree resolved by the replace directive).
 COPY atlas-lib/ /atlas-lib/
@@ -33,10 +33,12 @@ COPY operator/ .
 # Build with BoringCrypto (FIPS 140-2 validated crypto).
 # CGO_ENABLED=1 is required by GOEXPERIMENT=boringcrypto.
 # CC selects the appropriate cross-compiler when targeting arm64 from an amd64 host.
-RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o manager cmd/main.go
+    go build -o manager ./cmd
 
 # The worker probe ships in this image rather than in one of its own, so that
 # the Job a discovery run creates cannot be a version out of step with the
@@ -45,8 +47,26 @@ RUN CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "
 # CGO is off for it, unlike the manager. The probe reads sysfs and procfs and
 # issues ioctls through golang.org/x/sys and does no crypto at all, so it has
 # nothing to gain from BoringCrypto and nothing to link against.
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
-    go build -a -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -o simplyblock-nodeprobe ./cmd/simplyblock-nodeprobe
+
+# The conversion webhook ships in this image under its own entry point rather
+# than an image of its own, so the conversion code and the API types it converts
+# between are versioned together with the operator that reads them
+# (design-api-upgrade.md §29.3). It runs as a separate Deployment all the same:
+# a CRD whose conversion strategy is Webhook is unreadable while the webhook is
+# down, and the resources an administrator reads to diagnose a failed operator
+# are exactly those (§6.1).
+#
+# It serves TLS, so it takes the same BoringCrypto build the manager does.
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+    CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -o conversion-webhook ./cmd/conversion-webhook
 
 # Use Red Hat UBI10 minimal as runtime base (required for Red Hat certification).
 # ubi10-minimal includes glibc, which is required for CGO-linked binaries (BoringCrypto).
@@ -55,8 +75,10 @@ FROM registry.access.redhat.com/ubi10/ubi-minimal:10.2
 ARG VERSION=0.1.0
 ARG RELEASE=1
 
-# Apply all available security patches from the UBI10 repositories.
-RUN microdnf update -y && microdnf clean all
+# Apply all available security patches from the UBI10 repositories. iputils is
+# what the storage network probe runs: arping for the duplicate-address check,
+# and ping for the peers. The probe pods run this image.
+RUN microdnf update -y && microdnf install -y iputils && microdnf clean all
 
 # Required labels for Red Hat certification (preflight check operator).
 LABEL name="simplyblock-operator" \
@@ -71,6 +93,7 @@ WORKDIR /
 COPY --from=builder /workspace/manager .
 # On PATH, because the probe Job names it by name rather than by path.
 COPY --from=builder /workspace/simplyblock-nodeprobe /usr/local/bin/simplyblock-nodeprobe
+COPY --from=builder /workspace/conversion-webhook /usr/local/bin/conversion-webhook
 COPY LICENSE /licenses/LICENSE
 
 # The manager runs unprivileged as this user. The probe pod overrides it: it

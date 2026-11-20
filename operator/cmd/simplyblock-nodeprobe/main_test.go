@@ -13,6 +13,8 @@ package main
 import (
 	"strings"
 	"testing"
+
+	"k8s.io/client-go/rest"
 )
 
 // noEnv is the environment of a probe run by hand, with none of what the Job
@@ -46,7 +48,7 @@ func TestParseOptionsRefusesAClusterReportWithNoMountTable(t *testing.T) {
 func TestParseOptionsAcceptsAClusterReportWithOne(t *testing.T) {
 	opts, err := parseOptions([]string{
 		"--node=worker-3", "--namespace=simplyblock", "--run=oops-1",
-		"--mountinfo=/host/proc/1/mountinfo",
+		"--mountinfo=/host/proc/1/mountinfo", "--host-root=/host/root",
 	}, noEnv)
 	if err != nil {
 		t.Fatalf("parse the Job's own flags: %v", err)
@@ -77,7 +79,7 @@ func TestParseOptionsTakesTheAmbientFactsFromTheEnvironment(t *testing.T) {
 	// literals, so the probe reads them from the environment and needs no
 	// access to the API to learn where it landed.
 	opts, err := parseOptions([]string{
-		"--run=oops-1", "--mountinfo=/host/proc/1/mountinfo",
+		"--run=oops-1", "--mountinfo=/host/proc/1/mountinfo", "--host-root=/host/root",
 	}, envOf(map[string]string{
 		"NODE_NAME":     "worker-7",
 		"POD_NAMESPACE": "simplyblock",
@@ -100,7 +102,8 @@ func TestParseOptionsReadsTheOwnerTheJobPassed(t *testing.T) {
 		"OWNER_NAME":        "oops-1",
 		"OWNER_UID":         "8f14e45f-ceea-467a-9d1f-2e0b1c4b6b8a",
 	})
-	opts, err := parseOptions([]string{"--node=n", "--namespace=ns", "--run=r", "--mountinfo=/m"}, full)
+	args := []string{"--node=n", "--namespace=ns", "--run=r", "--mountinfo=/m", "--host-root=/host/root"}
+	opts, err := parseOptions(args, full)
 	if err != nil {
 		t.Fatalf("parse with an owner: %v", err)
 	}
@@ -109,7 +112,7 @@ func TestParseOptionsReadsTheOwnerTheJobPassed(t *testing.T) {
 	}
 
 	partial := envOf(map[string]string{"OWNER_KIND": "OperatorOps", "OWNER_NAME": "oops-1"})
-	opts, err = parseOptions([]string{"--node=n", "--namespace=ns", "--run=r", "--mountinfo=/m"}, partial)
+	opts, err = parseOptions(args, partial)
 	if err != nil {
 		t.Fatalf("parse with a partial owner: %v", err)
 	}
@@ -124,13 +127,65 @@ func TestParseOptionsRefusesWhatItCannotRun(t *testing.T) {
 		args []string
 	}{
 		{"no node at all", []string{"--namespace=ns", "--run=r", "--mountinfo=/m"}},
-		{"no namespace to write into", []string{"--node=n", "--run=r", "--mountinfo=/m"}},
-		{"no run to attribute it to", []string{"--node=n", "--namespace=ns", "--mountinfo=/m"}},
+		{"no namespace to write into", []string{"--node=n", "--run=r", "--mountinfo=/m", "--host-root=/r"}},
+		{"no run to attribute it to", []string{"--node=n", "--namespace=ns", "--mountinfo=/m", "--host-root=/r"}},
 		{"an output nobody has", []string{"--node=n", "--output=carrier-pigeon"}},
 		{"a timeout that cannot elapse", []string{"--node=n", "--output=stdout", "--timeout=0"}},
 	} {
 		if _, err := parseOptions(tc.args, noEnv); err == nil {
 			t.Errorf("%s: accepted it anyway", tc.name)
 		}
+	}
+}
+
+func TestParseOptionsRefusesAClusterReportWithNoHostRoot(t *testing.T) {
+	// The same shape of failure as --mountinfo, from the other direction: the
+	// default reads the probe image's own /etc/os-release, which answers, so
+	// the report would name the image's distribution as the worker's.
+	_, err := parseOptions([]string{
+		"--node=worker-3", "--namespace=simplyblock", "--run=oops-1",
+		"--mountinfo=/host/proc/1/mountinfo",
+	}, noEnv)
+
+	if err == nil {
+		t.Fatal("accepted a run that writes a report without being told where the host's root filesystem is")
+	}
+	if !strings.Contains(err.Error(), "--host-root") {
+		t.Errorf("the error is %q, and it does not name the flag that is missing", err)
+	}
+}
+
+func TestParseOptionsLetsAProbeRunByHandReadTheMachineItIsOn(t *testing.T) {
+	// Run by hand on a worker, the probe is the host: both roots default to the
+	// machine's own, and only a report going into the cluster is refused
+	// without them.
+	opts, err := parseOptions([]string{"--node=worker-3", "--output=stdout"}, noEnv)
+	if err != nil {
+		t.Fatalf("parse a by-hand run: %v", err)
+	}
+	if opts.roots.HostRoot != "" {
+		t.Errorf("the host root defaults to %q, want the inventory's own default", opts.roots.HostRoot)
+	}
+}
+
+// The definitions are listed in the namespace the report goes to, which is the
+// one the probe's Role is granted in and the one the draft's storage nodes are
+// created in.
+func TestWithClusterReadsTheNetworkAttachmentsOfTheRunsNamespace(t *testing.T) {
+	opts := options{namespace: "simplyblock"}
+
+	opts, err := withCluster(opts, &rest.Config{Host: "https://cluster.invalid"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := opts.roots.Kubernetes.NetworkAttachments
+	if source.Dynamic == nil || source.Discovery == nil {
+		t.Errorf("the source is %+v, want a dynamic and a discovery client", source)
+	}
+	if source.Namespace != "simplyblock" {
+		t.Errorf("the definitions are listed in %q, want the run's namespace", source.Namespace)
+	}
+	if opts.roots.Kubernetes.Discovery != nil || len(opts.roots.Kubernetes.Nodes) > 0 {
+		t.Error("the probe asks for the environment, which the run concludes once from the API")
 	}
 }

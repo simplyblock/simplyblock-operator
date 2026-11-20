@@ -1,0 +1,1 @@
+worker-02: declined by management network because eth0 is on 10.10.20.0/24, and the fleet's management network is 10.10.10.0/24, held by 1 of its 2 workers

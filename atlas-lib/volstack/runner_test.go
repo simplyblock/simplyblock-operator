@@ -10,6 +10,8 @@ package volstack
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -104,7 +106,15 @@ func (h healingLayer) Healthy(context.Context, Artifact) (bool, error) {
 
 func (h healingLayer) Heal(context.Context, Artifact, Artifact) error {
 	h.note("heal")
-	return h.healErr
+	if h.healErr != nil {
+		return h.healErr
+	}
+	// A heal that worked leaves a layer that can be read and is serving, which
+	// is what the layer under test does: the filesystem layer clears the dead
+	// mount and mounts the device again, after which its own Observe answers.
+	h.observeErr = nil
+	h.healthy = true
+	return nil
 }
 
 // growingLayer adds the optional Grower interface.
@@ -312,6 +322,77 @@ func TestDownSkipsAbsentLayers(t *testing.T) {
 	}
 	if !strings.Contains(joined, "fabric:release") {
 		t.Errorf("the layer that was present was not released:\n%s", joined)
+	}
+}
+
+// Regression: a teardown is not abandoned because a layer cannot be observed.
+//
+// Total path loss is the ordinary way this happens rather than an exotic one:
+// the device goes, the mount above it answers EIO, and the filesystem layer's
+// Observe reports that as an error rather than as a state. The survey ran before
+// any Release, so one unobservable layer refused the whole teardown, leaving the
+// dead mount in place and the fabric beneath it connected — the one situation
+// every layer's force path was written for.
+func TestDownReleasesWhatItCannotObserve(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	filesystem := &fakeLayer{name: "filesystem", log: &log, state: StateReady}
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		filesystem,
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	// The device went away under the stack after it was staged.
+	filesystem.observeErr = errors.New("the mount is dead, because the device behind it is gone")
+
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down refused a teardown it could not survey: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	if !strings.Contains(joined, "filesystem:release") {
+		t.Errorf("the dead mount was left in place:\n%s", joined)
+	}
+	if !strings.Contains(joined, "fabric:release") {
+		t.Errorf("the layer under the dead mount was never released:\n%s", joined)
+	}
+	if indexOf(log, "filesystem:release") > indexOf(log, "fabric:release") {
+		t.Errorf("Down released bottom-up:\n%s", joined)
+	}
+	if _, err := store.Load(testHandle); !errors.Is(err, ErrNoRecord) {
+		t.Errorf("the record survived a completed teardown: %v", err)
+	}
+}
+
+// The same teardown still reports a release that fails, because a stack that is
+// still up is not one whose record may go.
+func TestDownReportsAFailedReleaseAfterASurveyItCouldNotFinish(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	filesystem := &fakeLayer{name: "filesystem", log: &log, state: StateReady}
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		filesystem,
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	filesystem.observeErr = errors.New("the mount is dead")
+	filesystem.releaseErr = errors.New("umount: target is busy")
+
+	if err := r.Down(context.Background(), testHandle, plan); err == nil {
+		t.Fatal("Down reported success while the mount it could not release is still there")
+	}
+	if _, err := store.Load(testHandle); err != nil {
+		t.Errorf("the record was removed although the stack is still up: %v", err)
 	}
 }
 
@@ -573,5 +654,296 @@ func TestCompositeSubPlanIsRecordedInOrder(t *testing.T) {
 	}
 	if len(rec.Plan[1].Members) != 0 {
 		t.Errorf("a layer that is not a composite recorded members: %+v", rec.Plan[1].Members)
+	}
+}
+
+// Observe walks a live stack without converging any of it, and reports what the
+// topmost layer currently exposes. A raw block volume's publish needs the device
+// under a stack it must not bring up, and deriving it with Up would attach a
+// fabric a publish has no business attaching.
+func TestObserveReadsTheStackWithoutBuildingIt(t *testing.T) {
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, state: StateReady, exposes: "nvme0n1"},
+		&fakeLayer{name: "filesystem", log: &log, state: StateReady},
+	}
+
+	r := newRunner(t)
+	top, err := r.Observe(context.Background(), plan)
+	if err != nil {
+		t.Fatalf("Observe: %v", err)
+	}
+
+	want := "fabric:observe filesystem:observe"
+	if got := strings.Join(log, " "); got != want {
+		t.Errorf("call order:\n got %s\nwant %s", got, want)
+	}
+	dev, ok := top.Device()
+	if !ok || dev.Name != "nvme0n1" {
+		t.Fatalf("Observe reported %+v, want the device the stack exposes", top.Devices)
+	}
+}
+
+// A layer that cannot be read stops the walk and names itself, because a caller
+// acting on a partial reading acts on a stack it cannot see.
+func TestObserveReportsTheLayerItCouldNotRead(t *testing.T) {
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, state: StateReady, exposes: "nvme0n1"},
+		&fakeLayer{name: "filesystem", log: &log, observeErr: errors.New("blkid: no such device")},
+	}
+
+	if _, err := newRunner(t).Observe(context.Background(), plan); err == nil {
+		t.Fatal("Observe reported a stack it could not read")
+	} else if !strings.Contains(err.Error(), "filesystem") {
+		t.Errorf("the error does not name the layer that failed: %v", err)
+	}
+}
+
+// Regression: a layer that cannot be observed is healed rather than reported.
+//
+// This is the case the whole verb exists for. Total path loss removes the
+// device, the mount above it answers EIO, and the filesystem layer's Observe
+// reports that as an error rather than as a state — deliberately, because its
+// Healthy answers "not healthy" for the same mount so that a heal runs. The
+// runner asked Observe first and returned its error, so the heal never ran: the
+// CSI node service reported "observe filesystem while healing: the mount is
+// dead" on every retry, the volume was never republished, and the workload
+// stayed down.
+func TestHealRepairsALayerItCannotObserve(t *testing.T) {
+	r := NewRunner(NewStore(t.TempDir()))
+
+	var log []string
+	filesystem := healingLayer{&fakeLayer{
+		name: "filesystem", log: &log, state: StateReady, healthy: false,
+		observeErr: errors.New("the mount is dead, because the device behind it is gone"),
+	}}
+	plan := Plan{
+		healingLayer{&fakeLayer{
+			name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady, healthy: true,
+		}},
+		filesystem,
+	}
+
+	if err := r.Heal(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Heal refused a layer it could not observe: %v", err)
+	}
+	if joined := strings.Join(log, " "); !strings.Contains(joined, "filesystem:heal") {
+		t.Errorf("the unobservable layer was never healed:\n%s", joined)
+	}
+}
+
+// A layer that cannot be observed and cannot heal itself is still an error,
+// because nothing in the plan can repair it and continuing would build the
+// layers above it on a reading nobody has.
+func TestHealReportsAnUnobservableLayerThatCannotHeal(t *testing.T) {
+	r := NewRunner(NewStore(t.TempDir()))
+
+	var log []string
+	plan := Plan{&fakeLayer{
+		name: "fabric", log: &log, state: StateReady,
+		observeErr: errors.New("sysfs is unreadable"),
+	}}
+
+	if err := r.Heal(context.Background(), testHandle, plan); err == nil {
+		t.Fatal("Heal reported success for a layer it could neither read nor repair")
+	}
+}
+
+// Regression: a layer whose Observe reports StateAbsent has nothing to destroy
+// either, and Destroy surveyed for that and then threw the answer away.
+//
+// NodeUnstageVolume releases the stack and then, for a volume being deleted,
+// destroys it — and the release is what detaches the fabric. So every layer
+// standing on that fabric reports absent by the time Destroy walks them, and
+// destroying them anyway means removing an object whose metadata lives on a
+// device that is no longer there. On an LVM stack that surfaced as `lvremove:
+// Volume group "vol-..." not found`, which failed the RPC on a volume that had
+// in fact been torn down correctly.
+//
+// Down has always skipped absent layers. This is the same rule, in the verb that
+// surveyed for it and discarded the result.
+func TestDestroySkipsAbsentLayers(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "lvmVolumeGroup", log: &log, state: StateAbsent},
+		&fakeLayer{name: "lvmLogicalVolume", log: &log, state: StateAbsent},
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	if err := r.Destroy(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	for _, absent := range []string{"lvmVolumeGroup:destroy", "lvmLogicalVolume:destroy"} {
+		if strings.Contains(joined, absent) {
+			t.Errorf("an absent layer was destroyed (%s):\n%s", absent, joined)
+		}
+	}
+	if !strings.Contains(joined, "fabric:destroy") {
+		t.Errorf("the layer that was present was not destroyed:\n%s", joined)
+	}
+}
+
+// A layer that is already down is one a release has nothing to do to, and
+// StateAbsent is not the only way to be already down.
+//
+// StateInactive is the state Release itself leaves behind: the object is
+// complete and not mapped on this host. So a teardown resuming over a stack
+// something already took part of down meets it, and releasing again is at best
+// redundant work against an object that is in the asked-for state.
+func TestDownSkipsLayersThatAreAlreadyDown(t *testing.T) {
+	store := NewStore(t.TempDir())
+	r := NewRunner(store)
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "lvmVolumeGroup", log: &log, exposes: "dm-0", state: StateInactive},
+		&fakeLayer{name: "filesystem", log: &log, state: StateAbsent},
+	}
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	log = nil
+
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	joined := strings.Join(log, " ")
+	for _, down := range []string{"lvmVolumeGroup:release", "filesystem:release"} {
+		if strings.Contains(joined, down) {
+			t.Errorf("a layer that was already down was released (%s):\n%s", down, joined)
+		}
+	}
+	if !strings.Contains(joined, "fabric:release") {
+		t.Errorf("the layer that was still up was not released:\n%s", joined)
+	}
+}
+
+// Skipping is said out loud. A teardown that released three layers and a
+// teardown that skipped them both report success, and only the log separates a
+// stack that was already down from one this never reached.
+func TestDownSaysWhichLayersItSkipped(t *testing.T) {
+	var said strings.Builder
+	Logger = slog.New(slog.NewTextHandler(&said, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	t.Cleanup(func() { Logger = nil })
+
+	var log []string
+	plan := Plan{
+		&fakeLayer{name: "fabric", log: &log, exposes: "nvme0n1", state: StateReady},
+		&fakeLayer{name: "lvmVolumeGroup", log: &log, state: StateAbsent},
+	}
+	r := NewRunner(NewStore(t.TempDir()))
+	if _, err := r.Up(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Up: %v", err)
+	}
+	if err := r.Down(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Down: %v", err)
+	}
+
+	out := said.String()
+	if !strings.Contains(out, "lvmVolumeGroup") {
+		t.Errorf("the skipped layer is not named in the log:\n%s", out)
+	}
+	if !strings.Contains(out, "Absent") {
+		t.Errorf("the log does not say why it was skipped:\n%s", out)
+	}
+}
+
+// interruptedLayer is an unhealthy layer whose device lost every path while it
+// was held, which is what dmLinear reports after total path loss.
+type interruptedLayer struct {
+	healingLayer
+}
+
+func (i interruptedLayer) Observe(ctx context.Context, below Artifact) (State, Artifact, error) {
+	state, own, err := i.healingLayer.Observe(ctx, below)
+	own.Interrupted = !i.healthy
+	return state, own, err
+}
+
+// yieldingLayer adds the optional Yielder interface. A yield that worked leaves
+// the layer unmounted, so the heal walk finds it unhealthy and brings it back.
+type yieldingLayer struct {
+	healingLayer
+	yieldErr error
+}
+
+func (y yieldingLayer) Yield(context.Context, Artifact, Artifact) error {
+	y.note("yield")
+	if y.yieldErr != nil {
+		return y.yieldErr
+	}
+	y.healthy = false
+	return nil
+}
+
+func interruptedPlan(log *[]string, interrupted bool, yieldErr error) (Plan, *fakeLayer) {
+	fabric := &fakeLayer{name: "fabric", log: log, exposes: "nvme1n1", state: StateReady}
+	dm := &fakeLayer{name: "dmLinear", log: log, exposes: "dm-1", state: StateReady}
+	fs := &fakeLayer{name: "filesystem", log: log, state: StateReady, healthy: true}
+	var mid Layer = healingLayer{dm}
+	if interrupted {
+		mid = interruptedLayer{healingLayer{dm}}
+	}
+	return Plan{fabric, mid, yieldingLayer{healingLayer{fs}, yieldErr}}, fs
+}
+
+// Regression: 2026-11-19-ext4-stays-aborted-behind-dmlinear (e2e run
+// 44487645991). The indirection kept the device across total path loss, so the
+// ext4 mounted on it kept the journal it aborted during the outage and every
+// write after the heal failed read-only. A layer above an Interrupted one lets
+// go before the heal and is brought back by it, the way it was remade on the
+// new device before the indirection existed.
+func TestHealOfAnInterruptedLayerYieldsTheLayersAboveFirst(t *testing.T) {
+	var log []string
+	plan, _ := interruptedPlan(&log, true, nil)
+	if err := newRunner(t).Heal(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	yield, heal, remount := indexOf(log, "filesystem:yield"), indexOf(log, "dmLinear:heal"), indexOf(log, "filesystem:heal")
+	if yield < 0 || heal < 0 || remount < 0 || yield > heal || heal > remount {
+		t.Errorf("want filesystem:yield, then dmLinear:heal, then filesystem:heal:\n%s", strings.Join(log, " "))
+	}
+}
+
+// A re-point without loss, which is the live subsystem flip, keeps the mount:
+// keeping it is what the indirection is for.
+func TestHealOfALayerThatWasNotInterruptedYieldsNothing(t *testing.T) {
+	var log []string
+	plan, _ := interruptedPlan(&log, false, nil)
+	plan[1].(healingLayer).healthy = false
+	if err := newRunner(t).Heal(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	if indexOf(log, "filesystem:yield") >= 0 || indexOf(log, "filesystem:heal") >= 0 {
+		t.Errorf("a re-point without loss remounted the filesystem:\n%s", strings.Join(log, " "))
+	}
+	if indexOf(log, "dmLinear:heal") < 0 {
+		t.Errorf("the stale layer was not healed:\n%s", strings.Join(log, " "))
+	}
+}
+
+// A layer that cannot let go yet stops the heal before the layer under it is
+// touched, and says why, so the retry finds the interruption still in place.
+func TestHealWaitsWhileALayerAboveIsHeldElsewhere(t *testing.T) {
+	var log []string
+	plan, _ := interruptedPlan(&log, true, fmt.Errorf("mounted at /pods/a: %w", ErrHeldElsewhere))
+	err := newRunner(t).Heal(context.Background(), testHandle, plan)
+	if !errors.Is(err, ErrHeldElsewhere) {
+		t.Fatalf("Heal = %v, want ErrHeldElsewhere", err)
+	}
+	if indexOf(log, "dmLinear:heal") >= 0 {
+		t.Errorf("the interrupted layer was healed under a filesystem still held elsewhere:\n%s", strings.Join(log, " "))
 	}
 }

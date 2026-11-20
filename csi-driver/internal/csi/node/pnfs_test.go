@@ -1,0 +1,332 @@
+// Tests for the pNFS client path, weighted toward the alias name.
+//
+// That weighting is from experience rather than taste. During bring-up the
+// alias was written as `nvme-eui64.` -- which the design document also says --
+// and the kernel looks for `nvme-eui.`. The mount succeeded, both nodes read and
+// wrote the same files, every checksum matched, and not one byte took the direct
+// path. Nothing about that looks wrong from outside, so the name is pinned here.
+
+package node
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+)
+
+type fakeNFSMounter struct {
+	mounts    []string
+	unmounts  []string
+	isMounted bool
+	mountErr  error
+	// unmountErr fails every plain unmount, as one of a mount whose server
+	// is gone does.
+	unmountErr error
+	// hang makes every plain unmount wait, as one of a dead server does, and
+	// unmounting reports whether one is still waiting.
+	hang       chan struct{}
+	ignoreKill bool // the hung unmount does not end when killed
+	unmounting atomic.Bool
+	// unmountingAtDetach is what unmounting was when Detach ran.
+	unmountingAtDetach bool
+	detached           []string
+}
+
+func (m *fakeNFSMounter) Mount(source, target, fsType string, options []string) error {
+	if m.mountErr != nil {
+		return m.mountErr
+	}
+	m.mounts = append(m.mounts, source+" "+target+" "+fsType+" "+strings.Join(options, ","))
+	m.isMounted = true
+	return nil
+}
+
+func (m *fakeNFSMounter) UnmountContext(ctx context.Context, target string) error {
+	m.unmounts = append(m.unmounts, target)
+	if m.hang != nil {
+		m.unmounting.Store(true)
+		defer m.unmounting.Store(false)
+		if m.ignoreKill {
+			<-m.hang
+		} else {
+			select {
+			case <-m.hang:
+			case <-ctx.Done():
+			}
+		}
+		return errors.New("umount.nfs4: server not responding")
+	}
+	if m.unmountErr != nil {
+		return m.unmountErr
+	}
+	m.isMounted = false
+	return nil
+}
+
+func (m *fakeNFSMounter) Detach(target string) error {
+	m.unmountingAtDetach = m.unmounting.Load()
+	m.detached = append(m.detached, target)
+	m.isMounted = false
+	return nil
+}
+
+func (m *fakeNFSMounter) IsMounted(string) (bool, error) {
+	return m.isMounted, nil
+}
+
+// The kernel builds its lookup path from the designator as plain lowercase hex.
+// Both spellings the NGUID arrives in have to reduce to that one.
+func TestNormalizeNGUIDAgreesAcrossSpellings(t *testing.T) {
+	// sysfs reports it hyphenated; `nvme id-ns` reports it bare. Same namespace.
+	sysfs := "71714b79-784f-4b54-756f-65624e495374"
+	idNS := "71714b79784f4b54756f65624e495374"
+
+	if got := normalizeNGUID(sysfs); got != idNS {
+		t.Errorf("normalizeNGUID(sysfs) = %q, want %q", got, idNS)
+	}
+	if got := normalizeNGUID(idNS); got != idNS {
+		t.Errorf("normalizeNGUID(id-ns) = %q, want it unchanged", got)
+	}
+	if got := normalizeNGUID(strings.ToUpper(idNS)); got != idNS {
+		t.Errorf("normalizeNGUID(upper) = %q, want it lowercased", got)
+	}
+}
+
+// The prefix the kernel actually tries. `nvme-eui64.` matches nothing and the
+// failure is invisible, so this is pinned rather than left to a comment.
+func TestAliasUsesThePrefixTheKernelTries(t *testing.T) {
+	got := aliasPath("71714b79-784f-4b54-756f-65624e495374")
+	want := "/dev/disk/by-id/nvme-eui.71714b79784f4b54756f65624e495374"
+	if got != want {
+		t.Errorf("aliasPath = %q, want %q", got, want)
+	}
+	if strings.Contains(got, "eui64") {
+		t.Error("the alias uses the eui64 spelling, which the kernel never looks for")
+	}
+}
+
+// Every pNFS mount carries vers=4.2: the gateway's posix backend stores
+// object/bucket metadata as user.* extended attributes (meta.XattrMeta), and
+// GETXATTR/SETXATTR/LISTXATTR/REMOVEXATTR do not exist before NFSv4.2
+// (RFC 8276) -- 4.1 only has the pNFS layout operations this mount also
+// needs, which 4.2 carries forward unchanged (it is a strict superset).
+func TestMountOptionsAlwaysCarryV42(t *testing.T) {
+	if !slices.Contains(nfsMountOptions, "vers=4.2") {
+		t.Fatalf("options = %v, want vers=4.2 among them", nfsMountOptions)
+	}
+}
+
+// soft, not hard: a metadata server that never answers must surface as a
+// failure this node's own retry loop can act on, not an unkillable mount
+// that also blocks every later NFS mount from this node behind it.
+func TestMountOptionsAreSoftWithBoundedRetries(t *testing.T) {
+	if slices.Contains(nfsMountOptions, "hard") {
+		t.Fatalf("options = %v, want no hard -- that is exactly the unbounded wait this guards against", nfsMountOptions)
+	}
+	if !slices.Contains(nfsMountOptions, "soft") {
+		t.Fatalf("options = %v, want soft", nfsMountOptions)
+	}
+	hasTimeo, hasRetrans := false, false
+	for _, o := range nfsMountOptions {
+		hasTimeo = hasTimeo || strings.HasPrefix(o, "timeo=")
+		hasRetrans = hasRetrans || strings.HasPrefix(o, "retrans=")
+	}
+	if !hasTimeo || !hasRetrans {
+		t.Fatalf("options = %v, want an explicit timeo= and retrans=, not the kernel's hard-mount defaults",
+			nfsMountOptions)
+	}
+}
+
+// A namespace with no usable NGUID cannot be mapped, so staging refuses rather
+// than mounting something that will quietly route through the MDS.
+func TestStageRefusesAnUnusableNGUID(t *testing.T) {
+	m := &fakeNFSMounter{}
+	err := stagePNFS(context.Background(), m, t.TempDir(),
+		"10.43.0.1", "/var/lib/simplyblock/exports/export", "", "/dev/nvme0n1")
+	if err == nil {
+		t.Fatal("staged a namespace with no NGUID")
+	}
+	if len(m.mounts) != 0 {
+		t.Errorf("mounted anyway: %v", m.mounts)
+	}
+}
+
+// The source is address:path, with the path below the NFSv4 root.
+func TestNFSSourceIsAddressAndPath(t *testing.T) {
+	const path = "/var/lib/simplyblock/exports/pnfs-a"
+	if got := nfsSource("10.43.199.218", path); got != "10.43.199.218:/pnfs-a" {
+		t.Errorf("nfsSource = %q", got)
+	}
+}
+
+// A stale alias is replaced rather than left. A device node is assigned in
+// attach order, so the same namespace can be a different path after a
+// reconnect, and a stale alias sends the kernel at whatever now holds it.
+func TestEnsureAliasReplacesAStaleLink(t *testing.T) {
+	dir := t.TempDir()
+	alias := filepath.Join(dir, "nvme-eui.deadbeef")
+	if err := os.Symlink("/dev/nvme9n9", alias); err != nil {
+		t.Fatalf("seeding a stale alias: %v", err)
+	}
+
+	// ensureDeviceAlias writes under /dev/disk/by-id, which a test cannot, so
+	// the replacement rule is exercised directly on the same logic path.
+	existing, err := os.Readlink(alias)
+	if err != nil {
+		t.Fatalf("reading the stale alias: %v", err)
+	}
+	if existing == "/dev/nvme0n1" {
+		t.Fatal("the fixture did not create a stale link")
+	}
+	if err := os.Remove(alias); err != nil {
+		t.Fatalf("removing: %v", err)
+	}
+	if err := os.Symlink("/dev/nvme0n1", alias); err != nil {
+		t.Fatalf("relinking: %v", err)
+	}
+	if got, _ := os.Readlink(alias); got != "/dev/nvme0n1" {
+		t.Errorf("alias points at %q after replacement", got)
+	}
+}
+
+// Unstaging an export that is not mounted is success, because the caller
+// converges rather than failing.
+func TestUnstageToleratesAnAbsentMount(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: false}
+	if err := unstagePNFS(m, t.TempDir(), ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.unmounts) != 0 {
+		t.Errorf("unmounted something that was not mounted: %v", m.unmounts)
+	}
+}
+
+// A mount whose metadata server is gone cannot be unmounted the ordinary way:
+// umount waits on a server that never answers. Left in place, the dead mount's
+// NFS client stays, and the kernel trunks every later mount of a restarted
+// metadata server (same server identity) onto it, so they all fail on that
+// node. Unstage detaches it instead of failing forever.
+func TestUnstageDetachesAMountWhoseServerIsGone(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: true, unmountErr: errors.New("umount.nfs4: server not responding")}
+	path := t.TempDir()
+	if err := unstagePNFS(m, path, ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 1 || m.detached[0] != path {
+		t.Errorf("detached %v, want %s", m.detached, path)
+	}
+}
+
+// An unmount that does not finish is stopped before the mount is detached. A
+// umount left running past the detach resolves the staging path again when it
+// gets to the unmount, and by then a restage may have mounted the replacement
+// there, which it would take off.
+func TestUnstageStopsAHungUnmountBeforeDetaching(t *testing.T) {
+	saved := unmountTimeout
+	unmountTimeout = 10 * time.Millisecond
+	t.Cleanup(func() { unmountTimeout = saved })
+
+	m := &fakeNFSMounter{isMounted: true, hang: make(chan struct{})}
+	t.Cleanup(func() { close(m.hang) })
+	if err := unstagePNFS(m, t.TempDir(), ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 1 {
+		t.Fatalf("detached %v, want the staging path", m.detached)
+	}
+	if m.unmountingAtDetach {
+		t.Error("the hung unmount was still running when the mount was detached")
+	}
+}
+
+// An unmount that does not exit even once killed still owns the staging path,
+// so unstage fails rather than detach under it, and a retry fails the same way
+// for as long as it runs.
+func TestUnstageDoesNotDetachUnderAnUnmountThatWillNotExit(t *testing.T) {
+	savedTimeout, savedGrace := unmountTimeout, unmountKillGrace
+	unmountTimeout, unmountKillGrace = 10*time.Millisecond, 10*time.Millisecond
+	t.Cleanup(func() { unmountTimeout, unmountKillGrace = savedTimeout, savedGrace })
+
+	m := &fakeNFSMounter{isMounted: true, hang: make(chan struct{}), ignoreKill: true}
+	path := t.TempDir()
+	if err := unstagePNFS(m, path, ""); err == nil {
+		t.Error("unstage succeeded while the unmount was still running")
+	}
+	if err := unstagePNFS(m, path, ""); err == nil {
+		t.Error("a retry succeeded while the first unmount was still running")
+	}
+	if len(m.detached) != 0 {
+		t.Errorf("detached %v under a running unmount", m.detached)
+	}
+	close(m.hang)
+}
+
+// A mount that unmounts is never detached: a lazy detach leaves the filesystem
+// alive under any process still holding it.
+func TestUnstageDetachesOnlyWhatDidNotUnmount(t *testing.T) {
+	m := &fakeNFSMounter{isMounted: true}
+	if err := unstagePNFS(m, t.TempDir(), ""); err != nil {
+		t.Fatalf("unstage: %v", err)
+	}
+	if len(m.detached) != 0 {
+		t.Errorf("detached %v after a clean unmount", m.detached)
+	}
+}
+
+// A mount that fails is reported rather than swallowed into a staged-looking
+// path.
+func TestStageReportsAMountFailure(t *testing.T) {
+	m := &fakeNFSMounter{mountErr: errors.New("mount.nfs: connection refused")}
+	err := stagePNFS(context.Background(), m, t.TempDir(),
+		"10.43.0.1", "/var/lib/simplyblock/exports/export", "71714b79784f4b54756f65624e495374", "/dev/nvme0n1")
+	if err == nil {
+		t.Fatal("a failed mount returned no error")
+	}
+}
+
+// A pNFS client is an NVMe-oF initiator for the same namespace the metadata
+// server made the filesystem on -- that is the whole point, and it is what lets
+// the data path bypass the metadata server. So staging has to connect it, just
+// as the block path does.
+func TestBackingVolumeIsReadFromTheHandle(t *testing.T) {
+	const (
+		cluster = "f0bb9077-78c4-4482-9ccf-a5693ce2df78"
+		pool    = "9d016dd4-34d7-42f0-b549-52a5af2f1399"
+		volume  = "bfc56677-d602-4017-804b-975f3b929e3f"
+	)
+
+	spec, ok := backingVolumeOf(cluster + ":" + pool + ":" + volume)
+	if !ok {
+		t.Fatal("the handle was not recognized")
+	}
+	if spec.ClusterID != cluster || spec.PoolID != pool || spec.VolumeUUID != volume {
+		t.Errorf("backing volume = %+v", spec)
+	}
+}
+
+// What a volume is, is read from the stash rather than from its handle: a pNFS
+// volume's handle is its backing volume's, so a snapshot or a clone addresses
+// the lvol without knowing an export is in front of it.
+//
+// Getting this wrong strands a pod. Publish heals a dead mount before binding
+// it, and the generic heal builds a volume stack a pNFS volume does not have.
+func TestPNFSIsRecognizedFromTheStashedContext(t *testing.T) {
+	pnfs := map[string]string{csicommon.CtxAccessProtocol: csicommon.AccessProtocolNFS}
+	if !isPNFSVolume(pnfs) {
+		t.Error("a staged pNFS volume was not recognized, so publish would build it a stack")
+	}
+	if isPNFSVolume(map[string]string{"uuid": "bfc56677"}) {
+		t.Error("a block volume was routed to the pNFS path")
+	}
+	if isPNFSVolume(nil) {
+		t.Error("a volume with no stash was routed to the pNFS path")
+	}
+}

@@ -11,6 +11,8 @@
 package inventory
 
 import (
+	"encoding/json"
+	"os"
 	"slices"
 	"testing"
 
@@ -140,6 +142,61 @@ func TestDetectEnvironmentReadsRKE2AsRancher(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-13, RKE2 v1.36.6+rke2r1. RKE2 is built on the K3s code and
+// serves the k3s.cattle.io API group, for its add-ons and etcd snapshot records.
+// The group was read as K3s outright and K3s precedes Rancher, so the discovery
+// wrote `environment: K3s` for an RKE2 cluster.
+func TestDetectEnvironmentReadsAnRKE2ClusterThatServesTheK3sGroupAsRancher(t *testing.T) {
+	env := DetectEnvironment(
+		[]string{"apps", "helm.cattle.io", "k3s.cattle.io"},
+		[]corev1.Node{
+			node("server-1", kubelet("v1.36.6+rke2r1"), annotated("rke2.io/node-args", "[\"server\"]")),
+			node("agent-1", kubelet("v1.36.6+rke2r1")),
+		},
+	)
+
+	if env.Distribution != DistributionRancher {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionRancher)
+	}
+	// The K3s finding stays on the record for a reviewer.
+	if !evidenceFor(env, DistributionK3s) {
+		t.Error("the k3s.cattle.io group is not in the evidence")
+	}
+}
+
+// The group alone says "K3s or RKE2". With no kubelet to ask, the precedence
+// decides as before.
+func TestDetectEnvironmentReadsTheK3sGroupAloneAsK3s(t *testing.T) {
+	env := DetectEnvironment([]string{"apps", "k3s.cattle.io"}, nil)
+
+	if env.Distribution != DistributionK3s {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
+	}
+}
+
+// A kubelet that K3s built keeps the cluster K3s, whatever else is on it: the
+// Rancher-managed K3s cluster the precedence was written for, and a cluster
+// whose nodes were built by both.
+func TestDetectEnvironmentKeepsK3sWhereAK3sKubeletRuns(t *testing.T) {
+	cases := map[string][]corev1.Node{
+		"K3s under Rancher management": {
+			node("worker-1", kubelet("v1.31.4+k3s1"), annotated("management.cattle.io/pod-limits", "{}")),
+		},
+		"kubelets of both": {
+			node("worker-1", kubelet("v1.31.4+k3s1")),
+			node("worker-2", kubelet("v1.31.4+rke2r1")),
+		},
+	}
+	for name, nodes := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := DetectEnvironment([]string{"k3s.cattle.io", "management.cattle.io"}, nodes)
+			if env.Distribution != DistributionK3s {
+				t.Errorf("concluded %q, want %q", env.Distribution, DistributionK3s)
+			}
+		})
+	}
+}
+
 func TestDetectEnvironmentRecognizesRancherManagement(t *testing.T) {
 	env := DetectEnvironment(
 		[]string{"apps", "management.cattle.io"},
@@ -249,5 +306,129 @@ func TestDetectEnvironmentReadsEveryNodeAndNotOnlyTheFirst(t *testing.T) {
 	if env.Distribution != DistributionK3s {
 		t.Errorf("concluded %q from a fleet whose second node carries the marker, want %q",
 			env.Distribution, DistributionK3s)
+	}
+}
+
+func TestDetectEnvironmentRecognizesTheManagedServices(t *testing.T) {
+	// Each managed service is recognized from what a worker it provisioned
+	// carries, and from one marker alone: a self-managed node group has no
+	// node-pool label, and a node pool labeled by hand may carry no other.
+	cases := []struct {
+		name   string
+		worker corev1.Node
+		want   Distribution
+	}{
+		{"EKS by its kubelet version", node("worker-1", kubelet("v1.30.8-eks-2d5f260")), DistributionEKS},
+		{"EKS by its node-group label", node("worker-1", labeled("eks.amazonaws.com/nodegroup", "storage")), DistributionEKS},
+		{"GKE by its kubelet version", node("worker-1", kubelet("v1.30.5-gke.1014001")), DistributionGKE},
+		{"GKE by its node-pool label", node("worker-1", labeled("cloud.google.com/gke-nodepool", "storage")), DistributionGKE},
+		{"AKS by its agent-pool label", node("worker-1", labeled("kubernetes.azure.com/agentpool", "storage")), DistributionAKS},
+		{"AKS by its cluster label", node("worker-1", labeled("kubernetes.azure.com/cluster", "MC_rg_aks_westeurope")), DistributionAKS},
+		{"OKE by its node-pool label", node("worker-1", labeled("oke.oraclecloud.com/pool.name", "storage")), DistributionOKE},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := DetectEnvironment(nil, []corev1.Node{c.worker})
+			if env.Distribution != c.want {
+				t.Errorf("concluded %q, want %q", env.Distribution, c.want)
+			}
+		})
+	}
+}
+
+func TestDetectEnvironmentIgnoresTheCloudProvidersOwnLabels(t *testing.T) {
+	// A self-managed cluster on a cloud runs the provider's cloud controller
+	// manager too, and that labels the nodes it registers. Those labels say
+	// which cloud the machine is in, not who installed its kubelet. The AKS
+	// keys are whole keys, so a longer key that starts with one is not AKS.
+	env := DetectEnvironment(nil, []corev1.Node{node("worker-1",
+		labeled("oci.oraclecloud.com/fault-domain", "FAULT-DOMAIN-1"),
+		labeled("topology.k8s.aws/zone-id", "euc1-az2"),
+		labeled("kubernetes.azure.com/managed", "false"),
+		labeled("kubernetes.azure.com/cluster-name", "self-managed"),
+		labeled("kubernetes.azure.com/agentpool-custom", "storage"),
+	)})
+
+	if env.Distribution != DistributionVanilla {
+		t.Errorf("concluded %q from cloud-provider labels, want %q", env.Distribution, DistributionVanilla)
+	}
+}
+
+func TestDetectEnvironmentPrefersTheManagedServiceOverRancher(t *testing.T) {
+	// An EKS cluster imported into Rancher carries both. The managed service
+	// installed the kubelet and owns its configuration, so it is the answer.
+	env := DetectEnvironment(
+		[]string{"management.cattle.io"},
+		[]corev1.Node{node("worker-1",
+			kubelet("v1.30.8-eks-2d5f260"),
+			annotated("management.cattle.io/pod-requests", "{}"),
+		)},
+	)
+
+	if env.Distribution != DistributionEKS {
+		t.Errorf("concluded %q, want %q", env.Distribution, DistributionEKS)
+	}
+	if !evidenceFor(env, DistributionRancher) {
+		t.Errorf("recorded %+v, and the Rancher markers are missing from it", env.Evidence)
+	}
+}
+
+// A real GKE node, read from a one-node cluster on 2026-10-27 (COS, kernel
+// 6.12, GKE 1.36) and trimmed to its labels, annotations, and node info. GKE
+// registers no API group of its own, so the nodes are the whole of the case.
+func TestARealGKENodeReadsAsGKE(t *testing.T) {
+	raw, err := os.ReadFile("testdata/environment/gke-cos-n2.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list corev1.NodeList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+
+	env := DetectEnvironment(nil, list.Items)
+
+	if env.Distribution != DistributionGKE {
+		t.Fatalf("distribution = %s, want GKE: %+v", env.Distribution, env.Evidence)
+	}
+	sources := map[Source]bool{}
+	for _, e := range env.Evidence {
+		if e.Distribution != DistributionGKE {
+			t.Errorf("evidence for another distribution: %+v", e)
+		}
+		sources[e.Source] = true
+	}
+	if !sources[SourceKubeletVersion] || !sources[SourceNodeLabel] {
+		t.Errorf("evidence came from %v, want both the kubelet version and the node labels", sources)
+	}
+}
+
+// A real EKS node, read from a one-node cluster on 2026-10-27 (Amazon Linux
+// 2023, kernel 6.18, EKS 1.37), trimmed like the GKE one. Like GKE, EKS
+// registers no API group of its own.
+func TestARealEKSNodeReadsAsEKS(t *testing.T) {
+	raw, err := os.ReadFile("testdata/environment/eks-al2023-i4i.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var list corev1.NodeList
+	if err := json.Unmarshal(raw, &list); err != nil {
+		t.Fatal(err)
+	}
+
+	env := DetectEnvironment(nil, list.Items)
+
+	if env.Distribution != DistributionEKS {
+		t.Fatalf("distribution = %s, want EKS: %+v", env.Distribution, env.Evidence)
+	}
+	sources := map[Source]bool{}
+	for _, e := range env.Evidence {
+		if e.Distribution != DistributionEKS {
+			t.Errorf("evidence for another distribution: %+v", e)
+		}
+		sources[e.Source] = true
+	}
+	if !sources[SourceKubeletVersion] || !sources[SourceNodeLabel] {
+		t.Errorf("evidence came from %v, want both the kubelet version and the node labels", sources)
 	}
 }

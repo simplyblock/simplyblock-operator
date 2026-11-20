@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -63,6 +65,44 @@ type idResponse struct {
 type ReplicationPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+
+	// EndpointResolver answers where the control plane currently is -- see
+	// ReplicationPairReconciler's identical field (replicationpair_controller.go)
+	// for why this exists: without it, a ReplicationPolicy reconciled on a
+	// ControlPlane.spec.source.managed member cluster can never reach its
+	// control plane.
+	EndpointResolver controlplane.EndpointResolver
+}
+
+// apiClient resolves the control-plane client for one reconcile call, through
+// EndpointResolver when set. Mirrors ReplicationPairReconciler.apiClient.
+func (r *ReplicationPolicyReconciler) apiClient(ctx context.Context) *webapi.Client {
+	if r.EndpointResolver == nil {
+		return webapi.NewClient()
+	}
+
+	if endpoint := r.EndpointResolver(ctx); endpoint != "" {
+		return webapi.NewClient(endpoint)
+	}
+
+	return webapi.NewClient()
+}
+
+// clusterSecret reads the credential StorageClusterReconciler.persist wrote
+// for the named local StorageCluster. Mirrors
+// ReplicationPairReconciler.clusterSecret.
+func (r *ReplicationPolicyReconciler) clusterSecret(
+	ctx context.Context, namespace, clusterName string,
+) (string, error) {
+	var secret corev1.Secret
+	key := client.ObjectKey{
+		Name:      fmt.Sprintf("simplyblock-cluster-%s", clusterName),
+		Namespace: namespace,
+	}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return "", err
+	}
+	return string(secret.Data["secret"]), nil
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=replicationpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -101,7 +141,11 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
-	apiClient := webapi.NewClient()
+	if secret, err := r.clusterSecret(ctx, policy.Namespace, pair.Spec.SourceCluster); err == nil && secret != "" {
+		ctx = webapi.WithBearerToken(ctx, secret)
+	}
+
+	apiClient := r.apiClient(ctx)
 
 	if !policy.DeletionTimestamp.IsZero() {
 		return r.reconcileDelete(ctx, &policy, apiClient, clusterUUID)
@@ -127,10 +171,11 @@ func (r *ReplicationPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Re
 	}
 
 	// Sync slot count and mark ready.
+	// Slots of every namespace: a claim in a workload namespace follows this
+	// policy by its namespace-qualified reference.
 	var slotList simplyblockv1alpha1.ReplicationSlotList
 	if err := r.List(ctx, &slotList,
-		client.InNamespace(policy.Namespace),
-		client.MatchingFields{"spec.policyRef": policy.Name},
+		client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list ReplicationSlots for policy %q: %w", policy.Name, err)
 	}
@@ -161,10 +206,10 @@ func (r *ReplicationPolicyReconciler) reconcileDelete(
 ) (ctrl.Result, error) {
 	log := logf.FromContext(ctx)
 
+	// A slot in any namespace still follows the policy and blocks its deletion.
 	var slotList simplyblockv1alpha1.ReplicationSlotList
 	if err := r.List(ctx, &slotList,
-		client.InNamespace(policy.Namespace),
-		client.MatchingFields{"spec.policyRef": policy.Name},
+		client.MatchingFields{"spec.policyRef": policy.Namespace + "/" + policy.Name},
 	); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list ReplicationSlots: %w", err)
 	}
@@ -265,16 +310,24 @@ func parseDurationToMinutes(s string) (int, error) {
 	return minutes, nil
 }
 
+// slotPolicyRefIndex is the spec.policyRef index of a ReplicationSlot: the
+// policy it follows, namespace-qualified whichever spelling it was given.
+func slotPolicyRefIndex(obj client.Object) []string {
+	slot := obj.(*simplyblockv1alpha1.ReplicationSlot)
+	if slot.Spec.PolicyRef == "" {
+		return nil
+	}
+	return []string{utils.CanonicalRef(slot.Spec.PolicyRef, slot.Namespace)}
+}
+
 func (r *ReplicationPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// Index ReplicationSlots by spec.policyRef so the reconciler can quickly count slots.
+	// Index ReplicationSlots by the namespace-qualified policy they follow, so
+	// the reconciler can quickly count slots of every namespace.
 	if err := mgr.GetFieldIndexer().IndexField(
 		context.Background(),
 		&simplyblockv1alpha1.ReplicationSlot{},
 		"spec.policyRef",
-		func(obj client.Object) []string {
-			slot := obj.(*simplyblockv1alpha1.ReplicationSlot)
-			return []string{slot.Spec.PolicyRef}
-		},
+		slotPolicyRefIndex,
 	); err != nil {
 		if !apierrors.IsAlreadyExists(err) {
 			return err
@@ -291,9 +344,10 @@ func (r *ReplicationPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				if slot.Spec.PolicyRef == "" {
 					return nil
 				}
+				ns, name := utils.SplitRef(slot.Spec.PolicyRef, obj.GetNamespace())
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
-					Name:      slot.Spec.PolicyRef,
-					Namespace: obj.GetNamespace(),
+					Name:      name,
+					Namespace: ns,
 				}}}
 			},
 		)).

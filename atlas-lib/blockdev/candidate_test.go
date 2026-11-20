@@ -12,6 +12,7 @@ package blockdev
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -213,6 +214,30 @@ func TestCandidatesNamesAPartitionTableSeparatelyFromAFilesystem(t *testing.T) {
 	}
 }
 
+func TestCandidatesNamesAnLVMPhysicalVolumeSeparatelyFromOtherContent(t *testing.T) {
+	// A physical volume whose volume group has no active logical volume has no
+	// holder and nothing mounted, so lsblk shows a bare disk. The label is the
+	// only evidence, and NotBlank sends the administrator looking for a
+	// filesystem that is not there; the fix is pvremove, so the reason says LVM.
+	pv := blank(3750748848 * 512)
+	pv.bytes[512] = []byte("LABELONE")
+	pv.bytes[512+24] = []byte("LVM2 001")
+
+	in := inspectorOver(t, map[string]sparse{"sdb": pv}, nil)
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	got := found(t, cands, "sdb")
+	if got.Available() {
+		t.Fatal("handed over a disk carrying an LVM physical-volume label")
+	}
+	if !got.OnlyRejectedFor(ReasonLVMPhysicalVolume) {
+		t.Errorf("rejected it for %v, want %s alone", got.Rejections, ReasonLVMPhysicalVolume)
+	}
+}
+
 func TestCandidatesRejectsADiskWhoseContentItCouldNotRead(t *testing.T) {
 	// A device that could not be read is not a device that was read and found
 	// empty. This is the defect the content reading exists to remove, and it is
@@ -270,6 +295,89 @@ func TestCandidatesNeverHandsOverAFabricNamespace(t *testing.T) {
 	}
 }
 
+// A removable device is never backend storage, whatever is in it.
+//
+// The optical drive is the case that turned up on a real worker: a QEMU
+// DVD-ROM with install media in it reports a whole disk of 924 MB on the SATA
+// bus, reads as a blank device through a content probe that finds no signature
+// it knows, and is therefore admitted on every other ground. Nothing else
+// distinguishes it, and a cluster that took it would lose the device the moment
+// the medium was ejected.
+//
+// The waiver rules out nothing here: this is what the device is rather than
+// what is currently on it, so unlike a stale partition table there is no state
+// an administrator could know better than the kernel does.
+func TestCandidatesRejectsARemovableDevice(t *testing.T) {
+	const (
+		fixed = "devices/pci0000:00/0000:5e:00.0/nvme/nvme0/nvme0n1"
+		opti  = "devices/pci0000:00/0000:00:1f.2/ata2/host2/target2:0:0/2:0:0:0/block/sr0"
+		usb   = "devices/pci0000:00/0000:14:00.0/usb1/1-3/1-3:1.0/host3/target3:0:0/3:0:0:0/block/sdc"
+	)
+	h := tree{files: map[string]string{}, links: map[string]string{}}
+
+	// A fixed NVMe SSD, which is what the run is for.
+	h.blockAttrs(fixed, "259:0", 6251233968, false, false, false)
+	h.links["class/block/nvme0n1"] = "../../" + fixed
+	h.links[fixed+"/device"] = ".."
+
+	// The optical drive, with a medium in it so that it reports a size.
+	h.blockAttrs(opti, "11:0", 1805164, true, false, true)
+	h.links["class/block/sr0"] = "../../" + opti
+	h.links[opti+"/device"] = "../.."
+
+	// A USB stick, which is the same statement on a different bus: removable is
+	// what the kernel says about the device, not about the medium.
+	h.blockAttrs(usb, "8:32", 60063744, false, false, true)
+	h.links["class/block/sdc"] = "../../" + usb
+	h.links[usb+"/device"] = "../.."
+
+	// Nothing on this host is mounted or swapping: the refusal under test has
+	// to rest on what the devices are, and a usage finding would supply a
+	// second ground that hides whether the first one fired.
+	h.files["self/mountinfo"] = ""
+	h.files["swaps"] = ""
+
+	root := h.write(t)
+	in := Inspector{
+		Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+		// Only the fixed disk is served, which asserts the second half of the
+		// rejection: a device refused on a structural ground is never opened,
+		// so a removable drive's medium is not read to decide something the
+		// kernel already answered. An opener reaching sr0 fails the test by
+		// having no content to serve.
+		Prober: NewProberWithOpener(contentOpener(map[string]sparse{
+			"nvme0n1": blank(6251233968 * 512),
+		}), WithRegionSize(MinRegionSize)),
+		Exclusive: free,
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, name := range []string{"sr0", "sdc"} {
+		device := found(t, cands, name)
+		if device.Available() {
+			t.Errorf("handed over %s, a removable device, as backend storage", name)
+		}
+		if !device.RejectedFor(ReasonRemovable) {
+			t.Errorf("rejected %s for %v, want %s", name, device.Rejections, ReasonRemovable)
+		}
+		// The waiver an administrator has is for a stale partition table, and
+		// it must not reach this: a device rejected for being removable and for
+		// nothing else is still not a candidate.
+		if device.OnlyRejectedFor(ReasonPartitioned) {
+			t.Errorf("%s reads as refused only for its partition table", name)
+		}
+	}
+
+	fixedDisk := found(t, cands, "nvme0n1")
+	if !fixedDisk.Available() {
+		t.Errorf("rejected the fixed disk beside them: %v", fixedDisk.Rejections)
+	}
+}
+
 func TestCandidatesRejectsADiskTheKernelWillNotHandOver(t *testing.T) {
 	held := func(path string) error {
 		if path == "/dev/nvme0n1" {
@@ -290,5 +398,168 @@ func TestCandidatesRejectsADiskTheKernelWillNotHandOver(t *testing.T) {
 	}
 	if got.OnlyRejectedFor(ReasonPartitioned) {
 		t.Error("a busy device must not be accepted by any override")
+	}
+}
+
+// Regression: 2026-10-22-block-mode-partitions-never-proposed. A partition was
+// refused as NotAWholeDisk before its bytes were read, so a logical block
+// device run, which may take a partition, had no reading to decide on and
+// never proposed one. A partition nothing uses is now read like a disk: its
+// only structural ground stays NotAWholeDisk, which the run waives, and what it
+// carries decides the rest.
+func TestCandidatesReadsAPartitionNothingUses(t *testing.T) {
+	pv := blank(1048576 * 512)
+	pv.bytes[512] = []byte("LABELONE")
+	pv.bytes[512+24] = []byte("LVM2 001")
+
+	for _, tc := range []struct {
+		name    string
+		content sparse
+		want    []Reason
+		reading Content
+	}{
+		{"blank", blank(1048576 * 512), []Reason{ReasonNotAWholeDisk}, ContentBlank},
+		{"carrying a physical volume", pv, []Reason{ReasonNotAWholeDisk, ReasonLVMPhysicalVolume}, ContentStackLayer},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Only the root partition is mounted here, so the EFI partition
+			// beside it is one nothing uses.
+			h := storageHost()
+			h.files["self/mountinfo"] = "25 1 259:4 / / rw,relatime shared:1 - ext4 /dev/nvme1n1p2 rw"
+			h.files["swaps"] = swapOnVirtio
+			root := h.write(t)
+			in := Inspector{
+				Config: ScanConfig{SysfsRoot: root, ProcRoot: root},
+				Prober: NewProberWithOpener(contentOpener(map[string]sparse{"nvme1n1p1": tc.content}),
+					WithRegionSize(MinRegionSize)),
+				Exclusive: free,
+			}
+
+			cands, err := in.Candidates(context.Background())
+			if err != nil {
+				t.Fatalf("collect the candidates: %v", err)
+			}
+
+			got := found(t, cands, "nvme1n1p1")
+			if got.Reading.Content != tc.reading {
+				t.Errorf("the partition reads as %v, want %v", got.Reading.Content, tc.reading)
+			}
+			if !got.OnlyRejectedFor(tc.want...) || len(got.Rejections) != len(tc.want) {
+				t.Errorf("rejected it for %v, want exactly %v", got.Rejections, tc.want)
+			}
+		})
+	}
+}
+
+// A partition that is mounted is still refused before anything is opened,
+// exactly as a mounted disk is.
+func TestCandidatesDoesNotReadAMountedPartition(t *testing.T) {
+	in := inspectorOver(t, map[string]sparse{}, nil)
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+	got := found(t, cands, "nvme1n1p2")
+	if got.Reading.Content != ContentUnknown {
+		t.Errorf("a mounted partition was read: %v", got.Reading)
+	}
+	if got.RejectedFor(ReasonUnreadable) {
+		t.Errorf("a mounted partition was opened: %v", got.Rejections)
+	}
+}
+
+// rejection is the ground a candidate was refused on, or a failure when it was
+// not refused on it.
+func rejection(t *testing.T, c Candidate, reason Reason) Rejection {
+	t.Helper()
+	for _, r := range c.Rejections {
+		if r.Reason == reason {
+			return r
+		}
+	}
+	t.Fatalf("%s was not rejected for %s: %v", c.Name, reason, c.Rejections)
+	return Rejection{}
+}
+
+// heldBy is a kernel that refuses the named devices and hands over the rest.
+func heldBy(paths ...string) ExclusiveOpener {
+	return func(path string) error {
+		for _, held := range paths {
+			if path == held {
+				return ErrDeviceBusy
+			}
+		}
+		return nil
+	}
+}
+
+func TestCandidatesNamesTheArrayARAIDMemberBelongsTo(t *testing.T) {
+	// GKE assembles a node pool's local SSDs into an MD RAID array for ephemeral
+	// storage, and a reviewer told the disk is "held by [md0]" and "busy for no
+	// reason" is left to work out what md0 is. The reason names the array and
+	// its level, and the kernel's refusal is explained by it.
+	root := raidHost().write(t)
+	in := Inspector{
+		Config:    ScanConfig{SysfsRoot: root, ProcRoot: root},
+		Prober:    NewProberWithOpener(contentOpener(nil), WithRegionSize(MinRegionSize)),
+		Exclusive: heldBy("/dev/nvme0n1", "/dev/nvme0n2", "/dev/md0"),
+	}
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, name := range []string{"nvme0n1", "nvme0n2"} {
+		member := found(t, cands, name)
+		if member.Available() {
+			t.Fatalf("%s, a member of md0, was handed over", name)
+		}
+		got := rejection(t, member, ReasonRAIDMember)
+		for _, want := range []string{"md0", "raid0"} {
+			if !strings.Contains(got.Detail, want) {
+				t.Errorf("%s: the RAID member detail %q does not name %s", name, got.Detail, want)
+			}
+		}
+		if member.RejectedFor(ReasonStacked) {
+			t.Errorf("%s was also rejected as Stacked, which says the same thing without the array: %v",
+				name, member.Rejections)
+		}
+		busy := rejection(t, member, ReasonBusy)
+		if !strings.Contains(busy.Detail, "md0") {
+			t.Errorf("%s: the Busy detail %q does not say that md0 is why", name, busy.Detail)
+		}
+	}
+}
+
+func TestCandidatesExplainsAKernelRefusalItCanAccountFor(t *testing.T) {
+	// The kernel gives no reason for refusing an exclusive open, but when a
+	// readable source already found who holds the device, that is the reason,
+	// and "gives no reason" would be telling the reader to look for one.
+	in := inspectorOver(t, nil, heldBy("/dev/sda", "/dev/nvme1n1", "/dev/vda"))
+
+	cands, err := in.Candidates(context.Background())
+	if err != nil {
+		t.Fatalf("collect the candidates: %v", err)
+	}
+
+	for _, tc := range []struct{ name, want string }{
+		{"sda", "dm-0"},        // an LVM volume group holds it
+		{"nvme1n1", "mounted"}, // its partitions carry the root filesystem
+		{"vda", "swap"},        // it is swap
+	} {
+		got := rejection(t, found(t, cands, tc.name), ReasonBusy)
+		if !strings.Contains(got.Detail, tc.want) {
+			t.Errorf("%s: the Busy detail %q does not mention %s", tc.name, got.Detail, tc.want)
+		}
+		if strings.Contains(got.Detail, "gives no reason") {
+			t.Errorf("%s: the Busy detail %q claims there is no reason when one was found", tc.name, got.Detail)
+		}
+	}
+
+	// A device held by a device-mapper node is still Stacked: the array reason
+	// is for arrays.
+	if sda := found(t, cands, "sda"); sda.RejectedFor(ReasonRAIDMember) {
+		t.Errorf("sda, held by a device-mapper node, was rejected as a RAID member: %v", sda.Rejections)
 	}
 }

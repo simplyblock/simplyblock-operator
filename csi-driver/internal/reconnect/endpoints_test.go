@@ -171,3 +171,38 @@ func TestMissingEndpoints_NoActivePathsReportsAll(t *testing.T) {
 		t.Errorf("missingEndpoints = %+v, want both reported missing", missing)
 	}
 }
+
+// Regression: 2026-09-13-repaired-endpoint-stays-in-the-active-snapshot
+// (release/26.3.1 #533). Running the repair before the reconcile passes only
+// restores the path if the reconcile can see it is gone. activePaths is the
+// snapshot the monitor took before recoverPathsWithANA ran, and missingEndpoints
+// counts an endpoint as attached on presence alone, so a controller the repair
+// had just torn down still looked attached and its connect was skipped.
+func TestWithoutEndpoints_RepairedPathIsSeenAsMissingAgain(t *testing.T) {
+	const nqn = "nqn.2023-02.io.simplyblock:cluster:lvol:9ab68184"
+	// The snapshot the monitor took before the repair: all three paths present.
+	active := []initiator.Path{
+		{Name: "nvme0", Address: "traddr=10.0.0.1,trsvcid=4420", State: "live"},
+		{Name: "nvme1", Address: "traddr=10.0.0.2,trsvcid=4420", State: "live"},
+		{Name: "nvme2", Address: "traddr=10.0.0.3,trsvcid=4420", State: "live"},
+	}
+	conns := []*controlplane.LvolConnectResp{
+		{Nqn: nqn, IP: "10.0.0.1", Port: 4420},
+		{Nqn: nqn, IP: "10.0.0.2", Port: 4420},
+		{Nqn: nqn, IP: "10.0.0.3", Port: 4420},
+	}
+	if got := missingEndpoints(conns, active); len(got) != 0 {
+		t.Fatalf("missingEndpoints on the untouched snapshot = %d, want 0", len(got))
+	}
+
+	// The repair tore down 10.0.0.2. The reconcile that follows in this same
+	// tick has to connect it, so it must no longer count as attached.
+	remaining := withoutEndpoints(active, []string{"10.0.0.2:4420"})
+	missing := missingEndpoints(conns, remaining)
+	if len(missing) != 1 || missing[0].IP != "10.0.0.2" {
+		t.Fatalf("missing = %v, want only the torn-down 10.0.0.2", missing)
+	}
+	if len(remaining) != 2 {
+		t.Errorf("remaining = %d paths, want the other two untouched", len(remaining))
+	}
+}

@@ -1,16 +1,15 @@
-// Package v1alpha2 is the storage version of the simplyblock API group and the
-// shape every controller reads. It carries the property names settled by the CRD
-// redesign; v1alpha1 keeps the names that shipped and converts into this package
-// through the conversion webhook, so no reconciler has to know that an older
-// spelling exists.
+// Package v1alpha2 is the current version of the storage.simplyblock.io API
+// group and the version the cluster stores. It declares the kinds that run
+// simplyblock on Kubernetes: entity kinds such as StorageCluster, StorageNode,
+// StoragePool, and StorageDevice, whose spec is the desired state simplyblock
+// converges on, and the Ops kind beside each of them, which requests one
+// imperative operation against its subject and reports how far that operation
+// got.
 //
-// This package is the conversion hub: every type here implements conversion.Hub
-// and none of them implements ConvertTo or ConvertFrom. The spoke side lives
-// beside the older types, in api/v1alpha1/*_conversion.go.
-//
-// operator/docs/designs/crd-redesign/design-property-renames.md is the inventory
-// of what was renamed and why, and its §3 is the mechanism this package is the
-// hub of.
+// Several of these kinds also exist as v1alpha1, under property names that have
+// since been renamed. A manifest written against v1alpha1 is still accepted and
+// converted, and a client that asks for v1alpha1 gets the older spelling back.
+// A kind introduced in v1alpha2 has no v1alpha1 spelling.
 //
 // +kubebuilder:object:generate=true
 // +groupName=storage.simplyblock.io
@@ -22,7 +21,7 @@ import (
 )
 
 var (
-	// GroupVersion is group version used to register these objects.
+	// GroupVersion is the group version these objects are registered under.
 	GroupVersion = schema.GroupVersion{Group: "storage.simplyblock.io", Version: "v1alpha2"}
 
 	// SchemeBuilder is used to add go types to the GroupVersionKind scheme.

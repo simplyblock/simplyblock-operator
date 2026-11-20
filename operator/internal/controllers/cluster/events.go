@@ -1,0 +1,165 @@
+// The reasons this package emits events under.
+//
+// They are collected here rather than declared beside the code that raises them
+// because a reason is a contract with whoever is reading `kubectl describe`: it
+// is what an administrator greps for and what an alert matches on, so it
+// outlives the function that happens to raise it today.
+//
+// Events need a target object and both kinds are their own. An event about the
+// cluster's own reconcile goes on the StorageCluster, which is what an
+// administrator has open. An event about an operation goes on the
+// StorageClusterOps, which outlives the operation as its record.
+//
+// design-storagecluster.md §10.1 is the specification.
+
+package cluster
+
+const (
+	// FDBNotReady says the control plane is not ready to accept a creation.
+	FDBNotReady = "FDBNotReady"
+	// BackupCredentialsError says the Secret spec.backup names cannot be
+	// resolved: missing, unreadable, or lacking the two keys.
+	BackupCredentialsError = "BackupCredentialsError"
+	// InvalidConfig says a user-supplied field failed validation, which today
+	// means a URL that does not resolve to an external address.
+	InvalidConfig = "InvalidConfig"
+	// ClusterCreationFailed carries the control plane's own refusal, status and
+	// body, so the cause is visible in `kubectl describe` without reading the
+	// operator's log.
+	ClusterCreationFailed = "ClusterCreationFailed"
+	// ClusterAdopted says an existing backend cluster was taken over rather
+	// than created, which is the difference between a migration and a mistake.
+	ClusterAdopted = "ClusterAdopted"
+
+	// PeerClusterMissing says a follower site is waiting for its leader: the
+	// backend cluster does not exist yet, or the credentials to adopt it have not
+	// been delivered. A follower never creates the cluster itself.
+	PeerClusterMissing = "PeerClusterMissing"
+	// SyncReplicationMismatch says a follower was pointed at a backend cluster
+	// that is not a sync-replication cluster, which no stretched cluster can be;
+	// the adoption is refused rather than joining it.
+	SyncReplicationMismatch = "SyncReplicationMismatch"
+	// ForeignNodeOnSite says a follower's site already has a node in the backend
+	// cluster that none of this site's StorageNodes is, so another installation
+	// holds the site; the adoption is held rather than putting two operators on
+	// one site's nodes.
+	ForeignNodeOnSite = "ForeignNodeOnSite"
+	// SiteRecordChanged says the control plane's record of a lost site changed:
+	// a site was recorded out, its drain or fence moved on, or it returned.
+	SiteRecordChanged = "SiteRecordChanged"
+	// SiteLinkChanged says whether the site link reaches the other site's
+	// operator changed: Normal when it does, Warning when it stops.
+	SiteLinkChanged = "SiteLinkChanged"
+	// RoleChanged says this site's stretched role changed, which moves the
+	// cluster-wide operations to or from this site's operator.
+	RoleChanged = "RoleChanged"
+
+	// RoleConflict holds a follower handed a cluster whose record names the
+	// follower's own site as leader.
+	RoleConflict = "RoleConflict"
+
+	// LeaderSiteRecorded says the leader wrote its site to the cluster record.
+	LeaderSiteRecorded = "LeaderSiteRecorded"
+
+	// WorkerUnreachable holds a follower one of whose workers the control plane
+	// cannot reach.
+	WorkerUnreachable = "WorkerUnreachable"
+
+	// TaskCompleted and TaskCanceled are what remains of a control-plane task
+	// once it leaves status.tasks. The list is a window on the present and
+	// these are the record that something happened in it.
+	TaskCompleted = "TaskCompleted"
+	TaskCanceled  = "TaskCanceled"
+
+	// TaskGaveUp is a task that left the window having been restarted, which is
+	// the control plane reporting a failure rather than a finish. Its own status
+	// says done either way, so the retry count is what separates them, and the
+	// schema says as much: it is the one number that separates a task that is
+	// slow from one that is failing.
+	TaskGaveUp = "TaskGaveUp"
+
+	// The operation reasons, raised on the StorageClusterOps rather than the
+	// cluster.
+	//
+	// OperationSucceeded is one reason for all seven actions rather than one
+	// each: the action is already in spec.action and on a print column, so
+	// encoding it in the reason name tells a reader nothing and gives anyone
+	// alerting on completion seven reasons to match instead of one.
+	OperationQueued    = "OperationQueued"
+	OperationStarted   = "OperationStarted"
+	OperationSucceeded = "OperationSucceeded"
+	OperationFailed    = "OperationFailed"
+	OperationAborted   = "OperationAborted"
+
+	// AbortRefused says spec.abort arrived at a step that cannot be stopped.
+	AbortRefused = "AbortRefused"
+	// RoleLost is a cluster-wide operation ended because a role swap made its
+	// cluster a stretched cluster's follower site, whose leader now runs the
+	// cluster's cluster-wide operations. Raised only where the operation can
+	// still be stopped; one the control plane is part-way through runs on.
+	RoleLost = "RoleLost"
+
+	// StepDeadlineExceeded distinguishes an operation still working from one
+	// that stopped, which is the distinction status.message cannot express.
+	StepDeadlineExceeded = "StepDeadlineExceeded"
+
+	// PeerNodeNotOnline is the load-bearing one. Holding a rolling restart for
+	// a peer is correct behavior, and without an event it is indistinguishable
+	// from a stalled controller.
+	PeerNodeNotOnline = "PeerNodeNotOnline"
+
+	// NodeRestarted says the walk advanced to the next node.
+	NodeRestarted = "NodeRestarted"
+
+	// NodeSkipped says the walk passed over a node without restarting it,
+	// because the control plane stopped listing it or its removal started
+	// after the walk was planned.
+	NodeSkipped = "NodeSkipped"
+
+	// FailureDomainNotReady says an activation is waiting because the cluster's
+	// failure domains do not yet hold an equal number of hosts.
+	FailureDomainNotReady = "FailureDomainNotReady"
+
+	// StripeNodesNotReady says an activation is waiting because the cluster has
+	// fewer storage nodes than its erasure-coding scheme needs. Nothing below the
+	// operator reports it: the control plane's own activation gate counts devices
+	// rather than nodes.
+	StripeNodesNotReady = "StripeNodesNotReady"
+
+	// ActivationRetried says the control plane gave up on an activation it had
+	// accepted and the operator asked again. The control plane reports that
+	// failure nowhere but in the cluster's status falling back, so this event is
+	// the only record that an attempt was made and lost.
+	ActivationRetried = "ActivationRetried"
+
+	// ServiceClassesApplied says spec.serviceClasses differed from what the
+	// control plane held and was sent to it.
+	ServiceClassesApplied = "ServiceClassesApplied"
+
+	// ServiceClassesRefused carries the control plane's refusal of
+	// spec.serviceClasses, typically a class that is still used by a volume.
+	// The change is retried on every sync until the spec or the volumes move.
+	ServiceClassesRefused = "ServiceClassesRefused"
+
+	// ServiceClassesUnsupported says the control plane is too old to configure
+	// service classes, so spec.serviceClasses is not applied.
+	ServiceClassesUnsupported = "ServiceClassesUnsupported"
+
+	// WorkloadNamesNotRecorded says the control plane created the cluster
+	// without the workload names it was sent, so its nodes would be reached by
+	// names the cluster's Services do not carry.
+	WorkloadNamesNotRecorded = "WorkloadNamesNotRecorded"
+
+	// The supercluster's events, emitted on the supercluster, which is the
+	// object an administrator reads and the one that outlives any member.
+
+	// MemberAdded says a member cluster joined the supercluster.
+	MemberAdded = "MemberAdded"
+
+	// MemberPlacementChanged says a member left placement or returned to it.
+	MemberPlacementChanged = "MemberPlacementChanged"
+
+	// AggregateCapacityThreshold says the members' combined capacity crossed
+	// the supercluster's warning or critical threshold.
+	AggregateCapacityThreshold = "AggregateCapacityThreshold"
+)

@@ -163,6 +163,20 @@ func notImplemented(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "cpsim does not implement "+r.Method+" "+r.URL.Path, http.StatusNotImplemented)
 }
 
+// watching answers, and reports true, when the caller asked a read endpoint for
+// its event stream rather than a plain response. The control plane serves
+// `watch=true` as Server-Sent Events. The simulator holds a state that nothing
+// mutates behind the caller's back, so a stream from it would send one snapshot
+// and then hang until the test timed out. A 501 names the streaming as the part
+// that is missing, instead of handing back a plain body nobody asked for.
+func watching(w http.ResponseWriter, r *http.Request, watch *bool) bool {
+	if watch == nil || !*watch {
+		return false
+	}
+	notImplemented(w, r)
+	return true
+}
+
 // hostError is a host-authorization failure, which the control plane reports as
 // a 404 carrying the message.
 type hostError string

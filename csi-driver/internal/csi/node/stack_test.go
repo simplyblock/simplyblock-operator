@@ -1,0 +1,1181 @@
+// What each node RPC does to a volume's stack.
+//
+// These assert the verb and the plan, not the device: which layers a volume is
+// made of, which runner call an RPC chose, and what it did not call. The last
+// of those is the one that matters most, because an unstage that reached for
+// Destroy would take a volume's data with it, and no fake device can make that
+// claim provable.
+
+package node
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
+	k8smount "k8s.io/mount-utils"
+
+	"github.com/simplyblock/atlas/blockdev"
+	export "github.com/simplyblock/atlas/nfsexport"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/layers"
+
+	"github.com/simplyblock/csi-driver/internal/controlplane"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/initiator"
+	"github.com/simplyblock/csi-driver/internal/mount"
+)
+
+// recordingRunner answers every verb without touching a host and logs which one
+// it was asked for.
+type recordingRunner struct {
+	calls []string
+	plans map[string][]string
+
+	upErr      error
+	downErr    error
+	healErr    error
+	growErr    error
+	destroyErr error
+
+	exposes string
+}
+
+func newRecordingRunner() *recordingRunner {
+	return &recordingRunner{plans: map[string][]string{}, exposes: fakeDevice}
+}
+
+func (r *recordingRunner) note(verb string, plan volstack.Plan) {
+	r.calls = append(r.calls, verb)
+	r.plans[verb] = plan.Names()
+}
+
+func (r *recordingRunner) artifact() volstack.Artifact {
+	if r.exposes == "" {
+		return volstack.Artifact{}
+	}
+	return volstack.Artifact{Devices: []blockdev.Device{{Path: r.exposes, Name: filepath.Base(r.exposes)}}}
+}
+
+func (r *recordingRunner) Up(_ context.Context, _ string, plan volstack.Plan) (volstack.Artifact, error) {
+	r.note("up", plan)
+	return r.artifact(), r.upErr
+}
+
+func (r *recordingRunner) Down(_ context.Context, _ string, plan volstack.Plan) error {
+	r.note("down", plan)
+	return r.downErr
+}
+
+func (r *recordingRunner) Heal(_ context.Context, _ string, plan volstack.Plan) error {
+	r.note("heal", plan)
+	return r.healErr
+}
+
+func (r *recordingRunner) Grow(_ context.Context, plan volstack.Plan) error {
+	r.note("grow", plan)
+	return r.growErr
+}
+
+func (r *recordingRunner) Destroy(_ context.Context, _ string, plan volstack.Plan) error {
+	r.note("destroy", plan)
+	return r.destroyErr
+}
+
+func (r *recordingRunner) Observe(_ context.Context, plan volstack.Plan) (volstack.Artifact, error) {
+	r.note("observe", plan)
+	return r.artifact(), nil
+}
+
+// called reports whether the runner was asked for verb.
+func (r *recordingRunner) called(verb string) bool {
+	for _, call := range r.calls {
+		if call == verb {
+			return true
+		}
+	}
+	return false
+}
+
+// newStackedServer is a node server whose stack answers from runner and whose
+// mounter drives a fake kernel. Nothing here reaches a control plane, so every
+// plan is built from the stashed context.
+func newStackedServer(t *testing.T, runner stackRunner) (*Server, string) {
+	t.Helper()
+	s, recordDir := newTestStack(t, runner)
+	return &Server{
+		mounter:     mount.NewWith(k8smount.NewFakeMounter(nil), nil),
+		stack:       s,
+		volumeLocks: csicommon.NewVolumeLocks(),
+		// The hosts these tests stand in for have device-mapper. A test about a
+		// host without it clears this.
+		deviceMapper: true,
+	}, recordDir
+}
+
+// newTestStack is the stack with its record directory in a temporary one, so a
+// test can write a record and see the teardown read it. The directory is
+// returned because a test that corrupts a record writes the file itself.
+//
+// The dm indirection is off here. These tests pin the direct shapes they were
+// written against, and the indirection is on by default, so without this every
+// fresh stage would run dmsetup, which the recording runner does not answer. A
+// test about the indirection sets SPDKCSI_DM_INDIRECTION itself after this.
+func newTestStack(t *testing.T, runner stackRunner) (*stack, string) {
+	t.Helper()
+	t.Setenv("SPDKCSI_DM_INDIRECTION", "false")
+	recordDir := t.TempDir()
+	s := newStack(mount.NewWith(k8smount.NewFakeMounter(nil), nil), recordDir)
+	s.runner = runner
+	return s, recordDir
+}
+
+// plainShape is the layer list a filesystem volume stages as, rendered the way
+// these tests compare plans.
+const plainShape = "fabric → filesystem"
+
+// lvmShape is the layer list a volume carrying client-side compression or
+// deduplication stages as, rendered the same way.
+const lvmShape = "fabric → lvmPhysicalVolume → lvmVolumeGroup → lvmLogicalVolume → filesystem"
+
+// stagedContext is the volume context a staged volume leaves behind, which is
+// all the teardown and expansion paths have to work from.
+func stagedContext() map[string]string {
+	return map[string]string{
+		"nqn":         "nqn.2023-05.io.simplyblock:lvol:" + pvcTestLvol,
+		"nsId":        "1",
+		"uuid":        pvcTestLvol,
+		"targetType":  "tcp",
+		"connections": `[{"ip":"10.0.0.1","port":4420}]`,
+		"devicePath":  fakeDevice,
+	}
+}
+
+// stashedAt writes a staged volume's context where the node service looks for
+// it, and returns the staging parent path.
+func stashedAt(t *testing.T, vc map[string]string) string {
+	t.Helper()
+	parent := t.TempDir()
+	if err := stashVolumeContext(vc, parent); err != nil {
+		t.Fatalf("stash volume context: %v", err)
+	}
+	return parent
+}
+
+// A mount volume's stack is the fabric with a filesystem above it, and a raw
+// block volume's is the fabric alone. Raw block mode is a shorter plan rather
+// than a flag inside a stage function, which is what keeps a block volume from
+// sharing a code path with a formatting one.
+func TestPlanForSelectsTheShapeFromTheCapability(t *testing.T) {
+	s, _ := newTestStack(t, newRecordingRunner())
+	node := s.node("", nil)
+	volume := stackVolume("/staging", stagedContext(), mountCapability())
+
+	vc := stagedContext()
+	options := vdoOptions(vc)
+
+	mountPlan := planFor(node, connectionFromContext(vc), volume, options, shapeFor(vc, mountCapability()))
+	if got := strings.Join(mountPlan.Names(), " → "); got != plainShape {
+		t.Errorf("a filesystem volume stages as %s", got)
+	}
+
+	blockPlan := planFor(node, connectionFromContext(vc), volume, options, shapeFor(vc, blockCapability()))
+	if got := strings.Join(blockPlan.Names(), " → "); got != "fabric" {
+		t.Errorf("a raw block volume stages as %s, and nothing may format it", got)
+	}
+}
+
+// Every path the control plane published is carried, in the order it published
+// them, so the primary stays first. The DHCHAP key material rides along with
+// them, because the connect line is the only channel the control plane has for
+// it and a plan that dropped it would attach an authenticated subsystem with no
+// credentials.
+func TestConnectionFromResponsesCarriesEveryPathAndItsCredentials(t *testing.T) {
+	responses := []*controlplane.LvolConnectResp{
+		{
+			Nqn: "nqn.2023-05.io.simplyblock:lvol:" + pvcTestLvol, NSID: 3,
+			IP: "10.0.0.1", Port: 4420, TargetType: "TCP", NrIoQueues: 4, ReconnectDelay: 2,
+			Connect: "nvme connect --hostnqn=nqn.2014-08.org.nvmexpress:uuid:abc " +
+				"--dhchap-secret=DHHC-1:00:secret: --dhchap-ctrl-secret=DHHC-1:00:ctrl: --tls",
+		},
+		{
+			Nqn: "nqn.2023-05.io.simplyblock:lvol:" + pvcTestLvol, NSID: 3,
+			IP: "10.0.0.2", Port: 4420, TargetType: "TCP",
+			Connect: "nvme connect --hostnqn=nqn.2014-08.org.nvmexpress:uuid:abc",
+		},
+	}
+
+	connection, hostNQN := initiator.ConnectionFrom(responses, pvcTestLvol)
+
+	if len(connection.Endpoints) != 2 {
+		t.Fatalf("the connection carries %d endpoints, want both published paths", len(connection.Endpoints))
+	}
+	if connection.Endpoints[0].Address != "10.0.0.1" {
+		t.Errorf("the primary path is %s, and the control plane's order is the attach order",
+			connection.Endpoints[0].Address)
+	}
+	if connection.NSID != 3 || connection.UUID != pvcTestLvol {
+		t.Errorf("the connection names namespace %d of %s, want 3 of %s",
+			connection.NSID, connection.UUID, pvcTestLvol)
+	}
+	if connection.Endpoints[0].DHCHAPSecret == "" || connection.Endpoints[0].DHCHAPCtrlSecret == "" {
+		t.Error("the DHCHAP key material was dropped, so an authenticated connect would be refused")
+	}
+	if !connection.Endpoints[0].TLS {
+		t.Error("the connection is not marked encrypted, so the volume would be attached in the clear")
+	}
+	if hostNQN != "nqn.2014-08.org.nvmexpress:uuid:abc" {
+		t.Errorf("the host identity is %q, and presenting another is what an allowed-hosts pool refuses", hostNQN)
+	}
+}
+
+// The teardown path asks the control plane nothing: an unstage has to work when
+// the control plane does not, and a release attaches nothing, so it needs no
+// credentials. What it does need is the identity of the namespace, which the
+// stashed context carries.
+func TestConnectionFromContextNamesTheNamespace(t *testing.T) {
+	vc := stagedContext()
+	vc["targetLvolID"] = "11111111-2222-3333-4444-555555555555"
+
+	connection := connectionFromContext(vc)
+
+	if connection.NQN != vc["nqn"] || connection.NSID != 1 {
+		t.Errorf("the connection names %s namespace %d", connection.NQN, connection.NSID)
+	}
+	if connection.UUID != vc["targetLvolID"] {
+		t.Errorf("the connection identifies the namespace as %s, and after a failover the data is "+
+			"served out of the clone", connection.UUID)
+	}
+	if len(connection.Endpoints) != 1 || connection.Endpoints[0].Address != "10.0.0.1" {
+		t.Errorf("the endpoints did not survive the round trip: %+v", connection.Endpoints)
+	}
+}
+
+// A stage brings the stack up and records what the volume now is, so the later
+// RPCs act on a device that was read rather than guessed.
+func TestStageBringsTheStackUp(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	parent := t.TempDir()
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     stagedContext(),
+	}
+
+	if _, err := ns.NodeStageVolume(context.Background(), req); err != nil {
+		t.Fatalf("NodeStageVolume: %v", err)
+	}
+
+	if !runner.called("up") {
+		t.Fatalf("staging did not bring the stack up; it called %v", runner.calls)
+	}
+	if runner.called("destroy") {
+		t.Fatal("staging destroyed something")
+	}
+
+	stashed, err := lookupVolumeContext(parent)
+	if err != nil {
+		t.Fatalf("the staged volume left no context behind: %v", err)
+	}
+	if stashed["devicePath"] != fakeDevice {
+		t.Errorf("the staged device was recorded as %q, want the one the stack exposed", stashed["devicePath"])
+	}
+	if stashed[stagedFsTypeKey] != extFS {
+		t.Errorf("the staged filesystem was recorded as %q, and a restage has nothing else to go on",
+			stashed[stagedFsTypeKey])
+	}
+}
+
+// Regression: 2026-09-29-testfailover-nil-volumecontext — a statically
+// provisioned PV (the TestFailover bubble PV) carries no csi.volumeAttributes, so
+// NodeStageVolume received a nil VolumeContext and panicked with "assignment to
+// entry in nil map" at the first vc[...] write. The node plugin crash-looped, its
+// socket refused connections, and no pod could mount the clone. Staging must
+// tolerate a nil VolumeContext: the volume's identity is re-resolved from its
+// handle regardless.
+func TestStageToleratesNilVolumeContext(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: t.TempDir(),
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     nil, // a static PV with no volumeAttributes
+	}
+
+	// Before the fix this panicked on the nil map at the first vc[...] write. It
+	// must return instead. With no control plane in this unit harness to resolve
+	// the volume's identity from its handle, staging fails cleanly (fail-safe)
+	// rather than crashing the node plugin or attaching the wrong target.
+	_, err := ns.NodeStageVolume(context.Background(), req)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("want a clean Internal error for an unresolvable nil-context stage, got %v", err)
+	}
+	if runner.called("up") {
+		t.Fatalf("stage attached a target with no resolved subsystem: %v", runner.calls)
+	}
+}
+
+// An unstage releases and never destroys. It fires whenever no pod on this node
+// needs the volume mounted, which includes an ordinary pod restart, and
+// conflating the two verbs is what once ran vgremove over a volume holding
+// data.
+func TestUnstageReleasesAndNeverDestroys(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	parent := stashedAt(t, stagedContext())
+
+	_, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+	})
+	if err != nil {
+		t.Fatalf("NodeUnstageVolume: %v", err)
+	}
+
+	if !runner.called("down") {
+		t.Fatalf("the unstage released nothing; it called %v", runner.calls)
+	}
+	if runner.called("destroy") {
+		t.Fatal("the unstage destroyed the volume's objects, and an unstage is not a deletion")
+	}
+}
+
+// A volume on its way out takes the node-local objects its stack built with it,
+// because nothing will stage it again and nothing else on the host knows they
+// are there. Down comes first: what is released is the host's hold, and what is
+// destroyed is what is left after it.
+func TestUnstageDestroysAVolumeThatIsBeingDeleted(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newPVCTestNodeServer(t, deletingPV(), annotatedPVC(""))
+	ns.mounter = mount.NewWith(k8smount.NewFakeMounter(nil), nil)
+	ns.stack, _ = newTestStack(t, runner)
+	ns.volumeLocks = csicommon.NewVolumeLocks()
+
+	parent := stashedAt(t, stagedContext())
+	_, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+	})
+	if err != nil {
+		t.Fatalf("NodeUnstageVolume: %v", err)
+	}
+
+	if !runner.called("destroy") {
+		t.Fatalf("the deleted volume's node-local objects were left behind; the unstage called %v", runner.calls)
+	}
+	if got := strings.Join(runner.calls, " "); !strings.Contains(got, "down destroy") {
+		t.Errorf("the verbs ran as %q, and a destroy before the release would remove an object still held", got)
+	}
+}
+
+// A volume whose class says its storage is retained is never destroyed, however
+// else it looks. Of the two ways to be wrong here, only one is unrecoverable.
+func TestUnstageKeepsARetainedVolume(t *testing.T) {
+	runner := newRecordingRunner()
+	pv := deletingPV()
+	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+
+	ns, _ := newPVCTestNodeServer(t, pv, annotatedPVC(""))
+	ns.mounter = mount.NewWith(k8smount.NewFakeMounter(nil), nil)
+	ns.stack, _ = newTestStack(t, runner)
+	ns.volumeLocks = csicommon.NewVolumeLocks()
+
+	parent := stashedAt(t, stagedContext())
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume: %v", err)
+	}
+
+	if runner.called("destroy") {
+		t.Fatal("a retained volume's objects were destroyed on an ordinary unstage")
+	}
+}
+
+// Regression: 2026-09-23-pnfs-unstage-state-leak -- pNFS unstage returned
+// success while leaving its staging directory and volume-context stash behind,
+// and caller cancellation could interrupt the detach halfway through.
+func TestPNFSUnstageUsesCleanupContextAndRemovesStagedState(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	target := filepath.Join(parent, pvcTestHandle)
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatalf("create staging target: %v", err)
+	}
+
+	var teardownContextWasCanceled bool
+	ns.unstagePNFSFn = func(ctx context.Context, gotTarget string, _ export.Spec) error {
+		teardownContextWasCanceled = ctx.Err() != nil
+		if gotTarget != target {
+			t.Errorf("staging target = %q, want %q", gotTarget, target)
+		}
+		return nil
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := ns.NodeUnstageVolume(ctx, &csi.NodeUnstageVolumeRequest{
+		VolumeId: pvcTestHandle, StagingTargetPath: parent,
+	}); err != nil {
+		t.Fatalf("NodeUnstageVolume: %v", err)
+	}
+
+	if teardownContextWasCanceled {
+		t.Error("pNFS teardown inherited the canceled RPC context")
+	}
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Errorf("staging target still exists after successful unstage: %v", err)
+	}
+	if _, err := lookupVolumeContext(parent); err == nil {
+		t.Error("volume context still exists after successful unstage")
+	}
+}
+
+// A failed pNFS detach must retain the stash, because kubelet's retry receives
+// no volume context and needs that record to choose the pNFS teardown path.
+func TestPNFSUnstageFailureRetainsStagedStateForRetry(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	ns.unstagePNFSFn = func(context.Context, string, export.Spec) error {
+		return errors.New("detach failed")
+	}
+
+	if _, err := ns.NodeUnstageVolume(context.Background(), &csi.NodeUnstageVolumeRequest{
+		VolumeId: pvcTestHandle, StagingTargetPath: parent,
+	}); err == nil {
+		t.Fatal("NodeUnstageVolume succeeded when detach failed")
+	}
+	if _, err := lookupVolumeContext(parent); err != nil {
+		t.Fatalf("volume context was removed before detach succeeded: %v", err)
+	}
+}
+
+// The teardown follows the record rather than the class, because a class can be
+// edited or deleted after a volume is provisioned and a teardown owes the truth
+// about what is on the host.
+func TestTeardownPlanFollowsTheRecord(t *testing.T) {
+	cases := []struct {
+		name    string
+		layers  []string
+		want    string
+		wantErr string
+	}{
+		{name: "raw block", layers: []string{"fabric"}, want: "fabric"},
+		{name: "filesystem", layers: []string{"fabric", "filesystem"}, want: plainShape},
+		{name: "client-side compression", layers: strings.Split(lvmShape, " → "), want: lvmShape},
+		{
+			name:    "a layer this build does not know",
+			layers:  []string{"fabric", "dmCrypt", "filesystem"},
+			wantErr: "dmCrypt",
+		},
+		{
+			name:    "known layers in a shape this build does not stage",
+			layers:  []string{"fabric", "lvmVolumeGroup", "filesystem"},
+			wantErr: "not a shape this build stages",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ns, _ := newStackedServer(t, newRecordingRunner())
+			writeRecord(t, ns.stack, pvcTestHandle, tc.layers)
+
+			plan, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext())
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("the teardown accepted a plan it cannot release: %v", plan.Names())
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("the refusal does not name the layer it could not release: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("teardownPlan: %v", err)
+			}
+			if got := strings.Join(plan.Names(), " → "); got != tc.want {
+				t.Errorf("the teardown walks %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// A volume staged by a version predating the stack has no record, and what that
+// version built is fabric → filesystem. Nothing is restaged and no node is
+// drained for it.
+func TestTeardownPlanFallsBackToTheLegacyShape(t *testing.T) {
+	ns, _ := newStackedServer(t, newRecordingRunner())
+
+	plan, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext())
+	if err != nil {
+		t.Fatalf("teardownPlan: %v", err)
+	}
+	if got := strings.Join(plan.Names(), " → "); got != plainShape {
+		t.Errorf("a volume with no record is released as %s, want the legacy plan", got)
+	}
+}
+
+// A record that cannot be read stops the teardown. That is not the same as an
+// absent one: an absent record means the legacy plan, and a corrupt file is no
+// evidence that a legacy stack was built.
+func TestTeardownPlanRefusesAnUnreadableRecord(t *testing.T) {
+	ns, recordDir := newStackedServer(t, newRecordingRunner())
+	writeRecord(t, ns.stack, pvcTestHandle, []string{"fabric", "filesystem"})
+	corruptRecord(t, recordDir)
+
+	if _, err := ns.teardownPlan(context.Background(), pvcTestHandle, "/staging", stagedContext()); err == nil {
+		t.Fatal("the teardown fell back to the legacy plan on a record it could not read")
+	}
+}
+
+// A publish heals before it bind-mounts, because kubelet skips NodeStageVolume
+// while the volume is still referenced on this node: a same-node pod
+// replacement never stages again, so this is the only place a stack whose
+// foundation went away gets repaired before a pod inherits it.
+func TestPublishHealsBeforeBindMounting(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	parent := stashedAt(t, stagedContext())
+
+	target := filepath.Join(t.TempDir(), "published")
+	_, err := ns.NodePublishVolume(context.Background(), &csi.NodePublishVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		TargetPath:        target,
+		VolumeCapability:  mountCapability(),
+	})
+	if err != nil {
+		t.Fatalf("NodePublishVolume: %v", err)
+	}
+
+	if !runner.called("heal") {
+		t.Fatalf("the publish did not heal the stack first; it called %v", runner.calls)
+	}
+	if runner.called("up") {
+		t.Fatal("the publish brought the stack up, which may format a device that already holds data")
+	}
+}
+
+// An expansion grows the stack rather than one layer of it, so a volume whose
+// capacity grew underneath several layers reaches its filesystem.
+func TestExpandGrowsTheStack(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	parent := stashedAt(t, stagedContext())
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume: %v", err)
+	}
+
+	if !runner.called("grow") {
+		t.Fatalf("the expansion grew nothing; it called %v", runner.calls)
+	}
+	if got := strings.Join(runner.plans["grow"], " → "); got != plainShape {
+		t.Errorf("the expansion walked %s, and a layer left out of the walk never gains the space", got)
+	}
+}
+
+// A raw block volume's expansion walks a plan with nothing that can grow, which
+// is the correct answer: the block device was already resized at the storage
+// layer, and neither resize tool has anything to do with a device carrying no
+// filesystem.
+func TestExpandOfARawBlockVolumeGrowsNoFilesystem(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	parent := stashedAt(t, stagedContext())
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  blockCapability(),
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume: %v", err)
+	}
+	if got := strings.Join(runner.plans["grow"], " → "); got != "fabric" {
+		t.Errorf("the expansion walked %s, want the fabric alone", got)
+	}
+}
+
+// Regression: PR #384. A mount left behind by an interrupted stage, with no
+// stash written for it yet, must be re-staged rather than waved through as
+// already staged — the latter leaves every RPC after it with no stash to read.
+func TestStageRecoversAMountLeftBehindByAnInterruptedStage(t *testing.T) {
+	runner := newRecordingRunner()
+	parent := stagingDir(t)
+	req := &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     stagedContext(),
+	}
+	stagingTargetPath := getStagingTargetPath(req)
+	// FakeMounter's IsLikelyNotMountPoint stats the real path.
+	if err := os.MkdirAll(stagingTargetPath, 0o755); err != nil {
+		t.Fatalf("create the staging path a real mount would have left: %v", err)
+	}
+
+	s, _ := newTestStack(t, runner)
+	ns := &Server{
+		// Mounted already, with no stash — what an interrupted stage leaves.
+		mounter: mount.NewWith(k8smount.NewFakeMounter([]k8smount.MountPoint{
+			{Device: fakeDevice, Path: stagingTargetPath, Type: extFS},
+		}), nil),
+		stack:       s,
+		volumeLocks: csicommon.NewVolumeLocks(),
+	}
+
+	if _, err := ns.NodeStageVolume(context.Background(), req); err != nil {
+		t.Fatalf("NodeStageVolume: %v", err)
+	}
+
+	if !runner.called("up") {
+		t.Fatalf("the orphaned mount was never re-staged; NodeStageVolume answered success over a "+
+			"mount with no stash, which blocks every NodePublishVolume after it forever: calls=%v", runner.calls)
+	}
+	if _, err := lookupVolumeContext(parent); err != nil {
+		t.Fatalf("NodeStageVolume left no stash behind for the volume it just claimed was staged: %v", err)
+	}
+}
+
+// writeRecord puts a stack record on the store, naming the layers given.
+func writeRecord(t *testing.T, s *stack, handle string, names []string) {
+	t.Helper()
+	record := volstack.Record{Version: volstack.RecordVersion, VolumeHandle: handle}
+	for _, layer := range names {
+		entry := volstack.Entry{Layer: layer, Attempted: true}
+		switch layer {
+		case layerFilesystem:
+			params, err := json.Marshal(map[string]string{"fsType": extFS})
+			if err != nil {
+				t.Fatalf("encode the filesystem parameters: %v", err)
+			}
+			entry.Params = params
+		case layerLVMLogicalVolume:
+			params, err := json.Marshal(layers.LVMLogicalVolumeParams{
+				PoolName: vdoPoolName, Deduplication: true, Compression: true,
+			})
+			if err != nil {
+				t.Fatalf("encode the logical-volume parameters: %v", err)
+			}
+			entry.Params = params
+		}
+		record.Plan = append(record.Plan, entry)
+	}
+	if err := s.store.Write(record); err != nil {
+		t.Fatalf("write the stack record: %v", err)
+	}
+}
+
+// corruptRecord truncates every record in dir to a prefix that does not decode,
+// which is the shape a crash mid-write would leave if the write were not atomic.
+func corruptRecord(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read the record directory: %v", err)
+	}
+	if len(entries) == 0 {
+		t.Fatal("there is no record to corrupt")
+	}
+	for _, entry := range entries {
+		if err := os.WriteFile(filepath.Join(dir, entry.Name()), []byte(`{"version":1,"plan":[{"lay`), 0o600); err != nil {
+			t.Fatalf("corrupt the record: %v", err)
+		}
+	}
+}
+
+// mountCapability and blockCapability are the two access types a volume is
+// staged under. Every case here asks for ext4, and the cases that are about a
+// disagreement put the other filesystem on the device rather than in the class.
+func mountCapability() *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Mount{
+			Mount: &csi.VolumeCapability_MountVolume{FsType: extFS},
+		},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+	}
+}
+
+func blockCapability() *csi.VolumeCapability {
+	return &csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}},
+		AccessMode: &csi.VolumeCapability_AccessMode{
+			Mode: csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		},
+	}
+}
+
+// A bring-up that failed is tried once more after a fabric repair, and only
+// when the repair actually tore something down.
+//
+// A connect can succeed at one layer of the NVMe object tree while the layer
+// below it is unusable: a subsystem whose controllers are live and which
+// exports no namespace at all satisfies every check a connect makes, produces
+// no block device, and is retried by kubelet forever. Nothing changes between
+// those retries unless something is torn down first, which is what the repair
+// does and what makes a second attempt worth making.
+func TestStageRetriesTheBringUpAfterAFabricRepair(t *testing.T) {
+	runner := newRecordingRunner()
+	runner.upErr = errors.New("fabric: wait for the namespace: timed out")
+	ns, _ := newStackedServer(t, runner)
+
+	repaired := false
+	var diagnosed nvme.NamespaceID
+	ns.repairFabric = func(_ context.Context, _ string, nsID nvme.NamespaceID) bool {
+		repaired = true
+		diagnosed = nsID
+		runner.upErr = nil // the torn-down subsystem lets the next attach through
+		return true
+	}
+
+	_, err := ns.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: t.TempDir(),
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     stagedContext(),
+	})
+	if err != nil {
+		t.Fatalf("NodeStageVolume: %v", err)
+	}
+	if !repaired {
+		t.Fatal("the failed bring-up was not diagnosed, so kubelet would retry an attach nothing can change")
+	}
+	if got := strings.Count(strings.Join(runner.calls, " "), "up"); got != 2 {
+		t.Errorf("the stack was brought up %d times, want one attempt and one retry after the repair", got)
+	}
+	// The repair acts on the namespace the plan named. A namespace id that
+	// arrives here as anything else diagnoses a co-tenant of the subsystem, and
+	// what it tears down then belongs to another volume.
+	if want := namespaceID(stagedContext()); diagnosed != want {
+		t.Errorf("the repair was pointed at namespace %d, want %d", diagnosed, want)
+	}
+}
+
+// A repair that tore nothing down changes nothing, so the stage fails on the
+// first answer rather than running the same attach twice.
+func TestStageDoesNotRetryWhenNothingWasRepaired(t *testing.T) {
+	runner := newRecordingRunner()
+	runner.upErr = errors.New("fabric: attach refused")
+	ns, _ := newStackedServer(t, runner)
+	ns.repairFabric = func(context.Context, string, nvme.NamespaceID) bool { return false }
+
+	_, err := ns.NodeStageVolume(context.Background(), &csi.NodeStageVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: t.TempDir(),
+		VolumeCapability:  mountCapability(),
+		VolumeContext:     stagedContext(),
+	})
+	if err == nil {
+		t.Fatal("the stage reported success after a bring-up that failed")
+	}
+	if got := strings.Count(strings.Join(runner.calls, " "), "up"); got != 1 {
+		t.Errorf("the stack was brought up %d times, want the one attempt", got)
+	}
+}
+
+// A teardown identifies the volume's namespace from the record when the stashed
+// context cannot, which is what a stash lost to a crash between the mount and
+// the write leaves behind. The record names the subsystem and the namespace,
+// and that is all a release needs.
+func TestTeardownConnectionNamesTheSubsystemFromTheRecord(t *testing.T) {
+	record := volstack.Record{
+		Version:      volstack.RecordVersion,
+		VolumeHandle: pvcTestHandle,
+		Plan: []volstack.Entry{
+			{Layer: layerFabric, Params: fabricParams(t, "nqn.recorded", 7)},
+			{Layer: layerFilesystem},
+		},
+	}
+
+	connection, err := teardownConnection(record, map[string]string{})
+	if err != nil {
+		t.Fatalf("teardownConnection: %v", err)
+	}
+	if connection.NQN != "nqn.recorded" || connection.NSID != 7 {
+		t.Errorf("the teardown names %s namespace %d, want the recorded subsystem",
+			connection.NQN, connection.NSID)
+	}
+}
+
+// A teardown that can identify no namespace at all is refused rather than run.
+// The fabric layer looks its device up by the identity it is given, and a
+// selector that constrains nothing matches every namespace attached to the
+// node: releasing on that would detach another volume.
+func TestTeardownConnectionRefusesToIdentifyNothing(t *testing.T) {
+	_, err := teardownConnection(volstack.Record{}, map[string]string{"targetType": "tcp"})
+	if err == nil {
+		t.Fatal("a teardown was built for a volume nothing identifies, and it would detach whatever it found")
+	}
+}
+
+// fabricParams is one recorded fabric layer's parameters.
+func fabricParams(t *testing.T, subsystemNQN string, nsID uint32) []byte {
+	t.Helper()
+	params, err := json.Marshal(layers.FabricParams{NQN: subsystemNQN, NSID: nsID})
+	if err != nil {
+		t.Fatalf("encode the fabric parameters: %v", err)
+	}
+	return params
+}
+
+// deletingPV is the test claim's PersistentVolume on its way out: the reclaim
+// policy says the storage goes with it, and the claim behind it is terminating.
+func deletingPV() *corev1.PersistentVolume {
+	pv := boundPV()
+	pv.Spec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
+	pv.Status.Phase = corev1.VolumeReleased
+	return pv
+}
+
+// Regression: every seam the plans this driver selects will reach has to be
+// filled, because the layers do not check.
+//
+// The LVM rows were wired without the LVM manager among the seams, since the
+// only shapes before them were fabric and filesystem, which need none. The
+// layers take it as a concrete *lvm.Manager, so a nil one is not an error at the
+// call site — it is a nil-receiver panic the moment a layer runs its first LVM
+// command. That killed the node plugin on the first unstage of a compressed
+// volume, took that node's CSI with it, and collapsed the rest of the run: one
+// plugin down, 6 of 7 ready, and two volumes staged across the whole suite.
+func TestTheStackFillsEverySeamItsPlansReach(t *testing.T) {
+	s, _ := newTestStack(t, newRecordingRunner())
+
+	for name, filled := range map[string]bool{
+		"Connector":  s.seams.Connector != nil,
+		"Devices":    s.seams.Devices != nil,
+		"Content":    s.seams.Content != nil,
+		"Filesystem": s.seams.Filesystem != nil,
+		"Manager":    s.seams.Manager != nil,
+	} {
+		if !filled {
+			t.Errorf("the %s seam is nil; a layer reaching it panics rather than failing", name)
+		}
+	}
+}
+
+// Regression: expanding a pNFS volume silently took its data path away.
+//
+// Growing the namespace invalidates the client's cached pNFS block device, so
+// the next layout has to resolve it again. That resolution happens in the mount
+// namespace of whatever caused the I/O, and if a pod gets there first its /dev
+// is kubelet's minimal one with no disk/, so the resolve fails:
+//
+//	pNFS: no device found for volume 645a3751476137484763794b45497251
+//
+// The fail bit is then set and every write routes through the metadata server,
+// which is the whole feature gone. Nothing reports it: the writes succeed and
+// the data is correct.
+//
+// So an expand re-primes rather than doing nothing. This container has the
+// host's /dev, and kubelet calls this RPC on every node holding the volume.
+// Measured on a cluster: 128MiB after an expand cost 128 NFS WRITEs without the
+// prime and none with it.
+//
+// It must not walk the stack either. The metadata server grew the filesystem on
+// its own host, and the layer here is named for a filesystem with no resize
+// tool, so a walk fails outright.
+func TestExpandOfAPNFSVolumeGrowsNothingOnTheClient(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	if err := os.MkdirAll(filepath.Join(parent, pvcTestHandle), 0o755); err != nil {
+		t.Fatalf("create the staging path: %v", err)
+	}
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume on a pNFS volume: %v", err)
+	}
+
+	if runner.called("grow") {
+		t.Errorf("the expansion walked a stack a pNFS client does not have: %v", runner.plans["grow"])
+	}
+}
+
+// The prime is the work this RPC does for a pNFS volume, so a prime that could
+// not run is the RPC failing rather than the RPC having nothing to do. Without
+// it the failure is silent and permanent: the next pod write resolves the
+// device in the pod's own namespace, fails, and routes through the metadata
+// server from then on.
+func TestExpandOfAPNFSVolumeReportsALayoutItCouldNotPrime(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	// The staging path is deliberately absent, which is what a probe that
+	// cannot be written looks like.
+	parent := stashedAt(t, vc)
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+	})
+	if err == nil {
+		t.Fatal("NodeExpandVolume reported success without priming the layout")
+	}
+	if !strings.Contains(err.Error(), "layout") {
+		t.Errorf("error = %v, want it to name the layout it could not take", err)
+	}
+}
+
+// pnfsExpand runs NodeExpandVolume on a staged pNFS volume asking for required
+// bytes, and reports whether it took the layout. The staging path is a real
+// directory, so the size compared is that of the filesystem the test runs on.
+func pnfsExpand(t *testing.T, required int64) (bool, error) {
+	t.Helper()
+	primed, _, err := pnfsExpandRecorded(t, required, nil)
+	return primed, err
+}
+
+// pnfsExpandRecorded is pnfsExpand on a volume whose last prime was recorded:
+// record, given the mount's current statfs size, returns what to stash, or nil
+// for none. It also returns the record found afterward, before the error.
+func pnfsExpandRecorded(
+	t *testing.T, required int64, record func(have int64) *primedSize,
+) (bool, *primedSize, error) {
+	t.Helper()
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+
+	vc := stagedContext()
+	vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+	parent := stashedAt(t, vc)
+	if err := os.MkdirAll(filepath.Join(parent, pvcTestHandle), 0o755); err != nil {
+		t.Fatalf("create the staging path: %v", err)
+	}
+
+	staging := filepath.Join(parent, pvcTestHandle)
+	if record != nil {
+		have, err := mountSize(staging)
+		if err != nil {
+			t.Fatalf("statfs the staging path: %v", err)
+		}
+		if r := record(have); r != nil {
+			if err := stashPrimedSize(staging, *r); err != nil {
+				t.Fatalf("stash the primed size: %v", err)
+			}
+		}
+	}
+
+	primed := false
+	open := openProbe
+	openProbe = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		primed = true
+		return open(name, flag, perm)
+	}
+	t.Cleanup(func() { openProbe = open })
+
+	_, err := ns.NodeExpandVolume(context.Background(), &csi.NodeExpandVolumeRequest{
+		VolumeId:          pvcTestHandle,
+		StagingTargetPath: parent,
+		VolumePath:        filepath.Join(parent, pvcTestHandle),
+		VolumeCapability:  mountCapability(),
+		CapacityRange:     &csi.CapacityRange{RequiredBytes: required},
+	})
+	after, _ := lookupPrimedSize(staging)
+	return primed, after, err
+}
+
+// The controller only records the new size, and the metadata server grows the
+// filesystem afterward, asynchronously. A prime taken before that resolves
+// the device ID the grow is about to replace, so the pods resolve the new one
+// themselves, in a namespace without disk/by-id (pnfs-1791796138: one node
+// primed 4 s before the grow). Until the mount shows the size asked for, the
+// expansion is not done here yet: it says so with an error kubelet retries, and
+// takes no layout.
+func TestExpandOfAPNFSVolumeWaitsForTheGrowToReachTheClient(t *testing.T) {
+	primed, err := pnfsExpand(t, 1<<50) // 1 PiB, more than any test filesystem
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("NodeExpandVolume = %v, want Unavailable, which kubelet retries", err)
+	}
+	if primed {
+		t.Error("took the layout before the grow reached the client, on the device ID the grow replaces")
+	}
+}
+
+// Once the mount shows the size asked for, the expansion primes as before.
+func TestExpandOfAPNFSVolumePrimesOnceTheGrowArrived(t *testing.T) {
+	primed, err := pnfsExpand(t, 1)
+	if err != nil {
+		t.Fatalf("NodeExpandVolume: %v", err)
+	}
+	if !primed {
+		t.Error("the grow had arrived and the layout was not taken")
+	}
+}
+
+// Without a size to wait for there is nothing to compare, and the expansion
+// primes as it always did.
+func TestExpandOfAPNFSVolumeWithoutARequiredSizePrimesAtOnce(t *testing.T) {
+	primed, err := pnfsExpand(t, 0)
+	if err != nil {
+		t.Fatalf("NodeExpandVolume: %v", err)
+	}
+	if !primed {
+		t.Error("no size was asked for and the layout was not taken")
+	}
+}
+
+// statfs reports an XFS filesystem's size without its internal log, so a grown
+// export reads a little below the volume size; the tolerance absorbs that and
+// nothing larger. A filesystem still at the size before a 1 GiB grow is short.
+func TestPNFSGrowArrived(t *testing.T) {
+	const gib = int64(1) << 30
+	for _, tc := range []struct {
+		name           string
+		have, required int64
+		want           bool
+	}{
+		{"grown, less the log", 21*gib - 10<<20, 21 * gib, true},
+		{"exactly the size", 21 * gib, 21 * gib, true},
+		{"still before a 1 GiB grow", 20*gib - 10<<20, 21 * gib, false},
+		{"large volume, less a 2 GiB log", 10<<40 - 2038<<20, 10 << 40, true},
+		{"large volume before a 10 GiB grow", 10<<40 - 10*gib, 10 << 40, false},
+		{"nothing asked for", 0, 0, true},
+	} {
+		if got := pnfsGrowArrived(tc.have, tc.required); got != tc.want {
+			t.Errorf("%s: pnfsGrowArrived(%d, %d) = %v, want %v", tc.name, tc.have, tc.required, got, tc.want)
+		}
+	}
+}
+
+// A grow smaller than the size tolerance reads as arrived before it is there.
+// With the size the node last primed at on record, the expansion waits for the
+// mount to grow past it instead, however small the grow: a prime taken early is
+// one the re-armed layout hold does not count, and with pnfs-os 0006 gone the
+// pods then look the new device up in their own namespace.
+func TestExpandOfAPNFSVolumeWaitsForASmallGrowPastTheRecordedSize(t *testing.T) {
+	var have int64
+	record := func(h int64) *primedSize {
+		have = h
+		return &primedSize{Size: h}
+	}
+	// A first expansion only to learn the mount's size.
+	primed, _, err := pnfsExpandRecorded(t, 0, record)
+	if err != nil || !primed {
+		t.Fatalf("baseline expansion without a size: primed %v, %v", primed, err)
+	}
+	// A 100 MiB grow, below the tolerance of any filesystem a test runs on.
+	primed, _, err = pnfsExpandRecorded(t, have+100<<20, func(h int64) *primedSize {
+		return &primedSize{Size: h}
+	})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("NodeExpandVolume = %v, want Unavailable until the mount grows past the recorded size", err)
+	}
+	if primed {
+		t.Error("took the layout before a grow smaller than the tolerance reached the mount")
+	}
+}
+
+// A grow that reached the mount before the first call is past the recorded
+// size already, so the expansion primes, and records the size it primed at with
+// the size asked for.
+func TestExpandOfAPNFSVolumePrimesAGrowPastTheRecordedSize(t *testing.T) {
+	const required = int64(1) << 50
+	primed, after, err := pnfsExpandRecorded(t, required, func(h int64) *primedSize {
+		return &primedSize{Size: h - 1<<20}
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume: %v", err)
+	}
+	if !primed {
+		t.Error("the mount had grown past the recorded size and the layout was not taken")
+	}
+	if after == nil || after.Required != required {
+		t.Errorf("record after the prime = %+v, want the size asked for, %d", after, required)
+	}
+}
+
+// kubelet can ask again for a size it was already answered for. The mount has
+// not grown past the record then, and need not: the size was primed for.
+func TestExpandOfAPNFSVolumeAnswersARepeatedRequestForASizePrimedFor(t *testing.T) {
+	const required = int64(1) << 50
+	primed, _, err := pnfsExpandRecorded(t, required, func(h int64) *primedSize {
+		return &primedSize{Size: h, Required: required}
+	})
+	if err != nil {
+		t.Fatalf("NodeExpandVolume for a size already primed for: %v", err)
+	}
+	if !primed {
+		t.Error("a repeated request was answered without the layout taken again")
+	}
+}
+
+// A failed prime leaves the record as it was, so the next call waits for the
+// same grow again rather than taking it as primed.
+func TestExpandOfAPNFSVolumeKeepsTheRecordWhenThePrimeFails(t *testing.T) {
+	open := openProbe
+	openProbe = func(string, int, os.FileMode) (*os.File, error) { return nil, errors.New("no probe") }
+	t.Cleanup(func() { openProbe = open })
+
+	var before int64
+	_, after, err := pnfsExpandRecorded(t, 1<<50, func(h int64) *primedSize {
+		before = h - 1<<20
+		return &primedSize{Size: before}
+	})
+	if err == nil {
+		t.Fatal("NodeExpandVolume reported success without priming the layout")
+	}
+	if after == nil || after.Size != before || after.Required != 0 {
+		t.Errorf("record after a failed prime = %+v, want it unchanged at size %d", after, before)
+	}
+}
+
+// A prime at stage is recorded at the size the mount shows, with no size asked
+// for, which is what the first expansion waits to see exceeded.
+func TestAPrimeAtStageRecordsTheMountSize(t *testing.T) {
+	staging := filepath.Join(t.TempDir(), pvcTestHandle)
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatalf("create the staging path: %v", err)
+	}
+	if err := recordPrime(staging, 0); err != nil {
+		t.Fatalf("recordPrime: %v", err)
+	}
+	have, err := mountSize(staging)
+	if err != nil {
+		t.Fatalf("statfs: %v", err)
+	}
+	got, ok := lookupPrimedSize(staging)
+	if !ok || got.Size != have || got.Required != 0 {
+		t.Errorf("record = %+v (found %v), want size %d and no size asked for", got, ok, have)
+	}
+}

@@ -1,0 +1,16 @@
+{
+  "name": "wiped-lvm2",
+  "tool": "pvcreate",
+  "tool_version": "  LVM version:     2.03.31(2) (2025-02-27)",
+  "command": "pvcreate -q -f -y, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:43Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "0ba21f68828178dc018c9ccd746b56998f811ef65fb0315a2251c355dd8d0f95",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 8 bytes were erased at offset 0x00000218 (LVM2_member): 4c 56 4d 32 20 30 30 31. a physical-volume label, the one reading that is a stack layer rather than a filesystem"
+}

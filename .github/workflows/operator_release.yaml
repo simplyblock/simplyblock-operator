@@ -14,13 +14,9 @@ on:
         required: true
         type: string
 
-env:
-  QUAY_IMAGE_BASE: quay.io/simplyblock-io/simplyblock-operator
-  QUAY_REBALANCER_IMAGE_BASE: quay.io/simplyblock-io/simplyblock-rebalancer
-
 jobs:
   release:
-    name: Build, Push, and Bundle
+    name: Bundle
     runs-on: ubuntu-latest
     permissions:
       contents: write   # needed to upload release assets if desired
@@ -29,8 +25,13 @@ jobs:
         working-directory: operator
 
     steps:
+      # The release's own tag, not the ref the run was started from: a manual
+      # run from main for an older release would otherwise render main's CRDs
+      # and RBAC against that release's image, and replace its assets with them.
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ inputs.version || github.event.release.tag_name || github.ref }}
 
       - name: Set up Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -44,30 +45,15 @@ jobs:
           VERSION="${TAG#v}"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # OLM names the ClusterServiceVersion <name>.v<version>, a Kubernetes
+          # object name: lowercase only. A pre-release tag such as
+          # v26.4.0-Beta1 bundles as 26.4.0-beta1 (still valid SemVer); the
+          # images keep the release tag.
+          echo "bundle_version=$(printf %s "$VERSION" | tr 'A-Z' 'a-z')" >> "$GITHUB_OUTPUT"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
-
-      - name: Log in to Quay.io
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
-        with:
-          registry: quay.io
-          username: ${{ secrets.QUAY_USERNAME }}
-          password: ${{ secrets.QUAY_PASSWORD }}
-
-      - name: Build and push multi-arch image to quay.io
-        run: |
-          make docker-buildx \
-            VERSION=${{ steps.version.outputs.version }} \
-            IMG_TAG=${{ steps.version.outputs.tag }} \
-            PLATFORMS="linux/amd64,linux/arm64"
-
-      - name: Build and push simplyblock-rebalancer multi-arch image to quay.io
-        run: |
-          make docker-buildx-simplyblock-rebalancer \
-            IMG_TAG=${{ steps.version.outputs.tag }} \
-            PLATFORMS="linux/amd64,linux/arm64"
-
+      # build-operator (this job's dependency) already pushed the release's
+      # images to Quay directly, so `make bundle` below can resolve digests
+      # from there without this job touching Docker at all.
       - name: Install operator-sdk
         run: |
           OPERATOR_SDK_VERSION="v1.42.2"
@@ -86,8 +72,29 @@ jobs:
       - name: Generate bundle
         run: |
           make bundle \
-            VERSION=${{ steps.version.outputs.version }} \
+            VERSION=${{ steps.version.outputs.bundle_version }} \
             IMG_TAG=${{ steps.version.outputs.tag }}
+
+      # The same validation OperatorHub certification runs, before anything is pushed.
+      - name: Validate bundle
+        run: make bundle-validate
+
+      # Red Hat's certification fails a bundle that names any image by tag alone.
+      - name: Check every bundle image is pinned to this release
+        run: hack/check-bundle-pinned.sh bundle ${{ steps.version.outputs.tag }}
+
+      - name: Log in to Quay.io
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          registry: quay.io
+          username: ${{ secrets.QUAY_USERNAME }}
+          password: ${{ secrets.QUAY_PASSWORD }}
+
+      - name: Build and push bundle image
+        run: |
+          IMG="quay.io/simplyblock-io/simplyblock-operator-bundle:${{ steps.version.outputs.bundle_version }}"
+          docker build -f bundle.Dockerfile -t "$IMG" .
+          docker push "$IMG"
 
       - name: Package bundle as release asset
         run: |
@@ -100,6 +107,16 @@ jobs:
         run: |
           TAG="${{ steps.version.outputs.tag }}"
           gh release upload "$TAG" "bundle-${TAG}.zip" --clobber
+
+      # The installer is not committed; each release carries its own, pinned to
+      # the operator image of the same tag.
+      - name: Render the installer
+        run: make build-installer IMG_TAG=${{ steps.version.outputs.tag }}
+
+      - name: Attach the installer to GitHub release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${{ steps.version.outputs.tag }}" dist/install.yaml --clobber
 
       - name: Upload bundle artifact
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

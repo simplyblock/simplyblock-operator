@@ -1,0 +1,35 @@
+# Computes the image tag from a version or branch name. A composite action so
+# every job derives the tag itself: a job output carrying it is dropped when the
+# value contains a secret's value, which left the bundle job with an empty tag.
+name: Image tag
+description: Sanitize a version or branch name into a Docker image tag
+inputs:
+  version:
+    description: Version or branch name to turn into a tag
+    required: true
+outputs:
+  tag:
+    description: The sanitized image tag
+    value: ${{ steps.compute.outputs.tag }}
+  label_version:
+    description: The tag without a leading "v", for the OCI version label
+    value: ${{ steps.compute.outputs.label_version }}
+runs:
+  using: composite
+  steps:
+    - id: compute
+      shell: bash
+      env:
+        VERSION: ${{ inputs.version }}
+      # A Docker tag admits [a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}, and a branch name
+      # admits far more, so every character outside the set becomes a dash.
+      run: |
+        tag="$(printf %s "$VERSION" | tr -c 'a-zA-Z0-9_.-' '-' | cut -c1-128)"
+        # A tag's first character may not be a dash or a dot.
+        tag="$(printf %s "$tag" | sed 's/^[^a-zA-Z0-9_]*//')"
+        if [ -z "$tag" ]; then
+          echo "::error::${VERSION} sanitizes to an empty image tag"
+          exit 1
+        fi
+        echo "tag=${tag}" >> "$GITHUB_OUTPUT"
+        echo "label_version=${tag#v}" >> "$GITHUB_OUTPUT"

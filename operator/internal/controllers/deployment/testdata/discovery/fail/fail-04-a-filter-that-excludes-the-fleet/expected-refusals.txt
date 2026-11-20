@@ -1,0 +1,15 @@
+worker-01/nvme0n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-01/nvme1n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-01/nvme2n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-01/nvme3n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-01: declined by has devices because no device of it survived the device rules
+worker-02/nvme0n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-02/nvme1n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-02/nvme2n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-02/nvme3n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-02: declined by has devices because no device of it survived the device rules
+worker-03/nvme0n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-03/nvme1n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-03/nvme2n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-03/nvme3n1: declined by size range because it is 3T and the range 100T-200T starts above it
+worker-03: declined by has devices because no device of it survived the device rules

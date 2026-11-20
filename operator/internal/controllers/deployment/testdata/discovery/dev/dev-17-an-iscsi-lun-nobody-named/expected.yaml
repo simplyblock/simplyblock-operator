@@ -1,0 +1,24 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-dev-17
+  name: discovered-discover-dev-17
+spec:
+  cluster:
+    enableJournalDevice: true
+    name: discovered-discover-dev-17-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 0
+  nodeSets:
+  - groups:
+    - dataInterfaces:
+      - eth1
+      devices:
+        block:
+        - /dev/vdb
+        - /dev/vdc
+      mgmtInterface: eth0
+      name: group-1-block-2x3T
+      workers:
+      - worker-01
+    name: discovered

@@ -37,9 +37,7 @@ func newPolicyReconciler(t *testing.T, objects ...client.Object) (*ReplicationPo
 		// so their full structs (including status) are preserved by WithObjects.
 		WithStatusSubresource(&simplyblockv1alpha1.ReplicationPolicy{}).
 		WithObjects(allObjects...).
-		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", func(obj client.Object) []string {
-			return []string{obj.(*simplyblockv1alpha1.ReplicationSlot).Spec.PolicyRef}
-		}).
+		WithIndex(&simplyblockv1alpha1.ReplicationSlot{}, "spec.policyRef", slotPolicyRefIndex).
 		Build()
 	return &ReplicationPolicyReconciler{Client: cl, Scheme: scheme}, cl
 }
@@ -180,6 +178,95 @@ func TestPolicy_CreatesBackendPolicy_WhenAbsent(t *testing.T) {
 	got := getPolicy(t, cl)
 	if got.Status.BackendPolicyID != "pol-backend-uuid" {
 		t.Errorf("BackendPolicyID = %q, want pol-backend-uuid", got.Status.BackendPolicyID)
+	}
+}
+
+// ---------- EndpointResolver overrides the default/env-var endpoint ----------
+
+// TestPolicy_UsesEndpointResolver mirrors
+// TestSitePair_UsesEndpointResolver (replicationpair_controller_unit_test.go):
+// same bug, same fix, same reason -- a ReplicationPolicy reconciled on a
+// ControlPlane.spec.source.managed member cluster needs the hub's externally
+// published endpoint, not the in-cluster Service this reconciler otherwise
+// defaults to. SIMPLYBLOCK_WEBAPI_BASE_URL is deliberately left unset so a
+// pass proves the resolver path, not the env-var fallback
+// TestPolicy_CreatesBackendPolicy_WhenAbsent already covers.
+func TestPolicy_UsesEndpointResolver(t *testing.T) {
+	pair := readyPairForPolicy()
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pol", Namespace: "default",
+			Finalizers: []string{utils.FinalizerReplicationPolicy},
+		},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+	}
+	r, cl := newPolicyReconciler(t, pair, policy)
+
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, []interface{}{})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, map[string]string{"id": "pol-backend-uuid"})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	r.EndpointResolver = func(context.Context) string { return srv.URL }
+
+	_, err := r.Reconcile(context.Background(), policyRequest("pol"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got := getPolicy(t, cl)
+	if got.Status.BackendPolicyID != "pol-backend-uuid" {
+		t.Errorf("BackendPolicyID = %q, want pol-backend-uuid (EndpointResolver should have been used)", got.Status.BackendPolicyID)
+	}
+}
+
+// TestPolicy_AuthenticatesAsSourceClusterOnceSecretIsKnown mirrors
+// replicationpair_controller_unit_test.go's identically named test -- same
+// bug, same fix, same reason: authenticating as this operator's own
+// Kubernetes identity can never pass a TokenReview on the hub's cluster.
+func TestPolicy_AuthenticatesAsSourceClusterOnceSecretIsKnown(t *testing.T) {
+	pair := readyPairForPolicy()
+	policy := &simplyblockv1alpha1.ReplicationPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "pol", Namespace: "default",
+			Finalizers: []string{utils.FinalizerReplicationPolicy},
+		},
+		Spec: simplyblockv1alpha1.ReplicationPolicySpec{PairRef: "pair1"},
+	}
+	secret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-cluster-" + testClusterName,
+			Namespace: "default",
+		},
+		Data: map[string][]byte{"secret": []byte("cluster-own-secret")},
+	}
+	r, _ := newPolicyReconciler(t, pair, policy, secret)
+
+	var gotAuth string
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		gotAuth = req.Header.Get("Authorization")
+		switch {
+		case req.Method == http.MethodGet && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, []interface{}{})
+		case req.Method == http.MethodPost && req.URL.Path == apiPathReplicationPolicies:
+			writeJSON(w, map[string]string{"id": "pol-backend-uuid"})
+		default:
+			w.WriteHeader(http.StatusOK)
+		}
+	})
+	r.EndpointResolver = func(context.Context) string { return srv.URL }
+
+	if _, err := r.Reconcile(context.Background(), policyRequest("pol")); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotAuth != "Bearer cluster-own-secret" {
+		t.Errorf("authorization = %q, want the source cluster's own secret", gotAuth)
 	}
 }
 

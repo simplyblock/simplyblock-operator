@@ -174,3 +174,37 @@ func multipathHost() tree {
 	t2.files["swaps"] = swapOnVirtio
 	return t2
 }
+
+// raidHost is a GKE worker whose node pool attached its local SSDs as ephemeral
+// storage: two namespaces of one NVMe controller, assembled by the node into
+// the RAID-0 array md0, which carries the kubelet's ephemeral filesystem. The
+// namespaces are what a discovery run is pointed at, and the array is why it
+// gets none of them.
+func raidHost() tree {
+	const (
+		controller = "devices/pci0000:00/0000:00:04.0/nvme/nvme0"
+		first      = controller + "/nvme0n1"
+		second     = controller + "/nvme0n2"
+		array      = "devices/virtual/block/md0"
+	)
+	t2 := tree{files: map[string]string{}, links: map[string]string{}}
+
+	for name, dir := range map[string]string{"nvme0n1": first, "nvme0n2": second} {
+		t2.blockAttrs(dir, "259:"+name[len(name)-1:], 786432000, false, false, false)
+		t2.links["class/block/"+name] = "../../" + dir
+		t2.links[dir+"/device"] = ".."
+		t2.dirs = append(t2.dirs, dir+"/holders/md0")
+	}
+	t2.files[controller+"/model"] = "nvme_card"
+	t2.files[controller+"/serial"] = "nvme_card"
+
+	t2.blockAttrs(array, "9:0", 1572335616, false, false, false)
+	t2.files[array+"/md/level"] = "raid0"
+	t2.links["class/block/md0"] = "../../" + array
+	t2.dirs = append(t2.dirs, array+"/slaves/nvme0n1", array+"/slaves/nvme0n2")
+
+	t2.files["self/mountinfo"] = `25 1 8:1 / / rw,relatime shared:1 - ext4 /dev/sda1 rw
+40 25 9:0 / /mnt/stateful_partition/kube-ephemeral-ssd rw,relatime shared:20 - ext4 /dev/md0 rw`
+	t2.files["swaps"] = "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority"
+	return t2
+}

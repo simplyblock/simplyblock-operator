@@ -37,11 +37,30 @@
 //	                what order: one constructor per plan the design names.
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
+//	nfsexport       Publish a pNFS export on its metadata-server host.
+//	bucketdelivery  GatewayMountRoot: the one hostPath the CSI node plugin's
+//	                bucket bind mounts and the operator's gateway pods have
+//	                to agree on without calling each other.
+//	bucketdeliveryrpc
+//	                Deliver and withdraw an S3 bucket's mount on a gateway
+//	                node, over a link (bucketdelivery/bucketdeliveryrpc). No
+//	                local action package: the node-side work is the CSI node
+//	                plugin's own NodeStageVolume/NodePublishVolume, already
+//	                written for kubelet.
+//	fiemap          What a byte range of a file is made of on disk: data,
+//	                unwritten, delalloc, or hole.
+//	nfsclient       What the kernel's NFS client says about its mounts:
+//	                per-operation counts, layout types, and reconnects.
 //	link            gRPC between the operator and the CSI driver, over
 //	                connections the CSI driver opens.
 //	storage         One node's storage as one value (Accessor);
 //	                storage/storagerpc serves it over a link and reaches
 //	                another node's.
+//	conntrack       Forget a host's connection-tracking entries for one dead
+//	                backend; conntrack/conntrackrpc serves it over a link.
+//	placement/placementrpc
+//	                Which member of a supercluster a new volume goes to: the
+//	                operator serves it, the CSI controller calls it.
 //	prometheus      Read the telemetry simplyblock exports about itself:
 //	                capacity, per-volume load, and node write latency.
 //	errs            Sentinel errors shared across atlas, matched with errors.Is.
@@ -49,11 +68,16 @@
 //	                whether retrying can help.
 //	errs/deferrers  Deferred cleanup that logs its error instead of dropping it.
 //	locks           Scope a mutex to one function call, always unlocked by defer.
+//	bounded         Hard deadlines for calls no context reaches: a sysfs read,
+//	                an ioctl, a device open, a child process that cannot be
+//	                reaped.
 //	statemachine    Deterministic state machine declared as data, with entry
 //	                hooks and context deadlines.
 //	net             Reject URLs that are unsafe to forward to the backend.
 //	ptr             Pointers to values, for the optional fields of generated
 //	                request bodies and Kubernetes types.
+//	crdtypes        Validated value types custom resource fields share across
+//	                API groups and versions, so a validation rule is written once.
 //
 // Everything under internal/ (sysfs scanning, the generated control-plane API
 // client, and build metadata) is implementation detail and carries no

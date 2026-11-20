@@ -11,32 +11,36 @@ const (
 	FinalizerReplicationSlot   = "storage.simplyblock.io/replicationslot-finalizer"
 
 	// AnnotationReplicationPolicy is the annotation key on StorageClass or PVC that
-	// opts volumes into a named ReplicationPolicy CR.
+	// opts volumes into a named ReplicationPolicy CR: its name in the claim's own
+	// namespace, or "<namespace>/<name>" for a policy in another namespace.
 	AnnotationReplicationPolicy = "storage.simplyblock.io/replication-policy"
 
 	// ReplicationOps scope values.
 	ReplicationOpsScopeTarget = "target"
 	ReplicationOpsScopePolicy = "policy"
 	ReplicationOpsScopeVolume = "volume"
+	// ReplicationOpsScopeCluster selects every claim whose volume lives on one
+	// source storage cluster. Only the migration action accepts it.
+	ReplicationOpsScopeCluster = "cluster"
+
+	// ReplicationPolicyModeMigration is the ReplicationPolicy mode for a
+	// planned online move to the target cluster.
+	ReplicationPolicyModeMigration = "migration"
 
 	// ReplicationBackendStateReplicating is the backend API state string for a
 	// volume that is actively replicating snapshots to the target cluster.
 	ReplicationBackendStateReplicating = "replicating"
 
-	ClusterActionActivate           = "activate"
-	ClusterActionExpand             = "expand"
-	ClusterActionShutdown           = "shutdown"
-	ClusterActionStart              = "start"
-	ClusterActionRestart            = "restart"
-	ClusterActionNodeRollingRestart = "node-rolling-restart"
+	// The StorageCluster action names used to live here as untyped strings. They
+	// are now the StorageClusterOpsAction enum on the API type, which is where an
+	// enum's values belong, and the v1alpha1 spellings survive only in that
+	// version's conversion table.
 
-	// StorageNode action names.
-	NodeActionShutdown = "shutdown"
-	NodeActionRestart  = "restart"
-	NodeActionSuspend  = "suspend"
-	NodeActionResume   = "resume"
-	NodeActionRemove   = "remove"
-	NodeActionMigrate  = "migrate"
+	// The StorageNode action names moved to the StorageNodeOpsAction enum for the
+	// same reason the cluster ones did. Leaving them here as untyped strings was
+	// actively dangerous once the values were recased: an untyped constant
+	// compares against the named type without complaint, so a stale "remove"
+	// tested against StorageNodeOpsActionRemove compiles and is never equal.
 
 	// NodeRollingRestart per-node phases
 	NodeRollingRestartPhaseSnodeRefresh     = "snode-refresh"
@@ -54,9 +58,19 @@ const (
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
+	// ClusterStatusInActivation is a cluster the control plane is activating.
+	// It accepts a second activate on such a cluster and runs both.
+	ClusterStatusInActivation = "in_activation"
+	// ClusterStatusRebalancing is a cluster redistributing data across its
+	// nodes, which the control plane refuses every volume migration during.
+	ClusterStatusRebalancing = "rebalancing"
 
-	ClusterPhaseInitializing = "Initializing"
-	ClusterPhaseReady        = "Ready"
+	// The control plane's own names for the jobs that move data between nodes
+	// or devices. A volume migration is refused while any of them is unfinished,
+	// which is what utils.ClusterRebalancing reads them for.
+	TaskTypeNodeAdd            = "node_add"
+	TaskTypeClusterExpand      = "cluster_expand"
+	TaskTypeNewDeviceMigration = "new_device_migration"
 
 	NodeStatusOnline      = "online"
 	NodeStatusOffline     = "offline"
@@ -68,11 +82,18 @@ const (
 	NodeStatusUnreachable = "unreachable"
 	NodeStatusRemoved     = "removed"
 
+	// The statuses of a node leaving the cluster, in the order a removal moves
+	// it through them, and the one it ends in when the control plane gives up.
+	// The removal owns a node in any of them: nothing else shuts it down or
+	// restarts it.
+	NodeStatusPendingRemoval   = "pending_removal"
+	NodeStatusMigratingDevices = "migrating_devices"
+	NodeStatusMigratingLvols   = "migrating_lvols"
+	NodeStatusInRemoval        = "in_removal"
+	NodeStatusRemovedFailed    = "removed_failed"
+
 	ENDPOINT       = "http://simplyblock-webappapi:5000"
 	CSIProvisioner = "csi.simplyblock.io"
-
-	SecretNameStorageNodeSetAPITLS = "simplyblock-storage-node-api-tls"
-	SecretNameSpdkProxyTLS         = "simplyblock-spdk-proxy-tls"
 
 	// Webhook serving-certificate wiring. WebhookServiceName and
 	// WebhookConfigurationName carry the Kustomize namePrefix (simplyblock-operator-)
@@ -87,21 +108,37 @@ const (
 	// WebhookCertDir is where the serving cert (tls.crt/tls.key) is written and
 	// watched. This is the default location controller-runtime's webhook server
 	// (sigs.k8s.io/controller-runtime/pkg/webhook) reads from when CertDir is
-	// unset: filepath.Join(os.TempDir(), "k8s-webhook-server", "serving-certs").
+	// unset: `filepath.Join(os.TempDir(), "k8s-webhook-server", "serving-certs")`.
 	// We keep the same path (rather than a bespoke one) so both the cert-controller
 	// rotator and the webhook-server certwatcher agree without extra flags, and so
 	// the config/default/manager_webhook_patch.yaml emptyDir mount lines up.
 	WebhookCertDir = "/tmp/k8s-webhook-server/serving-certs"
 
-	// Aggregated metrics API wiring. MetricsAPIServiceName and
-	// MetricsAPIServiceObject carry the Kustomize namePrefix
-	// (simplyblock-operator-) applied in config/default, except that an APIService
-	// object's name is fixed by Kubernetes as <version>.<group> and takes no
-	// prefix. The serving certificate is provisioned into
-	// metricsapi.CertDir at runtime by the same cert-controller rotator the
-	// webhook uses, which also injects the CA bundle into the APIService.
+	// Conversion-webhook wiring. The conversion webhook runs as its own
+	// Deployment rather than inside the operator
+	// (design-api-upgrade.md §6.1): a CRD whose conversion strategy is Webhook
+	// cannot be read at all while the webhook is unreachable, and the objects an
+	// administrator reads to diagnose a failed operator are simplyblock custom
+	// resources. Sharing the operator's process would make those unreadable
+	// exactly when they are needed.
+	//
+	// Its Service, Secret, and certificate directory are therefore its own. The
+	// operator's rotator pre-creates and owns WebhookServerCertSecret, so a
+	// conversion webhook waiting on that Secret would be waiting on the operator
+	// having started, which is the coupling §6.1 removes.
+	ConversionWebhookServiceName      = "simplyblock-operator-conversion-webhook-service"
+	ConversionWebhookServerCertSecret = "conversion-webhook-server-cert"
+	ConversionWebhookCertDir          = "/tmp/k8s-conversion-webhook-server/serving-certs"
+
+	// Aggregated metrics API wiring. MetricsAPIServiceName carries the Kustomize
+	// namePrefix (simplyblock-operator-) applied in config/default. The
+	// APIService objects are not named here: their names are fixed by Kubernetes
+	// as <version>.<group> and there is one per served version, so the metricsapi
+	// package derives them from its own scheme. The serving certificate is
+	// provisioned into metricsapi.CertDir at runtime by the same cert-controller
+	// rotator the webhook uses, which also injects the CA bundle into each of
+	// those objects.
 	MetricsAPIServiceName    = "simplyblock-operator-metrics-apiserver"
-	MetricsAPIServiceObject  = "v1alpha1.metrics.simplyblock.io"
 	MetricsAPIServerCertName = "metrics-apiserver-cert"
 
 	// DefaultPrometheusURL is where the chart deploys Prometheus. Two things
@@ -112,6 +149,36 @@ const (
 
 	AnnotationTLSSecretRevision = "storage.simplyblock.io/tls-secret-revision"
 
+	// AnnotationLogCollector marks a pod whose logs the chart's fluent-bit ships
+	// to Graylog. Its filter drops every pod without the annotation set to
+	// `true`, so a workload left unmarked never reaches Graylog.
+	AnnotationLogCollector = "log-collector/enabled"
+
 	LabelFDBClusterName = "foundationdb.org/fdb-cluster-name"
-	LabelSpdkProxyRole  = "simplyblock-storage-node"
+
+	// LabelRole is the key the control plane marks an SPDK pod's part with, and
+	// LabelSpdkProxyRole its value. The pair is how the operator finds a pod it
+	// does not create: the control plane deploys one SPDK pod per backend node,
+	// owned by nothing, named after the node's RPC port, so the role is the only
+	// thing about it that is the same on every worker.
+	LabelRole          = "role"
+	LabelSpdkProxyRole = "simplyblock-storage-node"
+	// LabelMDSClusterID names the cluster a pNFS metadata server pod serves. Only
+	// metadata server pods carry it.
+	LabelMDSClusterID = "storage.simplyblock.io/cluster-id"
 )
+
+// NodeIsLeaving reports whether a control-plane node status, lowercased, is one
+// of a node leaving the cluster: any step of a removal, the removed node whose
+// record the control plane keeps, and a removal the control plane gave up on.
+// A node in any of them belongs to its removal, and nothing else shuts it down
+// or restarts it.
+func NodeIsLeaving(status string) bool {
+	switch status {
+	case NodeStatusPendingRemoval, NodeStatusMigratingDevices, NodeStatusMigratingLvols,
+		NodeStatusInRemoval, NodeStatusRemoved, NodeStatusRemovedFailed:
+		return true
+	default:
+		return false
+	}
+}

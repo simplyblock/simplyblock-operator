@@ -3,6 +3,11 @@
 package controller
 
 import (
+	"context"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/csi-addons/spec/lib/go/replication"
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"k8s.io/client-go/kubernetes"
 
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -10,20 +15,57 @@ import (
 
 type Server struct {
 	*csicommon.DefaultControllerServer
+	// The GroupController service (VolumeGroupSnapshot) is implemented in
+	// groupsnapshot.go; embedding the unimplemented server satisfies the
+	// interface's forward-compat guard for any method not overridden.
+	csi.UnimplementedGroupControllerServer
+	// The csi-addons Replication service (design §5) is implemented in
+	// replication.go, for the three Phase 1 verbs; the rest
+	// (PromoteVolume, DemoteVolume, ResyncVolume) fall through to this
+	// embedded default until Phase 2.
+	replication.UnimplementedControllerServer
+	// The csi-addons VolumeGroup (GroupController) service (design §14.3) is
+	// implemented in volumegroup.go. Its unimplemented base is embedded through
+	// a named wrapper (volumeGroupUnimplemented) because the replication base
+	// above already occupies the UnimplementedControllerServer embed name.
+	volumeGroupUnimplemented
 	volumeLocks *csicommon.VolumeLocks
 	// kubeClient reads/patches PVC annotations (host_id resolution, placement-hint
 	// cleanup). Built once at construction and reused, and nil when no in-cluster
 	// config is available (e.g., unit tests), in which case the annotation helpers
 	// are no-ops.
 	kubeClient kubernetes.Interface
+	// exports records the NFSExport a pNFS volume needs. Nil outside a
+	// cluster and when the CRD is unavailable, in which case a pNFS claim is
+	// refused with a clear message rather than the driver failing to start.
+	exports ExportRegistry
+	// placer asks the operator which member of a supercluster a volume goes
+	// to, over the link. Nil when the link is not enabled.
+	placer Placer
+	// storageNodes lists a cluster's storage nodes, which a striped volume's
+	// members are spread across. Nil reads them from the cluster's control
+	// plane (listStorageNodes); a test sets it.
+	storageNodes func(ctx context.Context, clusterID string) ([]atlascp.StorageNode, error)
+	// freezer suspends a striped volume on the node that stages it while its
+	// members are snapshotted or cloned (striped_freeze.go). Nil when the link
+	// to the operator is not enabled.
+	freezer stripeFreezer
+	// attachedNodes lists the nodes a volume is attached to. Nil reads its
+	// VolumeAttachments; a test sets it.
+	attachedNodes func(ctx context.Context, volumeID string) ([]string, error)
+	// snapshotSeals reads and writes a striped snapshot's seal on its
+	// VolumeSnapshotContent (striped_seal.go). Nil seals nothing, and a
+	// retried snapshot is taken again.
+	snapshotSeals snapshotSealer
 }
 
 //nolint:unparam // error return kept for constructor symmetry / future use
-func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*Server, error) {
+func New(d *csicommon.CSIDriver, kubeClient kubernetes.Interface, exports ExportRegistry) (*Server, error) {
 	server := Server{
 		DefaultControllerServer: csicommon.NewDefaultControllerServer(d),
 		volumeLocks:             csicommon.NewVolumeLocks(),
 		kubeClient:              kubeClient,
+		exports:                 exports,
 	}
 	return &server, nil
 }

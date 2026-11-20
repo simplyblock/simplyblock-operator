@@ -299,3 +299,59 @@ func TestDHCHAPAllowedNodeSegment(t *testing.T) {
 		}
 	})
 }
+
+func TestVDOCapableSegment(t *testing.T) {
+	t.Run("neither client parameter set", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{Parameters: map[string]string{}}
+		if key, val := vdoCapableSegment(req); key != "" || val != "" {
+			t.Errorf("got (%q, %q), want (\"\", \"\")", key, val)
+		}
+	})
+
+	t.Run("client_compression alone requires the segment", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{kube.ParamClientCompression: vdoCapableTrue},
+		}
+		key, val := vdoCapableSegment(req)
+		if key != kube.LabelVDOCapable || val != vdoCapableTrue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, kube.LabelVDOCapable, vdoCapableTrue)
+		}
+	})
+
+	t.Run("client_deduplication alone requires the segment", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{kube.ParamClientDeduplication: vdoCapableTrue},
+		}
+		key, val := vdoCapableSegment(req)
+		if key != kube.LabelVDOCapable || val != vdoCapableTrue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, kube.LabelVDOCapable, vdoCapableTrue)
+		}
+	})
+
+	t.Run("false values require no segment", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{
+				kube.ParamClientCompression:   "false",
+				kube.ParamClientDeduplication: "false",
+			},
+		}
+		if key, val := vdoCapableSegment(req); key != "" || val != "" {
+			t.Errorf("got (%q, %q), want (\"\", \"\")", key, val)
+		}
+	})
+
+	t.Run("ignores AccessibilityRequirements entirely, same reason as DHCHAP's segment", func(t *testing.T) {
+		req := &csi.CreateVolumeRequest{
+			Parameters: map[string]string{kube.ParamClientCompression: vdoCapableTrue},
+			AccessibilityRequirements: &csi.TopologyRequirement{
+				Preferred: []*csi.Topology{topologyWithSegments(map[string]string{
+					kube.LabelVDOCapable: "false",
+				})},
+			},
+		}
+		key, val := vdoCapableSegment(req)
+		if key != kube.LabelVDOCapable || val != vdoCapableTrue {
+			t.Errorf("got (%q, %q), want (%q, %q)", key, val, kube.LabelVDOCapable, vdoCapableTrue)
+		}
+	})
+}

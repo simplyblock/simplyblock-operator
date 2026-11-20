@@ -1,8 +1,13 @@
 package controlplane
 
 import (
+	"context"
 	"math"
+	"net/http"
+	"strings"
 	"testing"
+
+	"github.com/simplyblock/atlas/lvol"
 )
 
 func TestSizeToInt(t *testing.T) {
@@ -11,5 +16,135 @@ func TestSizeToInt(t *testing.T) {
 	}
 	if _, err := sizeToInt(math.MaxUint64); err == nil {
 		t.Error("sizeToInt(MaxUint64) = nil error, want overflow error")
+	}
+}
+
+// TestClientSubsystemVolumesSpansEveryPool. A migration moves an NVMe-oF
+// subsystem rather than one volume inside it, so whoever asks for a migration
+// has to know which volumes travel with the one they named. Nothing addresses a
+// subsystem's members directly, and the members are not required to share a
+// pool: a subsystem is a cluster-level object, so the answer is every pool's
+// volumes filtered by the NQN they publish under.
+func TestClientSubsystemVolumesSpansEveryPool(t *testing.T) {
+	const otherPool = "55555555-5555-5555-5555-555555555555"
+	const wanted = "nqn.wanted"
+
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/storage-pools/"):
+			_, _ = w.Write([]byte(`[` +
+				`{"id":"` + testPool + `","cluster_id":"` + testCluster + `","name":"pool1",` +
+				`"max_size":0,"capacity":{},"max_r_mbytes":0,"max_rw_iops":0,"max_rw_mbytes":0,` +
+				`"max_w_mbytes":0,"volume_max_size":0,"status":"active"},` +
+				`{"id":"` + otherPool + `","cluster_id":"` + testCluster + `","name":"pool2",` +
+				`"max_size":0,"capacity":{},"max_r_mbytes":0,"max_rw_iops":0,"max_rw_mbytes":0,` +
+				`"max_w_mbytes":0,"volume_max_size":0,"status":"active"}]`))
+		case strings.Contains(r.URL.Path, "/storage-pools/"+testPool+"/volumes/"):
+			_, _ = w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+				`"size":100,"ns_id":1,"nqn":"` + wanted + `"},` +
+				`{"id":"44444444-4444-4444-4444-444444444444","name":"vol2","pool_name":"pool1",` +
+				`"size":200,"ns_id":2,"nqn":"nqn.elsewhere"}]`))
+		default:
+			_, _ = w.Write([]byte(`[{"id":"66666666-6666-6666-6666-666666666666","name":"vol3",` +
+				`"pool_name":"pool2","size":300,"ns_id":3,"nqn":"` + wanted + `"}]`))
+		}
+	})
+
+	members, err := c.SubsystemVolumes(context.Background(), testCluster, wanted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 2 {
+		t.Fatalf("members = %d, want the two publishing under %s: %+v", len(members), wanted, members)
+	}
+	for _, m := range members {
+		if m.NQN != wanted {
+			t.Errorf("member %s publishes under %q, which is a different subsystem", m.Name, m.NQN)
+		}
+	}
+	// The handle is what maps a member back to the PersistentVolume fronting
+	// it, so a member from another pool has to carry that pool.
+	if members[1].ID != lvol.NewVolumeHandle(testCluster, otherPool, "66666666-6666-6666-6666-666666666666") {
+		t.Errorf("the member from the second pool has handle %q", members[1].ID)
+	}
+}
+
+// TestClientSubsystemVolumesRefusesAnEmptyNQN. Every volume in the cluster
+// would otherwise be a member of the subsystem named by nothing.
+func TestClientSubsystemVolumesRefusesAnEmptyNQN(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("the control plane was asked about a subsystem with no name")
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	if _, err := c.SubsystemVolumes(context.Background(), testCluster, ""); err == nil {
+		t.Fatal("an empty NQN was accepted")
+	}
+}
+
+// TestClientVolumeReportsTheNodeHostingIt. A migration is asked for by naming
+// the node a volume should be on, and the control plane refuses one naming the
+// node it is already on. Whoever asks therefore has to read where the volume
+// is before asking, which is the storage node the detail reports.
+func TestClientVolumeReportsTheNodeHostingIt(t *testing.T) {
+	const node = "77777777-7777-7777-7777-777777777777"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":100,"ns_id":1,"nqn":"nqn.one","storage_node_id":"` + node + `"}`))
+	})
+
+	volume, err := c.Volume(context.Background(), lvol.NewVolumeHandle(testCluster, testPool, testVolume))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume.StorageNodeID != node {
+		t.Errorf("the volume is reported on node %q, want %q", volume.StorageNodeID, node)
+	}
+}
+
+// TestClientSubsystemVolumesReportTheNodeHostingEachMember. The members of a
+// subsystem are read to learn which of them a migration still has to move, and
+// a member already on the target is one that does not.
+func TestClientSubsystemVolumesReportTheNodeHostingEachMember(t *testing.T) {
+	const node = "77777777-7777-7777-7777-777777777777"
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(r.URL.Path, "/storage-pools/") {
+			_, _ = w.Write([]byte(`[{"id":"` + testPool + `","cluster_id":"` + testCluster + `","name":"pool1",` +
+				`"max_size":0,"capacity":{},"max_r_mbytes":0,"max_rw_iops":0,"max_rw_mbytes":0,` +
+				`"max_w_mbytes":0,"volume_max_size":0,"status":"active"}]`))
+			return
+		}
+		_, _ = w.Write([]byte(`[{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":100,"ns_id":1,"nqn":"nqn.one","storage_node_id":"` + node + `"}]`))
+	})
+
+	members, err := c.SubsystemVolumes(context.Background(), testCluster, "nqn.one")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(members) != 1 || members[0].StorageNodeID != node {
+		t.Errorf("members = %+v, want the one volume reported on node %s", members, node)
+	}
+}
+
+// TestClientVolumeReportsItsConsistencyGroup. A relabeled claim names a group
+// other than the one its volume is in, and only the volume's own record says
+// which group that is, so a move between groups starts from it.
+func TestClientVolumeReportsItsConsistencyGroup(t *testing.T) {
+	const group = "c9c9c9c9-c9c9-4c9c-8c9c-c9c9c9c9c9c9"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"id":"` + testVolume + `","name":"vol1","pool_name":"pool1",` +
+			`"size":100,"ns_id":1,"nqn":"nqn.one","group_id":"` + group + `"}`))
+	})
+
+	volume, err := c.Volume(context.Background(), lvol.NewVolumeHandle(testCluster, testPool, testVolume))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if volume.GroupID != group {
+		t.Errorf("the volume is reported in group %q, want %q", volume.GroupID, group)
 	}
 }

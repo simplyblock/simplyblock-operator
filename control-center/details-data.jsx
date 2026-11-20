@@ -46,7 +46,6 @@ function PoolDetail({o: p, nav}) {
           ]} /></div></div>
         <div className="card"><h3>Quality of service</h3><div className="bd"><QosProps qos={p.qos} fallback="No QoS limits configured on this pool." /></div></div>
       </div>
-      {window.CRSection && <CRSection vm={p} nav={nav} />}
     </div>
   );
 }
@@ -131,7 +130,6 @@ function VolumeDetail({o: v, nav}) {
           <div style={{marginTop: 12}}><IOCards o={v} /></div>
         </div>
       </div>
-      {window.CRSection && <CRSection vm={v} nav={nav} />}
     </div>
   );
 }
@@ -196,7 +194,6 @@ function SnapshotDetail({o: s, nav}) {
             : <>No backup has been taken from this snapshot yet. Backups are always taken <b>from a snapshot</b>, never from the live volume.</>}</p>
         </div></div>
       </div>
-      {window.CRSection && <CRSection vm={s} nav={nav} />}
     </div>
   );
 }
@@ -270,7 +267,6 @@ function BackupDetail({o: b, nav}) {
           </div></div>
         </div>
       </div>
-      {window.CRSection && <CRSection vm={b} nav={nav} />}
     </div>
   );
 }
@@ -326,7 +322,6 @@ function PolicyDetail({o: p, nav}) {
             <span className="code" style={{marginTop: 7, display: "block"}}>{p.schedule.map(r => `${r.interval}\t${r.versions}x${r.online ? `\t${r.online}x online` : ""}`).join("\n")}</span></p>
         </div></div>
       </div>
-      {window.CRSection && <CRSection vm={p} nav={nav} />}
     </div>
   );
 }
@@ -339,7 +334,9 @@ const DETAIL_KIND = {pair: "PairDetail", rpolicy: "RPolicyDetail", zone: "ZoneDe
   k8sc: "K8sDetail", storageclass: "StorageClassDetail", pvc: "PvcDetail", bucket: "BucketDetail",
   // DR hub kinds live in drhub.jsx
   pplan: "PPlanDetail", drpath: "DRPathDetail", papp: "PAppDetail", rplan: "RPlanDetail", raction: "RActionDetail",
-  tbubble: "TBubbleDetail", tsched: "TSchedDetail", restore: "RestoreDetail", siteprofile: "SiteProfileDetail", dhcpserver: "DHCPServerDetail",
+  tbubble: "TBubbleDetail", tsched: "TSchedDetail", restore: "RestoreDetail", siteprofile: "SiteProfileDetail", dhcpserver: "DHCPServerDetail", sitedeploy: "SiteDeployDetail",
+  // AI-assisted discovery: discover.jsx
+  dgraph: "DGraphDetail", drprop: "DRPropDetail",
   deployconfig: "DeployConfigDetail", mpath: "MPathDetail", appgroup: "AppGroupDetail"};
 const Detail = ({obj, nav}) => {
   const C = DETAILS[obj.kind] || (DETAIL_KIND[obj.kind] ? window[DETAIL_KIND[obj.kind]] : null);

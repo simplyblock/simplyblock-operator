@@ -356,3 +356,27 @@ func TestScanConfigDefaultsToTheLiveHostsRoots(t *testing.T) {
 		t.Errorf("an unset ProcRoot resolves to %q, want %q", cfg.proc(), DefaultProcRoot)
 	}
 }
+
+func TestScanReadsTheLevelOfAnMDArray(t *testing.T) {
+	root := raidHost().write(t)
+
+	disks, err := Scan(ScanConfig{SysfsRoot: root, DevRoot: "/dev"})
+	if err != nil {
+		t.Fatalf("scan the block devices: %v", err)
+	}
+
+	array := scanned(t, disks, "md0")
+	if array.Kind != KindMDRaid {
+		t.Errorf("classified md0 as %s, want %s", array.Kind, KindMDRaid)
+	}
+	if array.RAIDLevel != "raid0" {
+		t.Errorf("read the level %q for md0, want raid0", array.RAIDLevel)
+	}
+	member := scanned(t, disks, "nvme0n1")
+	if member.RAIDLevel != "" {
+		t.Errorf("read a level %q for a member, which is not an array", member.RAIDLevel)
+	}
+	if len(member.Holders) != 1 || member.Holders[0] != "md0" {
+		t.Errorf("read holders %v for a member of md0, want [md0]", member.Holders)
+	}
+}

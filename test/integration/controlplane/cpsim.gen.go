@@ -16,12 +16,49 @@ import (
 	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
+// Defines values for AlertDTOSeverity.
+const (
+	AlertDTOSeverityCritical AlertDTOSeverity = "critical"
+	AlertDTOSeverityWarning  AlertDTOSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the AlertDTOSeverity enum.
+func (e AlertDTOSeverity) Valid() bool {
+	switch e {
+	case AlertDTOSeverityCritical:
+		return true
+	case AlertDTOSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for AlertDTOStatus.
+const (
+	AlertDTOStatusFiring   AlertDTOStatus = "firing"
+	AlertDTOStatusResolved AlertDTOStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the AlertDTOStatus enum.
+func (e AlertDTOStatus) Valid() bool {
+	switch e {
+	case AlertDTOStatusFiring:
+		return true
+	case AlertDTOStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterDTOStatus.
 const (
 	ClusterDTOStatusActive       ClusterDTOStatus = "active"
 	ClusterDTOStatusDegraded     ClusterDTOStatus = "degraded"
 	ClusterDTOStatusInActivation ClusterDTOStatus = "in_activation"
 	ClusterDTOStatusInExpansion  ClusterDTOStatus = "in_expansion"
+	ClusterDTOStatusInShrink     ClusterDTOStatus = "in_shrink"
 	ClusterDTOStatusInactive     ClusterDTOStatus = "inactive"
 	ClusterDTOStatusReadOnly     ClusterDTOStatus = "read_only"
 	ClusterDTOStatusSuspended    ClusterDTOStatus = "suspended"
@@ -38,6 +75,8 @@ func (e ClusterDTOStatus) Valid() bool {
 	case ClusterDTOStatusInActivation:
 		return true
 	case ClusterDTOStatusInExpansion:
+		return true
+	case ClusterDTOStatusInShrink:
 		return true
 	case ClusterDTOStatusInactive:
 		return true
@@ -70,6 +109,24 @@ func (e ClusterParamsBlkSize) Valid() bool {
 	}
 }
 
+// Defines values for ClusterParamsDeviceMode.
+const (
+	Lblk ClusterParamsDeviceMode = "lblk"
+	Nvme ClusterParamsDeviceMode = "nvme"
+)
+
+// Valid indicates whether the value is a known member of the ClusterParamsDeviceMode enum.
+func (e ClusterParamsDeviceMode) Valid() bool {
+	switch e {
+	case Lblk:
+		return true
+	case Nvme:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterParamsHaType.
 const (
 	ClusterParamsHaTypeHa     ClusterParamsHaType = "ha"
@@ -88,18 +145,590 @@ func (e ClusterParamsHaType) Valid() bool {
 	}
 }
 
+// Defines values for ConsistencyGroupReplicationStatusDTORole.
+const (
+	ConsistencyGroupReplicationStatusDTORoleFailedOver ConsistencyGroupReplicationStatusDTORole = "failed_over"
+	ConsistencyGroupReplicationStatusDTORoleNone       ConsistencyGroupReplicationStatusDTORole = "none"
+	ConsistencyGroupReplicationStatusDTORoleSecondary  ConsistencyGroupReplicationStatusDTORole = "secondary"
+	ConsistencyGroupReplicationStatusDTORoleSource     ConsistencyGroupReplicationStatusDTORole = "source"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupReplicationStatusDTORole enum.
+func (e ConsistencyGroupReplicationStatusDTORole) Valid() bool {
+	switch e {
+	case ConsistencyGroupReplicationStatusDTORoleFailedOver:
+		return true
+	case ConsistencyGroupReplicationStatusDTORoleNone:
+		return true
+	case ConsistencyGroupReplicationStatusDTORoleSecondary:
+		return true
+	case ConsistencyGroupReplicationStatusDTORoleSource:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConsistencyGroupReplicationStatusDTOState.
+const (
+	ConsistencyGroupReplicationStatusDTOStateDegraded       ConsistencyGroupReplicationStatusDTOState = "degraded"
+	ConsistencyGroupReplicationStatusDTOStateError          ConsistencyGroupReplicationStatusDTOState = "error"
+	ConsistencyGroupReplicationStatusDTOStateInSync         ConsistencyGroupReplicationStatusDTOState = "in_sync"
+	ConsistencyGroupReplicationStatusDTOStateLagging        ConsistencyGroupReplicationStatusDTOState = "lagging"
+	ConsistencyGroupReplicationStatusDTOStateNotReplicating ConsistencyGroupReplicationStatusDTOState = "not_replicating"
+	ConsistencyGroupReplicationStatusDTOStateReplicating    ConsistencyGroupReplicationStatusDTOState = "replicating"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupReplicationStatusDTOState enum.
+func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
+	switch e {
+	case ConsistencyGroupReplicationStatusDTOStateDegraded:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateError:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateInSync:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateLagging:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateNotReplicating:
+		return true
+	case ConsistencyGroupReplicationStatusDTOStateReplicating:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ConsistencyGroupSubsystemMoveCreateDTOPurpose.
+const (
+	Join  ConsistencyGroupSubsystemMoveCreateDTOPurpose = "join"
+	Leave ConsistencyGroupSubsystemMoveCreateDTOPurpose = "leave"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupSubsystemMoveCreateDTOPurpose enum.
+func (e ConsistencyGroupSubsystemMoveCreateDTOPurpose) Valid() bool {
+	switch e {
+	case Join:
+		return true
+	case Leave:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DevicePerformanceAssessmentDTOVerdict.
+const (
+	DevicePerformanceAssessmentDTOVerdictOk      DevicePerformanceAssessmentDTOVerdict = "ok"
+	DevicePerformanceAssessmentDTOVerdictSlow    DevicePerformanceAssessmentDTOVerdict = "slow"
+	DevicePerformanceAssessmentDTOVerdictUnknown DevicePerformanceAssessmentDTOVerdict = "unknown"
+)
+
+// Valid indicates whether the value is a known member of the DevicePerformanceAssessmentDTOVerdict enum.
+func (e DevicePerformanceAssessmentDTOVerdict) Valid() bool {
+	switch e {
+	case DevicePerformanceAssessmentDTOVerdictOk:
+		return true
+	case DevicePerformanceAssessmentDTOVerdictSlow:
+		return true
+	case DevicePerformanceAssessmentDTOVerdictUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for DeviceSmartAssessmentDTOVerdict.
+const (
+	DeviceSmartAssessmentDTOVerdictFailing     DeviceSmartAssessmentDTOVerdict = "failing"
+	DeviceSmartAssessmentDTOVerdictOk          DeviceSmartAssessmentDTOVerdict = "ok"
+	DeviceSmartAssessmentDTOVerdictUnknown     DeviceSmartAssessmentDTOVerdict = "unknown"
+	DeviceSmartAssessmentDTOVerdictUnsupported DeviceSmartAssessmentDTOVerdict = "unsupported"
+	DeviceSmartAssessmentDTOVerdictWarning     DeviceSmartAssessmentDTOVerdict = "warning"
+)
+
+// Valid indicates whether the value is a known member of the DeviceSmartAssessmentDTOVerdict enum.
+func (e DeviceSmartAssessmentDTOVerdict) Valid() bool {
+	switch e {
+	case DeviceSmartAssessmentDTOVerdictFailing:
+		return true
+	case DeviceSmartAssessmentDTOVerdictOk:
+		return true
+	case DeviceSmartAssessmentDTOVerdictUnknown:
+		return true
+	case DeviceSmartAssessmentDTOVerdictUnsupported:
+		return true
+	case DeviceSmartAssessmentDTOVerdictWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FDBKeyDescriptorType.
+const (
+	Fdb FDBKeyDescriptorType = "fdb"
+)
+
+// Valid indicates whether the value is a known member of the FDBKeyDescriptorType enum.
+func (e FDBKeyDescriptorType) Valid() bool {
+	switch e {
+	case Fdb:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for FailoverResultDTOStatus.
+const (
+	FailoverResultDTOStatusFailed     FailoverResultDTOStatus = "failed"
+	FailoverResultDTOStatusFailedOver FailoverResultDTOStatus = "failed_over"
+	FailoverResultDTOStatusSkipped    FailoverResultDTOStatus = "skipped"
+)
+
+// Valid indicates whether the value is a known member of the FailoverResultDTOStatus enum.
+func (e FailoverResultDTOStatus) Valid() bool {
+	switch e {
+	case FailoverResultDTOStatusFailed:
+		return true
+	case FailoverResultDTOStatusFailedOver:
+		return true
+	case FailoverResultDTOStatusSkipped:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GroupManifestState.
+const (
+	Broken    GroupManifestState = "broken"
+	Committed GroupManifestState = "committed"
+	Deleting  GroupManifestState = "deleting"
+)
+
+// Valid indicates whether the value is a known member of the GroupManifestState enum.
+func (e GroupManifestState) Valid() bool {
+	switch e {
+	case Broken:
+		return true
+	case Committed:
+		return true
+	case Deleting:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for HCPKeyDescriptorType.
+const (
+	Hcp HCPKeyDescriptorType = "hcp"
+)
+
+// Valid indicates whether the value is a known member of the HCPKeyDescriptorType enum.
+func (e HCPKeyDescriptorType) Valid() bool {
+	switch e {
+	case Hcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKMSSettingsProvider.
+const (
+	KMIPKMSSettingsProviderKmip KMIPKMSSettingsProvider = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKMSSettingsProvider enum.
+func (e KMIPKMSSettingsProvider) Valid() bool {
+	switch e {
+	case KMIPKMSSettingsProviderKmip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKeyDescriptorType.
+const (
+	KMIPKeyDescriptorTypeKmip KMIPKeyDescriptorType = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKeyDescriptorType enum.
+func (e KMIPKeyDescriptorType) Valid() bool {
+	switch e {
+	case KMIPKeyDescriptorTypeKmip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ManifestVolumeFabric.
+const (
+	Rdma    ManifestVolumeFabric = "rdma"
+	Tcp     ManifestVolumeFabric = "tcp"
+	Tcprdma ManifestVolumeFabric = "tcp,rdma"
+)
+
+// Valid indicates whether the value is a known member of the ManifestVolumeFabric enum.
+func (e ManifestVolumeFabric) Valid() bool {
+	switch e {
+	case Rdma:
+		return true
+	case Tcp:
+		return true
+	case Tcprdma:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ManifestVolumeHaType.
+const (
+	ManifestVolumeHaTypeHa     ManifestVolumeHaType = "ha"
+	ManifestVolumeHaTypeSingle ManifestVolumeHaType = "single"
+)
+
+// Valid indicates whether the value is a known member of the ManifestVolumeHaType enum.
+func (e ManifestVolumeHaType) Valid() bool {
+	switch e {
+	case ManifestVolumeHaTypeHa:
+		return true
+	case ManifestVolumeHaTypeSingle:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for PolicyParamsMode.
+const (
+	PolicyParamsModeFailover  PolicyParamsMode = "failover"
+	PolicyParamsModeMigration PolicyParamsMode = "migration"
+)
+
+// Valid indicates whether the value is a known member of the PolicyParamsMode enum.
+func (e PolicyParamsMode) Valid() bool {
+	switch e {
+	case PolicyParamsModeFailover:
+		return true
+	case PolicyParamsModeMigration:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationPolicyDTOMode.
+const (
+	ReplicationPolicyDTOModeFailover  ReplicationPolicyDTOMode = "failover"
+	ReplicationPolicyDTOModeMigration ReplicationPolicyDTOMode = "migration"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationPolicyDTOMode enum.
+func (e ReplicationPolicyDTOMode) Valid() bool {
+	switch e {
+	case ReplicationPolicyDTOModeFailover:
+		return true
+	case ReplicationPolicyDTOModeMigration:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationPolicyDTOStatus.
+const (
+	ReplicationPolicyDTOStatusActive   ReplicationPolicyDTOStatus = "active"
+	ReplicationPolicyDTOStatusInactive ReplicationPolicyDTOStatus = "inactive"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationPolicyDTOStatus enum.
+func (e ReplicationPolicyDTOStatus) Valid() bool {
+	switch e {
+	case ReplicationPolicyDTOStatusActive:
+		return true
+	case ReplicationPolicyDTOStatusInactive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationRelationshipDTODirection.
+const (
+	ToSource ReplicationRelationshipDTODirection = "to_source"
+	ToTarget ReplicationRelationshipDTODirection = "to_target"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationRelationshipDTODirection enum.
+func (e ReplicationRelationshipDTODirection) Valid() bool {
+	switch e {
+	case ToSource:
+		return true
+	case ToTarget:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationRelationshipDTOMode.
+const (
+	ReplicationRelationshipDTOModeFailover  ReplicationRelationshipDTOMode = "failover"
+	ReplicationRelationshipDTOModeMigration ReplicationRelationshipDTOMode = "migration"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationRelationshipDTOMode enum.
+func (e ReplicationRelationshipDTOMode) Valid() bool {
+	switch e {
+	case ReplicationRelationshipDTOModeFailover:
+		return true
+	case ReplicationRelationshipDTOModeMigration:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationRelationshipDTOState.
+const (
+	ReplicationRelationshipDTOStateCutoverDone    ReplicationRelationshipDTOState = "cutover_done"
+	ReplicationRelationshipDTOStateCutoverPending ReplicationRelationshipDTOState = "cutover_pending"
+	ReplicationRelationshipDTOStateFailedOver     ReplicationRelationshipDTOState = "failed_over"
+	ReplicationRelationshipDTOStateReplicating    ReplicationRelationshipDTOState = "replicating"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationRelationshipDTOState enum.
+func (e ReplicationRelationshipDTOState) Valid() bool {
+	switch e {
+	case ReplicationRelationshipDTOStateCutoverDone:
+		return true
+	case ReplicationRelationshipDTOStateCutoverPending:
+		return true
+	case ReplicationRelationshipDTOStateFailedOver:
+		return true
+	case ReplicationRelationshipDTOStateReplicating:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationStartParamsMode.
+const (
+	ReplicationStartParamsModeFailover  ReplicationStartParamsMode = "failover"
+	ReplicationStartParamsModeMigration ReplicationStartParamsMode = "migration"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationStartParamsMode enum.
+func (e ReplicationStartParamsMode) Valid() bool {
+	switch e {
+	case ReplicationStartParamsModeFailover:
+		return true
+	case ReplicationStartParamsModeMigration:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationStatusDTORole.
+const (
+	ReplicationStatusDTORoleFailedOver ReplicationStatusDTORole = "failed_over"
+	ReplicationStatusDTORoleNone       ReplicationStatusDTORole = "none"
+	ReplicationStatusDTORoleSecondary  ReplicationStatusDTORole = "secondary"
+	ReplicationStatusDTORoleSource     ReplicationStatusDTORole = "source"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationStatusDTORole enum.
+func (e ReplicationStatusDTORole) Valid() bool {
+	switch e {
+	case ReplicationStatusDTORoleFailedOver:
+		return true
+	case ReplicationStatusDTORoleNone:
+		return true
+	case ReplicationStatusDTORoleSecondary:
+		return true
+	case ReplicationStatusDTORoleSource:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationStatusDTOState.
+const (
+	ReplicationStatusDTOStateDegraded       ReplicationStatusDTOState = "degraded"
+	ReplicationStatusDTOStateError          ReplicationStatusDTOState = "error"
+	ReplicationStatusDTOStateInSync         ReplicationStatusDTOState = "in_sync"
+	ReplicationStatusDTOStateLagging        ReplicationStatusDTOState = "lagging"
+	ReplicationStatusDTOStateNotReplicating ReplicationStatusDTOState = "not_replicating"
+	ReplicationStatusDTOStateReplicating    ReplicationStatusDTOState = "replicating"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationStatusDTOState enum.
+func (e ReplicationStatusDTOState) Valid() bool {
+	switch e {
+	case ReplicationStatusDTOStateDegraded:
+		return true
+	case ReplicationStatusDTOStateError:
+		return true
+	case ReplicationStatusDTOStateInSync:
+		return true
+	case ReplicationStatusDTOStateLagging:
+		return true
+	case ReplicationStatusDTOStateNotReplicating:
+		return true
+	case ReplicationStatusDTOStateReplicating:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ReplicationTargetDTOStatus.
+const (
+	ReplicationTargetDTOStatusActive   ReplicationTargetDTOStatus = "active"
+	ReplicationTargetDTOStatusInactive ReplicationTargetDTOStatus = "inactive"
+)
+
+// Valid indicates whether the value is a known member of the ReplicationTargetDTOStatus enum.
+func (e ReplicationTargetDTOStatus) Valid() bool {
+	switch e {
+	case ReplicationTargetDTOStatusActive:
+		return true
+	case ReplicationTargetDTOStatusInactive:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SecondaryTarget.
+const (
+	N0 SecondaryTarget = 0
+	N1 SecondaryTarget = 1
+)
+
+// Valid indicates whether the value is a known member of the SecondaryTarget enum.
+func (e SecondaryTarget) Valid() bool {
+	switch e {
+	case N0:
+		return true
+	case N1:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SiteNodeDTOStatus.
+const (
+	SiteNodeDTOStatusDown             SiteNodeDTOStatus = "down"
+	SiteNodeDTOStatusInCreation       SiteNodeDTOStatus = "in_creation"
+	SiteNodeDTOStatusInRemoval        SiteNodeDTOStatus = "in_removal"
+	SiteNodeDTOStatusInRestart        SiteNodeDTOStatus = "in_restart"
+	SiteNodeDTOStatusInShutdown       SiteNodeDTOStatus = "in_shutdown"
+	SiteNodeDTOStatusMigratingDevices SiteNodeDTOStatus = "migrating_devices"
+	SiteNodeDTOStatusMigratingLvols   SiteNodeDTOStatus = "migrating_lvols"
+	SiteNodeDTOStatusOffline          SiteNodeDTOStatus = "offline"
+	SiteNodeDTOStatusOnline           SiteNodeDTOStatus = "online"
+	SiteNodeDTOStatusPendingRemoval   SiteNodeDTOStatus = "pending_removal"
+	SiteNodeDTOStatusRemoved          SiteNodeDTOStatus = "removed"
+	SiteNodeDTOStatusRemovedFailed    SiteNodeDTOStatus = "removed_failed"
+	SiteNodeDTOStatusSchedulable      SiteNodeDTOStatus = "schedulable"
+	SiteNodeDTOStatusSuspended        SiteNodeDTOStatus = "suspended"
+	SiteNodeDTOStatusUnreachable      SiteNodeDTOStatus = "unreachable"
+)
+
+// Valid indicates whether the value is a known member of the SiteNodeDTOStatus enum.
+func (e SiteNodeDTOStatus) Valid() bool {
+	switch e {
+	case SiteNodeDTOStatusDown:
+		return true
+	case SiteNodeDTOStatusInCreation:
+		return true
+	case SiteNodeDTOStatusInRemoval:
+		return true
+	case SiteNodeDTOStatusInRestart:
+		return true
+	case SiteNodeDTOStatusInShutdown:
+		return true
+	case SiteNodeDTOStatusMigratingDevices:
+		return true
+	case SiteNodeDTOStatusMigratingLvols:
+		return true
+	case SiteNodeDTOStatusOffline:
+		return true
+	case SiteNodeDTOStatusOnline:
+		return true
+	case SiteNodeDTOStatusPendingRemoval:
+		return true
+	case SiteNodeDTOStatusRemoved:
+		return true
+	case SiteNodeDTOStatusRemovedFailed:
+		return true
+	case SiteNodeDTOStatusSchedulable:
+		return true
+	case SiteNodeDTOStatusSuspended:
+		return true
+	case SiteNodeDTOStatusUnreachable:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SiteRecordDTOState.
+const (
+	SiteRecordDTOStateDone     SiteRecordDTOState = "done"
+	SiteRecordDTOStateDown     SiteRecordDTOState = "down"
+	SiteRecordDTOStateDraining SiteRecordDTOState = "draining"
+	SiteRecordDTOStateEmpty    SiteRecordDTOState = ""
+	SiteRecordDTOStateFencing  SiteRecordDTOState = "fencing"
+)
+
+// Valid indicates whether the value is a known member of the SiteRecordDTOState enum.
+func (e SiteRecordDTOState) Valid() bool {
+	switch e {
+	case SiteRecordDTOStateDone:
+		return true
+	case SiteRecordDTOStateDown:
+		return true
+	case SiteRecordDTOStateDraining:
+		return true
+	case SiteRecordDTOStateEmpty:
+		return true
+	case SiteRecordDTOStateFencing:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for StorageNodeDTOStatus.
 const (
-	StorageNodeDTOStatusDown        StorageNodeDTOStatus = "down"
-	StorageNodeDTOStatusInCreation  StorageNodeDTOStatus = "in_creation"
-	StorageNodeDTOStatusInRestart   StorageNodeDTOStatus = "in_restart"
-	StorageNodeDTOStatusInShutdown  StorageNodeDTOStatus = "in_shutdown"
-	StorageNodeDTOStatusOffline     StorageNodeDTOStatus = "offline"
-	StorageNodeDTOStatusOnline      StorageNodeDTOStatus = "online"
-	StorageNodeDTOStatusRemoved     StorageNodeDTOStatus = "removed"
-	StorageNodeDTOStatusSchedulable StorageNodeDTOStatus = "schedulable"
-	StorageNodeDTOStatusSuspended   StorageNodeDTOStatus = "suspended"
-	StorageNodeDTOStatusUnreachable StorageNodeDTOStatus = "unreachable"
+	StorageNodeDTOStatusDown             StorageNodeDTOStatus = "down"
+	StorageNodeDTOStatusInCreation       StorageNodeDTOStatus = "in_creation"
+	StorageNodeDTOStatusInRemoval        StorageNodeDTOStatus = "in_removal"
+	StorageNodeDTOStatusInRestart        StorageNodeDTOStatus = "in_restart"
+	StorageNodeDTOStatusInShutdown       StorageNodeDTOStatus = "in_shutdown"
+	StorageNodeDTOStatusMigratingDevices StorageNodeDTOStatus = "migrating_devices"
+	StorageNodeDTOStatusMigratingLvols   StorageNodeDTOStatus = "migrating_lvols"
+	StorageNodeDTOStatusOffline          StorageNodeDTOStatus = "offline"
+	StorageNodeDTOStatusOnline           StorageNodeDTOStatus = "online"
+	StorageNodeDTOStatusPendingRemoval   StorageNodeDTOStatus = "pending_removal"
+	StorageNodeDTOStatusRemoved          StorageNodeDTOStatus = "removed"
+	StorageNodeDTOStatusRemovedFailed    StorageNodeDTOStatus = "removed_failed"
+	StorageNodeDTOStatusSchedulable      StorageNodeDTOStatus = "schedulable"
+	StorageNodeDTOStatusSuspended        StorageNodeDTOStatus = "suspended"
+	StorageNodeDTOStatusUnreachable      StorageNodeDTOStatus = "unreachable"
 )
 
 // Valid indicates whether the value is a known member of the StorageNodeDTOStatus enum.
@@ -109,15 +738,25 @@ func (e StorageNodeDTOStatus) Valid() bool {
 		return true
 	case StorageNodeDTOStatusInCreation:
 		return true
+	case StorageNodeDTOStatusInRemoval:
+		return true
 	case StorageNodeDTOStatusInRestart:
 		return true
 	case StorageNodeDTOStatusInShutdown:
+		return true
+	case StorageNodeDTOStatusMigratingDevices:
+		return true
+	case StorageNodeDTOStatusMigratingLvols:
 		return true
 	case StorageNodeDTOStatusOffline:
 		return true
 	case StorageNodeDTOStatusOnline:
 		return true
+	case StorageNodeDTOStatusPendingRemoval:
+		return true
 	case StorageNodeDTOStatusRemoved:
+		return true
+	case StorageNodeDTOStatusRemovedFailed:
 		return true
 	case StorageNodeDTOStatusSchedulable:
 		return true
@@ -148,25 +787,75 @@ func (e StoragePoolDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for SyncReplicationStatusDTORole.
+const (
+	SyncReplicationStatusDTORolePrimary   SyncReplicationStatusDTORole = "primary"
+	SyncReplicationStatusDTORoleSecondary SyncReplicationStatusDTORole = "secondary"
+)
+
+// Valid indicates whether the value is a known member of the SyncReplicationStatusDTORole enum.
+func (e SyncReplicationStatusDTORole) Valid() bool {
+	switch e {
+	case SyncReplicationStatusDTORolePrimary:
+		return true
+	case SyncReplicationStatusDTORoleSecondary:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for SyncReplicationStatusDTOState.
+const (
+	SyncReplicationStatusDTOStateDegraded  SyncReplicationStatusDTOState = "degraded"
+	SyncReplicationStatusDTOStateHealthy   SyncReplicationStatusDTOState = "healthy"
+	SyncReplicationStatusDTOStateResyncing SyncReplicationStatusDTOState = "resyncing"
+)
+
+// Valid indicates whether the value is a known member of the SyncReplicationStatusDTOState enum.
+func (e SyncReplicationStatusDTOState) Valid() bool {
+	switch e {
+	case SyncReplicationStatusDTOStateDegraded:
+		return true
+	case SyncReplicationStatusDTOStateHealthy:
+		return true
+	case SyncReplicationStatusDTOStateResyncing:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for TaskDTOFunctionName.
 const (
 	BalancingOnDevAdd     TaskDTOFunctionName = "balancing_on_dev_add"
 	BalancingOnDevRem     TaskDTOFunctionName = "balancing_on_dev_rem"
 	BalancingOnRestart    TaskDTOFunctionName = "balancing_on_restart"
+	ClusterExpand         TaskDTOFunctionName = "cluster_expand"
 	DeviceMigration       TaskDTOFunctionName = "device_migration"
 	DeviceRestart         TaskDTOFunctionName = "device_restart"
 	FailedDeviceMigration TaskDTOFunctionName = "failed_device_migration"
+	FdbBackup             TaskDTOFunctionName = "fdb_backup"
+	GroupBackupCommit     TaskDTOFunctionName = "group_backup_commit"
+	GroupBackupDelete     TaskDTOFunctionName = "group_backup_delete"
 	JcCompResume          TaskDTOFunctionName = "jc_comp_resume"
+	LvolBatchMigration    TaskDTOFunctionName = "lvol_batch_migration"
 	LvolMigration         TaskDTOFunctionName = "lvol_migration"
 	LvolSyncDel           TaskDTOFunctionName = "lvol_sync_del"
+	LvolSyncOp            TaskDTOFunctionName = "lvol_sync_op"
 	NewDeviceMigration    TaskDTOFunctionName = "new_device_migration"
 	NodeAdd               TaskDTOFunctionName = "node_add"
+	NodeRemoval           TaskDTOFunctionName = "node_removal"
 	NodeRestart           TaskDTOFunctionName = "node_restart"
 	PortAllow             TaskDTOFunctionName = "port_allow"
+	ReplicationFinal      TaskDTOFunctionName = "replication_final"
 	S3Backup              TaskDTOFunctionName = "s3_backup"
 	S3BackupMerge         TaskDTOFunctionName = "s3_backup_merge"
 	S3BackupRestore       TaskDTOFunctionName = "s3_backup_restore"
 	SnapshotReplication   TaskDTOFunctionName = "snapshot_replication"
+	SyncPromote           TaskDTOFunctionName = "sync_promote"
+	SyncResync            TaskDTOFunctionName = "sync_resync"
+	SyncSiteFence         TaskDTOFunctionName = "sync_site_fence"
 )
 
 // Valid indicates whether the value is a known member of the TaskDTOFunctionName enum.
@@ -178,25 +867,41 @@ func (e TaskDTOFunctionName) Valid() bool {
 		return true
 	case BalancingOnRestart:
 		return true
+	case ClusterExpand:
+		return true
 	case DeviceMigration:
 		return true
 	case DeviceRestart:
 		return true
 	case FailedDeviceMigration:
 		return true
+	case FdbBackup:
+		return true
+	case GroupBackupCommit:
+		return true
+	case GroupBackupDelete:
+		return true
 	case JcCompResume:
+		return true
+	case LvolBatchMigration:
 		return true
 	case LvolMigration:
 		return true
 	case LvolSyncDel:
 		return true
+	case LvolSyncOp:
+		return true
 	case NewDeviceMigration:
 		return true
 	case NodeAdd:
 		return true
+	case NodeRemoval:
+		return true
 	case NodeRestart:
 		return true
 	case PortAllow:
+		return true
+	case ReplicationFinal:
 		return true
 	case S3Backup:
 		return true
@@ -205,6 +910,12 @@ func (e TaskDTOFunctionName) Valid() bool {
 	case S3BackupRestore:
 		return true
 	case SnapshotReplication:
+		return true
+	case SyncPromote:
+		return true
+	case SyncResync:
+		return true
+	case SyncSiteFence:
 		return true
 	default:
 		return false
@@ -235,6 +946,39 @@ func (e TaskDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for UpdatableClusterParametersTwoNodeFencingAuthority.
+const (
+	Pacemaker UpdatableClusterParametersTwoNodeFencingAuthority = "pacemaker"
+	Witness   UpdatableClusterParametersTwoNodeFencingAuthority = "witness"
+)
+
+// Valid indicates whether the value is a known member of the UpdatableClusterParametersTwoNodeFencingAuthority enum.
+func (e UpdatableClusterParametersTwoNodeFencingAuthority) Valid() bool {
+	switch e {
+	case Pacemaker:
+		return true
+	case Witness:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for VaultKMSSettingsProvider.
+const (
+	Vault VaultKMSSettingsProvider = "vault"
+)
+
+// Valid indicates whether the value is a known member of the VaultKMSSettingsProvider enum.
+func (e VaultKMSSettingsProvider) Valid() bool {
+	switch e {
+	case Vault:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -247,24 +991,6 @@ func (e CreateParamsHaType) Valid() bool {
 	case CreateParamsHaTypeHa:
 		return true
 	case CreateParamsHaTypeSingle:
-		return true
-	default:
-		return false
-	}
-}
-
-// Defines values for CreateParamsPriorityClass.
-const (
-	N0 CreateParamsPriorityClass = 0
-	N1 CreateParamsPriorityClass = 1
-)
-
-// Valid indicates whether the value is a known member of the CreateParamsPriorityClass enum.
-func (e CreateParamsPriorityClass) Valid() bool {
-	switch e {
-	case N0:
-		return true
-	case N1:
 		return true
 	default:
 		return false
@@ -292,6 +1018,42 @@ func (e ClustersCreateApiV2ClustersPostParamsResponseFormat) Valid() bool {
 	}
 }
 
+// Defines values for ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity.
+const (
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityCritical ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity = "critical"
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityWarning  ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity = "warning"
+)
+
+// Valid indicates whether the value is a known member of the ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity enum.
+func (e ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity) Valid() bool {
+	switch e {
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityCritical:
+		return true
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverityWarning:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus.
+const (
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusFiring   ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus = "firing"
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusResolved ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus = "resolved"
+)
+
+// Valid indicates whether the value is a known member of the ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus enum.
+func (e ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus) Valid() bool {
+	switch e {
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusFiring:
+		return true
+	case ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatusResolved:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat.
 const (
 	ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormatEmpty      ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat = "empty"
@@ -313,6 +1075,48 @@ func (e ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseForm
 	}
 }
 
+// Defines values for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat.
+const (
+	ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormatEmpty      ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat = "empty"
+	ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormatFull       ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat = "full"
+	ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormatIdentifier ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat = "identifier"
+)
+
+// Valid indicates whether the value is a known member of the ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat enum.
+func (e ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat) Valid() bool {
+	switch e {
+	case ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormatEmpty:
+		return true
+	case ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormatFull:
+		return true
+	case ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormatIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat.
+const (
+	ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormatEmpty      ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat = "empty"
+	ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormatFull       ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat = "full"
+	ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormatIdentifier ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat = "identifier"
+)
+
+// Valid indicates whether the value is a known member of the ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat enum.
+func (e ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat) Valid() bool {
+	switch e {
+	case ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormatEmpty:
+		return true
+	case ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormatFull:
+		return true
+	case ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormatIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsResponseFormat.
 const (
 	ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsResponseFormatEmpty      ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsResponseFormat = "empty"
@@ -328,6 +1132,27 @@ func (e ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsRe
 	case ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsResponseFormatFull:
 		return true
 	case ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParamsResponseFormatIdentifier:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat.
+const (
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatEmpty      ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "empty"
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatFull       ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "full"
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatIdentifier ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat = "identifier"
+)
+
+// Valid indicates whether the value is a known member of the ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat enum.
+func (e ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat) Valid() bool {
+	switch e {
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatEmpty:
+		return true
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatFull:
+		return true
+	case ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormatIdentifier:
 		return true
 	default:
 		return false
@@ -376,56 +1201,219 @@ func (e ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolI
 	}
 }
 
-// Defines values for ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat.
+// Defines values for ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat.
 const (
-	ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormatEmpty      ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat = "empty"
-	ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormatFull       ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat = "full"
-	ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormatIdentifier ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat = "identifier"
+	ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormatEmpty      ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat = "empty"
+	ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormatFull       ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat = "full"
+	ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormatIdentifier ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat = "identifier"
 )
 
-// Valid indicates whether the value is a known member of the ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat enum.
-func (e ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat) Valid() bool {
+// Valid indicates whether the value is a known member of the ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat enum.
+func (e ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat) Valid() bool {
 	switch e {
-	case ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormatEmpty:
+	case ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormatEmpty:
 		return true
-	case ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormatFull:
+	case ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormatFull:
 		return true
-	case ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormatIdentifier:
+	case ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormatIdentifier:
 		return true
 	default:
 		return false
 	}
 }
 
-// BackupConfigParams defines model for BackupConfigParams.
-type BackupConfigParams struct {
-	AccessKeyId      *string `json:"access_key_id,omitempty"`
-	BucketName       *string `json:"bucket_name,omitempty"`
-	LocalEndpoint    *string `json:"local_endpoint,omitempty"`
-	LocalTesting     *bool   `json:"local_testing,omitempty"`
-	S3ThreadPoolSize *int    `json:"s3_thread_pool_size,omitempty"`
-	SecondaryTarget  *int    `json:"secondary_target,omitempty"`
-	SecretAccessKey  *string `json:"secret_access_key,omitempty"`
-	SnapshotBackups  *bool   `json:"snapshot_backups,omitempty"`
-	WithCompression  *bool   `json:"with_compression,omitempty"`
+// AlertDTO One condition that currently needs an operator.
+//
+// Deliberately NOT an EventObj. An event is a journal entry -- it happened,
+// it is kept forever, and nothing ever retracts it. An alert is a claim
+// about the present that goes away by itself when it stops being true, so
+// it carries the object it is about and the time the condition started
+// rather than the time something was logged. “id“ is derived from the
+// kind and the object, so it is stable across polls and a consumer can
+// dedupe on it without keeping state.
+type AlertDTO struct {
+	ClusterId  openapi_types.UUID     `json:"cluster_id"`
+	Details    map[string]interface{} `json:"details"`
+	DeviceId   *openapi_types.UUID    `json:"device_id"`
+	FirstSeen  *string                `json:"first_seen"`
+	Id         string                 `json:"id"`
+	Kind       string                 `json:"kind"`
+	Message    string                 `json:"message"`
+	NodeId     *openapi_types.UUID    `json:"node_id"`
+	ResolvedAt *string                `json:"resolved_at"`
+	Severity   AlertDTOSeverity       `json:"severity"`
+	Since      *string                `json:"since"`
+	Status     AlertDTOStatus         `json:"status"`
+}
+
+// AlertDTOSeverity defines model for AlertDTO.Severity.
+type AlertDTOSeverity string
+
+// AlertDTOStatus defines model for AlertDTO.Status.
+type AlertDTOStatus string
+
+// BackupConfigInput A cluster's backup configuration: a location plus how to authenticate to it.
+type BackupConfigInput struct {
+	BucketName       string         `json:"bucket_name"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
+// BackupConfigOutput A cluster's backup configuration: a location plus how to authenticate to it.
+type BackupConfigOutput struct {
+	BucketName       string         `json:"bucket_name"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+	SecondaryTarget  *int           `json:"secondary_target,omitempty"`
+	SnapshotBackups  *bool          `json:"snapshot_backups,omitempty"`
+	UsePathStyle     *bool          `json:"use_path_style,omitempty"`
+	VerifyTls        *bool          `json:"verify_tls,omitempty"`
+	WithCompression  *bool          `json:"with_compression,omitempty"`
 }
 
 // BackupDTO defines model for BackupDTO.
 type BackupDTO struct {
-	AllowedHosts    []map[string]interface{} `json:"allowed_hosts"`
-	CompletedAt     int                      `json:"completed_at"`
-	CreatedAt       int                      `json:"created_at"`
-	Id              openapi_types.UUID       `json:"id"`
-	LvolId          string                   `json:"lvol_id"`
-	LvolName        string                   `json:"lvol_name"`
-	NodeId          string                   `json:"node_id"`
-	PrevBackupId    string                   `json:"prev_backup_id"`
-	S3Id            int                      `json:"s3_id"`
-	Size            int                      `json:"size"`
-	SnapshotId      string                   `json:"snapshot_id"`
-	SnapshotName    string                   `json:"snapshot_name"`
-	SourceClusterId string                   `json:"source_cluster_id"`
-	Status          string                   `json:"status"`
+	CompletedAt           int                 `json:"completed_at"`
+	CreatedAt             int                 `json:"created_at"`
+	Encrypted             bool                `json:"encrypted"`
+	GroupBackupId         *string             `json:"group_backup_id,omitempty"`
+	GroupSeq              *int                `json:"group_seq,omitempty"`
+	Id                    openapi_types.UUID  `json:"id"`
+	LvolId                openapi_types.UUID  `json:"lvol_id"`
+	LvolName              string              `json:"lvol_name"`
+	MaxNamespacePerSubsys *int                `json:"max_namespace_per_subsys,omitempty"`
+	NodeId                openapi_types.UUID  `json:"node_id"`
+	PrevBackupId          *openapi_types.UUID `json:"prev_backup_id,omitempty"`
+	S3Id                  int                 `json:"s3_id"`
+	Size                  int                 `json:"size"`
+	SnapshotId            openapi_types.UUID  `json:"snapshot_id"`
+	SnapshotName          string              `json:"snapshot_name"`
+	Status                string              `json:"status"`
+}
+
+// BackupExportInput Backups carried out of a cluster in a file, grouped by where they live.
+//
+// Grouped rather than one location for the whole document because a cluster
+// can hold backups in several buckets at once -- its own, plus any it has
+// imported -- and stamping all of them with a single bucket leaves the ones it
+// does not describe unrestorable, which is discovered during the recovery they
+// were meant to serve.
+//
+// A group's manifests are all in one bucket by construction: a chain cannot
+// span buckets, so the only way to collect backups from several is to walk
+// more than one chain.
+type BackupExportInput struct {
+	Groups        []LocatedManifestsInput `json:"groups"`
+	SchemaVersion *int                    `json:"schema_version,omitempty"`
+}
+
+// BackupExportOutput Backups carried out of a cluster in a file, grouped by where they live.
+//
+// Grouped rather than one location for the whole document because a cluster
+// can hold backups in several buckets at once -- its own, plus any it has
+// imported -- and stamping all of them with a single bucket leaves the ones it
+// does not describe unrestorable, which is discovered during the recovery they
+// were meant to serve.
+//
+// A group's manifests are all in one bucket by construction: a chain cannot
+// span buckets, so the only way to collect backups from several is to walk
+// more than one chain.
+type BackupExportOutput struct {
+	Groups        []LocatedManifestsOutput `json:"groups"`
+	SchemaVersion *int                     `json:"schema_version,omitempty"`
+}
+
+// BackupLocationInput Where a backup's objects are, and how to interpret them. Never secret.
+//
+// Every field here affects whether the objects can be read back at all, which
+// is why the whole model is embedded in each backup rather than looked up from
+// the cluster that happened to create it.
+type BackupLocationInput struct {
+	BucketName string  `json:"bucket_name"`
+	Endpoint   *string `json:"endpoint,omitempty"`
+	Region     *string `json:"region,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
+// BackupLocationOutput Where a backup's objects are, and how to interpret them. Never secret.
+//
+// Every field here affects whether the objects can be read back at all, which
+// is why the whole model is embedded in each backup rather than looked up from
+// the cluster that happened to create it.
+type BackupLocationOutput struct {
+	BucketName      string  `json:"bucket_name"`
+	Endpoint        *string `json:"endpoint,omitempty"`
+	Region          *string `json:"region,omitempty"`
+	SecondaryTarget *int    `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool   `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool   `json:"use_path_style,omitempty"`
+	VerifyTls       *bool   `json:"verify_tls,omitempty"`
+	WithCompression *bool   `json:"with_compression,omitempty"`
+}
+
+// BackupManifest defines model for BackupManifest.
+type BackupManifest struct {
+	BackupId    openapi_types.UUID `json:"backup_id"`
+	CompletedAt int                `json:"completed_at"`
+	CreatedAt   int                `json:"created_at"`
+
+	// Dataplane How the objects are encoded, so a later format change is detectable.
+	//
+	// Everything here has to be recorded because reading the bucket cannot
+	// recover it -- unlike the bucket's name, region and endpoint, which the
+	// reader necessarily supplied to get this far.
+	Dataplane  ManifestDataPlane `json:"dataplane"`
+	Encryption *struct {
+		union json.RawMessage
+	} `json:"encryption,omitempty"`
+	PrevBackupId  *openapi_types.UUID `json:"prev_backup_id,omitempty"`
+	S3Id          int                 `json:"s3_id"`
+	SchemaVersion *int                `json:"schema_version,omitempty"`
+	Size          int                 `json:"size"`
+
+	// Source Where this backup came from. Provenance for an operator reading a bucket.
+	//
+	// Nothing may resolve configuration or keys through these -- that dependency
+	// on the originating cluster is the whole problem being removed.
+	Source ManifestSource `json:"source"`
+
+	// Volume The shape of the volume this backup was taken from.
+	//
+	// Split in two by what is knowable. The identity and size come off the backup
+	// record and are always present. The settings below them come off the live
+	// volume, so they are absent together once that volume is deleted -- and
+	// absent is not the same answer as ``0``, which for a QoS cap means
+	// "unlimited" and for a priority class is a real class.
+	//
+	// Nothing reads the settings yet; restore still creates its volume with
+	// hardcoded defaults. They are recorded anyway because a manifest is read
+	// years after it is written, and a backup taken today cannot be given a shape
+	// retroactively once its volume is gone.
+	//
+	// The volume's allow-list is deliberately not among them. Who may attach is a
+	// property of the pool a volume lives in, not of the bytes a backup holds, and
+	// a restore lands in whichever pool it is given -- possibly in another cluster,
+	// where the source volume's NQNs mean nothing. So a restored volume takes the
+	// target pool's host configuration, and a stale allow-list from the source
+	// never overrides it.
+	Volume ManifestVolume `json:"volume"`
 }
 
 // BackupPolicyDTO defines model for BackupPolicyDTO.
@@ -436,6 +1424,21 @@ type BackupPolicyDTO struct {
 	MaxVersions    int                `json:"max_versions"`
 	Name           string             `json:"name"`
 	Status         string             `json:"status"`
+}
+
+// BatchMigrationDTO defines model for BatchMigrationDTO.
+type BatchMigrationDTO struct {
+	ActiveSourceNodeId string              `json:"active_source_node_id"`
+	ClusterId          string              `json:"cluster_id"`
+	ConnectStrings     *[]NvmeConnectEntry `json:"connect_strings,omitempty"`
+	ErrorMessage       string              `json:"error_message"`
+	Id                 openapi_types.UUID  `json:"id"`
+	MemberCount        int                 `json:"member_count"`
+	Phase              string              `json:"phase"`
+	SourceNodeId       string              `json:"source_node_id"`
+	Status             string              `json:"status"`
+	TargetNodeId       string              `json:"target_node_id"`
+	TargetNqn          string              `json:"target_nqn"`
 }
 
 // CapacityStatDTO defines model for CapacityStatDTO.
@@ -450,24 +1453,42 @@ type CapacityStatDTO struct {
 
 // ClusterDTO defines model for ClusterDTO.
 type ClusterDTO struct {
+	ActiveLvolMigrations        *int               `json:"active_lvol_migrations,omitempty"`
 	AntiAffinity                bool               `json:"anti_affinity"`
+	Atomic4k                    bool               `json:"atomic_4k"`
 	BackupEnabled               bool               `json:"backup_enabled"`
 	BlockSize                   int                `json:"block_size"`
 	Capacity                    CapacityStatDTO    `json:"capacity"`
+	DeviceMode                  string             `json:"device_mode"`
 	DistrNdcs                   int                `json:"distr_ndcs"`
 	DistrNpcs                   int                `json:"distr_npcs"`
 	EnableFailureDomain         bool               `json:"enable_failure_domain"`
 	Ha                          bool               `json:"ha"`
 	Id                          openapi_types.UUID `json:"id"`
+	InlineChecksum              bool               `json:"inline_checksum"`
+	IsDataRebalancing           *bool              `json:"is_data_rebalancing,omitempty"`
+	IsDegradedByRemoval         *bool              `json:"is_degraded_by_removal,omitempty"`
 	IsReBalancing               bool               `json:"is_re_balancing"`
+	IsShrinking                 *bool              `json:"is_shrinking,omitempty"`
+	LeaderSite                  *string            `json:"leader_site,omitempty"`
+	LostSite                    *string            `json:"lost_site,omitempty"`
+	LostSiteState               *string            `json:"lost_site_state,omitempty"`
+	LvolGeometryEnabled         bool               `json:"lvol_geometry_enabled"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
+	MdJournal                   *bool              `json:"md_journal,omitempty"`
 	Name                        *string            `json:"name"`
 	NodeAffinity                bool               `json:"node_affinity"`
+	NodeLabelSuffix             string             `json:"node_label_suffix"`
 	Nqn                         string             `json:"nqn"`
+	PageCopy                    *bool              `json:"page_copy,omitempty"`
 	ProvisionedCapacityCritical int                `json:"provisioned_capacity_critical"`
 	ProvisionedCapacityWarning  int                `json:"provisioned_capacity_warning"`
 	Secret                      *string            `json:"secret,omitempty"`
+	SnodeApiService             string             `json:"snode_api_service"`
+	SpdkProxyService            string             `json:"spdk_proxy_service"`
+	SpdkProxyTlsSecret          string             `json:"spdk_proxy_tls_secret"`
 	Status                      ClusterDTOStatus   `json:"status"`
+	SyncReplication             *bool              `json:"sync_replication,omitempty"`
 	TlsEnabled                  bool               `json:"tls_enabled"`
 	UtilizationCritical         int                `json:"utilization_critical"`
 	UtilizationWarning          int                `json:"utilization_warning"`
@@ -476,112 +1497,666 @@ type ClusterDTO struct {
 // ClusterDTOStatus defines model for ClusterDTO.Status.
 type ClusterDTOStatus string
 
+// ClusterLogEntryDTO defines model for ClusterLogEntryDTO.
+type ClusterLogEntryDTO struct {
+	ClusterId openapi_types.UUID `json:"cluster_id"`
+	Date      time.Time          `json:"date"`
+	Event     string             `json:"event"`
+	Id        openapi_types.UUID `json:"id"`
+	Level     string             `json:"level"`
+	Message   string             `json:"message"`
+	NodeId    string             `json:"node_id"`
+	Status    string             `json:"status"`
+	StorageId *int               `json:"storage_id"`
+	Vuid      *int               `json:"vuid"`
+}
+
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	BackupConfig           *BackupConfigParams     `json:"backup_config,omitempty"`
-	BlkSize                *ClusterParamsBlkSize   `json:"blk_size,omitempty"`
-	CapCrit                *int                    `json:"cap_crit,omitempty"`
-	CapWarn                *int                    `json:"cap_warn,omitempty"`
-	ClientDataNic          *string                 `json:"client_data_nic,omitempty"`
-	ClusterIp              *string                 `json:"cluster_ip,omitempty"`
-	CrName                 *string                 `json:"cr_name,omitempty"`
-	CrNamespace            *string                 `json:"cr_namespace,omitempty"`
-	CrPlural               *string                 `json:"cr_plural,omitempty"`
-	DistrBs                *int                    `json:"distr_bs,omitempty"`
-	DistrChunkBs           *int                    `json:"distr_chunk_bs,omitempty"`
-	DistrNdcs              *int                    `json:"distr_ndcs,omitempty"`
-	DistrNpcs              *int                    `json:"distr_npcs,omitempty"`
-	EnableFailureDomain    *bool                   `json:"enable_failure_domain,omitempty"`
-	EnableNodeAffinity     *bool                   `json:"enable_node_affinity,omitempty"`
-	Fabric                 *string                 `json:"fabric,omitempty"`
-	GrafanaSecret          *string                 `json:"grafana_secret,omitempty"`
-	HaType                 *ClusterParamsHaType    `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings `json:"hashicorp_vault_settings,omitempty"`
-	InflightIoThreshold    *int                    `json:"inflight_io_threshold,omitempty"`
-	IsSingleNode           *bool                   `json:"is_single_node,omitempty"`
-	MaxFaultTolerance      *int                    `json:"max_fault_tolerance,omitempty"`
-	MaxQueueSize           *int                    `json:"max_queue_size,omitempty"`
-	Name                   *string                 `json:"name,omitempty"`
-	NvmfBasePort           *int                    `json:"nvmf_base_port,omitempty"`
-	PageSizeInBlocks       *int                    `json:"page_size_in_blocks,omitempty"`
-	ProvCapCrit            *int                    `json:"prov_cap_crit,omitempty"`
-	ProvCapWarn            *int                    `json:"prov_cap_warn,omitempty"`
-	QpairCount             *int                    `json:"qpair_count,omitempty"`
-	RpcBasePort            *int                    `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           *int                    `json:"snode_api_port,omitempty"`
-	StrictNodeAntiAffinity *bool                   `json:"strict_node_anti_affinity,omitempty"`
+	Atomic4k             *bool                    `json:"atomic_4k,omitempty"`
+	BackupConfig         *UnresolvedBackupConfig  `json:"backup_config,omitempty"`
+	BlkSize              *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
+	CapCrit              *int                     `json:"cap_crit,omitempty"`
+	CapWarn              *int                     `json:"cap_warn,omitempty"`
+	ClientDataNic        *string                  `json:"client_data_nic,omitempty"`
+	ContainerImagePrefix *string                  `json:"container_image_prefix,omitempty"`
+	CrName               *string                  `json:"cr_name,omitempty"`
+	CrNamespace          *string                  `json:"cr_namespace,omitempty"`
+	CrPlural             *string                  `json:"cr_plural,omitempty"`
+	DeviceMode           *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
+	DistrBs              *int                     `json:"distr_bs,omitempty"`
+	DistrChunkBs         *int                     `json:"distr_chunk_bs,omitempty"`
+	DistrNdcs            *int                     `json:"distr_ndcs,omitempty"`
+	DistrNpcs            *int                     `json:"distr_npcs,omitempty"`
+	EnableFailureDomain  *bool                    `json:"enable_failure_domain,omitempty"`
+	EnableNodeAffinity   *bool                    `json:"enable_node_affinity,omitempty"`
+	Fabric               *string                  `json:"fabric,omitempty"`
+	HaType               *ClusterParamsHaType     `json:"ha_type,omitempty"`
+	HugepagesMem         *int                     `json:"hugepages_mem,omitempty"`
+	InflightIoThreshold  *int                     `json:"inflight_io_threshold,omitempty"`
+	InlineChecksum       *bool                    `json:"inline_checksum,omitempty"`
+	IsSingleNode         *bool                    `json:"is_single_node,omitempty"`
+	KmsSettings          *struct {
+		union json.RawMessage
+	} `json:"kms_settings,omitempty"`
+	LeaderSite             *string `json:"leader_site,omitempty"`
+	LvolGeometryEnabled    *bool   `json:"lvol_geometry_enabled,omitempty"`
+	MaxQueueSize           *int    `json:"max_queue_size,omitempty"`
+	MaxSubsys              int     `json:"max_subsys"`
+	MdJournal              *bool   `json:"md_journal,omitempty"`
+	Name                   *string `json:"name,omitempty"`
+	NodeLabelSuffix        *string `json:"node_label_suffix,omitempty"`
+	NvmfBasePort           *int    `json:"nvmf_base_port,omitempty"`
+	PageCopy               *bool   `json:"page_copy,omitempty"`
+	PageSizeInBlocks       *int    `json:"page_size_in_blocks,omitempty"`
+	ProvCapCrit            *int    `json:"prov_cap_crit,omitempty"`
+	ProvCapWarn            *int    `json:"prov_cap_warn,omitempty"`
+	QpairCount             *int    `json:"qpair_count,omitempty"`
+	RpcBasePort            *int    `json:"rpc_base_port,omitempty"`
+	SnodeApiPort           *int    `json:"snode_api_port,omitempty"`
+	SnodeApiService        *string `json:"snode_api_service,omitempty"`
+	SpdkProxyService       *string `json:"spdk_proxy_service,omitempty"`
+	SpdkProxyTlsSecret     *string `json:"spdk_proxy_tls_secret,omitempty"`
+	SpdkVcpuCount          int     `json:"spdk_vcpu_count"`
+	StrictNodeAntiAffinity *bool   `json:"strict_node_anti_affinity,omitempty"`
+	SyncReplication        *bool   `json:"sync_replication,omitempty"`
 }
 
 // ClusterParamsBlkSize defines model for ClusterParams.BlkSize.
 type ClusterParamsBlkSize int
 
+// ClusterParamsDeviceMode defines model for ClusterParams.DeviceMode.
+type ClusterParamsDeviceMode string
+
 // ClusterParamsHaType defines model for ClusterParams.HaType.
 type ClusterParamsHaType string
 
-// DeviceDTO defines model for DeviceDTO.
-type DeviceDTO struct {
-	Capacity           CapacityStatDTO    `json:"capacity"`
-	ClusterDeviceOrder int                `json:"cluster_device_order"`
-	ClusterId          openapi_types.UUID `json:"cluster_id"`
-	HealthCheck        *bool              `json:"health_check"`
-	Id                 openapi_types.UUID `json:"id"`
-	IoError            bool               `json:"io_error"`
-	IsPartition        bool               `json:"is_partition"`
-	Model              string             `json:"model"`
-	NvmeController     string             `json:"nvme_controller"`
-	NvmfIps            []string           `json:"nvmf_ips"`
-	NvmfNqn            *string            `json:"nvmf_nqn,omitempty"`
-	NvmfPort           *int               `json:"nvmf_port,omitempty"`
-	PcieAddress        string             `json:"pcie_address"`
-	RetriesExhausted   bool               `json:"retries_exhausted"`
-	SerialNumber       string             `json:"serial_number"`
-	Size               int                `json:"size"`
-	Status             string             `json:"status"`
-	StorageNodeId      openapi_types.UUID `json:"storage_node_id"`
+// CommitParams defines model for CommitParams.
+type CommitParams struct {
+	DeleteSource *bool `json:"delete_source,omitempty"`
 }
 
-// DeviceHealthInfoDTO defines model for DeviceHealthInfoDTO.
-type DeviceHealthInfoDTO struct {
-	AvailableSparePercentage                int                `json:"available_spare_percentage"`
-	AvailableSpareThresholdPercentage       int                `json:"available_spare_threshold_percentage"`
-	ControllerBusyTime                      int                `json:"controller_busy_time"`
-	CriticalCompositeTemperatureTimeMinutes int                `json:"critical_composite_temperature_time_minutes"`
-	CriticalWarning                         int                `json:"critical_warning"`
-	DataUnitsRead                           int                `json:"data_units_read"`
-	DataUnitsWritten                        int                `json:"data_units_written"`
-	FirmwareRevision                        string             `json:"firmware_revision"`
-	HostReadCommands                        int                `json:"host_read_commands"`
-	HostWriteCommands                       int                `json:"host_write_commands"`
-	Id                                      openapi_types.UUID `json:"id"`
-	MediaErrors                             int                `json:"media_errors"`
-	ModelNumber                             string             `json:"model_number"`
-	NumErrLogEntries                        int                `json:"num_err_log_entries"`
-	PercentageUsed                          int                `json:"percentage_used"`
-	PowerCycles                             int                `json:"power_cycles"`
-	PowerOnHours                            int                `json:"power_on_hours"`
-	SerialNumber                            string             `json:"serial_number"`
-	TemperatureCelsius                      int                `json:"temperature_celsius"`
-	Traddr                                  string             `json:"traddr"`
-	UnsafeShutdowns                         int                `json:"unsafe_shutdowns"`
-	WarningTemperatureTimeMinutes           int                `json:"warning_temperature_time_minutes"`
+// ConsistencyGroupColocateDTO Request body for moving a member into its group's subsystem.
+type ConsistencyGroupColocateDTO struct {
+	ClientSwapReady *bool `json:"client_swap_ready,omitempty"`
 }
+
+// ConsistencyGroupColocationDTO The subsystem move a late join would end in, computed against the state
+// the pinned node has once the join's migration landed. Nothing is reserved.
+// “target_nqn“ is empty for a fresh subsystem (“target_is_new“), and
+// “refusal“ names why the group could not be brought into one subsystem:
+// “SubsystemLimitReached: ...“ is final (the join would be refused for
+// it); “SubsystemBusy: ...“ is a subsystem held by an active migration or
+// move, which ends, so the join is waited, not refused.
+type ConsistencyGroupColocationDTO struct {
+	MovingLvolIds *[]string `json:"moving_lvol_ids,omitempty"`
+	Refusal       *string   `json:"refusal,omitempty"`
+	TargetIsNew   *bool     `json:"target_is_new,omitempty"`
+	TargetNqn     *string   `json:"target_nqn,omitempty"`
+}
+
+// ConsistencyGroupDTO A standalone consistency group summary (design §10).
+type ConsistencyGroupDTO struct {
+	ClusterId    openapi_types.UUID  `json:"cluster_id"`
+	Id           openapi_types.UUID  `json:"id"`
+	LastGroupSeq int                 `json:"last_group_seq"`
+	LvsName      *string             `json:"lvs_name,omitempty"`
+	MemberCount  int                 `json:"member_count"`
+	Name         string              `json:"name"`
+	NodeId       *openapi_types.UUID `json:"node_id,omitempty"`
+	PolicyId     *openapi_types.UUID `json:"policy_id,omitempty"`
+}
+
+// ConsistencyGroupGenerationDTO One generation of a consistency group (design §6.3).
+type ConsistencyGroupGenerationDTO struct {
+	Complete  bool                                  `json:"complete"`
+	CreatedAt int                                   `json:"created_at"`
+	Expected  int                                   `json:"expected"`
+	GroupSeq  int                                   `json:"group_seq"`
+	Members   []ConsistencyGroupGenerationMemberDTO `json:"members"`
+	Present   int                                   `json:"present"`
+}
+
+// ConsistencyGroupGenerationMemberDTO defines model for ConsistencyGroupGenerationMemberDTO.
+type ConsistencyGroupGenerationMemberDTO struct {
+	LvolId     string `json:"lvol_id"`
+	Ready      bool   `json:"ready"`
+	SnapshotId string `json:"snapshot_id"`
+}
+
+// ConsistencyGroupJoinPlanDTO The steps a late join of an existing volume takes (co-location design
+// §5): “migrate“ (live-migrate “migrate_lvol_ids“ to “target_node_id“
+// first), “join“, “colocate“ (move into “target_nqn“). “colocation“
+// is absent when the group has no other member to share a subsystem with.
+type ConsistencyGroupJoinPlanDTO struct {
+	Colocation     *ConsistencyGroupColocationDTO `json:"colocation,omitempty"`
+	MigrateLvolIds *[]string                      `json:"migrate_lvol_ids,omitempty"`
+	Steps          []string                       `json:"steps"`
+	TargetNodeId   *string                        `json:"target_node_id,omitempty"`
+	TargetNqn      *string                        `json:"target_nqn,omitempty"`
+}
+
+// ConsistencyGroupLineageMemberDTO One protected volume of a consistency group: the handle its
+// PersistentVolume carries and the volume serving its data now.
+type ConsistencyGroupLineageMemberDTO struct {
+	ActiveHandle string `json:"active_handle"`
+	OriginHandle string `json:"origin_handle"`
+}
+
+// ConsistencyGroupMemberDTO One current member of a consistency group (design §10 /members).
+type ConsistencyGroupMemberDTO struct {
+	JoinedSeq  int    `json:"joined_seq"`
+	LvolId     string `json:"lvol_id"`
+	LvsName    string `json:"lvs_name"`
+	NodeId     string `json:"node_id"`
+	Online     bool   `json:"online"`
+	RemovedSeq int    `json:"removed_seq"`
+}
+
+// ConsistencyGroupMemberJoinDTO Request body for the late join of an existing volume (design §4.5).
+type ConsistencyGroupMemberJoinDTO struct {
+	LvolId string `json:"lvol_id"`
+}
+
+// ConsistencyGroupMigrationCreateDTO Request body for a consistency-group migration: the group's scope (its
+// members, every subsystem sibling, transitively) moves to the node.
+type ConsistencyGroupMigrationCreateDTO struct {
+	HostNqn      *string `json:"host_nqn,omitempty"`
+	TargetNodeId string  `json:"target_node_id"`
+}
+
+// ConsistencyGroupMigrationDTO defines model for ConsistencyGroupMigrationDTO.
+type ConsistencyGroupMigrationDTO struct {
+	Items        *[]ConsistencyGroupMigrationItemDTO `json:"items,omitempty"`
+	Status       *string                             `json:"status,omitempty"`
+	TargetNodeId *string                             `json:"target_node_id,omitempty"`
+}
+
+// ConsistencyGroupMigrationItemDTO defines model for ConsistencyGroupMigrationItemDTO.
+type ConsistencyGroupMigrationItemDTO struct {
+	ConnectStrings *[]map[string]interface{} `json:"connect_strings,omitempty"`
+	Id             string                    `json:"id"`
+	Kind           string                    `json:"kind"`
+	LvolIds        []string                  `json:"lvol_ids"`
+	Nqn            string                    `json:"nqn"`
+}
+
+// ConsistencyGroupReplicationIntentDTO Request body to enable or disable group replication (design §14.4).
+//
+// A UUID attaches the whole consistency group to that group replication policy;
+// an explicit “null“ detaches it (the group and its members stay grouped by
+// label, only replication stops). The field is required, so omitting it is a
+// 422 rather than an ambiguous no-op.
+type ConsistencyGroupReplicationIntentDTO struct {
+	ReplicationPolicyId *openapi_types.UUID `json:"replication_policy_id"`
+}
+
+// ConsistencyGroupReplicationStatusDTO The replication status of a consistency group as one unit.
+//
+// A group's recovery point is its OLDEST member's, its lag and health its
+// WORST member's, and its backlog the sum, because a group is only as
+// protected as its slowest, sickest member. Never a 404, matching the
+// per-volume “ReplicationStatusDTO“ (design-csi-addons-replication.md
+// §14.4/§14.6).
+type ConsistencyGroupReplicationStatusDTO struct {
+	LagSeconds       *int                                      `json:"lag_seconds,omitempty"`
+	LastReplicatedAt *time.Time                                `json:"last_replicated_at,omitempty"`
+	MemberCount      *int                                      `json:"member_count,omitempty"`
+	OutstandingBytes *int                                      `json:"outstanding_bytes,omitempty"`
+	OutstandingCount *int                                      `json:"outstanding_count,omitempty"`
+	Resyncing        *bool                                     `json:"resyncing,omitempty"`
+	Role             ConsistencyGroupReplicationStatusDTORole  `json:"role"`
+	State            ConsistencyGroupReplicationStatusDTOState `json:"state"`
+}
+
+// ConsistencyGroupReplicationStatusDTORole defines model for ConsistencyGroupReplicationStatusDTO.Role.
+type ConsistencyGroupReplicationStatusDTORole string
+
+// ConsistencyGroupReplicationStatusDTOState defines model for ConsistencyGroupReplicationStatusDTO.State.
+type ConsistencyGroupReplicationStatusDTOState string
+
+// ConsistencyGroupResolutionDTO Where a consistency group's data lives now (replication_policy_controller.
+// resolve_group). “active_*“ are empty when no group holds a live member.
+type ConsistencyGroupResolutionDTO struct {
+	ActiveClusterId *string                             `json:"active_cluster_id,omitempty"`
+	ActiveGroupId   *string                             `json:"active_group_id,omitempty"`
+	ClusterId       string                              `json:"cluster_id"`
+	GroupId         string                              `json:"group_id"`
+	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMoveCreateDTO Request body for a subsystem move. With “purpose“ “join“ (the
+// default), “lvol_id“ is the member that just joined and the group is
+// brought into one subsystem. With “leave“, “lvol_id“ is a member about
+// to leave, and its namespace moves out of the subsystem it shares into a
+// fresh one of its own. A retry with the same “request_id“ answers with
+// the same move.
+type ConsistencyGroupSubsystemMoveCreateDTO struct {
+	LvolId    string                                         `json:"lvol_id"`
+	Purpose   *ConsistencyGroupSubsystemMoveCreateDTOPurpose `json:"purpose,omitempty"`
+	RequestId string                                         `json:"request_id"`
+}
+
+// ConsistencyGroupSubsystemMoveCreateDTOPurpose defines model for ConsistencyGroupSubsystemMoveCreateDTO.Purpose.
+type ConsistencyGroupSubsystemMoveCreateDTOPurpose string
+
+// ConsistencyGroupSubsystemMoveDTO A consistency group's subsystem move. “id“ is empty, and “volumes“
+// too, when nothing had to move. “namespaces_at“ is “source“ or
+// “target“; “deadline“ is the hosts' suspend deadline in Unix seconds
+// the move was started under (0 before it started).
+type ConsistencyGroupSubsystemMoveDTO struct {
+	Deadline     *int                                      `json:"deadline,omitempty"`
+	Id           string                                    `json:"id"`
+	NamespacesAt *string                                   `json:"namespaces_at,omitempty"`
+	Purpose      *string                                   `json:"purpose,omitempty"`
+	RequestId    *string                                   `json:"request_id,omitempty"`
+	Status       *string                                   `json:"status,omitempty"`
+	TargetIsNew  *bool                                     `json:"target_is_new,omitempty"`
+	TargetNqn    *string                                   `json:"target_nqn,omitempty"`
+	Volumes      *[]ConsistencyGroupSubsystemMoveVolumeDTO `json:"volumes,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMovePrepareDTO Request body for preparing a move: “host_nqn“ asks for the target
+// subsystem's connect entries for that host.
+type ConsistencyGroupSubsystemMovePrepareDTO struct {
+	HostNqn *string `json:"host_nqn,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMovePreparedDTO A prepared move, and the connect entries of its target subsystem for
+// the requested host, shaped like the volume connect route's.
+type ConsistencyGroupSubsystemMovePreparedDTO struct {
+	Connect *[]map[string]interface{} `json:"connect,omitempty"`
+
+	// Move A consistency group's subsystem move. ``id`` is empty, and ``volumes``
+	// too, when nothing had to move. ``namespaces_at`` is ``source`` or
+	// ``target``; ``deadline`` is the hosts' suspend deadline in Unix seconds
+	// the move was started under (0 before it started).
+	Move ConsistencyGroupSubsystemMoveDTO `json:"move"`
+}
+
+// ConsistencyGroupSubsystemMoveStartDTO Request body for moving the namespaces: the hosts' suspend deadline in
+// Unix seconds. The move refuses to begin once it has passed.
+type ConsistencyGroupSubsystemMoveStartDTO struct {
+	Deadline int `json:"deadline"`
+}
+
+// ConsistencyGroupSubsystemMoveVolumeDTO One volume whose namespace changes subsystem: where it is exported
+// from and at which nsid, its wire identity, and its nsid in the target.
+type ConsistencyGroupSubsystemMoveVolumeDTO struct {
+	LvolId     string  `json:"lvol_id"`
+	Nguid      *string `json:"nguid,omitempty"`
+	NsUuid     *string `json:"ns_uuid,omitempty"`
+	SourceNqn  *string `json:"source_nqn,omitempty"`
+	SourceNsid *int    `json:"source_nsid,omitempty"`
+	TargetNsid *int    `json:"target_nsid,omitempty"`
+}
+
+// DeviceDTO defines model for DeviceDTO.
+type DeviceDTO struct {
+	BdevType           *string                 `json:"bdev_type,omitempty"`
+	Capacity           CapacityStatDTO         `json:"capacity"`
+	ClusterDeviceOrder *int                    `json:"cluster_device_order"`
+	ClusterId          openapi_types.UUID      `json:"cluster_id"`
+	DevicePath         *string                 `json:"device_path,omitempty"`
+	HealthAssessment   *map[string]interface{} `json:"health_assessment,omitempty"`
+	HealthCheck        *bool                   `json:"health_check"`
+	Id                 openapi_types.UUID      `json:"id"`
+	IoError            bool                    `json:"io_error"`
+	IsPartition        bool                    `json:"is_partition"`
+	Model              string                  `json:"model"`
+	NvmeController     string                  `json:"nvme_controller"`
+	NvmfIps            []string                `json:"nvmf_ips"`
+	NvmfNqn            *string                 `json:"nvmf_nqn,omitempty"`
+	NvmfPort           *int                    `json:"nvmf_port,omitempty"`
+	PcieAddress        string                  `json:"pcie_address"`
+	RetriesExhausted   bool                    `json:"retries_exhausted"`
+	SerialNumber       string                  `json:"serial_number"`
+	Size               int                     `json:"size"`
+	Status             string                  `json:"status"`
+	StorageNodeId      openapi_types.UUID      `json:"storage_node_id"`
+}
+
+// DeviceGrowthDTO defines model for DeviceGrowthDTO.
+type DeviceGrowthDTO struct {
+	Devices   []map[string]interface{} `json:"devices"`
+	Errors    map[string]string        `json:"errors"`
+	Rebalance *DeviceRebalanceDTO      `json:"rebalance,omitempty"`
+	Uniform   bool                     `json:"uniform"`
+}
+
+// DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
+//
+// The Kubernetes operator judges each device's performance against the
+// fleet and its SMART log, and records the result here; the control plane
+// stores it on the device and raises “device_slow“ / “device_unhealthy“
+// from it while it is fresh (“reported_at“ + “valid_seconds“). “None“
+// for “performance“ or “smart“ means that half was not assessed.
+type DeviceHealthAssessmentDTO struct {
+	Performance  *DevicePerformanceAssessmentDTO `json:"performance,omitempty"`
+	ReportedAt   time.Time                       `json:"reported_at"`
+	Reporter     *string                         `json:"reporter,omitempty"`
+	Smart        *DeviceSmartAssessmentDTO       `json:"smart,omitempty"`
+	ValidSeconds *int                            `json:"valid_seconds,omitempty"`
+}
+
+// DeviceHealthInfoDTO A device's health log, in SPDK's field names whatever it was read with.
+//
+// Every metric is optional: an AIO device read through smartctl reports a
+// different subset than an NVMe controller does, and a device with no
+// health log at all (a virtio disk, a host without smartctl) is
+// “supported=false“ with every metric null -- a 200, not an error.
+type DeviceHealthInfoDTO struct {
+	AvailableSparePercentage                *int               `json:"available_spare_percentage,omitempty"`
+	AvailableSpareThresholdPercentage       *int               `json:"available_spare_threshold_percentage,omitempty"`
+	ControllerBusyTime                      *int               `json:"controller_busy_time,omitempty"`
+	CriticalCompositeTemperatureTimeMinutes *int               `json:"critical_composite_temperature_time_minutes,omitempty"`
+	CriticalWarning                         *int               `json:"critical_warning,omitempty"`
+	DataUnitsRead                           *int               `json:"data_units_read,omitempty"`
+	DataUnitsWritten                        *int               `json:"data_units_written,omitempty"`
+	FirmwareRevision                        *string            `json:"firmware_revision,omitempty"`
+	HostReadCommands                        *int               `json:"host_read_commands,omitempty"`
+	HostWriteCommands                       *int               `json:"host_write_commands,omitempty"`
+	Id                                      openapi_types.UUID `json:"id"`
+	MediaErrors                             *int               `json:"media_errors,omitempty"`
+	ModelNumber                             *string            `json:"model_number,omitempty"`
+	NumErrLogEntries                        *int               `json:"num_err_log_entries,omitempty"`
+	PendingSectors                          *int               `json:"pending_sectors,omitempty"`
+	PercentageUsed                          *int               `json:"percentage_used,omitempty"`
+	PowerCycles                             *int               `json:"power_cycles,omitempty"`
+	PowerOnHours                            *int               `json:"power_on_hours,omitempty"`
+	ReallocatedSectors                      *int               `json:"reallocated_sectors,omitempty"`
+	SerialNumber                            *string            `json:"serial_number,omitempty"`
+	SmartPassed                             *bool              `json:"smart_passed,omitempty"`
+	Source                                  *string            `json:"source,omitempty"`
+	Supported                               *bool              `json:"supported,omitempty"`
+	TemperatureCelsius                      *int               `json:"temperature_celsius,omitempty"`
+	Traddr                                  *string            `json:"traddr,omitempty"`
+	UnsafeShutdowns                         *int               `json:"unsafe_shutdowns,omitempty"`
+	WarningTemperatureTimeMinutes           *int               `json:"warning_temperature_time_minutes,omitempty"`
+}
+
+// DevicePerformanceAssessmentDTO defines model for DevicePerformanceAssessmentDTO.
+type DevicePerformanceAssessmentDTO struct {
+	FleetIopsPerTib *float32                              `json:"fleet_iops_per_tib,omitempty"`
+	FleetLatencyUs  *float32                              `json:"fleet_latency_us,omitempty"`
+	IopsPerTib      *float32                              `json:"iops_per_tib,omitempty"`
+	IopsRatio       *float32                              `json:"iops_ratio,omitempty"`
+	LatencyRatio    *float32                              `json:"latency_ratio,omitempty"`
+	LatencyUs       *float32                              `json:"latency_us,omitempty"`
+	Reason          *string                               `json:"reason,omitempty"`
+	Since           *time.Time                            `json:"since,omitempty"`
+	Verdict         DevicePerformanceAssessmentDTOVerdict `json:"verdict"`
+}
+
+// DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
+type DevicePerformanceAssessmentDTOVerdict string
+
+// DeviceRebalanceDTO defines model for DeviceRebalanceDTO.
+type DeviceRebalanceDTO struct {
+	Reason         string `json:"reason"`
+	Started        bool   `json:"started"`
+	WeightsUpdated bool   `json:"weights_updated"`
+}
+
+// DeviceResizeDTO defines model for DeviceResizeDTO.
+type DeviceResizeDTO struct {
+	DeviceId      string  `json:"device_id"`
+	NewSize       int     `json:"new_size"`
+	OldSize       int     `json:"old_size"`
+	PlacementSize int     `json:"placement_size"`
+	Resized       bool    `json:"resized"`
+	Uniform       bool    `json:"uniform"`
+	Warning       *string `json:"warning,omitempty"`
+}
+
+// DeviceSmartAssessmentDTO defines model for DeviceSmartAssessmentDTO.
+type DeviceSmartAssessmentDTO struct {
+	CheckedAt *time.Time                      `json:"checked_at,omitempty"`
+	Reason    *string                         `json:"reason,omitempty"`
+	Verdict   DeviceSmartAssessmentDTOVerdict `json:"verdict"`
+}
+
+// DeviceSmartAssessmentDTOVerdict defines model for DeviceSmartAssessmentDTO.Verdict.
+type DeviceSmartAssessmentDTOVerdict string
+
+// DrainStepProgress How far one drain step has got.
+//
+// “done“ is authoritative and the only field a caller must honour: a step
+// that cannot count its work still has to say when it has finished. The counts
+// are for reporting, so a removal that pauses for minutes has a number
+// attached rather than being an unexplained wait.
+type DrainStepProgress struct {
+	Completed  *int    `json:"completed,omitempty"`
+	Done       bool    `json:"done"`
+	Failed     *int    `json:"failed,omitempty"`
+	Message    *string `json:"message,omitempty"`
+	NodeStatus *string `json:"node_status,omitempty"`
+	Total      *int    `json:"total,omitempty"`
+}
+
+// DrainVerification Whether the node still hosts anything, before its DELETE.
+type DrainVerification struct {
+	Drained   bool      `json:"drained"`
+	Lvols     *[]string `json:"lvols,omitempty"`
+	Snapshots *[]string `json:"snapshots,omitempty"`
+}
+
+// FDBKeyDescriptor Keys held in the cluster's own FoundationDB, by “LocalKMS“.
+type FDBKeyDescriptor struct {
+	DekPath string                `json:"dek_path"`
+	Type    *FDBKeyDescriptorType `json:"type,omitempty"`
+}
+
+// FDBKeyDescriptorType defines model for FDBKeyDescriptor.Type.
+type FDBKeyDescriptorType string
 
 // FailbackParams defines model for FailbackParams.
 type FailbackParams struct {
-	SourceClusterId *string `json:"source_cluster_id,omitempty"`
+	SourceClusterId *openapi_types.UUID `json:"source_cluster_id,omitempty"`
 }
+
+// FailoverResultDTO defines model for FailoverResultDTO.
+type FailoverResultDTO struct {
+	ConnectionStrings *[]NvmeConnectEntry     `json:"connection_strings,omitempty"`
+	Detail            *string                 `json:"detail,omitempty"`
+	LvolId            openapi_types.UUID      `json:"lvol_id"`
+	Status            FailoverResultDTOStatus `json:"status"`
+	TargetLvolId      *openapi_types.UUID     `json:"target_lvol_id,omitempty"`
+}
+
+// FailoverResultDTOStatus defines model for FailoverResultDTO.Status.
+type FailoverResultDTOStatus string
+
+// GroupBackupDTO A consistency-group backup: the member backups of one generation as one
+// all-or-nothing unit.
+type GroupBackupDTO struct {
+	ClusterId            openapi_types.UUID   `json:"cluster_id"`
+	CompletedAt          *time.Time           `json:"completed_at,omitempty"`
+	ConsistencyGroupId   openapi_types.UUID   `json:"consistency_group_id"`
+	ConsistencyGroupName string               `json:"consistency_group_name"`
+	CreatedAt            time.Time            `json:"created_at"`
+	ErrorMessage         *string              `json:"error_message,omitempty"`
+	GroupSeq             int                  `json:"group_seq"`
+	Id                   openapi_types.UUID   `json:"id"`
+	MemberBackupIds      []openapi_types.UUID `json:"member_backup_ids"`
+	Size                 int                  `json:"size"`
+	Status               string               `json:"status"`
+}
+
+// GroupBackupExportInput A group backup carried out of a cluster in a file: the group manifest plus
+//
+//	the member backup manifests it names, as one unit.
+//
+//	This is to the group manifest what ``BackupExport`` is to a single-volume
+//	manifest -- the one document that does record a location, because it is not
+//	stored in the bucket it describes. The group manifest names the generation's
+//	members; ``members`` carries each member's whole restorable chain, grouped by
+//	the location it lives in exactly as a single-volume export groups its
+//	manifests. A group backup is homogeneous -- its members share one location
+//
+// -- so there is one group in practice, but reusing “BackupExport“ keeps
+//
+//	the member records on the single-volume import path and describes a member's
+//	chain the same way everywhere.
+type GroupBackupExportInput struct {
+	// GroupManifest The self-describing document for one consistency-group backup.
+	GroupManifest GroupBackupManifest `json:"group_manifest"`
+
+	// Members Backups carried out of a cluster in a file, grouped by where they live.
+	//
+	// Grouped rather than one location for the whole document because a cluster
+	// can hold backups in several buckets at once -- its own, plus any it has
+	// imported -- and stamping all of them with a single bucket leaves the ones it
+	// does not describe unrestorable, which is discovered during the recovery they
+	// were meant to serve.
+	//
+	// A group's manifests are all in one bucket by construction: a chain cannot
+	// span buckets, so the only way to collect backups from several is to walk
+	// more than one chain.
+	Members       BackupExportInput `json:"members"`
+	SchemaVersion *int              `json:"schema_version,omitempty"`
+}
+
+// GroupBackupExportOutput A group backup carried out of a cluster in a file: the group manifest plus
+//
+//	the member backup manifests it names, as one unit.
+//
+//	This is to the group manifest what ``BackupExport`` is to a single-volume
+//	manifest -- the one document that does record a location, because it is not
+//	stored in the bucket it describes. The group manifest names the generation's
+//	members; ``members`` carries each member's whole restorable chain, grouped by
+//	the location it lives in exactly as a single-volume export groups its
+//	manifests. A group backup is homogeneous -- its members share one location
+//
+// -- so there is one group in practice, but reusing “BackupExport“ keeps
+//
+//	the member records on the single-volume import path and describes a member's
+//	chain the same way everywhere.
+type GroupBackupExportOutput struct {
+	// GroupManifest The self-describing document for one consistency-group backup.
+	GroupManifest GroupBackupManifest `json:"group_manifest"`
+
+	// Members Backups carried out of a cluster in a file, grouped by where they live.
+	//
+	// Grouped rather than one location for the whole document because a cluster
+	// can hold backups in several buckets at once -- its own, plus any it has
+	// imported -- and stamping all of them with a single bucket leaves the ones it
+	// does not describe unrestorable, which is discovered during the recovery they
+	// were meant to serve.
+	//
+	// A group's manifests are all in one bucket by construction: a chain cannot
+	// span buckets, so the only way to collect backups from several is to walk
+	// more than one chain.
+	Members       BackupExportOutput `json:"members"`
+	SchemaVersion *int               `json:"schema_version,omitempty"`
+}
+
+// GroupBackupManifest The self-describing document for one consistency-group backup.
+type GroupBackupManifest struct {
+	CompletedAt     time.Time            `json:"completed_at"`
+	CreatedAt       time.Time            `json:"created_at"`
+	Encrypted       *bool                `json:"encrypted,omitempty"`
+	GroupBackupId   openapi_types.UUID   `json:"group_backup_id"`
+	MemberBackupIds []openapi_types.UUID `json:"member_backup_ids"`
+	SchemaVersion   *int                 `json:"schema_version,omitempty"`
+	Size            int                  `json:"size"`
+
+	// Source Where a group backup's generation came from. Provenance for a reader.
+	Source GroupManifestSource `json:"source"`
+
+	// State Whether a group manifest's member backups can be relied on.
+	//
+	// A group manifest is written ``committed``, at the commit barrier. A delete
+	// marks it ``deleting`` before it touches any member, and removes it only once
+	// every member is retired. A delete that ended after retiring a member marks it
+	// ``broken``: some members are gone, so the group backup cannot restore, and
+	// the bucket says so rather than presenting it as whole. Only a ``committed``
+	// group backup is restorable or importable.
+	State *GroupManifestState `json:"state,omitempty"`
+}
+
+// GroupFailbackParams defines model for GroupFailbackParams.
+type GroupFailbackParams struct {
+	SourceClusterId *openapi_types.UUID `json:"source_cluster_id,omitempty"`
+}
+
+// GroupManifestSource Where a group backup's generation came from. Provenance for a reader.
+type GroupManifestSource struct {
+	ClusterId            openapi_types.UUID `json:"cluster_id"`
+	ClusterName          *string            `json:"cluster_name,omitempty"`
+	ConsistencyGroupId   string             `json:"consistency_group_id"`
+	ConsistencyGroupName string             `json:"consistency_group_name"`
+	Generation           int                `json:"generation"`
+}
+
+// GroupManifestState Whether a group manifest's member backups can be relied on.
+//
+// A group manifest is written “committed“, at the commit barrier. A delete
+// marks it “deleting“ before it touches any member, and removes it only once
+// every member is retired. A delete that ended after retiring a member marks it
+// “broken“: some members are gone, so the group backup cannot restore, and
+// the bucket says so rather than presenting it as whole. Only a “committed“
+// group backup is restorable or importable.
+type GroupManifestState string
+
+// HCPKeyDescriptor Keys held in HashiCorp Vault, wrapped under a named transit key.
+type HCPKeyDescriptor struct {
+	DekPath      string                `json:"dek_path"`
+	KekName      string                `json:"kek_name"`
+	KvMount      *string               `json:"kv_mount,omitempty"`
+	TransitMount *string               `json:"transit_mount,omitempty"`
+	Type         *HCPKeyDescriptorType `json:"type,omitempty"`
+	VaultBaseUrl *string               `json:"vault_base_url,omitempty"`
+}
+
+// HCPKeyDescriptorType defines model for HCPKeyDescriptor.Type.
+type HCPKeyDescriptorType string
 
 // HTTPValidationError defines model for HTTPValidationError.
 type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
-// HashicorpVaultSettings defines model for HashicorpVaultSettings.
-type HashicorpVaultSettings struct {
-	BaseUrl      *string `json:"base_url,omitempty"`
-	CertRole     *string `json:"cert_role,omitempty"`
-	KvMount      *string `json:"kv_mount,omitempty"`
-	TransitMount *string `json:"transit_mount,omitempty"`
+// KMIPKMSSettings A KMIP-speaking key management appliance.
+type KMIPKMSSettings struct {
+	Provider  *KMIPKMSSettingsProvider `json:"provider,omitempty"`
+	ServerUrl string                   `json:"server_url"`
+}
+
+// KMIPKMSSettingsProvider defines model for KMIPKMSSettings.Provider.
+type KMIPKMSSettingsProvider string
+
+// KMIPKeyDescriptor Keys held in a KMIP-speaking appliance, wrapped under a named key.
+type KMIPKeyDescriptor struct {
+	DekPath   string                 `json:"dek_path"`
+	KekName   string                 `json:"kek_name"`
+	ServerUrl *string                `json:"server_url,omitempty"`
+	Type      *KMIPKeyDescriptorType `json:"type,omitempty"`
+}
+
+// KMIPKeyDescriptorType defines model for KMIPKeyDescriptor.Type.
+type KMIPKeyDescriptorType string
+
+// LocatedManifestsInput Manifests that were read from one location, and that location.
+type LocatedManifestsInput struct {
+	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	//
+	// Every field here affects whether the objects can be read back at all, which
+	// is why the whole model is embedded in each backup rather than looked up from
+	// the cluster that happened to create it.
+	Location  BackupLocationInput `json:"location"`
+	Manifests []BackupManifest    `json:"manifests"`
+}
+
+// LocatedManifestsOutput Manifests that were read from one location, and that location.
+type LocatedManifestsOutput struct {
+	// Location Where a backup's objects are, and how to interpret them. Never secret.
+	//
+	// Every field here affects whether the objects can be read back at all, which
+	// is why the whole model is embedded in each backup rather than looked up from
+	// the cluster that happened to create it.
+	Location  BackupLocationOutput `json:"location"`
+	Manifests []BackupManifest     `json:"manifests"`
 }
 
 // ManagementNodeDTO defines model for ManagementNodeDTO.
@@ -592,8 +2167,73 @@ type ManagementNodeDTO struct {
 	Status   string             `json:"status"`
 }
 
+// ManifestDataPlane How the objects are encoded, so a later format change is detectable.
+//
+// Everything here has to be recorded because reading the bucket cannot
+// recover it -- unlike the bucket's name, region and endpoint, which the
+// reader necessarily supplied to get this far.
+type ManifestDataPlane struct {
+	ClusterSize     *int    `json:"cluster_size,omitempty"`
+	KeyFormat       *string `json:"key_format,omitempty"`
+	WithCompression *bool   `json:"with_compression,omitempty"`
+}
+
+// ManifestSource Where this backup came from. Provenance for an operator reading a bucket.
+//
+// Nothing may resolve configuration or keys through these -- that dependency
+// on the originating cluster is the whole problem being removed.
+type ManifestSource struct {
+	ClusterId   openapi_types.UUID `json:"cluster_id"`
+	ClusterName *string            `json:"cluster_name,omitempty"`
+	NodeId      openapi_types.UUID `json:"node_id"`
+}
+
+// ManifestVolume The shape of the volume this backup was taken from.
+//
+// Split in two by what is knowable. The identity and size come off the backup
+// record and are always present. The settings below them come off the live
+// volume, so they are absent together once that volume is deleted -- and
+// absent is not the same answer as “0“, which for a QoS cap means
+// "unlimited" and for a priority class is a real class.
+//
+// Nothing reads the settings yet; restore still creates its volume with
+// hardcoded defaults. They are recorded anyway because a manifest is read
+// years after it is written, and a backup taken today cannot be given a shape
+// retroactively once its volume is gone.
+//
+// The volume's allow-list is deliberately not among them. Who may attach is a
+// property of the pool a volume lives in, not of the bytes a backup holds, and
+// a restore lands in whichever pool it is given -- possibly in another cluster,
+// where the source volume's NQNs mean nothing. So a restored volume takes the
+// target pool's host configuration, and a stale allow-list from the source
+// never overrides it.
+type ManifestVolume struct {
+	Fabric                *ManifestVolumeFabric `json:"fabric,omitempty"`
+	HaType                *ManifestVolumeHaType `json:"ha_type,omitempty"`
+	LvolId                openapi_types.UUID    `json:"lvol_id"`
+	LvolName              string                `json:"lvol_name"`
+	LvolPriorityClass     *int                  `json:"lvol_priority_class,omitempty"`
+	MaxNamespacePerSubsys *int                  `json:"max_namespace_per_subsys,omitempty"`
+	MaxSize               *int                  `json:"max_size,omitempty"`
+	PoolName              *string               `json:"pool_name,omitempty"`
+	RMbytesPerSec         *int                  `json:"r_mbytes_per_sec,omitempty"`
+	RwIosPerSec           *int                  `json:"rw_ios_per_sec,omitempty"`
+	RwMbytesPerSec        *int                  `json:"rw_mbytes_per_sec,omitempty"`
+	Size                  int                   `json:"size"`
+	SnapshotId            openapi_types.UUID    `json:"snapshot_id"`
+	SnapshotName          string                `json:"snapshot_name"`
+	WMbytesPerSec         *int                  `json:"w_mbytes_per_sec,omitempty"`
+}
+
+// ManifestVolumeFabric defines model for ManifestVolume.Fabric.
+type ManifestVolumeFabric string
+
+// ManifestVolumeHaType defines model for ManifestVolume.HaType.
+type ManifestVolumeHaType string
+
 // MigrationDTO defines model for MigrationDTO.
 type MigrationDTO struct {
+	ActiveSourceNodeId        string              `json:"active_source_node_id"`
 	CompletedAt               int                 `json:"completed_at"`
 	ConnectStrings            *[]NvmeConnectEntry `json:"connect_strings,omitempty"`
 	ErrorMessage              string              `json:"error_message"`
@@ -612,16 +2252,65 @@ type MigrationDTO struct {
 	TargetNodeId              string              `json:"target_node_id"`
 }
 
-// NvmeConnectEntry Typed representation of a single NVMe-oF connect target.
-//
-// Returned by connect_lvol and create_migration.  Replaces the ad-hoc dicts
-// that were built in both places with hyphenated keys.
-//
-// Python attributes and constructor keywords use snake_case
-// (“nr_io_queues“); the JSON representation uses hyphenated keys
-// (“nr-io-queues“) to match the “nvme connect“ option names.  Serialize
-// with “by_alias=True“ (FastAPI response models do this by default) to emit
-// the hyphenated keys.
+// MigrationForecastDTO defines model for MigrationForecastDTO.
+type MigrationForecastDTO struct {
+	BytesRemaining        *int      `json:"bytes_remaining,omitempty"`
+	CompletesAt           *int      `json:"completes_at,omitempty"`
+	Converging            *bool     `json:"converging,omitempty"`
+	DirtyBytesPerSec      *int      `json:"dirty_bytes_per_sec,omitempty"`
+	EtaSeconds            *int      `json:"eta_seconds,omitempty"`
+	NotConvergingLvs      *[]string `json:"not_converging_lvs,omitempty"`
+	ThroughputBytesPerSec *int      `json:"throughput_bytes_per_sec,omitempty"`
+	ThroughputMeasured    *bool     `json:"throughput_measured,omitempty"`
+}
+
+// MigrationPlanDTO A bulk online migration to another cluster. “id“ is null for a dry run.
+type MigrationPlanDTO struct {
+	ClusterId       string                   `json:"cluster_id"`
+	CreatedAt       *int                     `json:"created_at,omitempty"`
+	DeleteSource    bool                     `json:"delete_source"`
+	FinishedAt      *int                     `json:"finished_at,omitempty"`
+	Forecast        MigrationForecastDTO     `json:"forecast"`
+	Id              *string                  `json:"id"`
+	Name            *string                  `json:"name,omitempty"`
+	Status          string                   `json:"status"`
+	TargetClusterId string                   `json:"target_cluster_id"`
+	Volumes         []MigrationPlanVolumeDTO `json:"volumes"`
+	Warnings        *[]string                `json:"warnings,omitempty"`
+}
+
+// MigrationPlanVolumeDTO One volume of a migration plan (docs/online-migration.md).
+type MigrationPlanVolumeDTO struct {
+	BytesRemaining *int    `json:"bytes_remaining,omitempty"`
+	BytesTotal     *int    `json:"bytes_total,omitempty"`
+	Error          *string `json:"error,omitempty"`
+	EtaSeconds     *int    `json:"eta_seconds,omitempty"`
+	LvolId         string  `json:"lvol_id"`
+	Name           *string `json:"name,omitempty"`
+	State          string  `json:"state"`
+	TargetNodeId   *string `json:"target_node_id,omitempty"`
+}
+
+// NetworkAttachment One NetworkAttachmentDefinition the pod joins, as the operator states it. The
+// node record keeps these as plain dicts, which is what the record's base model stores.
+type NetworkAttachment struct {
+	Interface string    `json:"interface"`
+	Ips       *[]string `json:"ips,omitempty"`
+	Name      string    `json:"name"`
+	Namespace *string   `json:"namespace,omitempty"`
+	Resource  *string   `json:"resource,omitempty"`
+}
+
+// NodeReachabilityDTO One node's answer to the storage-node monitor's management-address
+// probe, run once on demand (“GET /clusters/{id}/reachability“).
+type NodeReachabilityDTO struct {
+	Id        string `json:"id"`
+	MgmtIp    string `json:"mgmt_ip"`
+	Reachable bool   `json:"reachable"`
+	Site      string `json:"site"`
+}
+
+// NvmeConnectEntry defines model for NvmeConnectEntry.
 type NvmeConnectEntry struct {
 	AllowedHosts   *[]string `json:"allowed-hosts,omitempty"`
 	Connect        string    `json:"connect"`
@@ -635,28 +2324,259 @@ type NvmeConnectEntry struct {
 	NsId           *int      `json:"ns-id,omitempty"`
 	Port           int       `json:"port"`
 	ReconnectDelay int       `json:"reconnect-delay"`
+	TargetLvolId   *string   `json:"target-lvol-id,omitempty"`
 	Tls            *bool     `json:"tls,omitempty"`
 	Transport      string    `json:"transport"`
+	TwoNode        *bool     `json:"two-node,omitempty"`
 }
+
+// PlanParams defines model for PlanParams.
+type PlanParams struct {
+	DeleteSource    *bool                 `json:"delete_source,omitempty"`
+	DryRun          *bool                 `json:"dry_run,omitempty"`
+	IntervalMin     *int                  `json:"interval_min,omitempty"`
+	LvolIds         *[]openapi_types.UUID `json:"lvol_ids,omitempty"`
+	Name            *string               `json:"name,omitempty"`
+	PoolId          *openapi_types.UUID   `json:"pool_id,omitempty"`
+	TargetClusterId *openapi_types.UUID   `json:"target_cluster_id,omitempty"`
+}
+
+// PolicyParams defines model for PolicyParams.
+type PolicyParams struct {
+	ConsistencyGroup *bool              `json:"consistency_group,omitempty"`
+	IntervalMin      *int               `json:"interval_min,omitempty"`
+	KeepReplicated   *int               `json:"keep_replicated,omitempty"`
+	Mode             *PolicyParamsMode  `json:"mode,omitempty"`
+	PolicyName       string             `json:"policy_name"`
+	RpoTargetSeconds *int               `json:"rpo_target_seconds,omitempty"`
+	TargetId         openapi_types.UUID `json:"target_id"`
+}
+
+// PolicyParamsMode defines model for PolicyParams.Mode.
+type PolicyParamsMode string
 
 // PoolHostParams defines model for PoolHostParams.
 type PoolHostParams struct {
 	HostNqn string `json:"host_nqn"`
 }
 
+// QOSClassDTO defines model for QOSClassDTO.
+type QOSClassDTO struct {
+	Id     int    `json:"id"`
+	Name   string `json:"name"`
+	Weight int    `json:"weight"`
+}
+
+// QOSClassParams defines model for QOSClassParams.
+type QOSClassParams struct {
+	Name   string `json:"name"`
+	Weight int    `json:"weight"`
+}
+
+// QOSConfigDTO defines model for QOSConfigDTO.
+type QOSConfigDTO struct {
+	Classes                   []QOSClassDTO `json:"classes"`
+	DefaultWeight             *int          `json:"default_weight"`
+	ReplicationClassAvailable bool          `json:"replication_class_available"`
+	ReplicationWeight         int           `json:"replication_weight"`
+	Weights                   []int         `json:"weights"`
+}
+
+// QOSConfigParams defines model for QOSConfigParams.
+type QOSConfigParams struct {
+	Classes           *[]QOSClassParams `json:"classes,omitempty"`
+	DefaultWeight     int               `json:"default_weight"`
+	ReplicationWeight *int              `json:"replication_weight,omitempty"`
+}
+
 // ReplicateLVolParams defines model for ReplicateLVolParams.
 type ReplicateLVolParams struct {
-	LvolId *string `json:"lvol_id,omitempty"`
+	LvolId openapi_types.UUID `json:"lvol_id"`
 }
+
+// ReplicatedGenerationDTO One complete, fully replicated consistency-group generation, every
+// member addressed as a cloneable object on the secondary.
+type ReplicatedGenerationDTO struct {
+	GroupSeq int                     `json:"group_seq"`
+	Members  []ReplicatedSnapshotDTO `json:"members"`
+}
+
+// ReplicatedSnapshotDTO A fully replicated snapshot on the secondary, addressed as a cloneable
+// object. “lvol_id“ is the volume the snapshot belongs to on the
+// SECONDARY cluster, not the source volume the caller asked about, because
+// that is the identity the ordinary CSI clone path resolves a
+// “dataSource“ against.
+type ReplicatedSnapshotDTO struct {
+	ClusterId  openapi_types.UUID  `json:"cluster_id"`
+	CreatedAt  time.Time           `json:"created_at"`
+	GroupId    *string             `json:"group_id,omitempty"`
+	GroupSeq   *int                `json:"group_seq,omitempty"`
+	LvolId     *openapi_types.UUID `json:"lvol_id,omitempty"`
+	PoolId     *openapi_types.UUID `json:"pool_id,omitempty"`
+	Size       int                 `json:"size"`
+	SnapshotId openapi_types.UUID  `json:"snapshot_id"`
+	UsedSize   int                 `json:"used_size"`
+}
+
+// ReplicationPolicyDTO defines model for ReplicationPolicyDTO.
+type ReplicationPolicyDTO struct {
+	ClusterId        openapi_types.UUID         `json:"cluster_id"`
+	ConsistencyGroup *bool                      `json:"consistency_group,omitempty"`
+	GroupLastSeq     *int                       `json:"group_last_seq,omitempty"`
+	GroupLvsName     *string                    `json:"group_lvs_name,omitempty"`
+	GroupNodeId      *openapi_types.UUID        `json:"group_node_id,omitempty"`
+	Id               openapi_types.UUID         `json:"id"`
+	IntervalMin      int                        `json:"interval_min"`
+	KeepReplicated   int                        `json:"keep_replicated"`
+	Mode             ReplicationPolicyDTOMode   `json:"mode"`
+	PolicyName       string                     `json:"policy_name"`
+	RpoTargetSeconds *int                       `json:"rpo_target_seconds,omitempty"`
+	Status           ReplicationPolicyDTOStatus `json:"status"`
+	TargetId         openapi_types.UUID         `json:"target_id"`
+}
+
+// ReplicationPolicyDTOMode defines model for ReplicationPolicyDTO.Mode.
+type ReplicationPolicyDTOMode string
+
+// ReplicationPolicyDTOStatus defines model for ReplicationPolicyDTO.Status.
+type ReplicationPolicyDTOStatus string
+
+// ReplicationRelationshipDTO defines model for ReplicationRelationshipDTO.
+type ReplicationRelationshipDTO struct {
+	Active          *string                             `json:"active,omitempty"`
+	ActiveLvolId    *openapi_types.UUID                 `json:"active_lvol_id,omitempty"`
+	Direction       ReplicationRelationshipDTODirection `json:"direction"`
+	IsSource        bool                                `json:"is_source"`
+	Mode            ReplicationRelationshipDTOMode      `json:"mode"`
+	ReplicationId   openapi_types.UUID                  `json:"replication_id"`
+	SourceClusterId *openapi_types.UUID                 `json:"source_cluster_id"`
+	SourceLvolId    *openapi_types.UUID                 `json:"source_lvol_id"`
+	State           ReplicationRelationshipDTOState     `json:"state"`
+	TargetClusterId *openapi_types.UUID                 `json:"target_cluster_id"`
+	TargetLvolId    *openapi_types.UUID                 `json:"target_lvol_id"`
+	TargetNqn       string                              `json:"target_nqn"`
+	TargetNsId      int                                 `json:"target_ns_id"`
+	TargetPoolId    *openapi_types.UUID                 `json:"target_pool_id,omitempty"`
+}
+
+// ReplicationRelationshipDTODirection defines model for ReplicationRelationshipDTO.Direction.
+type ReplicationRelationshipDTODirection string
+
+// ReplicationRelationshipDTOMode defines model for ReplicationRelationshipDTO.Mode.
+type ReplicationRelationshipDTOMode string
+
+// ReplicationRelationshipDTOState defines model for ReplicationRelationshipDTO.State.
+type ReplicationRelationshipDTOState string
+
+// ReplicationStartParams defines model for ReplicationStartParams.
+type ReplicationStartParams struct {
+	IntervalMin          *int                        `json:"interval_min,omitempty"`
+	Mode                 *ReplicationStartParamsMode `json:"mode,omitempty"`
+	ReplicationClusterId *openapi_types.UUID         `json:"replication_cluster_id,omitempty"`
+	ReplicationPoolId    *openapi_types.UUID         `json:"replication_pool_id,omitempty"`
+}
+
+// ReplicationStartParamsMode defines model for ReplicationStartParams.Mode.
+type ReplicationStartParamsMode string
+
+// ReplicationStatusDTO The typed steady-state replication status of one volume.
+//
+// Serves what “lvol_controller.get_replication_info“ computes, for the
+// volume's WHOLE replicated life — unlike “ReplicationRelationshipDTO“,
+// which only exists once a cutover or fail-over has created a relationship
+// record. “state: not_replicating, role: none“ is a valid answer, never a
+// 404, because the csi-addons adapter polls this on every reconcile.
+type ReplicationStatusDTO struct {
+	FailingCount     *int                      `json:"failing_count,omitempty"`
+	LagBudgetSeconds *int                      `json:"lag_budget_seconds,omitempty"`
+	LagSeconds       *int                      `json:"lag_seconds,omitempty"`
+	LastCycleBytes   *int                      `json:"last_cycle_bytes,omitempty"`
+	LastCycleSeconds *int                      `json:"last_cycle_seconds,omitempty"`
+	LastReplicatedAt *time.Time                `json:"last_replicated_at,omitempty"`
+	MaxRetryReached  *bool                     `json:"max_retry_reached,omitempty"`
+	OutstandingBytes *int                      `json:"outstanding_bytes,omitempty"`
+	OutstandingCount *int                      `json:"outstanding_count,omitempty"`
+	Resyncing        *bool                     `json:"resyncing,omitempty"`
+	Role             ReplicationStatusDTORole  `json:"role"`
+	State            ReplicationStatusDTOState `json:"state"`
+}
+
+// ReplicationStatusDTORole defines model for ReplicationStatusDTO.Role.
+type ReplicationStatusDTORole string
+
+// ReplicationStatusDTOState defines model for ReplicationStatusDTO.State.
+type ReplicationStatusDTOState string
+
+// ReplicationTargetDTO defines model for ReplicationTargetDTO.
+type ReplicationTargetDTO struct {
+	ClusterId       openapi_types.UUID         `json:"cluster_id"`
+	Id              openapi_types.UUID         `json:"id"`
+	Status          ReplicationTargetDTOStatus `json:"status"`
+	TargetClusterId openapi_types.UUID         `json:"target_cluster_id"`
+	TargetName      string                     `json:"target_name"`
+	TargetPoolUuid  *openapi_types.UUID        `json:"target_pool_uuid"`
+	TimeoutSec      int                        `json:"timeout_sec"`
+}
+
+// ReplicationTargetDTOStatus defines model for ReplicationTargetDTO.Status.
+type ReplicationTargetDTOStatus string
 
 // RootModelUnionCreateParamsCloneParams defines model for RootModel_Union__CreateParams___CloneParams__.
 type RootModelUnionCreateParamsCloneParams struct {
 	union json.RawMessage
 }
 
+// S3Credentials A static key pair.
+//
+// A pair rather than two independent fields, so "access key set, secret
+// missing" is unrepresentable instead of something a validator has to catch.
+type S3Credentials struct {
+	AccessKeyId     *string `json:"access_key_id,omitempty"`
+	SecretAccessKey *string `json:"secret_access_key,omitempty"`
+}
+
+// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+type SecondaryTarget int
+
+// SiteFenceTaskDTO A site fence in progress (the 202 answer of “fence“): the fence task,
+// also readable at “/clusters/{id}/tasks/{task_id}/“.
+type SiteFenceTaskDTO struct {
+	TaskId openapi_types.UUID `json:"task_id"`
+}
+
+// SiteNodeDTO A node of a site, as the site record lists it. “id“ is the storage
+// node's id (“StorageNodeDTO.id“).
+type SiteNodeDTO struct {
+	Id     string            `json:"id"`
+	MgmtIp string            `json:"mgmt_ip"`
+	Status SiteNodeDTOStatus `json:"status"`
+}
+
+// SiteNodeDTOStatus defines model for SiteNodeDTO.Status.
+type SiteNodeDTOStatus string
+
+// SiteRecordDTO What the control plane records about one site of a sync-replication
+// cluster (“GET /clusters/{id}/sites/{site}/status“, and the 200 answers
+// of “fence“ / “unfence“): “lost“ when the cluster records it as its
+// lost site, “state“ that record's “lost_site_state“ (“draining“ /
+// “down“ written by the storage-node monitor, “fencing“ / “done“
+// by a fence), the latest site-level fence task, the site's nodes.
+type SiteRecordDTO struct {
+	FenceTaskId *openapi_types.UUID `json:"fence_task_id,omitempty"`
+	Lost        bool                `json:"lost"`
+	Nodes       []SiteNodeDTO       `json:"nodes"`
+	Site        string              `json:"site"`
+	State       SiteRecordDTOState  `json:"state"`
+}
+
+// SiteRecordDTOState defines model for SiteRecordDTO.State.
+type SiteRecordDTOState string
+
 // SnapshotDTO defines model for SnapshotDTO.
 type SnapshotDTO struct {
 	CreatedAt   time.Time          `json:"created_at"`
+	GroupId     string             `json:"group_id"`
+	GroupSeq    int                `json:"group_seq"`
 	HealthCheck bool               `json:"health_check"`
 	Id          openapi_types.UUID `json:"id"`
 	Lvol        *string            `json:"lvol"`
@@ -691,9 +2611,11 @@ type StorageNodeDTO struct {
 	OnlineDeviceCount int                     `json:"online_device_count"`
 	RpcPort           int                     `json:"rpc_port"`
 	SecondaryNodeId   *openapi_types.UUID     `json:"secondary_node_id"`
+	Site              *string                 `json:"site,omitempty"`
 	SnapshotsMax      int                     `json:"snapshots_max"`
 	SpdkMem           int                     `json:"spdk_mem"`
 	Status            StorageNodeDTOStatus    `json:"status"`
+	TertiaryNodeId    *openapi_types.UUID     `json:"tertiary_node_id,omitempty"`
 	Uptime            *openapi_types.Duration `json:"uptime"`
 }
 
@@ -702,35 +2624,39 @@ type StorageNodeDTOStatus string
 
 // StorageNodeParams defines model for StorageNodeParams.
 type StorageNodeParams struct {
-	CrName              *string   `json:"cr_name,omitempty"`
-	CrNamespace         *string   `json:"cr_namespace,omitempty"`
-	CrPlural            *string   `json:"cr_plural,omitempty"`
-	DataNics            *[]string `json:"data_nics,omitempty"`
-	Expand              *bool     `json:"expand,omitempty"`
-	FailureDomain       *int      `json:"failure_domain,omitempty"`
-	Format4k            *bool     `json:"format_4k,omitempty"`
-	HaJm                *bool     `json:"ha_jm,omitempty"`
-	HaJmCount           *int      `json:"ha_jm_count,omitempty"`
-	IdDeviceByNqn       *bool     `json:"id_device_by_nqn,omitempty"`
-	InterfaceName       string    `json:"interface_name"`
-	IobufLargePoolCount *int      `json:"iobuf_large_pool_count,omitempty"`
-	IobufSmallPoolCount *int      `json:"iobuf_small_pool_count,omitempty"`
-	JmPercent           *int      `json:"jm_percent,omitempty"`
-	MaxSnapshots        *int      `json:"max_snapshots,omitempty"`
-	Namespace           *string   `json:"namespace,omitempty"`
-	NodeAddress         string    `json:"node_address"`
-	Partitions          *int      `json:"partitions,omitempty"`
-	SpdkDebug           *bool     `json:"spdk_debug,omitempty"`
-	SpdkImage           *string   `json:"spdk_image,omitempty"`
-	SpdkProxyImage      *string   `json:"spdk_proxy_image,omitempty"`
-	SpdkSysMem          *string   `json:"spdk_sys_mem,omitempty"`
-	TestDevice          *bool     `json:"test_device,omitempty"`
+	CrName              *string              `json:"cr_name,omitempty"`
+	CrNamespace         *string              `json:"cr_namespace,omitempty"`
+	CrPlural            *string              `json:"cr_plural,omitempty"`
+	DataNics            *[]string            `json:"data_nics,omitempty"`
+	Expand              *bool                `json:"expand,omitempty"`
+	FailureDomain       *int                 `json:"failure_domain,omitempty"`
+	ForceFormat         *bool                `json:"force_format,omitempty"`
+	Format4k            *bool                `json:"format_4k,omitempty"`
+	HaJm                *bool                `json:"ha_jm,omitempty"`
+	HaJmCount           *int                 `json:"ha_jm_count,omitempty"`
+	IdDeviceByNqn       *bool                `json:"id_device_by_nqn,omitempty"`
+	InterfaceName       string               `json:"interface_name"`
+	IobufLargePoolCount *int                 `json:"iobuf_large_pool_count,omitempty"`
+	IobufSmallPoolCount *int                 `json:"iobuf_small_pool_count,omitempty"`
+	JmPercent           *int                 `json:"jm_percent,omitempty"`
+	MaxSnapshots        *int                 `json:"max_snapshots,omitempty"`
+	Namespace           *string              `json:"namespace,omitempty"`
+	Networks            *[]NetworkAttachment `json:"networks,omitempty"`
+	NodeAddress         string               `json:"node_address"`
+	Partitions          *int                 `json:"partitions,omitempty"`
+	PodNetwork          *bool                `json:"pod_network,omitempty"`
+	Site                *string              `json:"site,omitempty"`
+	SpdkDebug           *bool                `json:"spdk_debug,omitempty"`
+	SpdkImage           *string              `json:"spdk_image,omitempty"`
+	SpdkProxyImage      *string              `json:"spdk_proxy_image,omitempty"`
+	SpdkSysMem          *string              `json:"spdk_sys_mem,omitempty"`
+	TestDevice          *bool                `json:"test_device,omitempty"`
 }
 
 // StoragePoolDTO defines model for StoragePoolDTO.
 type StoragePoolDTO struct {
 	AllowedHosts  *[]string            `json:"allowed_hosts,omitempty"`
-	Capacity      CapacityStatDTO      `json:"capacity"`
+	Capacity      *CapacityStatDTO     `json:"capacity"`
 	ClusterId     openapi_types.UUID   `json:"cluster_id"`
 	Dhchap        *bool                `json:"dhchap,omitempty"`
 	Id            openapi_types.UUID   `json:"id"`
@@ -762,6 +2688,42 @@ type StoragePoolParams struct {
 	VolumeMaxSize *int    `json:"volume_max_size,omitempty"`
 }
 
+// SyncReplicationStatusDTO The sync-replication status of a volume or consistency group seen from
+// one site (“GET .../replication/sync-status?site=“).
+//
+// Everything but “role“ is cluster-wide (the worst over every LVS), so
+// every volume and group answers the same: csi-addons' GetReplicationStatus
+// (“state“, “last_replicated_at“, “lag_seconds“, “bytes_behind“,
+// “diverged“) and GetSecondaryReadiness (“peer_ready = completed and not
+// degraded and not resyncing“).
+type SyncReplicationStatusDTO struct {
+	BytesBehind      *int                          `json:"bytes_behind,omitempty"`
+	Completed        bool                          `json:"completed"`
+	Degraded         bool                          `json:"degraded"`
+	Diverged         bool                          `json:"diverged"`
+	LagSeconds       *int                          `json:"lag_seconds,omitempty"`
+	LastReplicatedAt *time.Time                    `json:"last_replicated_at,omitempty"`
+	PeerReady        bool                          `json:"peer_ready"`
+	Resyncing        bool                          `json:"resyncing"`
+	Role             SyncReplicationStatusDTORole  `json:"role"`
+	Site             string                        `json:"site"`
+	State            SyncReplicationStatusDTOState `json:"state"`
+}
+
+// SyncReplicationStatusDTORole defines model for SyncReplicationStatusDTO.Role.
+type SyncReplicationStatusDTORole string
+
+// SyncReplicationStatusDTOState defines model for SyncReplicationStatusDTO.State.
+type SyncReplicationStatusDTOState string
+
+// TargetParams defines model for TargetParams.
+type TargetParams struct {
+	TargetClusterId openapi_types.UUID  `json:"target_cluster_id"`
+	TargetName      string              `json:"target_name"`
+	TargetPoolId    *openapi_types.UUID `json:"target_pool_id,omitempty"`
+	TimeoutSec      *int                `json:"timeout_sec,omitempty"`
+}
+
 // TaskDTO defines model for TaskDTO.
 type TaskDTO struct {
 	Canceled       bool                   `json:"canceled"`
@@ -783,19 +2745,54 @@ type TaskDTOFunctionName string
 // TaskDTOStatus defines model for TaskDTO.Status.
 type TaskDTOStatus string
 
+// UnresolvedBackupConfig A backup configuration as a caller can state it, before a cluster resolves it.
+//
+// Identical to :class:`BackupConfig` except that “bucket_name“ may be absent,
+// because the default is derived from a cluster id that does not exist yet at
+// cluster-create time (“Cluster.default_backup_bucket_name“). Hand one to
+// “Cluster.set_backup_config“, which resolves it; nothing further down ever
+// sees a configuration without a bucket.
+//
+// Which is also why an instance must be turned back into a plain dict at the
+// boundary it arrived on rather than passed along as a “BackupConfig“: the
+// inherited :meth:`location` cannot produce a location for a bucket nobody has
+// named yet.
+type UnresolvedBackupConfig struct {
+	BucketName       *string        `json:"bucket_name,omitempty"`
+	Credentials      *S3Credentials `json:"credentials,omitempty"`
+	Endpoint         *string        `json:"endpoint,omitempty"`
+	Region           *string        `json:"region,omitempty"`
+	S3ThreadPoolSize *int           `json:"s3_thread_pool_size,omitempty"`
+
+	// SecondaryTarget The kind of secondary store, numbered as the data plane's RPC expects.
+	SecondaryTarget *SecondaryTarget `json:"secondary_target,omitempty"`
+	SnapshotBackups *bool            `json:"snapshot_backups,omitempty"`
+	UsePathStyle    *bool            `json:"use_path_style,omitempty"`
+	VerifyTls       *bool            `json:"verify_tls,omitempty"`
+	WithCompression *bool            `json:"with_compression,omitempty"`
+}
+
 // UpdatableClusterParameters defines model for UpdatableClusterParameters.
 type UpdatableClusterParameters struct {
-	Name *string `json:"name,omitempty"`
+	LeaderSite              *string                                            `json:"leader_site,omitempty"`
+	Name                    *string                                            `json:"name,omitempty"`
+	TwoNodeArbitration      *bool                                              `json:"two_node_arbitration,omitempty"`
+	TwoNodeFencingAuthority *UpdatableClusterParametersTwoNodeFencingAuthority `json:"two_node_fencing_authority,omitempty"`
+	TwoNodeHostFencing      *bool                                              `json:"two_node_host_fencing,omitempty"`
 }
+
+// UpdatableClusterParametersTwoNodeFencingAuthority defines model for UpdatableClusterParameters.TwoNodeFencingAuthority.
+type UpdatableClusterParametersTwoNodeFencingAuthority string
 
 // UpdatableLVolParams defines model for UpdatableLVolParams.
 type UpdatableLVolParams struct {
-	MaxRMbytes  *int    `json:"max_r_mbytes,omitempty"`
-	MaxRwIops   *int    `json:"max_rw_iops,omitempty"`
-	MaxRwMbytes *int    `json:"max_rw_mbytes,omitempty"`
-	MaxWMbytes  *int    `json:"max_w_mbytes,omitempty"`
-	Name        *string `json:"name,omitempty"`
-	Size        *int    `json:"size,omitempty"`
+	MaxRMbytes          *int                `json:"max_r_mbytes,omitempty"`
+	MaxRwIops           *int                `json:"max_rw_iops,omitempty"`
+	MaxRwMbytes         *int                `json:"max_rw_mbytes,omitempty"`
+	MaxWMbytes          *int                `json:"max_w_mbytes,omitempty"`
+	Name                *string             `json:"name,omitempty"`
+	ReplicationPolicyId *openapi_types.UUID `json:"replication_policy_id,omitempty"`
+	Size                *int                `json:"size,omitempty"`
 }
 
 // UpdatableStoragePoolParams defines model for UpdatableStoragePoolParams.
@@ -832,6 +2829,19 @@ type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
 
+// VaultKMSSettings HashiCorp Vault (or an OpenBao-compatible server): a Transit mount
+// wraps/unwraps DEKs, a KV mount stores the wrapped ciphertext.
+type VaultKMSSettings struct {
+	BaseUrl      string                    `json:"base_url"`
+	CertRole     *string                   `json:"cert_role,omitempty"`
+	KvMount      *string                   `json:"kv_mount,omitempty"`
+	Provider     *VaultKMSSettingsProvider `json:"provider,omitempty"`
+	TransitMount *string                   `json:"transit_mount,omitempty"`
+}
+
+// VaultKMSSettingsProvider defines model for VaultKMSSettings.Provider.
+type VaultKMSSettingsProvider string
+
 // VolumeDTO defines model for VolumeDTO.
 type VolumeDTO struct {
 	AllowedHosts          []string                `json:"allowed_hosts"`
@@ -842,6 +2852,8 @@ type VolumeDTO struct {
 	DoReplicate           *bool                   `json:"do_replicate,omitempty"`
 	Fabric                string                  `json:"fabric"`
 	FromSource            *bool                   `json:"from_source,omitempty"`
+	GroupId               *string                 `json:"group_id,omitempty"`
+	GroupSeq              *int                    `json:"group_seq,omitempty"`
 	HealthCheck           bool                    `json:"health_check"`
 	HighAvailability      bool                    `json:"high_availability"`
 	Hostname              string                  `json:"hostname"`
@@ -889,13 +2901,15 @@ type UnderscoreBackupSnapshotParams struct {
 	SnapshotId string `json:"snapshot_id"`
 }
 
-// UnderscoreBackupSourceSwitchParams defines model for _BackupSourceSwitchParams.
-type UnderscoreBackupSourceSwitchParams struct {
-	SourceClusterId string `json:"source_cluster_id"`
+// UnderscoreClientHost defines model for _ClientHost.
+type UnderscoreClientHost struct {
+	HostNqns *[]string `json:"host_nqns,omitempty"`
+	NodeId   string    `json:"node_id"`
 }
 
 // UnderscoreCloneParams defines model for _CloneParams.
 type UnderscoreCloneParams struct {
+	ConsistencyGroup       *string `json:"consistency_group,omitempty"`
 	DeleteSnapOnLvolDelete *bool   `json:"delete_snap_on_lvol_delete,omitempty"`
 	Name                   string  `json:"name"`
 	PvcName                *string `json:"pvc_name,omitempty"`
@@ -912,36 +2926,125 @@ type UnderscoreContinueParams struct {
 
 // UnderscoreCreateParams defines model for _CreateParams.
 type UnderscoreCreateParams struct {
-	AllowedHosts          *[]string                  `json:"allowed_hosts,omitempty"`
-	DoReplicate           *bool                      `json:"do_replicate,omitempty"`
-	Encrypt               *bool                      `json:"encrypt,omitempty"`
-	Fabric                *string                    `json:"fabric,omitempty"`
-	HaType                *CreateParamsHaType        `json:"ha_type,omitempty"`
-	HostId                *string                    `json:"host_id,omitempty"`
-	MaxNamespacePerSubsys *int                       `json:"max_namespace_per_subsys,omitempty"`
-	MaxRMbytes            *int                       `json:"max_r_mbytes,omitempty"`
-	MaxRwIops             *int                       `json:"max_rw_iops,omitempty"`
-	MaxRwMbytes           *int                       `json:"max_rw_mbytes,omitempty"`
-	MaxWMbytes            *int                       `json:"max_w_mbytes,omitempty"`
-	Name                  string                     `json:"name"`
-	Namespaced            *bool                      `json:"namespaced,omitempty"`
-	Ndcs                  *int                       `json:"ndcs,omitempty"`
-	Npcs                  *int                       `json:"npcs,omitempty"`
-	PriorityClass         *CreateParamsPriorityClass `json:"priority_class,omitempty"`
-	PvcName               *string                    `json:"pvc_name,omitempty"`
-	ReplicationClusterId  *string                    `json:"replication_cluster_id,omitempty"`
-	Size                  int                        `json:"size"`
+	AllowedHosts          *[]string                   `json:"allowed_hosts,omitempty"`
+	ConsistencyGroup      *string                     `json:"consistency_group,omitempty"`
+	DoReplicate           *bool                       `json:"do_replicate,omitempty"`
+	Encrypt               *bool                       `json:"encrypt,omitempty"`
+	Fabric                *string                     `json:"fabric,omitempty"`
+	HaType                *CreateParamsHaType         `json:"ha_type,omitempty"`
+	HostId                *string                     `json:"host_id,omitempty"`
+	MaxNamespacePerSubsys *int                        `json:"max_namespace_per_subsys,omitempty"`
+	MaxRMbytes            *int                        `json:"max_r_mbytes,omitempty"`
+	MaxRwIops             *int                        `json:"max_rw_iops,omitempty"`
+	MaxRwMbytes           *int                        `json:"max_rw_mbytes,omitempty"`
+	MaxWMbytes            *int                        `json:"max_w_mbytes,omitempty"`
+	Name                  string                      `json:"name"`
+	Namespaced            *bool                       `json:"namespaced,omitempty"`
+	Ndcs                  *int                        `json:"ndcs,omitempty"`
+	Npcs                  *int                        `json:"npcs,omitempty"`
+	PriorityClass         *CreateParams_PriorityClass `json:"priority_class,omitempty"`
+	PvcName               *string                     `json:"pvc_name,omitempty"`
+	ReplicationClusterId  *string                     `json:"replication_cluster_id,omitempty"`
+	ReplicationPolicy     *string                     `json:"replication_policy,omitempty"`
+	Site                  *string                     `json:"site,omitempty"`
+	Size                  int                         `json:"size"`
 }
 
 // CreateParamsHaType defines model for CreateParams.HaType.
 type CreateParamsHaType string
 
-// CreateParamsPriorityClass defines model for CreateParams.PriorityClass.
-type CreateParamsPriorityClass int
+// CreateParamsPriorityClass0 defines model for CreateParams.PriorityClass.0.
+type CreateParamsPriorityClass0 = int
 
-// UnderscoreImportParams defines model for _ImportParams.
-type UnderscoreImportParams struct {
-	Metadata []map[string]interface{} `json:"metadata"`
+// CreateParamsPriorityClass1 defines model for CreateParams.PriorityClass.1.
+type CreateParamsPriorityClass1 = string
+
+// CreateParams_PriorityClass defines model for CreateParams.PriorityClass.
+type CreateParams_PriorityClass struct {
+	union json.RawMessage
+}
+
+// UnderscoreGenerationTakeParams defines model for _GenerationTakeParams.
+type UnderscoreGenerationTakeParams struct {
+	RequestId *string `json:"request_id,omitempty"`
+}
+
+// UnderscoreGroupBackupCreateParams defines model for _GroupBackupCreateParams.
+type UnderscoreGroupBackupCreateParams struct {
+	ConsistencyGroupId openapi_types.UUID `json:"consistency_group_id"`
+	GroupSeq           *int               `json:"group_seq,omitempty"`
+}
+
+// UnderscoreGroupImportFromBucket Import whatever group backups a bucket turns out to contain.
+//
+// The disaster-recovery path: it needs a bucket and credentials for it, and
+// nothing from the cluster that wrote the group backups.
+type UnderscoreGroupImportFromBucket struct {
+	// Bucket A cluster's backup configuration: a location plus how to authenticate to it.
+	Bucket BackupConfigInput `json:"bucket"`
+}
+
+// UnderscoreGroupImportManifests A group export carried in the request itself, e.g. read from a file.
+//
+// Names nothing beside it: the export records where its member backups live, so
+// the caller states nothing the document has not already recorded.
+type UnderscoreGroupImportManifests struct {
+	// Metadata A group backup carried out of a cluster in a file: the group manifest plus
+	//    the member backup manifests it names, as one unit.
+	//
+	//    This is to the group manifest what ``BackupExport`` is to a single-volume
+	//    manifest -- the one document that does record a location, because it is not
+	//    stored in the bucket it describes. The group manifest names the generation's
+	//    members; ``members`` carries each member's whole restorable chain, grouped by
+	//    the location it lives in exactly as a single-volume export groups its
+	//    manifests. A group backup is homogeneous -- its members share one location
+	// -- so there is one group in practice, but reusing ``BackupExport`` keeps
+	//    the member records on the single-volume import path and describes a member's
+	//    chain the same way everywhere.
+	//
+	Metadata GroupBackupExportInput `json:"metadata"`
+}
+
+// UnderscoreGroupRestoreParams defines model for _GroupRestoreParams.
+type UnderscoreGroupRestoreParams struct {
+	IntoGroupName string         `json:"into_group_name"`
+	Pool          string         `json:"pool"`
+	S3Credentials *S3Credentials `json:"s3_credentials,omitempty"`
+	TargetNodeId  *string        `json:"target_node_id,omitempty"`
+}
+
+// UnderscoreHostFenceRelease defines model for _HostFenceRelease.
+type UnderscoreHostFenceRelease struct {
+	NodeId string `json:"node_id"`
+}
+
+// UnderscoreImportFromBucket Import whatever a bucket turns out to contain.
+//
+// The disaster-recovery path: it needs a bucket and credentials for it, and
+// nothing from the cluster that wrote the backups.
+type UnderscoreImportFromBucket struct {
+	// Bucket A cluster's backup configuration: a location plus how to authenticate to it.
+	Bucket BackupConfigInput `json:"bucket"`
+}
+
+// UnderscoreImportManifests An export carried in the request itself, e.g. read from a file.
+//
+// Nothing beside it names a bucket: an export groups its manifests by the
+// location each was read from, so the caller states nothing the document has
+// not already recorded, and backups from several buckets import in one go.
+type UnderscoreImportManifests struct {
+	// Metadata Backups carried out of a cluster in a file, grouped by where they live.
+	//
+	// Grouped rather than one location for the whole document because a cluster
+	// can hold backups in several buckets at once -- its own, plus any it has
+	// imported -- and stamping all of them with a single bucket leaves the ones it
+	// does not describe unrestorable, which is discovered during the recovery they
+	// were meant to serve.
+	//
+	// A group's manifests are all in one bucket by construction: a chain cannot
+	// span buckets, so the only way to collect backups from several is to walk
+	// more than one chain.
+	Metadata BackupExportInput `json:"metadata"`
 }
 
 // UnderscoreMigrationParams defines model for _MigrationParams.
@@ -951,12 +3054,29 @@ type UnderscoreMigrationParams struct {
 	TargetNodeId openapi_types.UUID `json:"target_node_id"`
 }
 
+// UnderscoreOverride defines model for _Override.
+type UnderscoreOverride struct {
+	Reason string `json:"reason"`
+	Winner string `json:"winner"`
+}
+
 // UnderscorePolicyCreateParams defines model for _PolicyCreateParams.
 type UnderscorePolicyCreateParams struct {
 	Age      *string `json:"age,omitempty"`
 	Name     string  `json:"name"`
 	Schedule *string `json:"schedule,omitempty"`
 	Versions *int    `json:"versions,omitempty"`
+}
+
+// UnderscorePreferred defines model for _Preferred.
+type UnderscorePreferred struct {
+	NodeId string `json:"node_id"`
+}
+
+// UnderscoreRemediation defines model for _Remediation.
+type UnderscoreRemediation struct {
+	Fenced bool   `json:"fenced"`
+	NodeId string `json:"node_id"`
 }
 
 // UnderscoreReplicationParams defines model for _ReplicationParams.
@@ -976,16 +3096,16 @@ type UnderscoreRestartParams struct {
 
 // UnderscoreRestoreParams defines model for _RestoreParams.
 type UnderscoreRestoreParams struct {
-	BackupId     string  `json:"backup_id"`
-	LvolName     string  `json:"lvol_name"`
-	Pool         string  `json:"pool"`
-	TargetNodeId *string `json:"target_node_id,omitempty"`
+	BackupId      string         `json:"backup_id"`
+	LvolName      string         `json:"lvol_name"`
+	Pool          string         `json:"pool"`
+	S3Credentials *S3Credentials `json:"s3_credentials,omitempty"`
+	TargetNodeId  *string        `json:"target_node_id,omitempty"`
 }
 
 // UnderscoreSnapshotParams defines model for _SnapshotParams.
 type UnderscoreSnapshotParams struct {
-	Backup *bool  `json:"backup,omitempty"`
-	Name   string `json:"name"`
+	Name string `json:"name"`
 }
 
 // UnderscoreUpdateParams defines model for _UpdateParams.
@@ -997,6 +3117,8 @@ type UnderscoreUpdateParams struct {
 
 // ClustersListApiV2ClustersGetParams defines parameters for ClustersListApiV2ClustersGet.
 type ClustersListApiV2ClustersGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch     *bool               `form:"watch,omitempty" json:"watch,omitempty"`
 	ClusterId *openapi_types.UUID `form:"cluster_id,omitempty" json:"cluster_id,omitempty"`
 }
 
@@ -1009,6 +3131,44 @@ type ClustersCreateApiV2ClustersPostParams struct {
 // ClustersCreateApiV2ClustersPostParamsResponseFormat defines parameters for ClustersCreateApiV2ClustersPost.
 type ClustersCreateApiV2ClustersPostParamsResponseFormat string
 
+// ClustersDeleteApiV2ClustersClusterIdDeleteParams defines parameters for ClustersDeleteApiV2ClustersClusterIdDelete.
+type ClustersDeleteApiV2ClustersClusterIdDeleteParams struct {
+	Force *bool `form:"force,omitempty" json:"force,omitempty"`
+}
+
+// ClustersDetailApiV2ClustersClusterIdGetParams defines parameters for ClustersDetailApiV2ClustersClusterIdGet.
+type ClustersDetailApiV2ClustersClusterIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams struct {
+	// Severity Only return alerts of this severity
+	Severity *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity `form:"severity,omitempty" json:"severity,omitempty"`
+
+	// History Also return alerts that have already resolved
+	History *bool `form:"history,omitempty" json:"history,omitempty"`
+
+	// HistorySeconds Limit the history to alerts resolved within this many seconds. Implies history=true.
+	HistorySeconds *int `form:"history_seconds,omitempty" json:"history_seconds,omitempty"`
+
+	// Status Only return alerts in this state
+	Status *ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus `form:"status,omitempty" json:"status,omitempty"`
+}
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity string
+
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
+type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus string
+
+// ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams defines parameters for ClustersBackupsListApiV2ClustersClusterIdBackupsGet.
+type ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 	ResponseFormat *ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
@@ -1017,18 +3177,82 @@ type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams struct {
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat defines parameters for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParamsResponseFormat string
 
+// ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams defines parameters for ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet.
+type ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams defines parameters for ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet.
 type ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams struct {
-	// BackupId Export only the chain containing this backup UUID
+	// BackupId Export only the chain ending at this backup UUID
 	BackupId *string `form:"backup_id,omitempty" json:"backup_id,omitempty"`
 
 	// LvolName Export all completed backups for this lvol name
 	LvolName *string `form:"lvol_name,omitempty" json:"lvol_name,omitempty"`
 }
 
+// ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGetParams defines parameters for ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet.
+type ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGetParams struct {
+	// GroupBackupId Export the group backup with this UUID
+	GroupBackupId string `form:"group_backup_id" json:"group_backup_id"`
+}
+
+// ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody defines parameters for ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost.
+type ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody struct {
+	union json.RawMessage
+}
+
+// ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody defines parameters for ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost.
+type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody struct {
+	union json.RawMessage
+}
+
 // ClustersCapacityApiV2ClustersClusterIdCapacityGetParams defines parameters for ClustersCapacityApiV2ClustersClusterIdCapacityGet.
 type ClustersCapacityApiV2ClustersClusterIdCapacityGetParams struct {
 	History *string `form:"history,omitempty" json:"history,omitempty"`
+}
+
+// ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams defines parameters for ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet.
+type ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams struct {
+	Name *string `form:"name,omitempty" json:"name,omitempty"`
+}
+
+// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams defines parameters for ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost.
+type ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams struct {
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostParams defines parameters for ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost.
+type ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostParams struct {
+	Planned *bool `form:"planned,omitempty" json:"planned,omitempty"`
+
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetParams defines parameters for ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet.
+type ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetParams struct {
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGetParams defines parameters for ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet.
+type ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGetParams struct {
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody defines parameters for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost.
+type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody = UnderscoreGenerationTakeParams
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody defines parameters for ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost.
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody = ConsistencyGroupSubsystemMovePrepareDTO
+
+// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
+type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
+	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
 }
 
 // ClustersIostatsApiV2ClustersClusterIdIostatsGetParams defines parameters for ClustersIostatsApiV2ClustersClusterIdIostatsGet.
@@ -1039,6 +3263,40 @@ type ClustersIostatsApiV2ClustersClusterIdIostatsGetParams struct {
 // ClustersLogsApiV2ClustersClusterIdLogsGetParams defines parameters for ClustersLogsApiV2ClustersClusterIdLogsGet.
 type ClustersLogsApiV2ClustersClusterIdLogsGetParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
+// ClustersReachabilityApiV2ClustersClusterIdReachabilityGetParams defines parameters for ClustersReachabilityApiV2ClustersClusterIdReachabilityGet.
+type ClustersReachabilityApiV2ClustersClusterIdReachabilityGetParams struct {
+	// Site Sync replication: only the nodes of this site
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+
+	// Address Probe these management addresses (IP literals, repeatable, at most 64) instead of the nodes; not with site
+	Address *[]string `form:"address,omitempty" json:"address,omitempty"`
+}
+
+// ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParams defines parameters for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost.
+type ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParams struct {
+	ResponseFormat *ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+}
+
+// ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat defines parameters for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost.
+type ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParamsResponseFormat string
+
+// ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParams defines parameters for ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost.
+type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParams struct {
+	ResponseFormat *ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+}
+
+// ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat defines parameters for ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost.
+type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParamsResponseFormat string
+
+// ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams defines parameters for ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet.
+type ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
 // ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParams defines parameters for ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost.
@@ -1056,9 +3314,27 @@ type ClustersStorageNodesDeleteApiV2ClustersClusterIdStorageNodesStorageNodeIdDe
 	ForceDelete  *bool `form:"force_delete,omitempty" json:"force_delete,omitempty"`
 }
 
+// ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetParams defines parameters for ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet.
+type ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGetParams defines parameters for ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGet.
 type ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGetParams struct {
 	History *string `form:"history,omitempty" json:"history,omitempty"`
+}
+
+// ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGetParams defines parameters for ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet.
+type ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
+// ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams defines parameters for ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet.
+type ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
 // ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetParams defines parameters for ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet.
@@ -1076,6 +3352,14 @@ type ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageN
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
 
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams defines parameters for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost.
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams struct {
+	ResponseFormat *ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+}
+
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat defines parameters for ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost.
+type ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParamsResponseFormat string
+
 // ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams defines parameters for ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost.
 type ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
@@ -1084,6 +3368,11 @@ type ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorage
 // ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGetParams defines parameters for ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGet.
 type ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGetParams struct {
 	History *string `form:"history,omitempty" json:"history,omitempty"`
+}
+
+// ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams defines parameters for ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost.
+type ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams struct {
+	ForceRemove *bool `form:"force_remove,omitempty" json:"force_remove,omitempty"`
 }
 
 // ClustersStorageNodesShutdownApiV2ClustersClusterIdStorageNodesStorageNodeIdShutdownPostParams defines parameters for ClustersStorageNodesShutdownApiV2ClustersClusterIdStorageNodesStorageNodeIdShutdownPost.
@@ -1096,6 +3385,12 @@ type ClustersStorageNodesSuspendApiV2ClustersClusterIdStorageNodesStorageNodeIdS
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
 }
 
+// ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetParams defines parameters for ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet.
+type ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParams defines parameters for ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPost.
 type ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParams struct {
 	ResponseFormat *ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
@@ -1104,9 +3399,34 @@ type ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParams stru
 // ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat defines parameters for ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPost.
 type ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParamsResponseFormat string
 
+// ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetParams defines parameters for ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet.
+type ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
 // ClustersStoragePoolsIostatsApiV2ClustersClusterIdStoragePoolsPoolIdIostatsGetParams defines parameters for ClustersStoragePoolsIostatsApiV2ClustersClusterIdStoragePoolsPoolIdIostatsGet.
 type ClustersStoragePoolsIostatsApiV2ClustersClusterIdStoragePoolsPoolIdIostatsGetParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGetParams defines parameters for ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGet.
+type ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch            *bool   `form:"watch,omitempty" json:"watch,omitempty"`
+	ConsistencyGroup *string `form:"consistency_group,omitempty" json:"consistency_group,omitempty"`
+}
+
+// ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGetParams defines parameters for ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGet.
+type ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
+// ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetParams defines parameters for ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet.
+type ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
 }
 
 // ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostParams defines parameters for ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPost.
@@ -1116,6 +3436,12 @@ type ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVo
 
 // ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostParamsResponseFormat defines parameters for ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPost.
 type ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostParamsResponseFormat string
+
+// ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetParams defines parameters for ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet.
+type ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
 
 // ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetParams defines parameters for ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet.
 type ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetParams struct {
@@ -1139,13 +3465,68 @@ type ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdV
 	History *string `form:"history,omitempty" json:"history,omitempty"`
 }
 
-// ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParams defines parameters for ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost.
-type ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParams struct {
-	ResponseFormat *ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+// ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost.
+type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody = CommitParams
+
+// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams defines parameters for ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost.
+type ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams struct {
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
 }
 
-// ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat defines parameters for ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost.
-type ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParamsResponseFormat string
+// ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams defines parameters for ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost.
+type ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams struct {
+	Generation *int  `form:"generation,omitempty" json:"generation,omitempty"`
+	Planned    *bool `form:"planned,omitempty" json:"planned,omitempty"`
+
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody defines parameters for ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost.
+type ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody = ReplicationStartParams
+
+// ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGetParams defines parameters for ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet.
+type ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGetParams struct {
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGetParams defines parameters for ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet.
+type ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGetParams struct {
+	// Site Sync replication: the site the caller acts from
+	Site *string `form:"site,omitempty" json:"site,omitempty"`
+}
+
+// ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item defines parameters for ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet.
+type ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item struct {
+	union json.RawMessage
+}
+
+// ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParams defines parameters for ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost.
+type ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParams struct {
+	ResponseFormat *ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat `form:"response-format,omitempty" json:"response-format,omitempty"`
+}
+
+// ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat defines parameters for ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost.
+type ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParamsResponseFormat string
+
+// ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody defines parameters for ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet.
+type ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody struct {
+	union json.RawMessage
+}
+
+// ClustersTasksListApiV2ClustersClusterIdTasksGetParams defines parameters for ClustersTasksListApiV2ClustersClusterIdTasksGet.
+type ClustersTasksListApiV2ClustersClusterIdTasksGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
+
+// ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGetParams defines parameters for ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet.
+type ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGetParams struct {
+	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
+	Watch *bool `form:"watch,omitempty" json:"watch,omitempty"`
+}
 
 // ManagementNodesListApiV2ManagementNodesGetParams defines parameters for ManagementNodesListApiV2ManagementNodesGet.
 type ManagementNodesListApiV2ManagementNodesGetParams struct {
@@ -1166,6 +3547,23 @@ type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterPa
 // ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody defines body for ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost for application/json ContentType.
 type ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPostJSONRequestBody = UnderscoreReplicationParams
 
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody defines body for ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut for application/json ContentType.
+type ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPutJSONRequestBody = UnderscoreClientHost
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody defines body for ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost for application/json ContentType.
+type ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePostJSONRequestBody = UnderscoreHostFenceRelease
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody defines body for ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost for application/json ContentType.
+type ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePostJSONRequestBody = UnderscoreOverride
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody defines body for ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut for application/json ContentType.
+//
+// Deprecated: this type has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+type ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJSONRequestBody = UnderscorePreferred
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody defines body for ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut for application/json ContentType.
+type ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody = UnderscoreRemediation
+
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody defines body for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost for application/json ContentType.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody = UnderscoreBackupSnapshotParams
 
@@ -1178,17 +3576,74 @@ type ClustersBackupPoliciesAttachApiV2ClustersClusterIdBackupsBackupPoliciesPoli
 // ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody defines body for ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost for application/json ContentType.
 type ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPostJSONRequestBody = UnderscoreAttachParams
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody defines body for ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost for application/json ContentType.
+type ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPostJSONRequestBody = BackupConfigInput
+
+// ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPostJSONRequestBody defines body for ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost for application/json ContentType.
+type ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPostJSONRequestBody = UnderscoreGroupBackupCreateParams
+
+// ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPostJSONRequestBody defines body for ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost for application/json ContentType.
+type ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPostJSONRequestBody = BackupConfigInput
+
+// ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONRequestBody defines body for ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost for application/json ContentType.
+type ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONRequestBody ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody
+
+// ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePostJSONRequestBody defines body for ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost for application/json ContentType.
+type ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePostJSONRequestBody = UnderscoreGroupRestoreParams
+
 // ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody defines body for ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost for application/json ContentType.
-type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody = UnderscoreImportParams
+type ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONRequestBody ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody
 
 // ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody defines body for ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost for application/json ContentType.
 type ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePostJSONRequestBody = UnderscoreRestoreParams
 
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody defines body for ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost for application/json ContentType.
-type ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPostJSONRequestBody = UnderscoreBackupSourceSwitchParams
+// ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPostJSONRequestBody defines body for ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost for application/json ContentType.
+type ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPostJSONRequestBody = ConsistencyGroupMemberJoinDTO
+
+// ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPostJSONRequestBody defines body for ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost for application/json ContentType.
+type ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPostJSONRequestBody = ConsistencyGroupMemberJoinDTO
+
+// ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePostJSONRequestBody defines body for ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost for application/json ContentType.
+type ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePostJSONRequestBody = ConsistencyGroupColocateDTO
+
+// ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPostJSONRequestBody defines body for ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost for application/json ContentType.
+type ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPostJSONRequestBody = ConsistencyGroupMigrationCreateDTO
+
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody defines body for ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut for application/json ContentType.
+type ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPutJSONRequestBody = ConsistencyGroupReplicationIntentDTO
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody defines body for ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost for application/json ContentType.
+type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPostJSONRequestBody = GroupFailbackParams
+
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody defines body for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost for application/json ContentType.
+type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody = ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody = ConsistencyGroupSubsystemMoveCreateDTO
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody = ConsistencyGroupSubsystemMoveStartDTO
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody = ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody
+
+// ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody defines body for ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost for application/json ContentType.
+type ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody = PlanParams
+
+// ClustersQosSetApiV2ClustersClusterIdQosPutJSONRequestBody defines body for ClustersQosSetApiV2ClustersClusterIdQosPut for application/json ContentType.
+type ClustersQosSetApiV2ClustersClusterIdQosPutJSONRequestBody = QOSConfigParams
+
+// ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostJSONRequestBody defines body for ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost for application/json ContentType.
+type ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostJSONRequestBody = PolicyParams
+
+// ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostJSONRequestBody defines body for ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost for application/json ContentType.
+type ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostJSONRequestBody = TargetParams
 
 // ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody defines body for ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost for application/json ContentType.
 type ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostJSONRequestBody = StorageNodeParams
+
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody defines body for ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut for application/json ContentType.
+type ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPutJSONRequestBody = DeviceHealthAssessmentDTO
 
 // ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostJSONRequestBody defines body for ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost for application/json ContentType.
 type ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPostJSONRequestBody = UnderscoreRestartParams
@@ -1220,17 +3675,23 @@ type ClustersStoragePoolsVolumesUpdateApiV2ClustersClusterIdStoragePoolsPoolIdVo
 // ClustersStoragePoolsVolumesAddHostApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdHostsPostJSONRequestBody defines body for ClustersStoragePoolsVolumesAddHostApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdHostsPost for application/json ContentType.
 type ClustersStoragePoolsVolumesAddHostApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdHostsPostJSONRequestBody = UnderscoreAddHostParams
 
-// ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostJSONRequestBody defines body for ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost for application/json ContentType.
-type ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostJSONRequestBody = UnderscoreMigrationParams
-
-// ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePostJSONRequestBody defines body for ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost for application/json ContentType.
-type ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePostJSONRequestBody = UnderscoreContinueParams
+// ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONRequestBody defines body for ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost for application/json ContentType.
+type ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONRequestBody = ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPostJSONBody
 
 // ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostJSONRequestBody defines body for ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost for application/json ContentType.
 type ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPostJSONRequestBody = FailbackParams
 
+// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONRequestBody defines body for ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost for application/json ContentType.
+type ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONRequestBody = ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPostJSONBody
+
 // ClustersStoragePoolsVolumesSnapshotsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsPostJSONRequestBody defines body for ClustersStoragePoolsVolumesSnapshotsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsPost for application/json ContentType.
 type ClustersStoragePoolsVolumesSnapshotsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsPostJSONRequestBody = UnderscoreSnapshotParams
+
+// ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostJSONRequestBody defines body for ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost for application/json ContentType.
+type ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostJSONRequestBody = UnderscoreMigrationParams
+
+// ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostJSONRequestBody defines body for ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost for application/json ContentType.
+type ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostJSONRequestBody = UnderscoreContinueParams
 
 // ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody defines body for ClustersUpgradeApiV2ClustersClusterIdUpdatePost for application/json ContentType.
 type ClustersUpgradeApiV2ClustersClusterIdUpdatePostJSONRequestBody = UnderscoreUpdateParams
@@ -1359,6 +3820,316 @@ func (t *ValidationError_Loc_Item) UnmarshalJSON(b []byte) error {
 	return err
 }
 
+// AsCreateParamsPriorityClass0 returns the union data inside the CreateParams_PriorityClass as a CreateParamsPriorityClass0
+func (t CreateParams_PriorityClass) AsCreateParamsPriorityClass0() (CreateParamsPriorityClass0, error) {
+	var body CreateParamsPriorityClass0
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromCreateParamsPriorityClass0 overwrites any union data inside the CreateParams_PriorityClass as the provided CreateParamsPriorityClass0
+func (t *CreateParams_PriorityClass) FromCreateParamsPriorityClass0(v CreateParamsPriorityClass0) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeCreateParamsPriorityClass0 performs a merge with any union data inside the CreateParams_PriorityClass, using the provided CreateParamsPriorityClass0
+func (t *CreateParams_PriorityClass) MergeCreateParamsPriorityClass0(v CreateParamsPriorityClass0) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsCreateParamsPriorityClass1 returns the union data inside the CreateParams_PriorityClass as a CreateParamsPriorityClass1
+func (t CreateParams_PriorityClass) AsCreateParamsPriorityClass1() (CreateParamsPriorityClass1, error) {
+	var body CreateParamsPriorityClass1
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromCreateParamsPriorityClass1 overwrites any union data inside the CreateParams_PriorityClass as the provided CreateParamsPriorityClass1
+func (t *CreateParams_PriorityClass) FromCreateParamsPriorityClass1(v CreateParamsPriorityClass1) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeCreateParamsPriorityClass1 performs a merge with any union data inside the CreateParams_PriorityClass, using the provided CreateParamsPriorityClass1
+func (t *CreateParams_PriorityClass) MergeCreateParamsPriorityClass1(v CreateParamsPriorityClass1) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t CreateParams_PriorityClass) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *CreateParams_PriorityClass) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsUnderscoreGroupImportManifests returns the union data inside the ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody as a UnderscoreGroupImportManifests
+func (t ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) AsUnderscoreGroupImportManifests() (UnderscoreGroupImportManifests, error) {
+	var body UnderscoreGroupImportManifests
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreGroupImportManifests overwrites any union data inside the ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody as the provided UnderscoreGroupImportManifests
+func (t *ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) FromUnderscoreGroupImportManifests(v UnderscoreGroupImportManifests) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreGroupImportManifests performs a merge with any union data inside the ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody, using the provided UnderscoreGroupImportManifests
+func (t *ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) MergeUnderscoreGroupImportManifests(v UnderscoreGroupImportManifests) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsUnderscoreGroupImportFromBucket returns the union data inside the ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody as a UnderscoreGroupImportFromBucket
+func (t ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) AsUnderscoreGroupImportFromBucket() (UnderscoreGroupImportFromBucket, error) {
+	var body UnderscoreGroupImportFromBucket
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreGroupImportFromBucket overwrites any union data inside the ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody as the provided UnderscoreGroupImportFromBucket
+func (t *ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) FromUnderscoreGroupImportFromBucket(v UnderscoreGroupImportFromBucket) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreGroupImportFromBucket performs a merge with any union data inside the ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody, using the provided UnderscoreGroupImportFromBucket
+func (t *ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) MergeUnderscoreGroupImportFromBucket(v UnderscoreGroupImportFromBucket) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPostJSONBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsUnderscoreImportManifests returns the union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as a UnderscoreImportManifests
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) AsUnderscoreImportManifests() (UnderscoreImportManifests, error) {
+	var body UnderscoreImportManifests
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreImportManifests overwrites any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as the provided UnderscoreImportManifests
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) FromUnderscoreImportManifests(v UnderscoreImportManifests) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreImportManifests performs a merge with any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody, using the provided UnderscoreImportManifests
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MergeUnderscoreImportManifests(v UnderscoreImportManifests) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsUnderscoreImportFromBucket returns the union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as a UnderscoreImportFromBucket
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) AsUnderscoreImportFromBucket() (UnderscoreImportFromBucket, error) {
+	var body UnderscoreImportFromBucket
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromUnderscoreImportFromBucket overwrites any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody as the provided UnderscoreImportFromBucket
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) FromUnderscoreImportFromBucket(v UnderscoreImportFromBucket) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeUnderscoreImportFromBucket performs a merge with any union data inside the ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody, using the provided UnderscoreImportFromBucket
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MergeUnderscoreImportFromBucket(v UnderscoreImportFromBucket) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPostJSONBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsMigrationDTO returns the union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item as a MigrationDTO
+func (t ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) AsMigrationDTO() (MigrationDTO, error) {
+	var body MigrationDTO
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationDTO overwrites any union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item as the provided MigrationDTO
+func (t *ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) FromMigrationDTO(v MigrationDTO) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationDTO performs a merge with any union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item, using the provided MigrationDTO
+func (t *ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) MergeMigrationDTO(v MigrationDTO) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBatchMigrationDTO returns the union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item as a BatchMigrationDTO
+func (t ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) AsBatchMigrationDTO() (BatchMigrationDTO, error) {
+	var body BatchMigrationDTO
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBatchMigrationDTO overwrites any union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item as the provided BatchMigrationDTO
+func (t *ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) FromBatchMigrationDTO(v BatchMigrationDTO) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBatchMigrationDTO performs a merge with any union data inside the ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item, using the provided BatchMigrationDTO
+func (t *ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) MergeBatchMigrationDTO(v BatchMigrationDTO) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet200JSONResponseBody_Item) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
+// AsMigrationDTO returns the union data inside the ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody as a MigrationDTO
+func (t ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) AsMigrationDTO() (MigrationDTO, error) {
+	var body MigrationDTO
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromMigrationDTO overwrites any union data inside the ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody as the provided MigrationDTO
+func (t *ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) FromMigrationDTO(v MigrationDTO) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeMigrationDTO performs a merge with any union data inside the ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody, using the provided MigrationDTO
+func (t *ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) MergeMigrationDTO(v MigrationDTO) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+// AsBatchMigrationDTO returns the union data inside the ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody as a BatchMigrationDTO
+func (t ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) AsBatchMigrationDTO() (BatchMigrationDTO, error) {
+	var body BatchMigrationDTO
+	err := json.Unmarshal(t.union, &body)
+	return body, err
+}
+
+// FromBatchMigrationDTO overwrites any union data inside the ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody as the provided BatchMigrationDTO
+func (t *ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) FromBatchMigrationDTO(v BatchMigrationDTO) error {
+	b, err := json.Marshal(v)
+	t.union = b
+	return err
+}
+
+// MergeBatchMigrationDTO performs a merge with any union data inside the ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody, using the provided BatchMigrationDTO
+func (t *ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) MergeBatchMigrationDTO(v BatchMigrationDTO) error {
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+
+	merged, err := runtime.JSONMerge(t.union, b)
+	t.union = merged
+	return err
+}
+
+func (t ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) MarshalJSON() ([]byte, error) {
+	b, err := t.union.MarshalJSON()
+	return b, err
+}
+
+func (t *ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet200JSONResponseBody) UnmarshalJSON(b []byte) error {
+	err := t.union.UnmarshalJSON(b)
+	return err
+}
+
 // ServerInterface represents all server handlers.
 type ServerInterface interface {
 	// HealthApiV2MetaHealthGet Health
@@ -1375,10 +4146,10 @@ type ServerInterface interface {
 	ClustersCreateApiV2ClustersPost(w http.ResponseWriter, r *http.Request, params ClustersCreateApiV2ClustersPostParams)
 	// ClustersDeleteApiV2ClustersClusterIdDelete Clusters:Delete
 	// (DELETE /api/v2/clusters/{cluster_id}/)
-	ClustersDeleteApiV2ClustersClusterIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersDeleteApiV2ClustersClusterIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersDeleteApiV2ClustersClusterIdDeleteParams)
 	// ClustersDetailApiV2ClustersClusterIdGet Clusters:Detail
 	// (GET /api/v2/clusters/{cluster_id}/)
-	ClustersDetailApiV2ClustersClusterIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersDetailApiV2ClustersClusterIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersDetailApiV2ClustersClusterIdGetParams)
 	// ClustersUpdateApiV2ClustersClusterIdPut Clusters:Update
 	// (PUT /api/v2/clusters/{cluster_id}/)
 	ClustersUpdateApiV2ClustersClusterIdPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -1388,15 +4159,41 @@ type ServerInterface interface {
 	// ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost Clusters:Addreplication
 	// (POST /api/v2/clusters/{cluster_id}/addreplication)
 	ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersAlertsListApiV2ClustersClusterIdAlertsGet Clusters:Alerts:List
+	// (GET /api/v2/clusters/{cluster_id}/alerts/)
+	ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams)
+	// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet Clusters:Arbitration:Get
+	// (GET /api/v2/clusters/{cluster_id}/arbitration/)
+	ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut Clusters:Arbitration:Client-Host
+	// (PUT /api/v2/clusters/{cluster_id}/arbitration/client-host)
+	ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost Clusters:Arbitration:Host-Fence:Release
+	// (POST /api/v2/clusters/{cluster_id}/arbitration/host-fence/release)
+	ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost Clusters:Arbitration:Override
+	// (POST /api/v2/clusters/{cluster_id}/arbitration/override)
+	ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut Clusters:Arbitration:Preferred
+	// (PUT /api/v2/clusters/{cluster_id}/arbitration/preferred)
+	//
+	// Deprecated: this operation has been marked as deprecated upstream, but no `x-deprecated-reason` was set
+	ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut Clusters:Arbitration:Remediation
+	// (PUT /api/v2/clusters/{cluster_id}/arbitration/remediation)
+	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
+	// (GET /api/v2/clusters/{cluster_id}/backup-config)
+	ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsListApiV2ClustersClusterIdBackupsGet Clusters:Backups:List
 	// (GET /api/v2/clusters/{cluster_id}/backups/)
-	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams)
 	// ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost Clusters:Backups:Create
 	// (POST /api/v2/clusters/{cluster_id}/backups/)
 	ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostParams)
 	// ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet Clusters:Backup-Policies:List
 	// (GET /api/v2/clusters/{cluster_id}/backups/backup-policies/)
-	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams)
 	// ClustersBackupPoliciesCreateApiV2ClustersClusterIdBackupsBackupPoliciesPost Clusters:Backup-Policies:Create
 	// (POST /api/v2/clusters/{cluster_id}/backups/backup-policies/)
 	ClustersBackupPoliciesCreateApiV2ClustersClusterIdBackupsBackupPoliciesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -1409,21 +4206,45 @@ type ServerInterface interface {
 	// ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost Clusters:Backup-Policies:Detach
 	// (POST /api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/detach)
 	ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost Clusters:Backups:Discover
+	// (POST /api/v2/clusters/{cluster_id}/backups/discover)
+	ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet Clusters:Backups:Export
 	// (GET /api/v2/clusters/{cluster_id}/backups/export)
 	ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGetParams)
+	// ClustersBackupsGroupsListApiV2ClustersClusterIdBackupsGroupsGet Clusters:Backups:Groups:List
+	// (GET /api/v2/clusters/{cluster_id}/backups/groups/)
+	ClustersBackupsGroupsListApiV2ClustersClusterIdBackupsGroupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost Clusters:Backups:Groups:Create
+	// (POST /api/v2/clusters/{cluster_id}/backups/groups/)
+	ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost Clusters:Backups:Groups:Discover
+	// (POST /api/v2/clusters/{cluster_id}/backups/groups/discover)
+	ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet Clusters:Backups:Groups:Export
+	// (GET /api/v2/clusters/{cluster_id}/backups/groups/export)
+	ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGetParams)
+	// ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost Clusters:Backups:Groups:Import
+	// (POST /api/v2/clusters/{cluster_id}/backups/groups/import)
+	ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete Clusters:Backups:Groups:Delete
+	// (DELETE /api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/)
+	ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupBackupId openapi_types.UUID)
+	// ClustersBackupsGroupsDetailApiV2ClustersClusterIdBackupsGroupsGroupBackupIdGet Clusters:Backups:Groups:Detail
+	// (GET /api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/)
+	ClustersBackupsGroupsDetailApiV2ClustersClusterIdBackupsGroupsGroupBackupIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupBackupId openapi_types.UUID)
+	// ClustersBackupsGroupsMembersApiV2ClustersClusterIdBackupsGroupsGroupBackupIdMembersGet Clusters:Backups:Groups:Members
+	// (GET /api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/members/)
+	ClustersBackupsGroupsMembersApiV2ClustersClusterIdBackupsGroupsGroupBackupIdMembersGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupBackupId openapi_types.UUID)
+	// ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost Clusters:Backups:Groups:Restore
+	// (POST /api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/restore)
+	ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupBackupId openapi_types.UUID)
 	// ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost Clusters:Backups:Import
 	// (POST /api/v2/clusters/{cluster_id}/backups/import)
 	ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost Clusters:Backups:Restore
 	// (POST /api/v2/clusters/{cluster_id}/backups/restore)
 	ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
-	// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost Clusters:Backups:Source-Switch
-	// (POST /api/v2/clusters/{cluster_id}/backups/source-switch)
-	ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
-	// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet Clusters:Backups:Sources
-	// (GET /api/v2/clusters/{cluster_id}/backups/sources)
-	ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet Clusters:Backups:Detail
 	// (GET /api/v2/clusters/{cluster_id}/backups/{backup_id}/)
 	ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, backupId openapi_types.UUID)
@@ -1435,27 +4256,186 @@ type ServerInterface interface {
 	// ClustersCapacityApiV2ClustersClusterIdCapacityGet Clusters:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/capacity)
 	ClustersCapacityApiV2ClustersClusterIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersCapacityApiV2ClustersClusterIdCapacityGetParams)
+	// ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet Clusters:Consistency-Groups:List
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/)
+	ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams)
+	// ClustersConsistencyGroupsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdDelete Clusters:Consistency-Groups:Delete
+	// (DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/)
+	ClustersConsistencyGroupsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet Clusters:Consistency-Groups:Detail
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/)
+	ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGet Clusters:Consistency-Groups:Members
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members)
+	ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost Clusters:Consistency-Groups:Members:Join
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members)
+	ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost Clusters:Consistency-Groups:Members:Plan
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/plan)
+	ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete Clusters:Consistency-Groups:Members:Detach
+	// (DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id})
+	ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, lvolId string)
+	// ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost Clusters:Consistency-Groups:Members:Colocate
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id}/colocate)
+	ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, lvolId string)
+	// ClustersConsistencyGroupsMigrationCancelApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationDelete Clusters:Consistency-Groups:Migration:Cancel
+	// (DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration)
+	ClustersConsistencyGroupsMigrationCancelApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMigrationApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationGet Clusters:Consistency-Groups:Migration
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration)
+	ClustersConsistencyGroupsMigrationApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost Clusters:Consistency-Groups:Migration:Create
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration)
+	ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationStartPost Clusters:Consistency-Groups:Migration:Start
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration/start)
+	ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationStartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut Clusters:Consistency-Groups:Replication:Configure
+	// (PUT /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication)
+	ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost Clusters:Consistency-Groups:Replication:Demote
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote)
+	ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, params ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams)
+	// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost Clusters:Consistency-Groups:Replication:Failback
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback)
+	ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost Clusters:Consistency-Groups:Replication:Failover
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover)
+	ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, params ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostParams)
+	// ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet Clusters:Consistency-Groups:Replication:Resolution
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution)
+	ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet Clusters:Consistency-Groups:Replication:Status
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status)
+	ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, params ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetParams)
+	// ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet Clusters:Consistency-Groups:Replication:Sync-Status
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/sync-status)
+	ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, params ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGetParams)
+	// ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet Clusters:Consistency-Groups:Snapshots:List
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots)
+	ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost Clusters:Consistency-Groups:Snapshots:Take
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots)
+	ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete Clusters:Consistency-Groups:Snapshots:Delete
+	// (DELETE /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq})
+	ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int)
+	// ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet Clusters:Consistency-Groups:Snapshots:Detail
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq})
+	ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int)
+	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost Clusters:Consistency-Groups:Subsystem-Moves:Create
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves)
+	ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet Clusters:Consistency-Groups:Subsystem-Moves:Get
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id})
+	ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost Clusters:Consistency-Groups:Subsystem-Moves:Commit
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit)
+	ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost Clusters:Consistency-Groups:Subsystem-Moves:Move
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move)
+	ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare)
+	ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost Clusters:Consistency-Groups:Subsystem-Moves:Rollback
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback)
+	ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
 	// ClustersExpandApiV2ClustersClusterIdExpandPost Clusters:Expand
 	// (POST /api/v2/clusters/{cluster_id}/expand)
 	ClustersExpandApiV2ClustersClusterIdExpandPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
+	// (POST /api/v2/clusters/{cluster_id}/grow-devices)
+	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams)
 	// ClustersIostatsApiV2ClustersClusterIdIostatsGet Clusters:Iostats
 	// (GET /api/v2/clusters/{cluster_id}/iostats)
 	ClustersIostatsApiV2ClustersClusterIdIostatsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersIostatsApiV2ClustersClusterIdIostatsGetParams)
 	// ClustersLogsApiV2ClustersClusterIdLogsGet Clusters:Logs
 	// (GET /api/v2/clusters/{cluster_id}/logs)
 	ClustersLogsApiV2ClustersClusterIdLogsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersLogsApiV2ClustersClusterIdLogsGetParams)
+	// ClustersMigrationPlansListApiV2ClustersClusterIdMigrationPlansGet Clusters:Migration-Plans:List
+	// (GET /api/v2/clusters/{cluster_id}/migration-plans/)
+	ClustersMigrationPlansListApiV2ClustersClusterIdMigrationPlansGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost Clusters:Migration-Plans:Create
+	// (POST /api/v2/clusters/{cluster_id}/migration-plans/)
+	ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersMigrationPlansCancelApiV2ClustersClusterIdMigrationPlansPlanIdDelete Clusters:Migration-Plans:Cancel
+	// (DELETE /api/v2/clusters/{cluster_id}/migration-plans/{plan_id})
+	ClustersMigrationPlansCancelApiV2ClustersClusterIdMigrationPlansPlanIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, planId openapi_types.UUID)
+	// ClustersMigrationPlansDetailApiV2ClustersClusterIdMigrationPlansPlanIdGet Clusters:Migration-Plans:Detail
+	// (GET /api/v2/clusters/{cluster_id}/migration-plans/{plan_id})
+	ClustersMigrationPlansDetailApiV2ClustersClusterIdMigrationPlansPlanIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, planId openapi_types.UUID)
+	// ClustersQosGetApiV2ClustersClusterIdQosGet Clusters:Qos:Get
+	// (GET /api/v2/clusters/{cluster_id}/qos/)
+	ClustersQosGetApiV2ClustersClusterIdQosGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersQosSetApiV2ClustersClusterIdQosPut Clusters:Qos:Set
+	// (PUT /api/v2/clusters/{cluster_id}/qos/)
+	ClustersQosSetApiV2ClustersClusterIdQosPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersReachabilityApiV2ClustersClusterIdReachabilityGet Clusters:Reachability
+	// (GET /api/v2/clusters/{cluster_id}/reachability)
+	ClustersReachabilityApiV2ClustersClusterIdReachabilityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersReachabilityApiV2ClustersClusterIdReachabilityGetParams)
 	// ClustersRebalanceApiV2ClustersClusterIdRebalancePost Clusters:Rebalance
 	// (POST /api/v2/clusters/{cluster_id}/rebalance)
 	ClustersRebalanceApiV2ClustersClusterIdRebalancePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersReplicationPoliciesListApiV2ClustersClusterIdReplicationPoliciesGet Clusters:Replication:Policies:List
+	// (GET /api/v2/clusters/{cluster_id}/replication/policies/)
+	ClustersReplicationPoliciesListApiV2ClustersClusterIdReplicationPoliciesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost Clusters:Replication:Policies:Create
+	// (POST /api/v2/clusters/{cluster_id}/replication/policies/)
+	ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParams)
+	// ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete Clusters:Replication:Policies:Delete
+	// (DELETE /api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/)
+	ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet Clusters:Replication:Policies:Detail
+	// (GET /api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/)
+	ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost Clusters:Replication:Policies:Failover
+	// (POST /api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/failover)
+	ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet Clusters:Replication:Policies:Latest-Generation
+	// (GET /api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/latest-generation)
+	ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, policyId openapi_types.UUID)
+	// ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet Clusters:Replication:Relationships:Detail
+	// (GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id})
+	ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, lvolId openapi_types.UUID)
+	// ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet Clusters:Replication:Relationships:Latest-Snapshot
+	// (GET /api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot)
+	ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, lvolId openapi_types.UUID)
+	// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet Clusters:Replication:Targets:List
+	// (GET /api/v2/clusters/{cluster_id}/replication/targets/)
+	ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost Clusters:Replication:Targets:Create
+	// (POST /api/v2/clusters/{cluster_id}/replication/targets/)
+	ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParams)
+	// ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete Clusters:Replication:Targets:Delete
+	// (DELETE /api/v2/clusters/{cluster_id}/replication/targets/{target_id}/)
+	ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, targetId openapi_types.UUID)
+	// ClustersReplicationTargetsDetailApiV2ClustersClusterIdReplicationTargetsTargetIdGet Clusters:Replication:Targets:Detail
+	// (GET /api/v2/clusters/{cluster_id}/replication/targets/{target_id}/)
+	ClustersReplicationTargetsDetailApiV2ClustersClusterIdReplicationTargetsTargetIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, targetId openapi_types.UUID)
+	// ClustersReplicationTargetsFailoverApiV2ClustersClusterIdReplicationTargetsTargetIdFailoverPost Clusters:Replication:Targets:Failover
+	// (POST /api/v2/clusters/{cluster_id}/replication/targets/{target_id}/failover)
+	ClustersReplicationTargetsFailoverApiV2ClustersClusterIdReplicationTargetsTargetIdFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, targetId openapi_types.UUID)
 	// ClustersShutdownApiV2ClustersClusterIdShutdownPost Clusters:Shutdown
 	// (POST /api/v2/clusters/{cluster_id}/shutdown)
 	ClustersShutdownApiV2ClustersClusterIdShutdownPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	// ClustersSitesFenceApiV2ClustersClusterIdSitesSiteFencePost Clusters:Sites:Fence
+	// (POST /api/v2/clusters/{cluster_id}/sites/{site}/fence)
+	ClustersSitesFenceApiV2ClustersClusterIdSitesSiteFencePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, site string)
+	// ClustersSitesStatusApiV2ClustersClusterIdSitesSiteStatusGet Clusters:Sites:Status
+	// (GET /api/v2/clusters/{cluster_id}/sites/{site}/status)
+	ClustersSitesStatusApiV2ClustersClusterIdSitesSiteStatusGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, site string)
+	// ClustersSitesUnfenceApiV2ClustersClusterIdSitesSiteUnfencePost Clusters:Sites:Unfence
+	// (POST /api/v2/clusters/{cluster_id}/sites/{site}/unfence)
+	ClustersSitesUnfenceApiV2ClustersClusterIdSitesSiteUnfencePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, site string)
 	// ClustersStartApiV2ClustersClusterIdStartPost Clusters:Start
 	// (POST /api/v2/clusters/{cluster_id}/start)
 	ClustersStartApiV2ClustersClusterIdStartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet Clusters:Storage-Nodes:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/)
-	ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams)
 	// ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost Clusters:Storage-Nodes:Create
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/)
 	ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPostParams)
@@ -1464,19 +4444,28 @@ type ServerInterface interface {
 	ClustersStorageNodesDeleteApiV2ClustersClusterIdStorageNodesStorageNodeIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesDeleteApiV2ClustersClusterIdStorageNodesStorageNodeIdDeleteParams)
 	// ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet Clusters:Storage-Nodes:Detail
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/)
-	ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetParams)
 	// ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGet Clusters:Storage-Nodes:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/capacity)
 	ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGetParams)
 	// ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet Clusters:Storage Nodes:Devices:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/)
-	ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGetParams)
 	// ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet Clusters:Storage Nodes:Devices:Detail
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/)
-	ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
+	ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams)
+	// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost Clusters:Storage Nodes:Devices:Add
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add)
+	ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
 	// ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet Clusters:Storage Nodes:Devices:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity)
 	ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGetParams)
+	// ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost Clusters:Storage Nodes:Devices:Fail
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail)
+	ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
+	// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut Clusters:Storage Nodes:Devices:Set-Health-Assessment
+	// (PUT /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment)
+	ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
 	// ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet Clusters:Storage Nodes:Devices:Get-Device-Health-Info
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info)
 	ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
@@ -1486,24 +4475,45 @@ type ServerInterface interface {
 	// ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost Clusters:Storage Nodes:Devices:Remove
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove)
 	ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePostParams)
+	// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost Clusters:Storage Nodes:Devices:Replace
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace)
+	ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams)
 	// ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost Clusters:Storage Nodes:Devices:Reset
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset)
 	ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
+	// ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost Clusters:Storage Nodes:Devices:Resize
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize)
+	ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID)
 	// ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost Clusters:Storage Nodes:Devices:Restart
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/restart)
 	ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, deviceId openapi_types.UUID, params ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPostParams)
 	// ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGet Clusters:Storage-Nodes:Iostats
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/iostats)
 	ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGetParams)
+	// ClustersStorageNodesMigrateDevicesProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesGet Clusters:Storage-Nodes:Migrate-Devices-Progress
+	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/migrate-devices)
+	ClustersStorageNodesMigrateDevicesProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	// ClustersStorageNodesMigrateDevicesApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesPost Clusters:Storage-Nodes:Migrate-Devices
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/migrate-devices)
+	ClustersStorageNodesMigrateDevicesApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	// ClustersStorageNodesMigratingLvolsApiV2ClustersClusterIdStorageNodesStorageNodeIdMigratingLvolsPost Clusters:Storage-Nodes:Migrating-Lvols
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/migrating-lvols)
+	ClustersStorageNodesMigratingLvolsApiV2ClustersClusterIdStorageNodesStorageNodeIdMigratingLvolsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
 	// ClustersStorageNodesNicsListApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsGet Clusters:Storage-Nodes:Nics:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/nics)
 	ClustersStorageNodesNicsListApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
 	// ClustersStorageNodesNicsIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsNicIdIostatsGet Clusters:Storage-Nodes:Nics:Iostats
 	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/nics/{nic_id}/iostats)
 	ClustersStorageNodesNicsIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsNicIdIostatsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, nicId string)
-	// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Start
+	// ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet Clusters:Storage-Nodes:Prepare-Removal-Progress
+	// (GET /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal)
+	ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	// ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost Clusters:Storage-Nodes:Prepare-Removal
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal)
+	ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams)
+	// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost Clusters:Storage-Nodes:Promote
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote)
-	ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
+	ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
 	// ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost Clusters:Storage-Nodes:Restart
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/restart)
 	ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
@@ -1519,9 +4529,12 @@ type ServerInterface interface {
 	// ClustersStorageNodesSuspendApiV2ClustersClusterIdStorageNodesStorageNodeIdSuspendPost Clusters:Storage-Nodes:Suspend
 	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/suspend)
 	ClustersStorageNodesSuspendApiV2ClustersClusterIdStorageNodesStorageNodeIdSuspendPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID, params ClustersStorageNodesSuspendApiV2ClustersClusterIdStorageNodesStorageNodeIdSuspendPostParams)
+	// ClustersStorageNodesVerifyDrainedApiV2ClustersClusterIdStorageNodesStorageNodeIdVerifyDrainedPost Clusters:Storage-Nodes:Verify-Drained
+	// (POST /api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/verify-drained)
+	ClustersStorageNodesVerifyDrainedApiV2ClustersClusterIdStorageNodesStorageNodeIdVerifyDrainedPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, storageNodeId openapi_types.UUID)
 	// ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet Clusters:Storage-Pools:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/)
-	ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetParams)
 	// ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPost Clusters:Storage-Pools:Create
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/)
 	ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPostParams)
@@ -1530,7 +4543,7 @@ type ServerInterface interface {
 	ClustersStoragePoolsDeleteApiV2ClustersClusterIdStoragePoolsPoolIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID)
 	// ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet Clusters:Storage-Pools:Detail
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/)
-	ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID)
+	ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, params ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetParams)
 	// ClustersStoragePoolsUpdateApiV2ClustersClusterIdStoragePoolsPoolIdPut Clusters:Storage-Pools:Update
 	// (PUT /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/)
 	ClustersStoragePoolsUpdateApiV2ClustersClusterIdStoragePoolsPoolIdPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID)
@@ -1545,16 +4558,16 @@ type ServerInterface interface {
 	ClustersStoragePoolsIostatsApiV2ClustersClusterIdStoragePoolsPoolIdIostatsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, params ClustersStoragePoolsIostatsApiV2ClustersClusterIdStoragePoolsPoolIdIostatsGetParams)
 	// ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGet Clusters:Storage-Pools:Snapshots:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/snapshots/)
-	ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID)
+	ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, params ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGetParams)
 	// ClustersStoragePoolsSnapshotsDeleteApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdDelete Clusters:Storage-Pools:Snapshots:Delete
 	// (DELETE /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/snapshots/{snapshot_id}/)
 	ClustersStoragePoolsSnapshotsDeleteApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, snapshotId openapi_types.UUID)
 	// ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGet Clusters:Storage-Pools:Snapshots:Detail
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/snapshots/{snapshot_id}/)
-	ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, snapshotId openapi_types.UUID)
+	ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, snapshotId openapi_types.UUID, params ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGetParams)
 	// ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet Clusters:Storage-Pools:Volumes:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/)
-	ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID)
+	ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, params ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetParams)
 	// ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPost Clusters:Storage-Pools:Volumes:Create
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/)
 	ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, params ClustersStoragePoolsVolumesCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesPostParams)
@@ -1566,7 +4579,7 @@ type ServerInterface interface {
 	ClustersStoragePoolsVolumesDeleteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet Clusters:Storage-Pools:Volumes:Detail
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/)
-	ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetParams)
 	// ClustersStoragePoolsVolumesUpdateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdPut Clusters:Storage-Pools:Volumes:Update
 	// (PUT /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/)
 	ClustersStoragePoolsVolumesUpdateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdPut(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
@@ -1576,6 +4589,9 @@ type ServerInterface interface {
 	// ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet Clusters:Storage-Pools:Volumes:Backups:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups)
 	ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost Clusters:Storage-Pools:Volumes:Backups:Create
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups)
+	ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet Clusters:Storage-Pools:Volumes:Capacity
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/capacity)
 	ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGetParams)
@@ -1600,54 +4616,78 @@ type ServerInterface interface {
 	// ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdIostatsGet Clusters:Storage-Pools:Volumes:Iostats
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/iostats)
 	ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdIostatsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdIostatsGetParams)
-	// ClustersStoragePoolsVolumesListReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdListReplicationTasksGet Clusters:Storage-Pools:Volumes:List Replication Tasks
-	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/list_replication_tasks)
-	ClustersStoragePoolsVolumesListReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdListReplicationTasksGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGet Clusters:Storage-Pools:Volumes:Migrations:List
-	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/)
-	ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost Cluster:Storage-Pools:Volumes:Migrations:Create
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/)
-	ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParams)
-	// ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDelete Cluster:Storage-Pools:Volumes:Migrations:Cancel
-	// (DELETE /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/)
-	ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, migrationId openapi_types.UUID)
-	// ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGet Cluster:Storage-Pools:Volumes:Migrations:Detail
-	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/)
-	ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, migrationId openapi_types.UUID)
-	// ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost Cluster:Storage-Pools:Volumes:Migrations:Continue
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/continue)
-	ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, migrationId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesReplicateLvolApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicateLvolPost Clusters:Storage-Pools:Volumes:Replicate Lvol
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replicate_lvol)
-	ClustersStoragePoolsVolumesReplicateLvolApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicateLvolPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost Clusters:Storage-Pools:Volumes:Replication Commit
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_commit)
+	// ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGet Clusters:Storage-Pools:Volumes:Replication:Detail
+	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/)
+	ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost Clusters:Storage-Pools:Volumes:Replication:Commit
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/commit)
 	ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost Clusters:Storage-Pools:Volumes:Replication Failback
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_failback)
+	// ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost Clusters:Storage-Pools:Volumes:Replication:Cutover-Proceed
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/cutover-proceed)
+	ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost Clusters:Storage-Pools:Volumes:Replication:Demote
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote)
+	ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams)
+	// ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost Clusters:Storage-Pools:Volumes:Replication:Failback
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failback)
 	ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost Clusters:Storage-Pools:Volumes:Replication Start
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_start)
+	// ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost Clusters:Storage-Pools:Volumes:Replication:Failover
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover)
+	ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams)
+	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost Clusters:Storage-Pools:Volumes:Replication:Start
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start)
 	ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost Clusters:Storage-Pools:Volumes:Replication Stop
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_stop)
+	// ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet Clusters:Storage-Pools:Volumes:Replication:Status
+	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/status)
+	ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGetParams)
+	// ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost Clusters:Storage-Pools:Volumes:Replication:Stop
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/stop)
 	ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
-	// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost Clusters:Storage-Pools:Volumes:Replication Start
-	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_trigger)
-	ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet Clusters:Storage-Pools:Volumes:Replication:Sync-Status
+	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/sync-status)
+	ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID, params ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGetParams)
+	// ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet Clusters:Storage-Pools:Volumes:Replication:Tasks
+	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/tasks)
+	ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost Clusters:Storage-Pools:Volumes:Replication:Trigger
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/trigger)
+	ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesResumeApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdResumePost Clusters:Storage-Pools:Volumes:Resume
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/resume)
+	ClustersStoragePoolsVolumesResumeApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdResumePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsGet Clusters:Storage-Pools:Volumes:Snapshots:List
 	// (GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/snapshots)
 	ClustersStoragePoolsVolumesSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
 	// ClustersStoragePoolsVolumesSnapshotsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsPost Clusters:Storage-Pools:Volumes:Snapshots:Create
 	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/snapshots)
 	ClustersStoragePoolsVolumesSnapshotsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersStoragePoolsVolumesSuspendApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSuspendPost Clusters:Storage-Pools:Volumes:Suspend
+	// (POST /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/suspend)
+	ClustersStoragePoolsVolumesSuspendApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSuspendPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, poolId openapi_types.UUID, volumeId openapi_types.UUID)
+	// ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet Clusters:Subsystems:Migrations:List
+	// (GET /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/)
+	ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string)
+	// ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost Clusters:Subsystems:Migrations:Create
+	// (POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/)
+	ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string, params ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParams)
+	// ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDelete Clusters:Subsystems:Migrations:Cancel
+	// (DELETE /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/)
+	ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDelete(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID)
+	// ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet Clusters:Subsystems:Migrations:Detail
+	// (GET /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/)
+	ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID)
+	// ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost Clusters:Subsystems:Migrations:Cleanup-Target
+	// (POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/cleanup-target)
+	ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID)
+	// ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost Clusters:Subsystems:Migrations:Continue
+	// (POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue)
+	ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID)
 	// ClustersTasksListApiV2ClustersClusterIdTasksGet Clusters:Tasks:List
 	// (GET /api/v2/clusters/{cluster_id}/tasks/)
-	ClustersTasksListApiV2ClustersClusterIdTasksGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
+	ClustersTasksListApiV2ClustersClusterIdTasksGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersTasksListApiV2ClustersClusterIdTasksGetParams)
 	// ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet Clusters:Tasks:Detail
 	// (GET /api/v2/clusters/{cluster_id}/tasks/{task_id}/)
-	ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, taskId openapi_types.UUID)
+	ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, taskId openapi_types.UUID, params ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGetParams)
 	// ClustersUpgradeApiV2ClustersClusterIdUpdatePost Clusters:Upgrade
 	// (POST /api/v2/clusters/{cluster_id}/update)
 	ClustersUpgradeApiV2ClustersClusterIdUpdatePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -1704,6 +4744,19 @@ func (siw *ServerInterfaceWrapper) ClustersListApiV2ClustersGet(w http.ResponseW
 
 	// Parameter object where we will unmarshal all parameters from the context
 	var params ClustersListApiV2ClustersGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
 
 	// ------------- Optional query parameter "cluster_id" -------------
 
@@ -1790,8 +4843,24 @@ func (siw *ServerInterfaceWrapper) ClustersDeleteApiV2ClustersClusterIdDelete(w 
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersDeleteApiV2ClustersClusterIdDeleteParams
+
+	// ------------- Optional query parameter "force" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "force", r.URL.Query(), &params.Force, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "force"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "force", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersDeleteApiV2ClustersClusterIdDelete(w, r, clusterId)
+		siw.Handler.ClustersDeleteApiV2ClustersClusterIdDelete(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1816,8 +4885,24 @@ func (siw *ServerInterfaceWrapper) ClustersDetailApiV2ClustersClusterIdGet(w htt
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersDetailApiV2ClustersClusterIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersDetailApiV2ClustersClusterIdGet(w, r, clusterId)
+		siw.Handler.ClustersDetailApiV2ClustersClusterIdGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1905,6 +4990,269 @@ func (siw *ServerInterfaceWrapper) ClustersAddreplicationApiV2ClustersClusterIdA
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersAlertsListApiV2ClustersClusterIdAlertsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersAlertsListApiV2ClustersClusterIdAlertsGetParams
+
+	// ------------- Optional query parameter "severity" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "severity", r.URL.Query(), &params.Severity, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "severity"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "severity", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "history" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "history", r.URL.Query(), &params.History, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "history"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "history", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "history_seconds" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "history_seconds", r.URL.Query(), &params.HistorySeconds, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "history_seconds"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "history_seconds", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "status" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "status", r.URL.Query(), &params.Status, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "status"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "status", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersAlertsListApiV2ClustersClusterIdAlertsGet(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w http.ResponseWriter, r *http.Request) {
 
@@ -1920,8 +5268,24 @@ func (siw *ServerInterfaceWrapper) ClustersBackupsListApiV2ClustersClusterIdBack
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w, r, clusterId)
+		siw.Handler.ClustersBackupsListApiV2ClustersClusterIdBackupsGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -1988,8 +5352,24 @@ func (siw *ServerInterfaceWrapper) ClustersBackupPoliciesListApiV2ClustersCluste
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w, r, clusterId)
+		siw.Handler.ClustersBackupPoliciesListApiV2ClustersClusterIdBackupsBackupPoliciesGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2130,6 +5510,32 @@ func (siw *ServerInterfaceWrapper) ClustersBackupPoliciesDetachApiV2ClustersClus
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet(w http.ResponseWriter, r *http.Request) {
 
@@ -2185,6 +5591,292 @@ func (siw *ServerInterfaceWrapper) ClustersBackupsExportApiV2ClustersClusterIdBa
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersBackupsGroupsListApiV2ClustersClusterIdBackupsGroupsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsListApiV2ClustersClusterIdBackupsGroupsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsListApiV2ClustersClusterIdBackupsGroupsGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGetParams
+
+	// ------------- Required query parameter "group_backup_id" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "group_backup_id", r.URL.Query(), &params.GroupBackupId, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "group_backup_id"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_backup_id", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_backup_id" -------------
+	var groupBackupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_backup_id", r.PathValue("group_backup_id"), &groupBackupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_backup_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete(w, r, clusterId, groupBackupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsDetailApiV2ClustersClusterIdBackupsGroupsGroupBackupIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsDetailApiV2ClustersClusterIdBackupsGroupsGroupBackupIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_backup_id" -------------
+	var groupBackupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_backup_id", r.PathValue("group_backup_id"), &groupBackupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_backup_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsDetailApiV2ClustersClusterIdBackupsGroupsGroupBackupIdGet(w, r, clusterId, groupBackupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsMembersApiV2ClustersClusterIdBackupsGroupsGroupBackupIdMembersGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsMembersApiV2ClustersClusterIdBackupsGroupsGroupBackupIdMembersGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_backup_id" -------------
+	var groupBackupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_backup_id", r.PathValue("group_backup_id"), &groupBackupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_backup_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsMembersApiV2ClustersClusterIdBackupsGroupsGroupBackupIdMembersGet(w, r, clusterId, groupBackupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_backup_id" -------------
+	var groupBackupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_backup_id", r.PathValue("group_backup_id"), &groupBackupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_backup_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost(w, r, clusterId, groupBackupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost(w http.ResponseWriter, r *http.Request) {
 
@@ -2228,58 +5920,6 @@ func (siw *ServerInterfaceWrapper) ClustersBackupsRestoreApiV2ClustersClusterIdB
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost(w, r, clusterId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost(w, r, clusterId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet operation middleware
-func (siw *ServerInterfaceWrapper) ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet(w, r, clusterId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2401,6 +6041,1186 @@ func (siw *ServerInterfaceWrapper) ClustersCapacityApiV2ClustersClusterIdCapacit
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGetParams
+
+	// ------------- Optional query parameter "name" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "name", r.URL.Query(), &params.Name, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "name"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "name", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdDelete(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGet(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "lvol_id" -------------
+	var lvolId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "lvol_id", r.PathValue("lvol_id"), &lvolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "lvol_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete(w, r, clusterId, groupId, lvolId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "lvol_id" -------------
+	var lvolId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "lvol_id", r.PathValue("lvol_id"), &lvolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "lvol_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost(w, r, clusterId, groupId, lvolId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMigrationCancelApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMigrationCancelApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMigrationCancelApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationDelete(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMigrationApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMigrationApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMigrationApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationGet(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationStartPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationStartPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationStartPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePostParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost(w, r, clusterId, groupId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPostParams
+
+	// ------------- Optional query parameter "planned" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "planned", r.URL.Query(), &params.Planned, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "planned"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planned", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost(w, r, clusterId, groupId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGetParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet(w, r, clusterId, groupId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGetParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet(w, r, clusterId, groupId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "seq" -------------
+	var seq int
+
+	err = runtime.BindStyledParameterWithOptions("simple", "seq", r.PathValue("seq"), &seq, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "seq", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete(w, r, clusterId, groupId, seq)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "seq" -------------
+	var seq int
+
+	err = runtime.BindStyledParameterWithOptions("simple", "seq", r.PathValue("seq"), &seq, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "integer", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "seq", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(w, r, clusterId, groupId, seq)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersExpandApiV2ClustersClusterIdExpandPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersExpandApiV2ClustersClusterIdExpandPost(w http.ResponseWriter, r *http.Request) {
 
@@ -2418,6 +7238,48 @@ func (siw *ServerInterfaceWrapper) ClustersExpandApiV2ClustersClusterIdExpandPos
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersExpandApiV2ClustersClusterIdExpandPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams
+
+	// ------------- Optional query parameter "rebalance" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "rebalance", r.URL.Query(), &params.Rebalance, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "rebalance"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "rebalance", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2500,8 +7362,250 @@ func (siw *ServerInterfaceWrapper) ClustersLogsApiV2ClustersClusterIdLogsGet(w h
 		return
 	}
 
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersLogsApiV2ClustersClusterIdLogsGet(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersMigrationPlansListApiV2ClustersClusterIdMigrationPlansGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersMigrationPlansListApiV2ClustersClusterIdMigrationPlansGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersMigrationPlansListApiV2ClustersClusterIdMigrationPlansGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersMigrationPlansCancelApiV2ClustersClusterIdMigrationPlansPlanIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersMigrationPlansCancelApiV2ClustersClusterIdMigrationPlansPlanIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "plan_id" -------------
+	var planId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "plan_id", r.PathValue("plan_id"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "plan_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersMigrationPlansCancelApiV2ClustersClusterIdMigrationPlansPlanIdDelete(w, r, clusterId, planId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersMigrationPlansDetailApiV2ClustersClusterIdMigrationPlansPlanIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersMigrationPlansDetailApiV2ClustersClusterIdMigrationPlansPlanIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "plan_id" -------------
+	var planId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "plan_id", r.PathValue("plan_id"), &planId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "plan_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersMigrationPlansDetailApiV2ClustersClusterIdMigrationPlansPlanIdGet(w, r, clusterId, planId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersQosGetApiV2ClustersClusterIdQosGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersQosGetApiV2ClustersClusterIdQosGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersQosGetApiV2ClustersClusterIdQosGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersQosSetApiV2ClustersClusterIdQosPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersQosSetApiV2ClustersClusterIdQosPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersQosSetApiV2ClustersClusterIdQosPut(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReachabilityApiV2ClustersClusterIdReachabilityGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReachabilityApiV2ClustersClusterIdReachabilityGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersReachabilityApiV2ClustersClusterIdReachabilityGetParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "address" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "address", r.URL.Query(), &params.Address, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "address"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "address", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReachabilityApiV2ClustersClusterIdReachabilityGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2537,6 +7641,457 @@ func (siw *ServerInterfaceWrapper) ClustersRebalanceApiV2ClustersClusterIdRebala
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersReplicationPoliciesListApiV2ClustersClusterIdReplicationPoliciesGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesListApiV2ClustersClusterIdReplicationPoliciesGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesListApiV2ClustersClusterIdReplicationPoliciesGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPostParams
+
+	// ------------- Optional query parameter "response-format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "response-format", r.URL.Query(), &params.ResponseFormat, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "response-format"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "response-format", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "policy_id" -------------
+	var policyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "policy_id", r.PathValue("policy_id"), &policyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "policy_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete(w, r, clusterId, policyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "policy_id" -------------
+	var policyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "policy_id", r.PathValue("policy_id"), &policyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "policy_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet(w, r, clusterId, policyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "policy_id" -------------
+	var policyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "policy_id", r.PathValue("policy_id"), &policyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "policy_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost(w, r, clusterId, policyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "policy_id" -------------
+	var policyId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "policy_id", r.PathValue("policy_id"), &policyId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "policy_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet(w, r, clusterId, policyId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "lvol_id" -------------
+	var lvolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "lvol_id", r.PathValue("lvol_id"), &lvolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "lvol_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet(w, r, clusterId, lvolId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "lvol_id" -------------
+	var lvolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "lvol_id", r.PathValue("lvol_id"), &lvolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "lvol_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet(w, r, clusterId, lvolId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPostParams
+
+	// ------------- Optional query parameter "response-format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "response-format", r.URL.Query(), &params.ResponseFormat, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "response-format"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "response-format", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost(w, r, clusterId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "target_id" -------------
+	var targetId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "target_id", r.PathValue("target_id"), &targetId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete(w, r, clusterId, targetId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationTargetsDetailApiV2ClustersClusterIdReplicationTargetsTargetIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationTargetsDetailApiV2ClustersClusterIdReplicationTargetsTargetIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "target_id" -------------
+	var targetId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "target_id", r.PathValue("target_id"), &targetId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationTargetsDetailApiV2ClustersClusterIdReplicationTargetsTargetIdGet(w, r, clusterId, targetId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersReplicationTargetsFailoverApiV2ClustersClusterIdReplicationTargetsTargetIdFailoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersReplicationTargetsFailoverApiV2ClustersClusterIdReplicationTargetsTargetIdFailoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "target_id" -------------
+	var targetId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "target_id", r.PathValue("target_id"), &targetId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "target_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersReplicationTargetsFailoverApiV2ClustersClusterIdReplicationTargetsTargetIdFailoverPost(w, r, clusterId, targetId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersShutdownApiV2ClustersClusterIdShutdownPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersShutdownApiV2ClustersClusterIdShutdownPost(w http.ResponseWriter, r *http.Request) {
 
@@ -2554,6 +8109,111 @@ func (siw *ServerInterfaceWrapper) ClustersShutdownApiV2ClustersClusterIdShutdow
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersShutdownApiV2ClustersClusterIdShutdownPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSitesFenceApiV2ClustersClusterIdSitesSiteFencePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSitesFenceApiV2ClustersClusterIdSitesSiteFencePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "site" -------------
+	var site string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site", r.PathValue("site"), &site, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSitesFenceApiV2ClustersClusterIdSitesSiteFencePost(w, r, clusterId, site)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSitesStatusApiV2ClustersClusterIdSitesSiteStatusGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSitesStatusApiV2ClustersClusterIdSitesSiteStatusGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "site" -------------
+	var site string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site", r.PathValue("site"), &site, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSitesStatusApiV2ClustersClusterIdSitesSiteStatusGet(w, r, clusterId, site)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSitesUnfenceApiV2ClustersClusterIdSitesSiteUnfencePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSitesUnfenceApiV2ClustersClusterIdSitesSiteUnfencePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "site" -------------
+	var site string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "site", r.PathValue("site"), &site, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSitesUnfenceApiV2ClustersClusterIdSitesSiteUnfencePost(w, r, clusterId, site)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2604,8 +8264,24 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesListApiV2ClustersClusterI
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet(w, r, clusterId)
+		siw.Handler.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2758,8 +8434,24 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDetailApiV2ClustersCluste
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet(w, r, clusterId, storageNodeId)
+		siw.Handler.ClustersStorageNodesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdGet(w, r, clusterId, storageNodeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2844,8 +8536,24 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesListApiV2ClustersC
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet(w, r, clusterId, storageNodeId)
+		siw.Handler.ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet(w, r, clusterId, storageNodeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2888,8 +8596,68 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesDetailApiV2Cluster
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet(w, r, clusterId, storageNodeId, deviceId)
+		siw.Handler.ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet(w, r, clusterId, storageNodeId, deviceId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost(w, r, clusterId, storageNodeId, deviceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -2950,6 +8718,94 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesCapacityApiV2Clust
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet(w, r, clusterId, storageNodeId, deviceId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost(w, r, clusterId, storageNodeId, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut(w, r, clusterId, storageNodeId, deviceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3123,6 +8979,66 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesRemoveApiV2Cluster
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePostParams
+
+	// ------------- Optional query parameter "response-format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "response-format", r.URL.Query(), &params.ResponseFormat, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "response-format"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "response-format", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost(w, r, clusterId, storageNodeId, deviceId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost(w http.ResponseWriter, r *http.Request) {
 
@@ -3158,6 +9074,50 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesResetApiV2Clusters
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost(w, r, clusterId, storageNodeId, deviceId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "device_id" -------------
+	var deviceId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "device_id", r.PathValue("device_id"), &deviceId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "device_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost(w, r, clusterId, storageNodeId, deviceId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3278,6 +9238,111 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesIostatsApiV2ClustersClust
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStorageNodesMigrateDevicesProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesMigrateDevicesProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesMigrateDevicesProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesGet(w, r, clusterId, storageNodeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesMigrateDevicesApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesMigrateDevicesApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesMigrateDevicesApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesPost(w, r, clusterId, storageNodeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesMigratingLvolsApiV2ClustersClusterIdStorageNodesStorageNodeIdMigratingLvolsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesMigratingLvolsApiV2ClustersClusterIdStorageNodesStorageNodeIdMigratingLvolsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesMigratingLvolsApiV2ClustersClusterIdStorageNodesStorageNodeIdMigratingLvolsPost(w, r, clusterId, storageNodeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStorageNodesNicsListApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStorageNodesNicsListApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsGet(w http.ResponseWriter, r *http.Request) {
 
@@ -3357,8 +9422,8 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesNicsIostatsApiV2ClustersC
 	handler.ServeHTTP(w, r)
 }
 
-// ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request) {
+// ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -3382,7 +9447,93 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesStartApiV2ClustersCluster
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w, r, clusterId, storageNodeId)
+		siw.Handler.ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet(w, r, clusterId, storageNodeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPostParams
+
+	// ------------- Optional query parameter "force_remove" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "force_remove", r.URL.Query(), &params.ForceRemove, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "force_remove"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "force_remove", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost(w, r, clusterId, storageNodeId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost(w, r, clusterId, storageNodeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3599,6 +9750,41 @@ func (siw *ServerInterfaceWrapper) ClustersStorageNodesSuspendApiV2ClustersClust
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStorageNodesVerifyDrainedApiV2ClustersClusterIdStorageNodesStorageNodeIdVerifyDrainedPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStorageNodesVerifyDrainedApiV2ClustersClusterIdStorageNodesStorageNodeIdVerifyDrainedPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "storage_node_id" -------------
+	var storageNodeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "storage_node_id", r.PathValue("storage_node_id"), &storageNodeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "storage_node_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStorageNodesVerifyDrainedApiV2ClustersClusterIdStorageNodesStorageNodeIdVerifyDrainedPost(w, r, clusterId, storageNodeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(w http.ResponseWriter, r *http.Request) {
 
@@ -3614,8 +9800,24 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsListApiV2ClustersClusterI
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(w, r, clusterId)
+		siw.Handler.ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3726,8 +9928,24 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsDetailApiV2ClustersCluste
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet(w, r, clusterId, poolId)
+		siw.Handler.ClustersStoragePoolsDetailApiV2ClustersClusterIdStoragePoolsPoolIdGet(w, r, clusterId, poolId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -3917,8 +10135,37 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsSnapshotsListApiV2Cluster
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "consistency_group" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "consistency_group", r.URL.Query(), &params.ConsistencyGroup, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "consistency_group"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "consistency_group", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGet(w, r, clusterId, poolId)
+		siw.Handler.ClustersStoragePoolsSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsGet(w, r, clusterId, poolId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4005,8 +10252,24 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsSnapshotsDetailApiV2Clust
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGet(w, r, clusterId, poolId, snapshotId)
+		siw.Handler.ClustersStoragePoolsSnapshotsDetailApiV2ClustersClusterIdStoragePoolsPoolIdSnapshotsSnapshotIdGet(w, r, clusterId, poolId, snapshotId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4040,8 +10303,24 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesListApiV2ClustersC
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet(w, r, clusterId, poolId)
+		siw.Handler.ClustersStoragePoolsVolumesListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesGet(w, r, clusterId, poolId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4214,8 +10493,24 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesDetailApiV2Cluster
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet(w, r, clusterId, poolId, volumeId)
+		siw.Handler.ClustersStoragePoolsVolumesDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdGet(w, r, clusterId, poolId, volumeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4348,6 +10643,50 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesBackupsListApiV2Cl
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost(w, r, clusterId, poolId, volumeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -4817,8 +11156,8 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesIostatsApiV2Cluste
 	handler.ServeHTTP(w, r)
 }
 
-// ClustersStoragePoolsVolumesListReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdListReplicationTasksGet operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesListReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdListReplicationTasksGet(w http.ResponseWriter, r *http.Request) {
+// ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGet(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -4851,314 +11190,7 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesListReplicationTas
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesListReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdListReplicationTasksGet(w, r, clusterId, poolId, volumeId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGet operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGet(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "pool_id" -------------
-	var poolId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "volume_id" -------------
-	var volumeId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGet(w, r, clusterId, poolId, volumeId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost operation middleware
-func (siw *ServerInterfaceWrapper) ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "pool_id" -------------
-	var poolId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "volume_id" -------------
-	var volumeId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
-		return
-	}
-
-	// Parameter object where we will unmarshal all parameters from the context
-	var params ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPostParams
-
-	// ------------- Optional query parameter "response-format" -------------
-
-	err = runtime.BindQueryParameterWithOptions("form", true, false, "response-format", r.URL.Query(), &params.ResponseFormat, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
-	if err != nil {
-		var requiredError *runtime.RequiredParameterError
-		if errors.As(err, &requiredError) {
-			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "response-format"})
-		} else {
-			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "response-format", Err: err})
-		}
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost(w, r, clusterId, poolId, volumeId, params)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDelete operation middleware
-func (siw *ServerInterfaceWrapper) ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDelete(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "pool_id" -------------
-	var poolId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "volume_id" -------------
-	var volumeId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "migration_id" -------------
-	var migrationId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDelete(w, r, clusterId, poolId, volumeId, migrationId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGet operation middleware
-func (siw *ServerInterfaceWrapper) ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGet(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "pool_id" -------------
-	var poolId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "volume_id" -------------
-	var volumeId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "migration_id" -------------
-	var migrationId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGet(w, r, clusterId, poolId, volumeId, migrationId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost operation middleware
-func (siw *ServerInterfaceWrapper) ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "pool_id" -------------
-	var poolId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "volume_id" -------------
-	var volumeId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "migration_id" -------------
-	var migrationId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost(w, r, clusterId, poolId, volumeId, migrationId)
-	}))
-
-	for _, middleware := range siw.HandlerMiddlewares {
-		handler = middleware(handler)
-	}
-
-	handler.ServeHTTP(w, r)
-}
-
-// ClustersStoragePoolsVolumesReplicateLvolApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicateLvolPost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicateLvolApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicateLvolPost(w http.ResponseWriter, r *http.Request) {
-
-	var err error
-	_ = err
-
-	// ------------- Path parameter "cluster_id" -------------
-	var clusterId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "pool_id" -------------
-	var poolId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
-		return
-	}
-
-	// ------------- Path parameter "volume_id" -------------
-	var volumeId openapi_types.UUID
-
-	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
-	if err != nil {
-		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
-		return
-	}
-
-	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesReplicateLvolApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicateLvolPost(w, r, clusterId, poolId, volumeId)
+		siw.Handler.ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGet(w, r, clusterId, poolId, volumeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5212,6 +11244,110 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationCommitA
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost(w, r, clusterId, poolId, volumeId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost(w http.ResponseWriter, r *http.Request) {
 
@@ -5247,6 +11383,92 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationFailbac
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPostParams
+
+	// ------------- Optional query parameter "generation" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "generation", r.URL.Query(), &params.Generation, runtime.BindQueryParameterOptions{Type: "integer", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "generation"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "generation", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "planned" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "planned", r.URL.Query(), &params.Planned, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "planned"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "planned", Err: err})
+		}
+		return
+	}
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost(w, r, clusterId, poolId, volumeId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5300,6 +11522,66 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStartAp
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGetParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet(w, r, clusterId, poolId, volumeId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost operation middleware
 func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost(w http.ResponseWriter, r *http.Request) {
 
@@ -5344,8 +11626,68 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStopApi
 	handler.ServeHTTP(w, r)
 }
 
-// ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost operation middleware
-func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost(w http.ResponseWriter, r *http.Request) {
+// ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGetParams
+
+	// ------------- Optional query parameter "site" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "site", r.URL.Query(), &params.Site, runtime.BindQueryParameterOptions{Type: "", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "site"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "site", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet(w, r, clusterId, poolId, volumeId, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet(w http.ResponseWriter, r *http.Request) {
 
 	var err error
 	_ = err
@@ -5378,7 +11720,95 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationStartAp
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost(w, r, clusterId, poolId, volumeId)
+		siw.Handler.ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersStoragePoolsVolumesResumeApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdResumePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesResumeApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdResumePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesResumeApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdResumePost(w, r, clusterId, poolId, volumeId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5476,6 +11906,312 @@ func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesSnapshotsCreateApi
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersStoragePoolsVolumesSuspendApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSuspendPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersStoragePoolsVolumesSuspendApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSuspendPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "pool_id" -------------
+	var poolId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "pool_id", r.PathValue("pool_id"), &poolId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "pool_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "volume_id" -------------
+	var volumeId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "volume_id", r.PathValue("volume_id"), &volumeId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "volume_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersStoragePoolsVolumesSuspendApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSuspendPost(w, r, clusterId, poolId, volumeId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "nqn" -------------
+	var nqn string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "nqn", r.PathValue("nqn"), &nqn, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "nqn", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet(w, r, clusterId, nqn)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "nqn" -------------
+	var nqn string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "nqn", r.PathValue("nqn"), &nqn, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "nqn", Err: err})
+		return
+	}
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPostParams
+
+	// ------------- Optional query parameter "response-format" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "response-format", r.URL.Query(), &params.ResponseFormat, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "response-format"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "response-format", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost(w, r, clusterId, nqn, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDelete operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDelete(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "nqn" -------------
+	var nqn string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "nqn", r.PathValue("nqn"), &nqn, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "nqn", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "migration_id" -------------
+	var migrationId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDelete(w, r, clusterId, nqn, migrationId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "nqn" -------------
+	var nqn string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "nqn", r.PathValue("nqn"), &nqn, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "nqn", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "migration_id" -------------
+	var migrationId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet(w, r, clusterId, nqn, migrationId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "nqn" -------------
+	var nqn string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "nqn", r.PathValue("nqn"), &nqn, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "nqn", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "migration_id" -------------
+	var migrationId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost(w, r, clusterId, nqn, migrationId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "nqn" -------------
+	var nqn string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "nqn", r.PathValue("nqn"), &nqn, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "nqn", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "migration_id" -------------
+	var migrationId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "migration_id", r.PathValue("migration_id"), &migrationId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "migration_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost(w, r, clusterId, nqn, migrationId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersTasksListApiV2ClustersClusterIdTasksGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersTasksListApiV2ClustersClusterIdTasksGet(w http.ResponseWriter, r *http.Request) {
 
@@ -5491,8 +12227,24 @@ func (siw *ServerInterfaceWrapper) ClustersTasksListApiV2ClustersClusterIdTasksG
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersTasksListApiV2ClustersClusterIdTasksGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersTasksListApiV2ClustersClusterIdTasksGet(w, r, clusterId)
+		siw.Handler.ClustersTasksListApiV2ClustersClusterIdTasksGet(w, r, clusterId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5526,8 +12278,24 @@ func (siw *ServerInterfaceWrapper) ClustersTasksDetailApiV2ClustersClusterIdTask
 		return
 	}
 
+	// Parameter object where we will unmarshal all parameters from the context
+	var params ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGetParams
+
+	// ------------- Optional query parameter "watch" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, false, "watch", r.URL.Query(), &params.Watch, runtime.BindQueryParameterOptions{Type: "boolean", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "watch"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "watch", Err: err})
+		}
+		return
+	}
+
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		siw.Handler.ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet(w, r, clusterId, taskId)
+		siw.Handler.ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet(w, r, clusterId, taskId, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5767,6 +12535,14 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/{$}", wrapper.ClustersUpdateApiV2ClustersClusterIdPut)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/activate", wrapper.ClustersActivateApiV2ClustersClusterIdActivatePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/addreplication", wrapper.ClustersAddreplicationApiV2ClustersClusterIdAddreplicationPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/alerts/{$}", wrapper.ClustersAlertsListApiV2ClustersClusterIdAlertsGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/{$}", wrapper.ClustersArbitrationGetApiV2ClustersClusterIdArbitrationGet)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/client-host", wrapper.ClustersArbitrationClientHostApiV2ClustersClusterIdArbitrationClientHostPut)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/host-fence/release", wrapper.ClustersArbitrationHostFenceReleaseApiV2ClustersClusterIdArbitrationHostFenceReleasePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/override", wrapper.ClustersArbitrationOverrideApiV2ClustersClusterIdArbitrationOverridePost)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/preferred", wrapper.ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPut)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/arbitration/remediation", wrapper.ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backup-config", wrapper.ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsListApiV2ClustersClusterIdBackupsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{$}", wrapper.ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/{backup_id}/{$}", wrapper.ClustersBackupsDetailApiV2ClustersClusterIdBackupsBackupIdGet)
@@ -5776,17 +12552,78 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}", wrapper.ClustersBackupPoliciesDeleteApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDelete)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/attach", wrapper.ClustersBackupPoliciesAttachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdAttachPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/backup-policies/{policy_id}/detach", wrapper.ClustersBackupPoliciesDetachApiV2ClustersClusterIdBackupsBackupPoliciesPolicyIdDetachPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/discover", wrapper.ClustersBackupsDiscoverApiV2ClustersClusterIdBackupsDiscoverPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/export", wrapper.ClustersBackupsExportApiV2ClustersClusterIdBackupsExportGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/{$}", wrapper.ClustersBackupsGroupsListApiV2ClustersClusterIdBackupsGroupsGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/{$}", wrapper.ClustersBackupsGroupsCreateApiV2ClustersClusterIdBackupsGroupsPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/{$}", wrapper.ClustersBackupsGroupsDeleteApiV2ClustersClusterIdBackupsGroupsGroupBackupIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/{$}", wrapper.ClustersBackupsGroupsDetailApiV2ClustersClusterIdBackupsGroupsGroupBackupIdGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/members/{$}", wrapper.ClustersBackupsGroupsMembersApiV2ClustersClusterIdBackupsGroupsGroupBackupIdMembersGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/{group_backup_id}/restore", wrapper.ClustersBackupsGroupsRestoreApiV2ClustersClusterIdBackupsGroupsGroupBackupIdRestorePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/discover", wrapper.ClustersBackupsGroupsDiscoverApiV2ClustersClusterIdBackupsGroupsDiscoverPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/export", wrapper.ClustersBackupsGroupsExportApiV2ClustersClusterIdBackupsGroupsExportGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/groups/import", wrapper.ClustersBackupsGroupsImportApiV2ClustersClusterIdBackupsGroupsImportPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/import", wrapper.ClustersBackupsImportApiV2ClustersClusterIdBackupsImportPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/restore", wrapper.ClustersBackupsRestoreApiV2ClustersClusterIdBackupsRestorePost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/source-switch", wrapper.ClustersBackupsSourceSwitchApiV2ClustersClusterIdBackupsSourceSwitchPost)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/backups/sources", wrapper.ClustersBackupsSourcesApiV2ClustersClusterIdBackupsSourcesGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/capacity", wrapper.ClustersCapacityApiV2ClustersClusterIdCapacityGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{$}", wrapper.ClustersConsistencyGroupsListApiV2ClustersClusterIdConsistencyGroupsGet)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/{$}", wrapper.ClustersConsistencyGroupsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/{$}", wrapper.ClustersConsistencyGroupsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members", wrapper.ClustersConsistencyGroupsMembersApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members", wrapper.ClustersConsistencyGroupsMembersJoinApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id}", wrapper.ClustersConsistencyGroupsMembersDetachApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdDelete)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/{lvol_id}/colocate", wrapper.ClustersConsistencyGroupsMembersColocateApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersLvolIdColocatePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/members/plan", wrapper.ClustersConsistencyGroupsMembersPlanApiV2ClustersClusterIdConsistencyGroupsGroupIdMembersPlanPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration", wrapper.ClustersConsistencyGroupsMigrationCancelApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration", wrapper.ClustersConsistencyGroupsMigrationApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration", wrapper.ClustersConsistencyGroupsMigrationCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/migration/start", wrapper.ClustersConsistencyGroupsMigrationStartApiV2ClustersClusterIdConsistencyGroupsGroupIdMigrationStartPost)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication", wrapper.ClustersConsistencyGroupsReplicationConfigureApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationPut)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/demote", wrapper.ClustersConsistencyGroupsReplicationDemoteApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationDemotePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failback", wrapper.ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailbackPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/failover", wrapper.ClustersConsistencyGroupsReplicationFailoverApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationFailoverPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/resolution", wrapper.ClustersConsistencyGroupsReplicationResolutionApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationResolutionGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/status", wrapper.ClustersConsistencyGroupsReplicationStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationStatusGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/replication/sync-status", wrapper.ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsistencyGroupsGroupIdReplicationSyncStatusGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots", wrapper.ClustersConsistencyGroupsSnapshotsListApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots", wrapper.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq}", wrapper.ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq}", wrapper.ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves", wrapper.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}", wrapper.ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit", wrapper.ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move", wrapper.ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare", wrapper.ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback", wrapper.ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/expand", wrapper.ClustersExpandApiV2ClustersClusterIdExpandPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/grow-devices", wrapper.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/iostats", wrapper.ClustersIostatsApiV2ClustersClusterIdIostatsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/logs", wrapper.ClustersLogsApiV2ClustersClusterIdLogsGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/migration-plans/{$}", wrapper.ClustersMigrationPlansListApiV2ClustersClusterIdMigrationPlansGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/migration-plans/{$}", wrapper.ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/migration-plans/{plan_id}", wrapper.ClustersMigrationPlansCancelApiV2ClustersClusterIdMigrationPlansPlanIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/migration-plans/{plan_id}", wrapper.ClustersMigrationPlansDetailApiV2ClustersClusterIdMigrationPlansPlanIdGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/qos/{$}", wrapper.ClustersQosGetApiV2ClustersClusterIdQosGet)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/qos/{$}", wrapper.ClustersQosSetApiV2ClustersClusterIdQosPut)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/reachability", wrapper.ClustersReachabilityApiV2ClustersClusterIdReachabilityGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/rebalance", wrapper.ClustersRebalanceApiV2ClustersClusterIdRebalancePost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{$}", wrapper.ClustersReplicationPoliciesListApiV2ClustersClusterIdReplicationPoliciesGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{$}", wrapper.ClustersReplicationPoliciesCreateApiV2ClustersClusterIdReplicationPoliciesPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/{$}", wrapper.ClustersReplicationPoliciesDeleteApiV2ClustersClusterIdReplicationPoliciesPolicyIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/{$}", wrapper.ClustersReplicationPoliciesDetailApiV2ClustersClusterIdReplicationPoliciesPolicyIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/failover", wrapper.ClustersReplicationPoliciesFailoverApiV2ClustersClusterIdReplicationPoliciesPolicyIdFailoverPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/policies/{policy_id}/latest-generation", wrapper.ClustersReplicationPoliciesLatestGenerationApiV2ClustersClusterIdReplicationPoliciesPolicyIdLatestGenerationGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}", wrapper.ClustersReplicationRelationshipsDetailApiV2ClustersClusterIdReplicationRelationshipsLvolIdGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/relationships/{lvol_id}/latest-snapshot", wrapper.ClustersReplicationRelationshipsLatestSnapshotApiV2ClustersClusterIdReplicationRelationshipsLvolIdLatestSnapshotGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{$}", wrapper.ClustersReplicationTargetsListApiV2ClustersClusterIdReplicationTargetsGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{$}", wrapper.ClustersReplicationTargetsCreateApiV2ClustersClusterIdReplicationTargetsPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/{$}", wrapper.ClustersReplicationTargetsDeleteApiV2ClustersClusterIdReplicationTargetsTargetIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/{$}", wrapper.ClustersReplicationTargetsDetailApiV2ClustersClusterIdReplicationTargetsTargetIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/replication/targets/{target_id}/failover", wrapper.ClustersReplicationTargetsFailoverApiV2ClustersClusterIdReplicationTargetsTargetIdFailoverPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/shutdown", wrapper.ClustersShutdownApiV2ClustersClusterIdShutdownPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/sites/{site}/fence", wrapper.ClustersSitesFenceApiV2ClustersClusterIdSitesSiteFencePost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/sites/{site}/status", wrapper.ClustersSitesStatusApiV2ClustersClusterIdSitesSiteStatusGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/sites/{site}/unfence", wrapper.ClustersSitesUnfenceApiV2ClustersClusterIdSitesSiteUnfencePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/start", wrapper.ClustersStartApiV2ClustersClusterIdStartPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{$}", wrapper.ClustersStorageNodesListApiV2ClustersClusterIdStorageNodesGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{$}", wrapper.ClustersStorageNodesCreateApiV2ClustersClusterIdStorageNodesPost)
@@ -5795,21 +12632,32 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/capacity", wrapper.ClustersStorageNodesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdCapacityGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{$}", wrapper.ClustersStorageNodesDevicesListApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/{$}", wrapper.ClustersStorageNodesDevicesDetailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/add", wrapper.ClustersStorageNodesDevicesAddApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdAddPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/capacity", wrapper.ClustersStorageNodesDevicesCapacityApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdCapacityGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/fail", wrapper.ClustersStorageNodesDevicesFailApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdFailPost)
+	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-assessment", wrapper.ClustersStorageNodesDevicesSetHealthAssessmentApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthAssessmentPut)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/health-info", wrapper.ClustersStorageNodesDevicesGetDeviceHealthInfoApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdHealthInfoGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/iostats", wrapper.ClustersStorageNodesDevicesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdIostatsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/remove", wrapper.ClustersStorageNodesDevicesRemoveApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRemovePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/replace", wrapper.ClustersStorageNodesDevicesReplaceApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdReplacePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/reset", wrapper.ClustersStorageNodesDevicesResetApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResetPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/resize", wrapper.ClustersStorageNodesDevicesResizeApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdResizePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/devices/{device_id}/restart", wrapper.ClustersStorageNodesDevicesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdDevicesDeviceIdRestartPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/iostats", wrapper.ClustersStorageNodesIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdIostatsGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/migrate-devices", wrapper.ClustersStorageNodesMigrateDevicesProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/migrate-devices", wrapper.ClustersStorageNodesMigrateDevicesApiV2ClustersClusterIdStorageNodesStorageNodeIdMigrateDevicesPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/migrating-lvols", wrapper.ClustersStorageNodesMigratingLvolsApiV2ClustersClusterIdStorageNodesStorageNodeIdMigratingLvolsPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/nics", wrapper.ClustersStorageNodesNicsListApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/nics/{nic_id}/iostats", wrapper.ClustersStorageNodesNicsIostatsApiV2ClustersClusterIdStorageNodesStorageNodeIdNicsNicIdIostatsGet)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote", wrapper.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal", wrapper.ClustersStorageNodesPrepareRemovalProgressApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/prepare-removal", wrapper.ClustersStorageNodesPrepareRemovalApiV2ClustersClusterIdStorageNodesStorageNodeIdPrepareRemovalPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/promote", wrapper.ClustersStorageNodesPromoteApiV2ClustersClusterIdStorageNodesStorageNodeIdPromotePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/restart", wrapper.ClustersStorageNodesRestartApiV2ClustersClusterIdStorageNodesStorageNodeIdRestartPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/resume", wrapper.ClustersStorageNodesResumeApiV2ClustersClusterIdStorageNodesStorageNodeIdResumePost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/shutdown", wrapper.ClustersStorageNodesShutdownApiV2ClustersClusterIdStorageNodesStorageNodeIdShutdownPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/start", wrapper.ClustersStorageNodesStartApiV2ClustersClusterIdStorageNodesStorageNodeIdStartPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/suspend", wrapper.ClustersStorageNodesSuspendApiV2ClustersClusterIdStorageNodesStorageNodeIdSuspendPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-nodes/{storage_node_id}/verify-drained", wrapper.ClustersStorageNodesVerifyDrainedApiV2ClustersClusterIdStorageNodesStorageNodeIdVerifyDrainedPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{$}", wrapper.ClustersStoragePoolsListApiV2ClustersClusterIdStoragePoolsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{$}", wrapper.ClustersStoragePoolsCreateApiV2ClustersClusterIdStoragePoolsPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/{$}", wrapper.ClustersStoragePoolsDeleteApiV2ClustersClusterIdStoragePoolsPoolIdDelete)
@@ -5828,6 +12676,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPut+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/{$}", wrapper.ClustersStoragePoolsVolumesUpdateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdPut)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups", wrapper.ClustersStoragePoolsVolumesBackupsDeleteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsDelete)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups", wrapper.ClustersStoragePoolsVolumesBackupsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/backups", wrapper.ClustersStoragePoolsVolumesBackupsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdBackupsPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/capacity", wrapper.ClustersStoragePoolsVolumesCapacityApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdCapacityGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/clone", wrapper.ClustersStoragePoolsVolumesCloneApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdClonePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect", wrapper.ClustersStoragePoolsVolumesConnectApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdConnectGet)
@@ -5836,21 +12685,29 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/hosts/{host_nqn}/secret", wrapper.ClustersStoragePoolsVolumesGetHostSecretApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdHostsHostNqnSecretGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/inflate", wrapper.ClustersStoragePoolsVolumesInflateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdInflatePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/iostats", wrapper.ClustersStoragePoolsVolumesIostatsApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdIostatsGet)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/list_replication_tasks", wrapper.ClustersStoragePoolsVolumesListReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdListReplicationTasksGet)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{$}", wrapper.ClustersStoragePoolsVolumesMigrationsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsGet)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{$}", wrapper.ClusterStoragePoolsVolumesMigrationsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsPost)
-	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/{$}", wrapper.ClusterStoragePoolsVolumesMigrationsCancelApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdDelete)
-	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/{$}", wrapper.ClusterStoragePoolsVolumesMigrationsDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdGet)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/migrations/{migration_id}/continue", wrapper.ClusterStoragePoolsVolumesMigrationsContinueApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdMigrationsMigrationIdContinuePost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replicate_lvol", wrapper.ClustersStoragePoolsVolumesReplicateLvolApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicateLvolPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_commit", wrapper.ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_failback", wrapper.ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_start", wrapper.ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_stop", wrapper.ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost)
-	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication_trigger", wrapper.ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/{$}", wrapper.ClustersStoragePoolsVolumesReplicationDetailApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/commit", wrapper.ClustersStoragePoolsVolumesReplicationCommitApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCommitPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/cutover-proceed", wrapper.ClustersStoragePoolsVolumesReplicationCutoverProceedApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationCutoverProceedPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/demote", wrapper.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failback", wrapper.ClustersStoragePoolsVolumesReplicationFailbackApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailbackPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/failover", wrapper.ClustersStoragePoolsVolumesReplicationFailoverApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationFailoverPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/start", wrapper.ClustersStoragePoolsVolumesReplicationStartApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStartPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/status", wrapper.ClustersStoragePoolsVolumesReplicationStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStatusGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/stop", wrapper.ClustersStoragePoolsVolumesReplicationStopApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationStopPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/sync-status", wrapper.ClustersStoragePoolsVolumesReplicationSyncStatusApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationSyncStatusGet)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/tasks", wrapper.ClustersStoragePoolsVolumesReplicationTasksApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTasksGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/replication/trigger", wrapper.ClustersStoragePoolsVolumesReplicationTriggerApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationTriggerPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/resume", wrapper.ClustersStoragePoolsVolumesResumeApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdResumePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/snapshots", wrapper.ClustersStoragePoolsVolumesSnapshotsListApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/snapshots", wrapper.ClustersStoragePoolsVolumesSnapshotsCreateApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSnapshotsPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/suspend", wrapper.ClustersStoragePoolsVolumesSuspendApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdSuspendPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/replicate_lvol_on_source_cluster", wrapper.ClustersStoragePoolsReplicateLvolOnSourceClusterApiV2ClustersClusterIdStoragePoolsPoolIdVolumesReplicateLvolOnSourceClusterPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{$}", wrapper.ClustersSubsystemsMigrationsListApiV2ClustersClusterIdSubsystemsNqnMigrationsGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{$}", wrapper.ClustersSubsystemsMigrationsCreateApiV2ClustersClusterIdSubsystemsNqnMigrationsPost)
+	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/{$}", wrapper.ClustersSubsystemsMigrationsCancelApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdDelete)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/{$}", wrapper.ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/cleanup-target", wrapper.ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue", wrapper.ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/tasks/{$}", wrapper.ClustersTasksListApiV2ClustersClusterIdTasksGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/tasks/{task_id}/{$}", wrapper.ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/update", wrapper.ClustersUpgradeApiV2ClustersClusterIdUpdatePost)

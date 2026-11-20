@@ -14,6 +14,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -27,6 +28,8 @@ type NodeStatusResponse struct {
 	UUID   string `json:"id"`
 	Status string `json:"status"`
 	IP     string `json:"mgmt_ip"`
+	// Site is the node's sync-replication site, empty off a sync cluster.
+	Site string `json:"site"`
 }
 
 type Lvol struct {
@@ -67,6 +70,12 @@ var ErrClusterNotFound = errors.New("storage cluster not found")
 // matching StorageCluster exists but its Status.UUID has not been populated yet.
 var ErrClusterUUIDNotReady = errors.New("storage cluster UUID not yet populated")
 
+// ErrAggregateCluster is returned by cluster-lookup helpers when the named
+// StorageCluster is a supercluster. A supercluster has no backend cluster: its
+// status.uuid is an identifier the control plane does not know, so a caller
+// that needs a backend cluster has to resolve one of the members instead.
+var ErrAggregateCluster = errors.New("storage cluster is a supercluster, which has no backend cluster")
+
 func ResolvePoolUUID(
 	ctx context.Context,
 	c client.Client,
@@ -75,13 +84,13 @@ func ResolvePoolUUID(
 	poolName string,
 ) (string, error) {
 
-	var pools simplyblockv1alpha1.StoragePoolList
+	var pools simplyblockv1alpha2.StoragePoolList
 	if err := c.List(ctx, &pools, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
 
 	for _, p := range pools.Items {
-		if p.Spec.ClusterName == clusterName &&
+		if p.Spec.ClusterRef == clusterName &&
 			p.Name == poolName &&
 			p.Status.UUID != "" {
 			return p.Status.UUID, nil
@@ -98,7 +107,17 @@ func ResolveClusterUUID(
 	clusterName string,
 ) (string, error) {
 
-	var clusters simplyblockv1alpha1.StorageClusterList
+	// A cluster on a different physical Kubernetes cluster has no local
+	// StorageCluster object to match by name -- the object only exists on
+	// that other cluster's own API server. The backend control plane is
+	// shared across clusters and addresses cluster pairs by this same UUID,
+	// so a raw UUID is passed through unresolved rather than requiring a
+	// local name match that can never succeed for a genuinely remote target.
+	if IsUUID(clusterName) {
+		return clusterName, nil
+	}
+
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return "", err
 	}
@@ -106,6 +125,9 @@ func ResolveClusterUUID(
 	for _, cluster := range clusters.Items {
 		if cluster.Name != clusterName {
 			continue
+		}
+		if cluster.Spec.Supercluster != nil {
+			return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrAggregateCluster, clusterName, namespace)
 		}
 		if cluster.Status.UUID == "" {
 			return "", fmt.Errorf("%w: cluster %q in namespace %q", ErrClusterUUIDNotReady, clusterName, namespace)
@@ -122,14 +144,19 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 		// with that UUID actually exists in the requested namespace. Without
 		// this check a caller in namespace A could supply the UUID of a cluster
 		// in namespace B and bypass namespace isolation entirely.
-		var list simplyblockv1alpha1.StorageClusterList
+		var list simplyblockv1alpha2.StorageClusterList
 		if err := k8sClient.List(ctx, &list, client.InNamespace(namespace)); err != nil {
 			return "", fmt.Errorf("failed to validate cluster UUID %q in namespace %q: %w", cluster, namespace, err)
 		}
 		for i := range list.Items {
-			if list.Items[i].Status.UUID == cluster {
-				return cluster, nil
+			if list.Items[i].Status.UUID != cluster {
+				continue
 			}
+			if list.Items[i].Spec.Supercluster != nil {
+				return "", fmt.Errorf("%w: cluster %q in namespace %q",
+					ErrAggregateCluster, list.Items[i].Name, namespace)
+			}
+			return cluster, nil
 		}
 		return "", fmt.Errorf("cluster UUID %q not found in namespace %q", cluster, namespace)
 	}
@@ -137,7 +164,7 @@ func ResolveClusterIdentifier(ctx context.Context, k8sClient client.Client, name
 }
 
 // ResolveClusterCRByUUID finds the StorageCluster CR in namespace whose backend
-// UUID matches uuid. Used to go from a cross-cluster reference (which only
+// UUID matches the given one. Used to go from a cross-cluster reference (which only
 // carries the backend UUID) back to the CR, to read config the backend doesn't
 // expose, such as a cluster's backup credentials secret.
 func ResolveClusterCRByUUID(
@@ -145,9 +172,9 @@ func ResolveClusterCRByUUID(
 	c client.Client,
 	namespace string,
 	uuid string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
+) (*simplyblockv1alpha2.StorageCluster, error) {
 
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -176,9 +203,9 @@ func ResolveClusterCR(
 	c client.Client,
 	namespace string,
 	clusterName string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
+) (*simplyblockv1alpha2.StorageCluster, error) {
 
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := c.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
 		return nil, err
 	}
@@ -234,12 +261,51 @@ func ShouldActivateCluster(
 		onlineHealthy >= required
 }
 
-func ClusterAlreadyActive(cluster *simplyblockv1alpha1.StorageCluster) bool {
+func ClusterAlreadyActive(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	return cluster.Status.Status == "active"
 }
 
-func ClusterInExpansion(cluster *simplyblockv1alpha1.StorageCluster) bool {
+func ClusterInExpansion(cluster *simplyblockv1alpha2.StorageCluster) bool {
 	return cluster.Status.Status == "in_expansion"
+}
+
+// rebalancingTaskTypes are the control plane's jobs that redistribute data, and
+// so refuse a volume migration for as long as they run.
+//
+// It is a list of the types this has been observed to happen for rather than of
+// every type the control plane has: a job whose effect on placement is unknown
+// is not assumed to block, because assuming it does stalls migrations for a
+// reason nobody can name. Extend it against a get-tasks listing, not a guess.
+var rebalancingTaskTypes = map[string]bool{
+	TaskTypeNodeAdd:            true,
+	TaskTypeClusterExpand:      true,
+	TaskTypeNewDeviceMigration: true,
+}
+
+// ClusterRebalancing answers whether the control plane will refuse a volume
+// migration because it is redistributing data.
+//
+// It asks twice, because the authoritative answer is not always there. The
+// control plane knows — it refuses the migration with a 400 saying the cluster
+// is rebalancing — but it does not always say so in the status it reports, and
+// a cluster running two node_add jobs has been seen reporting `active`. So the
+// status is read first and the mirrored task list second, and the second is
+// what makes this usable before the first is fixed.
+//
+// The task list is a fallback and not a substitute. It is capped at twenty
+// entries, it carries only the types named above, and nothing keeps the control
+// plane from starting a job it does not list. A false negative here is the
+// error the operation used to fail with, which is where it was before.
+func ClusterRebalancing(cluster *simplyblockv1alpha2.StorageCluster) bool {
+	if cluster.Status.Status == ClusterStatusRebalancing {
+		return true
+	}
+	for _, task := range cluster.Status.Tasks {
+		if rebalancingTaskTypes[task.Type] && task.Status != TaskStateDone {
+			return true
+		}
+	}
+	return false
 }
 
 func ActivateCluster(
@@ -289,7 +355,7 @@ type ClusterListEntry struct {
 func GetClusterID(
 	ctx context.Context,
 	apiClient *webapi.Client,
-	clusterCR *simplyblockv1alpha1.StorageCluster,
+	clusterCR *simplyblockv1alpha2.StorageCluster,
 ) (string, error) {
 	if clusterCR.Status.UUID != "" {
 		return clusterCR.Status.UUID, nil
@@ -488,7 +554,7 @@ func RequiredNodesFromErasureCodingScheme(scheme string) (int, error) {
 }
 
 // ParityChunksFromErasureCodingScheme returns just npcs (the parity-chunk
-// count, e.g. "2x1" -> 1) from a StorageCluster's erasureCodingScheme. This
+// count: `2x1` yields 1) from a StorageCluster's erasureCodingScheme. This
 // is the failure-domain risk budget the drain coordinator's fdDrainGate
 // spends against — see RequiredNodesFromErasureCodingScheme for the sibling
 // ndcs+npcs total.

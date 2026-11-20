@@ -1,0 +1,18 @@
+# buf module for the conntrack flow service.
+#
+# The .proto lives next to the Go code generated from it rather than under a
+# proto/atlas/conntrack/v1/ tree, which keeps one package's definition,
+# generated code and hand-written client in one directory. That breaks one lint
+# rule, PACKAGE_DIRECTORY_MATCH, which wants atlas/conntrack/v1/flow.proto, so it
+# is the one exception.
+version: v2
+modules:
+  - path: .
+lint:
+  use:
+    - STANDARD
+  except:
+    - PACKAGE_DIRECTORY_MATCH
+breaking:
+  use:
+    - FILE

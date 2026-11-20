@@ -19,12 +19,12 @@ import (
 var ServiceCABundlePath = "/etc/simplyblock/tls/ca.crt"
 
 // ServiceClientCertificatePath is where the operator pod mounts its client
-// certificate for mutually-authenticated TLS to the simplyblock webapp.
+// certificate for mutually authenticated TLS to the simplyblock webapp.
 // Overridable for tests.
 var ServiceClientCertificatePath = "/etc/simplyblock/tls/tls.crt"
 
 // ServiceClientKeyPath is where the operator pod mounts its client private key
-// for mutually-authenticated TLS to the simplyblock webapp. Overridable for
+// for mutually authenticated TLS to the simplyblock webapp. Overridable for
 // tests.
 var ServiceClientKeyPath = "/etc/simplyblock/tls/tls.key"
 
@@ -33,14 +33,14 @@ var ServiceClientKeyPath = "/etc/simplyblock/tls/tls.key"
 var OperatorNamespacePath = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
 // BuildStorageNodeSetAPIClient returns an *http.Client that trusts the CA at
-// caPath, pins ServerName to the storage-node API service DNS name in the
-// given namespace, and optionally presents the client certificate pair at
+// caPath, pins ServerName to the DNS name of the storage-node API Service
+// serviceName in the given namespace, and optionally presents the client certificate pair at
 // certPath/keyPath when both paths are provided. This lets the operator dial
 // a pod/host IP directly while still passing hostname verification against
 // the service-ca-issued cert, whose SAN is the service DNS name. Timeout is
 // short (3s) since this is used for reachability probes.
-func BuildStorageNodeSetAPIClient(namespace, caPath, certPath, keyPath string) (*http.Client, error) {
-	c, err := buildServiceAPIClient("simplyblock-storage-node-api", namespace, caPath)
+func BuildStorageNodeSetAPIClient(serviceName, namespace, caPath, certPath, keyPath string) (*http.Client, error) {
+	c, err := buildServiceAPIClient(serviceName, namespace, caPath)
 	if err != nil {
 		return nil, err
 	}
@@ -65,6 +65,28 @@ func BuildWebAPIClient(namespace, caPath, certPath, keyPath string) (*http.Clien
 		return nil, err
 	}
 	c.Timeout = 30 * time.Second
+	return c, nil
+}
+
+// BuildEndpointClient returns an *http.Client for a control plane reached by an
+// address other than the in-cluster webappapi Service. Its certificate is
+// verified against the address's own hostname and against the system trust
+// store plus the CA at caPath when that file exists. The client certificate
+// pair is presented when both paths are provided.
+func BuildEndpointClient(caPath, certPath, keyPath string) (*http.Client, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if caPEM, err := os.ReadFile(caPath); err == nil {
+		pool.AppendCertsFromPEM(caPEM)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	c := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	if err := applyClientCertificate(c, certPath, keyPath); err != nil {
+		return nil, err
+	}
 	return c, nil
 }
 

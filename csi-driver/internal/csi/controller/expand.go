@@ -10,7 +10,9 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -25,7 +27,6 @@ func (cs *Server) ControllerExpandVolume(
 	if req.GetCapacityRange() == nil {
 		return nil, status.Error(codes.InvalidArgument, "capacity range is required")
 	}
-
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
@@ -38,17 +39,45 @@ func (cs *Server) ControllerExpandVolume(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID %q: %v", volumeID, err)
 	}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		return cs.expandStripedVolume(ctx, volumeID, spdkVol, width, updatedSize)
+	}
 
 	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		return nil, err
 	}
 
-	err = sbclient.ResizeVolume(ctx, spdkVol.VolumeID, capacityBytes)
+	// A client-side compressed or deduplicated volume is staged under LVM and
+	// VDO, and is grown that much larger than it reports, the way it was
+	// created.
+	lvolBytes := capacityBytes
+	if cs.stagedUnderLVM(ctx, volumeID) {
+		lvolBytes = vdoBackedBytes(capacityBytes)
+	}
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			return c.ResizeVolume(ctx, h.VolumeID, lvolBytes)
+		})
 	if err != nil {
 		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)
 		return nil, classifyControllerExpandVolumeError(err)
 	}
+
+	// An export serving this volume has a filesystem on top of it that only
+	// its host can grow, so the record carries the new size and the operator
+	// does the rest. A volume with no export finds none and is unaffected.
+	if err := growExportAfter(ctx, cs.exports, volumeID, capacityBytes); err != nil {
+		return nil, err
+	}
+
+	// Every volume has node-side work. A block volume's node grows its
+	// filesystem; a pNFS client has none to grow but has to re-take its
+	// layout, because growing the namespace invalidated the block device it
+	// had cached. This flag is the only thing that gets NodeExpandVolume
+	// called, and without the call a pod's next write resolves the device in
+	// its own mount namespace, fails, and routes through the metadata server
+	// from then on.
 	return &csi.ControllerExpandVolumeResponse{
 		CapacityBytes:         capacityBytes,
 		NodeExpansionRequired: true,

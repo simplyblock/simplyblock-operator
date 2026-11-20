@@ -4,9 +4,12 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/simplyblock/atlas/bounded"
 )
 
 // nvmeIoctlAdminCmd is NVME_IOCTL_ADMIN_CMD: _IOWR('N', 0x41, struct
@@ -16,6 +19,7 @@ const nvmeIoctlAdminCmd = 0xC0484E41
 
 const (
 	nvmeAdminIdentify   = 0x06 // Identify admin command opcode
+	nvmeIdentifyCNSNS   = 0x00 // CNS value: Identify Namespace data structure
 	nvmeIdentifyCNSCtrl = 0x01 // CNS value: Identify Controller data structure
 )
 
@@ -43,30 +47,82 @@ type nvmePassthruCmd struct {
 	result      uint32
 }
 
+// identifyTimeoutMs is the command timeout handed to the kernel with the
+// Identify, so a command that reaches the controller is failed by the kernel
+// instead of waiting out the default admin timeout.
+const identifyTimeoutMs = uint32(bounded.ReadTimeout / time.Millisecond)
+
 // identifyControllerMNAN issues an NVMe Identify Controller admin command on
 // the controller character device (e.g., "/dev/nvme0") and returns its MNAN
 // field (Maximum Number of Allowed Namespaces), the most namespaces the
 // controller's subsystem may hold.
+//
+// The open and the ioctl run under bounded.ReadTimeout. A controller can leave
+// the live state between the sysfs read that chose it and the ioctl, and the
+// kernel then holds the command until the controller reconnects or is deleted.
 func identifyControllerMNAN(devicePath string) (uint32, error) {
+	return bounded.Call("identify "+devicePath, bounded.ReadTimeout, func() (uint32, error) {
+		return identifyControllerMNANUnbounded(devicePath)
+	})
+}
+
+func identifyControllerMNANUnbounded(devicePath string) (uint32, error) {
+	buf, err := identifyControllerUnbounded(devicePath)
+	if err != nil {
+		return 0, err
+	}
+	return mnanFromIdentify(buf), nil
+}
+
+// identifyController issues an NVMe Identify Controller admin command on the
+// controller character device and returns the raw data structure, under the
+// same bound as identifyControllerMNAN.
+func identifyController(devicePath string) ([]byte, error) {
+	return bounded.Call("identify "+devicePath, bounded.ReadTimeout, func() ([]byte, error) {
+		return identifyControllerUnbounded(devicePath)
+	})
+}
+
+func identifyControllerUnbounded(devicePath string) ([]byte, error) {
+	// Identify Controller ignores NSID.
+	return identifyUnbounded(devicePath, 0, nvmeIdentifyCNSCtrl, identifyControllerLen)
+}
+
+// identifyNamespace issues an NVMe Identify Namespace admin command for nsid on
+// the controller character device and returns the raw data structure, under
+// the same bound as identifyControllerMNAN.
+func identifyNamespace(devicePath string, nsid NamespaceID) ([]byte, error) {
+	return bounded.Call("identify namespace "+devicePath, bounded.ReadTimeout, func() ([]byte, error) {
+		return identifyUnbounded(devicePath, uint32(nsid), nvmeIdentifyCNSNS, identifyNamespaceLen)
+	})
+}
+
+// identifyUnbounded opens devicePath and issues one Identify with the given
+// NSID and CNS, returning the length bytes the controller wrote.
+func identifyUnbounded(devicePath string, nsid uint32, cns uint32, length uint32) ([]byte, error) {
 	f, err := os.OpenFile(devicePath, os.O_RDONLY, 0)
 	if err != nil {
-		return 0, fmt.Errorf("open %s: %w", devicePath, err)
+		return nil, fmt.Errorf("open %s: %w", devicePath, err)
 	}
 	defer func() { _ = f.Close() }()
 
-	buf := make([]byte, identifyControllerLen)
+	buf := make([]byte, length)
 	cmd := nvmePassthruCmd{
-		opcode:  nvmeAdminIdentify,
-		nsid:    0, // Identify Controller ignores NSID
-		addr:    uint64(uintptr(unsafe.Pointer(&buf[0]))),
-		dataLen: identifyControllerLen,
-		cdw10:   nvmeIdentifyCNSCtrl, // CNS in the low byte
+		opcode:    nvmeAdminIdentify,
+		nsid:      nsid,
+		addr:      uint64(uintptr(unsafe.Pointer(&buf[0]))),
+		dataLen:   length,
+		cdw10:     cns, // CNS in the low byte
+		timeoutMs: identifyTimeoutMs,
 	}
-	_, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), nvmeIoctlAdminCmd, uintptr(unsafe.Pointer(&cmd)))
+	ret, _, errno := unix.Syscall(unix.SYS_IOCTL, f.Fd(), nvmeIoctlAdminCmd, uintptr(unsafe.Pointer(&cmd)))
 	// Keep buf alive until the kernel has finished writing into it via addr.
 	runtime.KeepAlive(buf)
 	if errno != 0 {
-		return 0, fmt.Errorf("ioctl NVME_ADMIN_CMD %s: %w", devicePath, errno)
+		return nil, fmt.Errorf("ioctl NVME_ADMIN_CMD %s: %w", devicePath, errno)
 	}
-	return mnanFromIdentify(buf), nil
+	if err := adminStatus(ret); err != nil {
+		return nil, fmt.Errorf("ioctl NVME_ADMIN_CMD %s: %w", devicePath, err)
+	}
+	return buf, nil
 }

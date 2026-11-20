@@ -1,0 +1,16 @@
+{
+  "name": "lvmcache",
+  "tool": "lvconvert --type cache",
+  "tool_version": "  LVM version:     2.03.31(2) (2025-02-27)",
+  "command": "pvcreate, vgcreate, lvcreate origin and fast, lvconvert --type cache --cachevol",
+  "device_size": 134217728,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:18:36Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "DEVNAME=/dev/loop0 UUID=NsXb1O-4FRz-0oTM-VjjO-Fdw5-4iku-f9PVsX VERSION=LVM2\\ 001 TYPE=LVM2_member USAGE=raid",
+  "head_sha256": "02848fc53ec131f9af77e7a17caa1cf9e12f9c97530cecf8d2c22e3bd5fa940b",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "a whole disk holding an lvmcache: the disk is an LVM physical volume and reads as one, because the cache is metadata inside the group rather than anything on the disk"
+}

@@ -215,3 +215,37 @@ func TestNodeSubscriptionLookupOfAnEmptyIDMisses(t *testing.T) {
 		t.Error("an empty node id should miss rather than match a cached node")
 	}
 }
+
+// The node stream carries each node's lvstore replica partners, in the control
+// plane's field names, because target selection for a drain reads them from
+// the cache once the stream has synced. A node with no tertiary is reported
+// with a null one.
+//
+// Regression: 2026-10-05-drain-target-is-tertiary — a decoded DTO handed to
+// target selection proves nothing about the wire: a wrong tag would drop the
+// partners from the stream while every test of the selection stayed green.
+func TestNodeSubscriptionCarriesEachNodesReplicaPartners(t *testing.T) {
+	const secondary = "0f2c7b1e-6a4d-4c8e-9f10-2b3c4d5e6f70"
+	const tertiary = "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+	sub := registeredNodes(t)
+
+	ingestNode(t, sub, cpinformer.EventSnapshot, `[
+		{"id":"`+snNode+`","status":"online","secondary_node_id":"`+secondary+`","tertiary_node_id":"`+tertiary+`"},
+		{"id":"`+secondary+`","status":"online","secondary_node_id":"`+snNode+`","tertiary_node_id":null}
+	]`)
+
+	_, dto, ok := sub.Lookup(snNode)
+	if !ok {
+		t.Fatal("the node should be cached after a snapshot")
+	}
+	if dto.SecondaryNodeID != secondary || dto.TertiaryNodeID != tertiary {
+		t.Errorf("partners = %q/%q, want %q/%q", dto.SecondaryNodeID, dto.TertiaryNodeID, secondary, tertiary)
+	}
+	_, other, ok := sub.Lookup(secondary)
+	if !ok {
+		t.Fatal("the second node should be cached after a snapshot")
+	}
+	if other.SecondaryNodeID != snNode || other.TertiaryNodeID != "" {
+		t.Errorf("partners = %q/%q, want %q and no tertiary", other.SecondaryNodeID, other.TertiaryNodeID, snNode)
+	}
+}

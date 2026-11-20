@@ -5,26 +5,24 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	"github.com/simplyblock/atlas/kube"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -34,13 +32,6 @@ import (
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=volumemigrations,verbs=get;list;watch;create
 
 const (
-	// labelPinnedVolumePV labels a controller-created VolumeMigration with a
-	// hash of the PV name (see pinPVLabelValue), so all pin-driven migrations for
-	// a PV can be found without knowing the (target-dependent) object name. The
-	// value is hashed because PV names can exceed the 63-char label-value limit;
-	// the full PV name is preserved in VolumeMigration.spec.pvName.
-	labelPinnedVolumePV = "storage.simplyblock.io/pinned-volume-pv"
-
 	// pvcPinRequeueUnbound is how long to wait before rechecking a PVC whose
 	// backing PV is not provisioned yet.
 	pvcPinRequeueUnbound = 15 * time.Second
@@ -58,13 +49,17 @@ const (
 // pinned-volume value differs from the AnnotationPinnedVolumeApplied marker it
 // writes after acting, so its own annotation writes do not re-trigger a
 // migration. A validating admission webhook rejects an unknown storage node at
-// write time; the re-validation here is a defense-in-depth backstop (e.g. for
+// write time; the re-validation here is a defense-in-depth backstop (e.g., for
 // values that predate the webhook, or a node removed after the pin was set).
 type PersistentVolumeClaimReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Recorder  events.EventRecorder
 	apiClient *webapi.Client
+
+	// Mover raises a pinned volume's move as whichever kind this deployment
+	// runs. Unset means the kind this API group documents.
+	Mover volumemigration.Mover
 }
 
 func (r *PersistentVolumeClaimReconciler) Reconcile(
@@ -83,7 +78,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	// setApplied normalizes those legacy annotations into selected-storage-node
 	// when it records the applied target, so the annotation state converges.
 	desired := kube.PinnedNode(pvc.Annotations)
-	applied := pvc.Annotations[kube.AnnoSelectedStorageNodeApplied]
+	applied, _ := kube.KeySelectedStorageNodeApplied.Get(pvc.Annotations)
 
 	// Strict change-diff gate: nothing to do unless the pinned target changed.
 	if desired == applied {
@@ -110,7 +105,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 		}
 		return ctrl.Result{}, fmt.Errorf("get PV %q: %w", pvc.Spec.VolumeName, err)
 	}
-	clusterUUID, poolUUID, volumeUUID, ok := splitCSIVolumeHandle(pv)
+	clusterUUID, poolUUID, volumeUUID, ok := csiVolumeHandleParts(pv)
 	if !ok {
 		r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "NotSimplyblockVolume", "NotSimplyblockVolume",
 			"PV %q is not a simplyblock CSI volume; pinned-volume annotation ignored", pv.Name)
@@ -157,7 +152,7 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	}
 
 	// Serialize per PV: wait for any in-flight pin migration to finish before
-	// requesting another (e.g. when the target changed while one was running).
+	// requesting another (e.g., when the target changed while one was running).
 	active, err := r.hasActiveMigration(ctx, cluster.Namespace, pv.Name)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -175,54 +170,53 @@ func (r *PersistentVolumeClaimReconciler) Reconcile(
 	return r.setApplied(ctx, pvc, desired)
 }
 
-// createMigration creates a VolumeMigration for the PV/target in the owning
-// StorageCluster's namespace. The name is deterministic in (pv, target) so a
-// retried reconcile is idempotent (AlreadyExists is tolerated).
+// createMigration raises the move of a pinned volume onto its requested node,
+// as whichever kind this deployment runs.
+//
+// Each call raises a move under a fresh name, so finished moves to the same
+// target stay as history. A retried reconcile does not raise a second one:
+// hasActiveMigration holds it back. The move is raised in the owning
+// StorageCluster's namespace: a claim may live in another namespace than its
+// cluster, and a cross-namespace owner reference is invalid.
 func (r *PersistentVolumeClaimReconciler) createMigration(
 	ctx context.Context,
-	cluster *simplyblockv1alpha1.StorageCluster,
+	cluster *simplyblockv1alpha2.StorageCluster,
 	pvName, target string,
 ) error {
-	vm := &simplyblockv1alpha1.VolumeMigration{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      pinMigrationName(pvName, target),
-			Namespace: cluster.Namespace,
-			Labels:    map[string]string{labelPinnedVolumePV: pinPVLabelValue(pvName)},
-		},
-		Spec: simplyblockv1alpha1.VolumeMigrationSpec{
-			PVName:         pvName,
-			TargetNodeUUID: target,
-		},
-	}
-	// Own by the StorageCluster (same namespace) so the migration is garbage-
-	// collected with the cluster. The PVC cannot be the owner: it may live in a
-	// different namespace, and a cross-namespace owner reference is invalid. A
-	// plain owner reference (not a controller reference) avoids setting
-	// blockOwnerDeletion, which would require storageclusters/finalizers access.
-	if err := controllerutil.SetOwnerReference(cluster, vm, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on VolumeMigration: %w", err)
-	}
-	if err := r.Create(ctx, vm); err != nil && !apierrors.IsAlreadyExists(err) {
-		return fmt.Errorf("create VolumeMigration %q: %w", vm.Name, err)
-	}
-	return nil
+	return r.mover().Start(ctx, volumemigration.MoveRequest{
+		Name:           pinMigrationName(pvName, target),
+		Namespace:      cluster.Namespace,
+		PVName:         pvName,
+		TargetNodeUUID: target,
+		Labels:         map[string]string{simplyblockv1alpha2.PinnedVolumeLabel: pinPVLabelValue(pvName)},
+		Owner:          cluster,
+		OwnerKind:      "StorageCluster",
+		Scheme:         r.Scheme,
+	})
 }
 
-// hasActiveMigration reports whether a non-terminal pin-driven VolumeMigration
-// exists for the given PV.
+// mover is this controller's channel for raising a move, defaulted so a
+// reconciler built without one raises the kind this API group documents.
+func (r *PersistentVolumeClaimReconciler) mover() volumemigration.Mover {
+	if r.Mover != nil {
+		return r.Mover
+	}
+	return volumemigration.NewMover(r.Client, r.Scheme, false)
+}
+
+// hasActiveMigration reports whether a non-terminal pin-driven move exists for
+// the given volume.
 func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 	ctx context.Context,
 	namespace, pvName string,
 ) (bool, error) {
-	var list simplyblockv1alpha1.VolumeMigrationList
-	if err := r.List(ctx, &list,
-		client.InNamespace(namespace),
-		client.MatchingLabels{labelPinnedVolumePV: pinPVLabelValue(pvName)},
-	); err != nil {
-		return false, fmt.Errorf("list VolumeMigrations for PV %q: %w", pvName, err)
+	moves, err := r.mover().List(ctx, namespace,
+		map[string]string{simplyblockv1alpha2.PinnedVolumeLabel: pinPVLabelValue(pvName)})
+	if err != nil {
+		return false, fmt.Errorf("list the moves of PV %q: %w", pvName, err)
 	}
-	for _, vm := range list.Items {
-		if !isTerminalMigrationPhase(vm.Status.Phase) {
+	for _, move := range moves {
+		if !move.Phase.Terminal() {
 			return true, nil
 		}
 	}
@@ -236,8 +230,8 @@ func (r *PersistentVolumeClaimReconciler) hasActiveMigration(
 func (r *PersistentVolumeClaimReconciler) resolveClusterCR(
 	ctx context.Context,
 	clusterUUID string,
-) (*simplyblockv1alpha1.StorageCluster, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
+) (*simplyblockv1alpha2.StorageCluster, error) {
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := r.List(ctx, &clusters); err != nil {
 		return nil, fmt.Errorf("list StorageClusters: %w", err)
 	}
@@ -257,7 +251,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	pvc *corev1.PersistentVolumeClaim,
 	target string,
 ) (ctrl.Result, error) {
-	if pvc.Annotations[kube.AnnoSelectedStorageNodeRejected] == target {
+	if rejected, _ := kube.KeySelectedStorageNodeRejected.Get(pvc.Annotations); rejected == target {
 		return ctrl.Result{}, nil
 	}
 	r.Recorder.Eventf(pvc, nil, corev1.EventTypeWarning, "InvalidPinTarget", "InvalidPinTarget",
@@ -266,7 +260,7 @@ func (r *PersistentVolumeClaimReconciler) rejectTarget(
 	if pvc.Annotations == nil {
 		pvc.Annotations = map[string]string{}
 	}
-	pvc.Annotations[kube.AnnoSelectedStorageNodeRejected] = target
+	pvc.Annotations = kube.KeySelectedStorageNodeRejected.Set(pvc.Annotations, target)
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record rejected pin target: %w", err)
 	}
@@ -285,36 +279,41 @@ func (r *PersistentVolumeClaimReconciler) setApplied(
 		pvc.Annotations = map[string]string{}
 	}
 	if value == "" {
-		delete(pvc.Annotations, kube.AnnoSelectedStorageNodeApplied)
+		kube.KeySelectedStorageNodeApplied.Delete(pvc.Annotations)
 	} else {
-		pvc.Annotations[kube.AnnoSelectedStorageNodeApplied] = value
+		pvc.Annotations = kube.KeySelectedStorageNodeApplied.Set(pvc.Annotations, value)
 		// Normalize legacy pin annotations into the canonical one so the state
 		// converges: a pre-existing host-id pin (which drove this reconcile via
 		// kube.PinnedNode) is rewritten to selected-storage-node and the legacy
 		// forms are dropped.
-		pvc.Annotations[kube.AnnoSelectedStorageNode] = value
-		delete(pvc.Annotations, kube.AnnoHostID)
+		pvc.Annotations = kube.KeySelectedStorageNode.Set(pvc.Annotations, value)
+		kube.KeyHostID.Delete(pvc.Annotations)
 		delete(pvc.Annotations, kube.DeprecatedAnnoHostID)
 	}
-	delete(pvc.Annotations, kube.AnnoSelectedStorageNodeRejected)
+	kube.KeySelectedStorageNodeRejected.Delete(pvc.Annotations)
 	if err := r.Patch(ctx, pvc, patch); err != nil {
 		return ctrl.Result{}, fmt.Errorf("record applied pin target: %w", err)
 	}
 	return ctrl.Result{}, nil
 }
 
-// splitCSIVolumeHandle parses a simplyblock CSI volume handle
-// ("<clusterUUID>:<poolUUID>:<volumeUUID>") from a PV. ok is false when the PV is
-// not a simplyblock CSI volume or the handle is malformed.
-func splitCSIVolumeHandle(pv *corev1.PersistentVolume) (clusterUUID, poolUUID, volumeUUID string, ok bool) {
-	if pv.Spec.CSI == nil || pv.Spec.CSI.VolumeHandle == "" {
+// csiVolumeHandleParts returns the parts of a PV's simplyblock CSI volume
+// handle through the atlas helpers, so the handle grammar lives in one place.
+// ok is false when the PV is not a simplyblock CSI volume or the handle is
+// malformed.
+//
+// The normalized reader rather than the field's own, because a volume
+// provisioned before the v2 API migration spells its pool as a name in a field
+// the API server refuses to change, and the pool this returns is handed to the
+// control plane (design-api-upgrade.md §16.4). A volume the migration has not
+// reached, or a cluster nobody has migrated, still reports the name.
+func csiVolumeHandleParts(pv *corev1.PersistentVolume) (clusterUUID, poolRef, volumeUUID string, ok bool) {
+	normalized, err := kube.NormalizedVolumeHandleFromPV(pv)
+	if err != nil {
 		return "", "", "", false
 	}
-	parts := strings.SplitN(pv.Spec.CSI.VolumeHandle, ":", 3)
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return "", "", "", false
-	}
-	return parts[0], parts[1], parts[2], true
+	h := normalized.Handle
+	return h.ClusterID, h.PoolRef, h.VolumeID, true
 }
 
 func containsStorageNode(nodes []webapi.StorageNodeInfo, uuid string) bool {
@@ -326,27 +325,15 @@ func containsStorageNode(nodes []webapi.StorageNodeInfo, uuid string) bool {
 	return false
 }
 
-func isTerminalMigrationPhase(phase simplyblockv1alpha1.VolumeMigrationPhase) bool {
-	switch phase {
-	case simplyblockv1alpha1.VolumeMigrationPhaseCompleted,
-		simplyblockv1alpha1.VolumeMigrationPhaseFailed,
-		simplyblockv1alpha1.VolumeMigrationPhaseAborted:
-		return true
-	default:
-		return false
-	}
-}
-
-// pinMigrationName is a deterministic, DNS-label-safe VolumeMigration name for a
-// (PV, target) pair. Deterministic so a retried reconcile hits AlreadyExists
-// instead of creating duplicates; target-dependent so a new target yields a new
-// object rather than colliding with a finished migration to the old target.
+// pinMigrationName is a DNS-label-safe move name for a (PV, target) pair: a
+// prefix derived from the pair and a random suffix, so every move is a new object
+// and an earlier move to the same target is never found in its place.
 func pinMigrationName(pvName, target string) string {
 	sum := sha256.Sum256([]byte(pvName + "\x00" + target))
-	return "pvc-pin-" + hex.EncodeToString(sum[:])[:16]
+	return kube.NameWithID("pvc-pin-" + hex.EncodeToString(sum[:])[:16])
 }
 
-// pinPVLabelValue derives a label-safe value from a PV name for labelPinnedVolumePV.
+// pinPVLabelValue derives a label-safe value from a PV name for PinnedVolumeLabel.
 // PV names can exceed the 63-character label-value limit, so the name is hashed to
 // a fixed-length hex string; the full PV name remains in VolumeMigration.spec.pvName.
 // createMigration and hasActiveMigration must use this same derivation.

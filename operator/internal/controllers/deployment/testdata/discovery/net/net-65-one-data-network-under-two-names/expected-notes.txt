@@ -1,0 +1,2 @@
+stripe is 1+0: the draft has several node sets, and each becomes a member cluster of a supercluster that stripes across its own nodes alone, so the scheme is one the smallest node set, of 1 storage node, carries. Delete the node sets you do not want, or widen the stripe if every node set you keep carries more. A cluster's stripe cannot be changed afterward
+wrote discovered-discover-net-65 in Draft: 2 workers with 8 nvme devices, in 2 group(s) across 2 node set(s); 0 refusal(s)

@@ -118,13 +118,44 @@ type Device struct {
 	// this was written against uio0 was the controller in slot 05.0 while uio2
 	// was the one in slot 02.0.
 	UIODevices []string
+
+	// InUse reports whether anything holds one of UIODevices open, and is nil
+	// for a device nothing asked about.
+	//
+	// The three states are the point. [Scan] does not set it, because answering
+	// needs the process table and a scan reads sysfs; [CheckHolders] sets it on
+	// every device it could check and leaves it nil on every device it could
+	// not. A device nothing holds and a device whose process table could not be
+	// read are then different values rather than one, which is what keeps a
+	// caller from reclaiming a disk it never established was free.
+	//
+	// Read it through [Device.Held] and [Device.Free], which are the two
+	// questions a caller actually has and neither of which is the negation of
+	// the other.
+	InUse *bool
 }
+
+// Held reports whether something is known to hold the device open.
+//
+// A device nothing checked is not held, because nothing established that it
+// was. It is not free either: see [Device.Free].
+func (d Device) Held() bool { return d.InUse != nil && *d.InUse }
+
+// Free reports whether the device was checked and found to be held by nothing,
+// which is the only state in which it is safe to take.
+func (d Device) Free() bool { return d.InUse != nil && !*d.InUse }
 
 // IsNVMe reports whether the device is an NVMe controller.
 func (d Device) IsNVMe() bool { return strings.HasPrefix(d.Class, classNVMePrefix) }
 
-// BoundToUserspace reports whether a userspace-IO driver owns the device, which
-// on this product's hosts means SPDK has taken it or something left it taken.
+// BoundToUserspace reports whether a userspace-IO driver owns the device.
+//
+// It says which driver is bound and nothing about who is driving it. SPDK binds
+// a controller this way, and so does a hypervisor passing a disk through to a
+// guest, a DPDK application, and any other product that drives hardware from
+// userspace; a binding left behind by something that has since exited looks the
+// same as all of them. [HeldBy] is what separates those cases, and it is a
+// different question with a different source.
 func (d Device) BoundToUserspace() bool {
 	return d.Driver == DriverUIOGeneric || d.Driver == DriverVFIO
 }

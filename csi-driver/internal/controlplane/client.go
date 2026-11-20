@@ -26,10 +26,19 @@ import (
 
 // errors deserve special care
 var (
-	ErrVolumeNotFound   = errors.New("volume not found")
+	ErrVolumeNotFound = errors.New("volume not found")
+	// ErrVolumeHeldByMove is a connect the control plane refused with a 409
+	// because a consistency-group subsystem move holds the volume's subsystem.
+	// Transient: the move's suspend window is bounded. A caller retries it and
+	// never attaches from anything older, because the subsystem the volume is
+	// in is about to change.
+	ErrVolumeHeldByMove = errors.New("volume held by a consistency-group subsystem move")
 	ErrVolumeExists     = errors.New("volume already exists")
 	ErrSnapshotNotFound = errors.New("snapshot not found")
 	ErrSnapshotExists   = errors.New("snapshot already exists")
+	// ErrSiteConflict is a create on a stretched cluster pinned to a node of
+	// another site than the one it names.
+	ErrSiteConflict = errors.New("the volume's host is on another site")
 
 	// ErrClusterNotFound means the clusterID referenced by a request is no longer
 	// present in the driver's secret configuration, i.e., the cluster has been
@@ -97,7 +106,7 @@ type ClusterAPI interface {
 	CreateSnapshot(ctx context.Context, lvolID, snapshotName string) (string, error)
 	ListSnapshots(ctx context.Context) ([]*SnapshotResp, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
-	CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName string) (string, error)
+	CloneSnapshot(ctx context.Context, snapshotID, cloneName, newSize, pvcName, consistencyGroup string) (string, error)
 }
 
 // StoragePool represents a simplyblock storage pool returned by the cluster API.
@@ -121,6 +130,15 @@ type LvolConnectResp struct {
 	// volume has been failed over. The CSI driver uses it for device lookup
 	// instead of the original source lvol UUID.
 	TargetLvolID string `json:"target-lvol-id,omitempty"`
+	// KeepAliveTmo, FastIOFailTmo and TwoNode: on a two-node arbitrated
+	// cluster (TwoNode) the host must connect with the control plane's
+	// keep-alive, fast_io_fail and ctrl-loss values, or a frozen node's path is
+	// detected late and a fenced path dropped (sbcli
+	// docs/design/two-node-arbitration.md §9.1). Every other cluster keeps the
+	// driver's own connect settings.
+	KeepAliveTmo  int  `json:"keep-alive-tmo,omitempty"`
+	FastIOFailTmo int  `json:"fast-io-fail-tmo,omitempty"`
+	TwoNode       bool `json:"two-node,omitempty"`
 }
 
 type connectionInfo struct {
@@ -282,6 +300,16 @@ func (client APIClient) createVolume(ctx context.Context, poolID string, params 
 	raw, err := client.do(ctx, http.MethodPost, client.v2volumes(poolID), params)
 	if err != nil {
 		if isHTTPStatus(err, http.StatusConflict) {
+			// A name that exists is a plain detail; a host on another site is a
+			// detail naming that site.
+			var e *HTTPError
+			_ = errors.As(err, &e)
+			var conflict struct {
+				NodeSite string `json:"node_site"`
+			}
+			if json.Unmarshal([]byte(e.Message), &conflict) == nil && conflict.NodeSite != "" {
+				return "", fmt.Errorf("%w: %s", ErrSiteConflict, e.Message)
+			}
 			err = ErrVolumeExists
 		}
 		return "", err
@@ -457,18 +485,22 @@ func (client APIClient) cloneVolume(
 // cloneSnapshot creates a new volume from a snapshot, returning the new volume's UUID
 func (client APIClient) cloneSnapshot(
 	ctx context.Context,
-	poolID, snapshotID, cloneName, newSize, pvcName string,
+	poolID, snapshotID, cloneName, newSize, pvcName, consistencyGroup string,
 ) (string, error) {
 	params := struct {
 		Name       string `json:"name"`
 		SnapshotID string `json:"snapshot_id"`
 		Size       string `json:"size,omitempty"`
 		PVCName    string `json:"pvc_name,omitempty"`
+		// The restore PVC's consistency-group label: the clones form a NEW
+		// group at provisioning when it is set (design §7.2).
+		ConsistencyGroup string `json:"consistency_group,omitempty"`
 	}{
-		Name:       cloneName,
-		SnapshotID: snapshotID,
-		Size:       newSize,
-		PVCName:    pvcName,
+		Name:             cloneName,
+		SnapshotID:       snapshotID,
+		Size:             newSize,
+		PVCName:          pvcName,
+		ConsistencyGroup: consistencyGroup,
 	}
 
 	klog.V(5).Infof("cloneSnapshot size: %s", newSize)
@@ -602,8 +634,12 @@ func (client APIClient) getLvolConnections(
 	}
 	raw, err := client.do(ctx, http.MethodGet, path, nil)
 	if err != nil {
-		if isHTTPStatus(err, http.StatusNotFound) {
-			return nil, ErrVolumeNotFound
+		var httpErr *HTTPError
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusNotFound {
+			return nil, fmt.Errorf("%w: %s", ErrVolumeNotFound, httpErr.Message)
+		}
+		if errors.As(err, &httpErr) && httpErr.StatusCode == http.StatusConflict {
+			return nil, fmt.Errorf("%w: %s", ErrVolumeHeldByMove, httpErr.Message)
 		}
 		return nil, err
 	}

@@ -23,7 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/duration"
 
-	metricsv1alpha1 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1"
+	metricsv1alpha2 "github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha2"
 )
 
 // columns are the table headers, in print order. Priority 1 hides a column
@@ -45,9 +45,9 @@ func (s *Storage) ConvertToTable(_ context.Context, object runtime.Object, _ run
 	table := &metav1.Table{ColumnDefinitions: columns}
 
 	switch typed := object.(type) {
-	case *metricsv1alpha1.LogicalVolumeMetrics:
+	case *metricsv1alpha2.LogicalVolumeMetrics:
 		table.Rows = append(table.Rows, row(typed))
-	case *metricsv1alpha1.LogicalVolumeMetricsList:
+	case *metricsv1alpha2.LogicalVolumeMetricsList:
 		table.ResourceVersion = typed.ResourceVersion
 		for i := range typed.Items {
 			table.Rows = append(table.Rows, row(&typed.Items[i]))
@@ -65,7 +65,7 @@ func (s *Storage) ConvertToTable(_ context.Context, object runtime.Object, _ run
 	return table, nil
 }
 
-func row(reading *metricsv1alpha1.LogicalVolumeMetrics) metav1.TableRow {
+func row(reading *metricsv1alpha2.LogicalVolumeMetrics) metav1.TableRow {
 	return metav1.TableRow{
 		Cells: []any{
 			reading.Name,

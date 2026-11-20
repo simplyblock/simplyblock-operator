@@ -54,6 +54,35 @@ type Worker struct {
 	// with 256 GiB may schedule against 250. Its zero value means the planner
 	// was given no node objects.
 	Kube KubeNode
+
+	// Mgmt is the interface the draft names for management, with what the stack
+	// says about it: the physical interfaces underneath a bond or a bridge, the
+	// speed they add up to, and the memory node they sit on. Its name is empty
+	// when the machine presents no interface that would serve.
+	//
+	// The name is part of what makes two workers groupable: a NodeGroup names
+	// one interface for every worker in it, so machines that call theirs
+	// different things describe different groups however identical their disks
+	// are.
+	Mgmt Management
+
+	// Data are the interfaces the draft names for data traffic, ascending by
+	// name, and empty when the machine has none that qualify. They are part of
+	// what makes two workers groupable for the same reason the management
+	// interface is.
+	Data []string
+
+	// Attachment is the NetworkAttachmentDefinitions the draft attaches the
+	// worker's storage node through, nil on host networking. A run names one
+	// for the whole fleet, so it does not split groups on its own, and it is
+	// in the signature all the same: a NodeGroup names one for every worker.
+	Attachment *simplyblockv1alpha2.NetworkAttachmentSelection
+
+	// FailureDomain is the value of the failure-domain label on the worker's
+	// Node, empty when it carries none or one the field does not accept. It is
+	// part of what makes two workers groupable, because a NodeGroup names one
+	// failure domain for every worker it lists.
+	FailureDomain string
 }
 
 // Addresses is how the draft names this worker's devices, ascending and without
@@ -91,6 +120,22 @@ type Group struct {
 	// Class and Addresses are the device selection they share.
 	Class     DeviceClass
 	Addresses []string
+
+	// MgmtInterface is the interface every worker in the group binds its
+	// management address to, which is why it is on the group rather than on the
+	// workers: a NodeGroup names one.
+	MgmtInterface string
+
+	// DataInterfaces are the interfaces every worker in the group carries data
+	// traffic on, empty when they serve data on the management interface.
+	DataInterfaces []string
+
+	// NetworkAttachment is the attachment every worker in the group is drafted
+	// with, nil on host networking.
+	NetworkAttachment *simplyblockv1alpha2.NetworkAttachmentSelection
+
+	// FailureDomain is the failure domain every worker in the group is in.
+	FailureDomain string
 }
 
 // Grouper puts workers into groups.
@@ -120,11 +165,19 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 
 	for _, worker := range workers {
 		addresses := worker.Addresses()
-		signature := worker.Class.signature(addresses)
+		signature := worker.Class.signature(addresses, worker.Mgmt.Name, worker.Data) + "\x00" + worker.FailureDomain +
+			"\x00" + attachmentSignature(worker.Attachment)
 
 		group, seen := bySignature[signature]
 		if !seen {
-			group = &Group{Class: worker.Class, Addresses: addresses}
+			group = &Group{
+				Class:             worker.Class,
+				Addresses:         addresses,
+				MgmtInterface:     worker.Mgmt.Name,
+				DataInterfaces:    worker.Data,
+				NetworkAttachment: worker.Attachment,
+				FailureDomain:     worker.FailureDomain,
+			}
 			bySignature[signature] = group
 			order = append(order, signature)
 		}
@@ -150,12 +203,27 @@ func (GroupByHardware) Group(workers []Worker) []Group {
 	return groups
 }
 
-// signature is the key two workers must agree on to share a group: the class
-// and the addresses, hashed so that a hundred addresses do not become a
-// hundred-element map key.
-func (c DeviceClass) signature(addresses []string) string {
-	digest := sha256.Sum256([]byte(string(c) + "\x00" + strings.Join(addresses, "\x00")))
+// signature is the key two workers must agree on to share a group: the class,
+// the addresses, the management interface, and the data interfaces, hashed so
+// that a hundred addresses do not become a hundred-element map key.
+//
+// The interfaces are in the key because a NodeGroup names them for every worker
+// it lists. Two machines with identical disks that call their NICs different things
+// cannot be described by one group, and grouping them anyway would write a
+// document that is wrong for whichever of them lost.
+func (c DeviceClass) signature(addresses []string, mgmtInterface string, dataInterfaces []string) string {
+	digest := sha256.Sum256([]byte(
+		string(c) + "\x00" + mgmtInterface + "\x00" + strings.Join(dataInterfaces, ",") +
+			"\x00" + strings.Join(addresses, "\x00")))
 	return hex.EncodeToString(digest[:])
+}
+
+// attachmentSignature is a worker's attachment as part of its group key.
+func attachmentSignature(attachment *simplyblockv1alpha2.NetworkAttachmentSelection) string {
+	if attachment == nil {
+		return ""
+	}
+	return attachment.Management + "\x00" + attachment.Data
 }
 
 // groupName names a group for a reader.
@@ -164,8 +232,15 @@ func (c DeviceClass) signature(addresses []string) string {
 // what a reviewer edits and "group-1" invites that where a hash does not. The
 // ordering above is what makes the number stable.
 func groupName(index int, group Group) string {
+	size := humanBytes(groupDeviceBytes(group))
+	if groupDeviceBytes(group) == 0 {
+		// Devices the kernel does not present have no size to read, and naming
+		// the group for "0 B" would state a capacity where there is only an
+		// absence of one.
+		size = "unsized"
+	}
 	return fmt.Sprintf("group-%d-%s-%dx%s", index+1, group.Class,
-		len(group.Addresses), humanBytes(groupDeviceBytes(group)))
+		len(group.Addresses), size)
 }
 
 // groupDeviceBytes is the size of one worker's devices in the group, which is
@@ -190,12 +265,12 @@ type NodeSetBuilder interface {
 	Build(groups []Group) []simplyblockv1alpha2.NodeSet
 }
 
-// SingleNodeSet puts every group into one node set.
+// SingleNodeSet puts every group into one node set, which the size split then
+// divides where it holds more workers than one member may.
 //
-// A node set is a rack, and nothing a probe reports says which rack a worker is
-// in: the Kubernetes API carries a zone label on some fleets and nothing on
-// most, and a zone is not a rack. So one set, named for what it is, and a
-// reviewer who knows the racks splits it.
+// A node set is a member cluster, and nothing a probe reports says how a fleet
+// is meant to be divided beyond its topology labels. So one set, named for what
+// it is, and a reviewer who knows the racks splits it.
 type SingleNodeSet struct {
 	// SetName is the node set's name. Empty is DefaultNodeSetName.
 	SetName string
@@ -208,17 +283,19 @@ const DefaultNodeSetName = "discovered"
 
 func (SingleNodeSet) Name() string { return "single node set" }
 
+// Build puts every group into one node set.
 func (b SingleNodeSet) Build(groups []Group) []simplyblockv1alpha2.NodeSet {
 	if len(groups) == 0 {
 		return nil
 	}
-
 	name := b.SetName
 	if name == "" {
 		name = DefaultNodeSetName
 	}
-
-	set := simplyblockv1alpha2.NodeSet{Name: name, Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(groups))}
+	set := simplyblockv1alpha2.NodeSet{
+		Name:   name,
+		Groups: make([]simplyblockv1alpha2.NodeGroup, 0, len(groups)),
+	}
 	for _, group := range groups {
 		set.Groups = append(set.Groups, nodeGroupOf(group))
 	}
@@ -232,7 +309,17 @@ func nodeGroupOf(group Group) simplyblockv1alpha2.NodeGroup {
 		workers = append(workers, worker.Name)
 	}
 
-	out := simplyblockv1alpha2.NodeGroup{Name: group.Name, Workers: workers}
+	out := simplyblockv1alpha2.NodeGroup{
+		Name:           group.Name,
+		Workers:        workers,
+		MgmtInterface:  group.MgmtInterface,
+		DataInterfaces: group.DataInterfaces,
+		FailureDomain:  group.FailureDomain,
+	}
+	if group.NetworkAttachment != nil {
+		attachment := *group.NetworkAttachment
+		out.NetworkAttachment = &attachment
+	}
 	if len(group.Addresses) > 0 {
 		selection := &simplyblockv1alpha2.DeviceSelection{}
 		if group.Class == ClassBlock {

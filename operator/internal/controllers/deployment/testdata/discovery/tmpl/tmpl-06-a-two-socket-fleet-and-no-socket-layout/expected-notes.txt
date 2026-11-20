@@ -1,0 +1,3 @@
+stripe is 1+1, the only redundant scheme a fleet of 3 carries: it needs 3 storage nodes and the next scheme up needs more. A cluster's stripe cannot be changed afterward
+enableNodeAffinity is set, because a 1+1 stripe is a mirror and reads are served from the local node's copy first. The control plane takes it at cluster create and never re-applies it, so this is the line to remove now if reads should not prefer the local node
+wrote discovered-discover-tmpl-06 in Draft: 3 workers with 6 nvme devices, in 1 group(s) across 1 node set(s); 6 refusal(s)

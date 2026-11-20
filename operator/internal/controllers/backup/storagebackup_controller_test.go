@@ -1,0 +1,499 @@
+// Tests for the StorageBackup mirror: the projection from a control-plane
+// status to a typed phase, and the create, update, and delete paths of the
+// reconciler that publishes it.
+//
+// The delete path carries the assertion that matters most here. A backup object
+// is the whole of what Kubernetes knows about a copy, so deleting one on the
+// strength of a cold cache would empty the inventory every time the operator
+// restarted, and every restore would then have nothing to name.
+
+package backup
+
+import (
+	"context"
+	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
+)
+
+func backupObjectName() string { return simplyblockv1alpha2.StorageBackupName(testBackupID) }
+
+func backupRequest() ctrl.Request {
+	return ctrl.Request{
+		NamespacedName: types.NamespacedName{Namespace: testNamespace, Name: backupObjectName()},
+	}
+}
+
+func reportedBackup() subscriptions.BackupDTO {
+	return subscriptions.BackupDTO{
+		ID:           testBackupID,
+		LvolID:       testLvolID,
+		LvolName:     "vol1",
+		SnapshotID:   "snapshot-id",
+		SnapshotName: "snap-1",
+		NodeID:       "node-1",
+		Status:       cpBackupCompleted,
+		Size:         1 << 30,
+		CreatedAt:    1700000000,
+		CompletedAt:  1700000060,
+	}
+}
+
+// backupMirror builds a reconciler over the given cache and objects.
+func backupMirror(
+	t *testing.T, cache BackupCache, objs ...client.Object,
+) *StorageBackupReconciler {
+	t.Helper()
+	c := testClient(t, objs...)
+	return &StorageBackupReconciler{
+		Client: c, Scheme: testScheme(t), Backups: cache, Recorder: testRecorder(),
+	}
+}
+
+func syncedCache(backups ...subscriptions.BackupDTO) *fakeBackupCache {
+	cache := &fakeBackupCache{synced: true, backups: map[string]subscriptions.BackupDTO{}}
+	for _, backup := range backups {
+		cache.backups[simplyblockv1alpha2.StorageBackupName(backup.ID)] = backup
+	}
+	return cache
+}
+
+// sourceVolume is a PersistentVolume the mirror resolves a backup's claim, pool,
+// and filesystem through.
+func sourceVolume() *corev1.PersistentVolume {
+	return &corev1.PersistentVolume{
+		ObjectMeta: metav1.ObjectMeta{Name: "pv-1"},
+		Spec: corev1.PersistentVolumeSpec{
+			ClaimRef: &corev1.ObjectReference{Name: testClaim, Namespace: testNamespace},
+			PersistentVolumeSource: corev1.PersistentVolumeSource{
+				CSI: &corev1.CSIPersistentVolumeSource{
+					VolumeHandle: testClusterID + ":" + testPoolID + ":" + testLvolID,
+					FSType:       "xfs",
+				},
+			},
+		},
+	}
+}
+
+func TestMirrorCreatesAnObjectForADiscoveredBackup(t *testing.T) {
+	r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject(), sourceVolume())
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+
+	if backup.Spec.ClusterRef != testClusterCR || backup.Spec.Source != nil {
+		t.Errorf("spec = %+v, want a record naming the cluster", backup.Spec)
+	}
+	if backup.BackupID() != testBackupID {
+		t.Errorf("status.backup.backupID = %q, want the store's identifier %q", backup.BackupID(), testBackupID)
+	}
+	if got := backup.Status.Phase; got != simplyblockv1alpha2.StorageBackupPhaseAvailable {
+		t.Errorf("status.phase = %q, want %q", got, simplyblockv1alpha2.StorageBackupPhaseAvailable)
+	}
+	if got := backup.Copy().Size; got == nil || *got != 1<<30 {
+		t.Errorf("status.backup.size = %v, want 1GiB", got)
+	}
+	// The Kubernetes half of the source, which the control plane does not report
+	// and the mirror resolves through the volume's handle.
+	source := backup.Source()
+	if source.ClaimName != testClaim || source.FSType != "xfs" || source.PoolUUID != testPoolID {
+		t.Errorf("status.source = %+v, want the claim, filesystem, and pool of the source volume", source)
+	}
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelClaim]; got != testClaim {
+		t.Errorf("claim label = %q, want claim-1", got)
+	}
+}
+
+// A member of a group backup carries the group identity on status.source.group
+// and the group-backup-id label, so the members of one generation are a selector
+// a group restore can address.
+func TestMirrorRecordsAGroupMemberBackup(t *testing.T) {
+	const groupBackupID = "11111111-1111-1111-1111-111111111111/gb-1"
+	member := reportedBackup()
+	member.GroupBackupID = groupBackupID
+	member.GroupSeq = 7
+
+	r := backupMirror(t, syncedCache(member), testClusterObject(), sourceVolume())
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+
+	group := backup.Source().Group
+	if group == nil {
+		t.Fatal("status.source.group is nil, want the group identity of a member backup")
+	}
+	if group.GroupBackupID != groupBackupID || group.Generation != 7 {
+		t.Errorf("status.source.group = %+v, want group backup %q generation 7", group, groupBackupID)
+	}
+	// The label carries the bare uuid: the composite is not a legal label value.
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; got != "gb-1" {
+		t.Errorf("group-backup-id label = %q, want the bare uuid %q", got, "gb-1")
+	}
+}
+
+// The control plane writes a member backup first and attaches it to its group
+// backup in a second write, so the mirror's first event carries no group. The
+// group must still land: on the later event, into the write-once source, and
+// as the bare-uuid label. Before this, the composite id made the label patch
+// illegal and the reconcile failed before the status write, so the members sat
+// Pending with no group for good (live 2026-10-20).
+func TestMirrorFillsTheGroupOfAMemberReportedBeforeItsGroupID(t *testing.T) {
+	const groupBackupID = "11111111-1111-1111-1111-111111111111/22222222-2222-4222-8222-222222222222"
+	first := reportedBackup()
+	first.Status = cpBackupInProgress
+	cache := syncedCache(first)
+	r := backupMirror(t, cache, testClusterObject(), sourceVolume())
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+	if backup.Source().Group != nil {
+		t.Fatalf("status.source.group = %+v before the group id was reported, want nil", backup.Source().Group)
+	}
+
+	second := reportedBackup()
+	second.GroupBackupID = groupBackupID
+	second.GroupSeq = 3
+	cache.backups[simplyblockv1alpha2.StorageBackupName(second.ID)] = second
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatal(err)
+	}
+	group := backup.Source().Group
+	if group == nil || group.GroupBackupID != groupBackupID || group.Generation != 3 {
+		t.Fatalf("status.source.group = %+v, want group backup %q generation 3 filled in on the later event", group, groupBackupID)
+	}
+	if got := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; got != "22222222-2222-4222-8222-222222222222" {
+		t.Errorf("group-backup-id label = %q, want the bare uuid", got)
+	}
+	if backup.Status.Phase != simplyblockv1alpha2.StorageBackupPhaseAvailable {
+		t.Errorf("phase = %q, want Available: the status write must not be lost behind the label", backup.Status.Phase)
+	}
+	// The rest of the source stays as first written.
+	if backup.Source().LvolID != first.LvolID {
+		t.Errorf("status.source.lvolID = %q changed from %q", backup.Source().LvolID, first.LvolID)
+	}
+}
+
+// A standalone backup carries no group identity and no group-backup-id label, so
+// it never shows up among a group's members.
+func TestMirrorLeavesAStandaloneBackupUngrouped(t *testing.T) {
+	r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject(), sourceVolume())
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+	if backup.Source().Group != nil {
+		t.Errorf("status.source.group = %+v, want nil for a standalone backup", backup.Source().Group)
+	}
+	if _, labeled := backup.Labels[simplyblockv1alpha2.BackupLabelGroupBackupID]; labeled {
+		t.Error("a standalone backup carries the group-backup-id label")
+	}
+}
+
+// A backup whose volume is gone still gets an object. The copy is in the bucket
+// and is restorable, and refusing to record it would make it unreachable: a
+// restore names a StorageBackup, and there would be none to name.
+func TestMirrorRecordsABackupWhoseSourceVolumeIsGone(t *testing.T) {
+	r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject())
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatalf("the mirror created no object: %v", err)
+	}
+	if got := backup.Source().ClaimName; got != "" {
+		t.Errorf("status.source.claimName = %q, want empty for a backup with no source volume", got)
+	}
+	if _, labeled := backup.Labels[simplyblockv1alpha2.BackupLabelClaim]; labeled {
+		t.Error("the object carries a claim label naming a claim that does not exist")
+	}
+	// What the control plane did report is still recorded.
+	if got := backup.Source().LvolID; got != testLvolID {
+		t.Errorf("status.source.lvolID = %q, want %q", got, testLvolID)
+	}
+}
+
+// The source group is written once and never updated. The pool a volume was in
+// when it was backed up is a fact about the backup, and rewriting it when the
+// volume moves would destroy the only record of where the data came from, which
+// is what a restore reads.
+func TestMirrorNeverRewritesTheSourceGroup(t *testing.T) {
+	recorded := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{
+			ClusterID: testClusterID,
+			Source:    &simplyblockv1alpha2.BackupSource{PoolName: "the-pool-it-came-from"},
+		},
+	}
+	r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject(), sourceVolume(), recorded)
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Fatal(err)
+	}
+	if got := backup.Source().PoolName; got != "the-pool-it-came-from" {
+		t.Errorf("status.source.poolName = %q, want the pool recorded when the copy was taken", got)
+	}
+}
+
+// A synced stream that does not mention a backup is a backup that left the
+// store, which is the ordinary end of a copy's life.
+func TestMirrorDeletesAnObjectWhoseBackupLeftTheStore(t *testing.T) {
+	recorded := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+	r := backupMirror(t, syncedCache(), testClusterObject(), recorded)
+
+	if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	err := r.Get(context.Background(), backupRequest().NamespacedName, &backup)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("the object survived a synced stream that no longer reports it: %v", err)
+	}
+}
+
+// Regression: 2026-10-01-merged-backup-lingers — retention merges the oldest
+// backup into its successor and the control plane keeps a record of it, status
+// merged, with its manifest deleted and its keys unmapped. The mirror did not
+// know the status, so it kept an object for it, phase Pending, for ever.
+func TestMirrorTreatsAMergedBackupAsGone(t *testing.T) {
+	merged := reportedBackup()
+	merged.Status = "merged"
+
+	recorded := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+	for name, objs := range map[string][]client.Object{
+		"the object it already has is removed": {testClusterObject(), recorded},
+		"no object is created for it":          {testClusterObject(), sourceVolume()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := backupMirror(t, syncedCache(merged), objs...)
+
+			if _, err := r.Reconcile(context.Background(), backupRequest()); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+
+			var backup simplyblockv1alpha2.StorageBackup
+			err := r.Get(context.Background(), backupRequest().NamespacedName, &backup)
+			if !apierrors.IsNotFound(err) {
+				t.Errorf("a merged backup has an object, phase %q: %v", backup.Status.Phase, err)
+			}
+		})
+	}
+}
+
+// A cold cache has said nothing at all, and deleting on that would empty the
+// inventory on every operator restart. This is the single most important
+// assertion about the mirror's delete path.
+func TestMirrorKeepsAnObjectWhileTheStreamHasNotSynced(t *testing.T) {
+	recorded := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec: simplyblockv1alpha2.StorageBackupSpec{
+			ClusterRef: testClusterCR,
+		},
+		Status: simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+	cold := &fakeBackupCache{synced: false, backups: map[string]subscriptions.BackupDTO{}}
+	r := backupMirror(t, cold, testClusterObject(), recorded)
+
+	result, err := r.Reconcile(context.Background(), backupRequest())
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if result.RequeueAfter == 0 {
+		t.Error("a cold cache produced no requeue, so the object would never be looked at again")
+	}
+
+	var backup simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), backupRequest().NamespacedName, &backup); err != nil {
+		t.Errorf("the object was deleted on the strength of a cache that has said nothing: %v", err)
+	}
+}
+
+func TestBackupPhaseGroupsTheControlPlanesStatuses(t *testing.T) {
+	for status, want := range map[string]simplyblockv1alpha2.StorageBackupPhase{
+		cpBackupPending:    simplyblockv1alpha2.StorageBackupPhasePending,
+		cpBackupInProgress: simplyblockv1alpha2.StorageBackupPhaseCreating,
+		cpBackupCompleted:  simplyblockv1alpha2.StorageBackupPhaseAvailable,
+		cpBackupFailed:     simplyblockv1alpha2.StorageBackupPhaseFailed,
+		// Both describe a copy being rewritten, so neither is restorable and
+		// neither has failed.
+		cpBackupMerging:  simplyblockv1alpha2.StorageBackupPhaseCreating,
+		cpBackupDeleting: simplyblockv1alpha2.StorageBackupPhaseCreating,
+		// A status this operator has never seen says the operator does not know,
+		// which is not the same as saying the copy is usable.
+		"something_new": simplyblockv1alpha2.StorageBackupPhasePending,
+	} {
+		if got := backupPhaseFor(status); got != want {
+			t.Errorf("backupPhaseFor(%q) = %q, want %q", status, got, want)
+		}
+	}
+}
+
+// The index is what lets the mirror resolve a backup's claim without listing
+// every volume in the cluster, and a volume it cannot read is one it must not
+// index under a wrong key.
+func TestVolumeIndexCoversOnlyWellFormedSimplyblockVolumes(t *testing.T) {
+	indexed := IndexPersistentVolumeLvolID(sourceVolume())
+	if len(indexed) != 1 || indexed[0] != testLvolID {
+		t.Errorf("a simplyblock volume indexed as %v, want [%s]", indexed, testLvolID)
+	}
+
+	foreign := &corev1.PersistentVolume{Spec: corev1.PersistentVolumeSpec{
+		PersistentVolumeSource: corev1.PersistentVolumeSource{
+			HostPath: &corev1.HostPathVolumeSource{Path: "/data"},
+		},
+	}}
+	if indexed := IndexPersistentVolumeLvolID(foreign); indexed != nil {
+		t.Errorf("a non-CSI volume indexed as %v, want nothing", indexed)
+	}
+
+	malformed := &corev1.PersistentVolume{Spec: corev1.PersistentVolumeSpec{
+		PersistentVolumeSource: corev1.PersistentVolumeSource{
+			CSI: &corev1.CSIPersistentVolumeSource{VolumeHandle: "not-a-handle"},
+		},
+	}}
+	if indexed := IndexPersistentVolumeLvolID(malformed); indexed != nil {
+		t.Errorf("a malformed handle indexed as %v, want nothing", indexed)
+	}
+}
+
+// A request is a person's object, so the mirror leaves it to its reconciler. It
+// records no second object for a backup a request owns, removes one it recorded
+// before the request knew the ID, and fails the request when the copy is pruned.
+func TestMirrorDefersToTheRequestThatOwnsABackup(t *testing.T) {
+	requestKey := types.NamespacedName{Namespace: "app", Name: "nightly"}
+	request := func(owns bool) *simplyblockv1alpha2.StorageBackup {
+		sb := &simplyblockv1alpha2.StorageBackup{
+			ObjectMeta: metav1.ObjectMeta{Name: requestKey.Name, Namespace: requestKey.Namespace},
+			Spec:       simplyblockv1alpha2.StorageBackupSpec{Source: &simplyblockv1alpha2.BackupRequest{ClaimName: testClaim}},
+		}
+		if owns {
+			sb.Status = simplyblockv1alpha2.StorageBackupStatus{
+				Phase:     simplyblockv1alpha2.StorageBackupPhaseAvailable,
+				ClusterID: testClusterID,
+				Backup:    &simplyblockv1alpha2.BackupCopy{BackupID: testBackupID},
+			}
+		}
+		return sb
+	}
+	record := &simplyblockv1alpha2.StorageBackup{
+		ObjectMeta: metav1.ObjectMeta{Name: backupObjectName(), Namespace: testNamespace},
+		Spec:       simplyblockv1alpha2.StorageBackupSpec{ClusterRef: testClusterCR},
+		Status:     simplyblockv1alpha2.StorageBackupStatus{ClusterID: testClusterID},
+	}
+
+	for name, tc := range map[string]struct {
+		cache     *fakeBackupCache
+		objs      []client.Object
+		reconcile types.NamespacedName
+		check     func(t *testing.T, r *StorageBackupReconciler)
+	}{
+		"a request with no backup yet is not read as a copy that left the store": {
+			cache: syncedCache(), objs: []client.Object{request(false)}, reconcile: requestKey,
+			check: func(t *testing.T, r *StorageBackupReconciler) { mustExist(t, r, requestKey) },
+		},
+		"no record is created for a backup a request owns": {
+			cache: syncedCache(reportedBackup()), objs: []client.Object{request(true), sourceVolume()},
+			reconcile: backupRequest().NamespacedName,
+			check: func(t *testing.T, r *StorageBackupReconciler) {
+				if err := r.Get(context.Background(), backupRequest().NamespacedName, &simplyblockv1alpha2.StorageBackup{}); err == nil {
+					t.Error("the mirror recorded a second object for a requested backup")
+				}
+			},
+		},
+		"a record made before the request knew the ID is removed": {
+			cache: syncedCache(reportedBackup()), objs: []client.Object{request(true), record}, reconcile: requestKey,
+			check: func(t *testing.T, r *StorageBackupReconciler) {
+				if err := r.Get(context.Background(), backupRequest().NamespacedName, &simplyblockv1alpha2.StorageBackup{}); err == nil {
+					t.Error("the duplicate record survived the request learning the ID")
+				}
+			},
+		},
+		"a copy that leaves the store fails the request": {
+			cache: syncedCache(), objs: []client.Object{request(true)}, reconcile: backupRequest().NamespacedName,
+			check: func(t *testing.T, r *StorageBackupReconciler) {
+				if got := mustExist(t, r, requestKey).Status.Phase; got != simplyblockv1alpha2.StorageBackupPhaseFailed {
+					t.Errorf("request phase = %q, want Failed once the copy left the store", got)
+				}
+			},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := backupMirror(t, tc.cache, append([]client.Object{testClusterObject()}, tc.objs...)...)
+			if _, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: tc.reconcile}); err != nil {
+				t.Fatal(err)
+			}
+			tc.check(t, r)
+		})
+	}
+
+	t.Run("deleting a request queues the record of its backup", func(t *testing.T) {
+		r := backupMirror(t, syncedCache(reportedBackup()), testClusterObject())
+		got := r.recordOf(context.Background(), request(true))
+		if len(got) != 1 || got[0].NamespacedName != backupRequest().NamespacedName {
+			t.Errorf("queued %v, want the backup's record in the cluster's namespace", got)
+		}
+	})
+}
+
+func mustExist(t *testing.T, r *StorageBackupReconciler, key types.NamespacedName) *simplyblockv1alpha2.StorageBackup {
+	t.Helper()
+	var got simplyblockv1alpha2.StorageBackup
+	if err := r.Get(context.Background(), key, &got); err != nil {
+		t.Fatalf("%s is gone: %v", key, err)
+	}
+	return &got
+}

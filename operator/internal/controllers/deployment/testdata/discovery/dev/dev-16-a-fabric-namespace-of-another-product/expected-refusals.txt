@@ -1,0 +1,1 @@
+worker-01/nvme3n1: declined by device class because this run scans NVMe devices and the device is on NVMeFabric

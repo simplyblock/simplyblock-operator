@@ -64,13 +64,27 @@ spec:
           image: "{{ .Values.image.numaResource.repository }}:{{ .Values.image.numaResource.tag }}"
           imagePullPolicy: {{ .Values.image.numaResource.pullPolicy }}
           securityContext:
+            # Root, whatever the image's USER: the socket goes into kubelet's
+            # root-owned device-plugins directory with every capability dropped.
+            runAsUser: 0
             privileged: false
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
+            # The plugin registers over the kubelet's socket, and SELinux decides
+            # that by the type the kubelet runs as. OpenShift's policy lets
+            # container_device_plugin_t connect to its kubelet. RKE2 runs its
+            # kubelet as container_runtime_t, which that type may not connect to,
+            # so off OpenShift the plugin takes the type no policy confines.
+            # `helm template` without --api-versions renders the type of the
+            # other clusters.
             seLinuxOptions:
+              {{- if .Capabilities.APIVersions.Has "config.openshift.io/v1/ClusterVersion" }}
               type: container_device_plugin_t
+              {{- else }}
+              type: spc_t
+              {{- end }}
 
           envFrom:
             - configMapRef:

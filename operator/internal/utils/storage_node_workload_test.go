@@ -1,0 +1,510 @@
+package utils
+
+import (
+	"slices"
+	"strings"
+	"testing"
+
+	"github.com/simplyblock/atlas/ptr"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	atlaskube "github.com/simplyblock/atlas/kube"
+)
+
+func TestStorageNodeSetAPIAddress(t *testing.T) {
+	got := StorageNodeSetAPIAddress("worker-1", "simplyblock", atlaskube.ConstantWorkloadNames())
+	want := "worker-1.simplyblock-storage-node-api.simplyblock.svc:5000"
+	if got != want {
+		t.Fatalf("StorageNodeSetAPIAddress = %q, want %q", got, want)
+	}
+}
+
+func TestBuildStorageNodeSetClusterRoleBindingNameIncludesNamespace(t *testing.T) {
+	cluster1Binding := BuildStorageNodeSetClusterRoleBinding("cluster1")
+	cluster2Binding := BuildStorageNodeSetClusterRoleBinding("cluster2")
+
+	if cluster1Binding.Name == cluster2Binding.Name {
+		t.Fatalf("expected per-namespace ClusterRoleBinding names, got %q", cluster1Binding.Name)
+	}
+	if cluster1Binding.Name != "simplyblock-storage-node-binding-cluster1" {
+		t.Fatalf("unexpected cluster1 ClusterRoleBinding name %q", cluster1Binding.Name)
+	}
+	if len(cluster1Binding.Subjects) != 1 || cluster1Binding.Subjects[0].Namespace != "cluster1" {
+		t.Fatalf("expected cluster1 service account subject, got %#v", cluster1Binding.Subjects)
+	}
+}
+
+// allows reports whether a rule of role grants verb on the resource kind in group.
+func allows(role *rbacv1.ClusterRole, group, kind, verb string) bool {
+	for _, r := range role.Rules {
+		if slices.Contains(r.APIGroups, group) && slices.Contains(r.Resources, kind) && slices.Contains(r.Verbs, verb) {
+			return true
+		}
+	}
+	return false
+}
+
+// The OpenShift CPU topology job deletes the master KubeletConfig a previous
+// simplyblock cluster left behind. Without delete in the storage node role that
+// call is Forbidden, `set -e` fails the job, and the node is never added.
+func TestStorageNodeRoleMayDeleteAKubeletConfigOnOpenShift(t *testing.T) {
+	const group = "machineconfiguration.openshift.io"
+	role := BuildStorageNodeSetClusterRole(true)
+
+	if !allows(role, group, "kubeletconfigs", "delete") {
+		t.Fatalf("the storage node role cannot delete kubeletconfigs: %#v", role.Rules)
+	}
+	for _, kind := range []string{"machineconfigs", "machineconfigpools"} {
+		if allows(role, group, kind, "delete") {
+			t.Errorf("the storage node role may delete %s, which no job does", kind)
+		}
+	}
+	if allows(BuildStorageNodeSetClusterRole(false), group, "kubeletconfigs", "delete") {
+		t.Errorf("the storage node role grants kubeletconfigs outside OpenShift")
+	}
+}
+
+// TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys guards the mounts
+// node_configure.py's lblk eligibility check needs.
+//
+// It arrived with the lblk work against the v1alpha1 builder and is written
+// against the v1alpha2 one here, because that is the builder this operator
+// runs: the StorageCluster is the DaemonSet's parent now, and the check is
+// about the container rather than about which kind describes it.
+func TestBuildStorageNodeDaemonSetConfigGeneratorMountsDevAndSys(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "", "")
+
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
+	var hasDev, hasSys bool
+	for _, m := range init.VolumeMounts {
+		if m.Name == "dev-vol" && m.MountPath == "/dev" {
+			hasDev = true
+		}
+		if m.Name == "host-sys" && m.MountPath == "/sys" {
+			hasSys = true
+		}
+	}
+	if !hasDev {
+		t.Errorf("s-node-api-config-generator must mount /dev for lblk eligibility checks")
+	}
+	if !hasSys {
+		t.Errorf("s-node-api-config-generator must mount /sys for block-device inspection")
+	}
+}
+
+// TestConfigGeneratorAndMainContainerRunAsRootWithoutSudo is a regression test:
+// 2026-09-29, K3s on Ubuntu 24.04. Both containers ran as the image's default
+// non-root user and started their command through sudo, which fails its PAM
+// account check in this image ("Authentication service cannot retrieve
+// authentication info"): s-node-api-config-generator exited at once and every
+// storage node's add failed. The fix mirrors sbcli's SPDK pod fix for the same
+// fault: run as root (runAsUser 0) and drop sudo rather than escalate to it.
+func TestConfigGeneratorAndMainContainerRunAsRootWithoutSudo(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "", "")
+
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
+	if init.Name != "s-node-api-config-generator" {
+		t.Fatalf("expected s-node-api-config-generator, got %q", init.Name)
+	}
+	if init.SecurityContext == nil || init.SecurityContext.RunAsUser == nil || *init.SecurityContext.RunAsUser != 0 {
+		t.Errorf("s-node-api-config-generator must run as root (runAsUser 0), got %#v", init.SecurityContext)
+	}
+	if strings.Contains(configureInvocation, "sudo") {
+		t.Errorf("configureInvocation must not call sudo: %s", configureInvocation)
+	}
+
+	main := ds.Spec.Template.Spec.Containers[0]
+	if main.Name != "s-node-api-container" {
+		t.Fatalf("expected s-node-api-container, got %q", main.Name)
+	}
+	if main.SecurityContext == nil || main.SecurityContext.RunAsUser == nil || *main.SecurityContext.RunAsUser != 0 {
+		t.Errorf("s-node-api-container must run as root (runAsUser 0), got %#v", main.SecurityContext)
+	}
+	if strings.Contains(strings.Join(main.Command, "\n"), "sudo") {
+		t.Errorf("s-node-api-container must not call sudo: %v", main.Command)
+	}
+}
+
+func TestBuildSpdkProxyEndpointSlice_DottedNodeNameTruncates(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	endpoints := []SpdkProxyEndpoint{
+		{NodeName: "ip-10-0-1-23.us-east-1.compute.internal", PodIP: "10.0.1.23", RpcPort: 9001},
+		{NodeName: "worker-1", PodIP: "10.0.1.24", RpcPort: 9001},
+	}
+
+	eps, err := BuildSpdkProxyEndpointSlice(sn, 9001, endpoints)
+	if err != nil {
+		t.Fatalf("BuildSpdkProxyEndpointSlice: %v", err)
+	}
+	if len(eps.Endpoints) != 2 {
+		t.Fatalf("expected 2 endpoints, got %d", len(eps.Endpoints))
+	}
+
+	got := map[string]string{}
+	for _, e := range eps.Endpoints {
+		if e.Hostname == nil || len(e.Addresses) != 1 {
+			t.Fatalf("malformed endpoint %#v", e)
+		}
+		got[*e.Hostname] = e.Addresses[0]
+	}
+	if got["ip-10-0-1-23"] != "10.0.1.23" {
+		t.Fatalf("expected dotted node name truncated to first label, got %#v", got)
+	}
+	if got["worker-1"] != "10.0.1.24" {
+		t.Fatalf("expected single-label node name preserved, got %#v", got)
+	}
+}
+
+func TestBuildSpdkProxyEndpointSlice_CollidingFirstLabelFails(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	endpoints := []SpdkProxyEndpoint{
+		{NodeName: "worker.us-east-1.local", PodIP: "10.0.0.1", RpcPort: 9001},
+		{NodeName: "worker.eu-west-1.local", PodIP: "10.0.0.2", RpcPort: 9001},
+	}
+
+	eps, err := BuildSpdkProxyEndpointSlice(sn, 9001, endpoints)
+	if err == nil {
+		t.Fatalf("expected collision error, got slice %#v", eps)
+	}
+	if !strings.Contains(err.Error(), "worker.us-east-1.local") ||
+		!strings.Contains(err.Error(), "worker.eu-west-1.local") {
+		t.Fatalf("expected error to name both colliding nodes, got %q", err.Error())
+	}
+}
+
+func TestBuildStorageNodeDaemonSetUserResourcesOverrideDefaults(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				ContainerResources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("1Gi")},
+					Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+				},
+				InitContainerResources: corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("64Mi")},
+					Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("128Mi")},
+				},
+			},
+		},
+	}
+
+	ds := BuildStorageNodeDaemonSet(sn, false, false, "", "", "simplyblock/simplyblock:latest")
+
+	main := ds.Spec.Template.Spec.Containers[0]
+	mainMem := main.Resources.Limits[corev1.ResourceMemory]
+	if mainMem.String() != "4Gi" {
+		t.Errorf("main container: expected user memory limit 4Gi, got %v", mainMem.String())
+	}
+
+	init := ds.Spec.Template.Spec.InitContainers[1] // [0]=node-env-writer, [1]=s-node-api-config-generator
+	initMem := init.Resources.Limits[corev1.ResourceMemory]
+	if initMem.String() != "128Mi" {
+		t.Errorf("init container: expected user memory limit 128Mi, got %v", initMem.String())
+	}
+}
+
+// What the pod carries as an environment variable is the fleet's value, and
+// what the node's own entry states has to win over it. The entry is sourced
+// rather than injected, so a variable it sets is a shell variable: exec only
+// inherits the environment, which a sourced assignment is not part of until it
+// is exported.
+func TestTheMainContainerExportsTheNodesReservedCPUs(t *testing.T) {
+	ds := BuildStorageNodeDaemonSet(&simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+	}, false, false, "", "", "node-agent:test")
+
+	containers := ds.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("the pod has %d containers, want 1", len(containers))
+	}
+	command := strings.Join(containers[0].Command, "\n")
+
+	if !strings.Contains(command, ". /etc/node-env/env.sh") {
+		t.Fatalf("the container does not source the node's entry: %s", command)
+	}
+	if !strings.Contains(command, "export RESERVED_SYSTEM_CPUS") {
+		t.Errorf("the container sources the entry and exports nothing from it, "+
+			"so the node's own reserved CPUs never reach the agent: %s", command)
+	}
+	// Only that one. Exporting the entry wholesale would put the device lists
+	// and the class flag into the agent's environment, where nothing asked for
+	// them and a name could collide.
+	if strings.Contains(command, "set -a") {
+		t.Errorf("the container exports the whole entry: %s", command)
+	}
+}
+
+// The OpenShift block is the statement that this is OpenShift, and the pool it
+// names is the extra machine-config role the storage pool inherits from. Both
+// reach the agent as the environment variables it reads them by.
+func TestTheOpenShiftBlockReachesTheAgent(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				OpenShift: &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"},
+			},
+		},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["OPENSHIFT_CLUSTER"] != "true" {
+		t.Errorf("OPENSHIFT_CLUSTER = %q for a cluster that states the block", env["OPENSHIFT_CLUSTER"])
+	}
+	if env["OPENSHIFT_MCP"] != "infra" {
+		t.Errorf("OPENSHIFT_MCP = %q, want the pool the block names", env["OPENSHIFT_MCP"])
+	}
+}
+
+// No block is no OpenShift, and the agent is told so rather than left to read an
+// empty string as a distribution.
+func TestNoOpenShiftBlockIsNotOpenShift(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["OPENSHIFT_CLUSTER"] != "false" {
+		t.Errorf("OPENSHIFT_CLUSTER = %q with no block stated", env["OPENSHIFT_CLUSTER"])
+	}
+	if _, stated := env["OPENSHIFT_MCP"]; stated {
+		t.Errorf("OPENSHIFT_MCP = %q with no block stated", env["OPENSHIFT_MCP"])
+	}
+}
+
+// Talos is stated the way OpenShift is, and the agent reads it the same way:
+// TALOS_CLUSTER is what switches it to reserving huge pages through the Talos
+// API, and the talosctl image, when the cluster pins one, rides along.
+func TestTalosReachesTheAgent(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				Talos:         ptr.To(true),
+				TalosctlImage: "ghcr.io/siderolabs/talosctl:v1.12.7",
+			},
+		},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["TALOS_CLUSTER"] != "true" {
+		t.Errorf("TALOS_CLUSTER = %q for a cluster that states Talos", env["TALOS_CLUSTER"])
+	}
+	if env["TALOSCTL_IMAGE"] != "ghcr.io/siderolabs/talosctl:v1.12.7" {
+		t.Errorf("TALOSCTL_IMAGE = %q, want the pinned image", env["TALOSCTL_IMAGE"])
+	}
+	if env["TALOS_MACHINE_CONFIG"] != "preprovisioned" {
+		t.Errorf("TALOS_MACHINE_CONFIG = %q with no mode stated, want the pre-provisioned default said out loud",
+			env["TALOS_MACHINE_CONFIG"])
+	}
+}
+
+// A cluster that states Managed lets the agent patch the machine config
+// through the Talos API; the agent reads the mode lowercase.
+func TestAManagedTalosMachineConfigReachesTheAgent(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+		Spec: simplyblockv1alpha2.StorageClusterSpec{
+			StorageNodes: &simplyblockv1alpha2.StorageNodesSpec{
+				Talos:              ptr.To(true),
+				TalosMachineConfig: simplyblockv1alpha2.TalosMachineConfigManaged,
+			},
+		},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["TALOS_MACHINE_CONFIG"] != "managed" {
+		t.Errorf("TALOS_MACHINE_CONFIG = %q for a cluster that states Managed", env["TALOS_MACHINE_CONFIG"])
+	}
+}
+
+// Unstated is not Talos, said explicitly, and no image is forced on the agent
+// so that its own default stands.
+func TestUnstatedTalosIsNotTalos(t *testing.T) {
+	cluster := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: "simplyblock"},
+	}
+
+	env := mainEnvOf(t, BuildStorageNodeDaemonSet(cluster, false, false, "", "", "agent:test"))
+	if env["TALOS_CLUSTER"] != "false" {
+		t.Errorf("TALOS_CLUSTER = %q with Talos unstated", env["TALOS_CLUSTER"])
+	}
+	if _, stated := env["TALOSCTL_IMAGE"]; stated {
+		t.Errorf("TALOSCTL_IMAGE = %q with Talos unstated", env["TALOSCTL_IMAGE"])
+	}
+	if _, stated := env["TALOS_MACHINE_CONFIG"]; stated {
+		t.Errorf("TALOS_MACHINE_CONFIG = %q with Talos unstated", env["TALOS_MACHINE_CONFIG"])
+	}
+}
+
+// The agent reads a finished Job's pod log and checks for the Talos API
+// credentials Secret before creating a Job that mounts it; both need rules the
+// role did not carry (seen as HTTP 403 in the agent log on the first Talos run).
+func TestStorageNodeRoleLetsTheAgentReadJobLogsAndCheckSecrets(t *testing.T) {
+	granted := map[string][]string{}
+	for _, rule := range BuildStorageNodeSetClusterRole(false).Rules {
+		for _, group := range rule.APIGroups {
+			for _, res := range rule.Resources {
+				granted[group+"/"+res] = append(granted[group+"/"+res], rule.Verbs...)
+			}
+		}
+	}
+	for _, want := range []string{"/pods/log", "/secrets", "/nodes/proxy"} {
+		verbs := granted[want]
+		if len(verbs) != 1 || verbs[0] != "get" {
+			t.Errorf("%s verbs = %v, want exactly [get]", want, verbs)
+		}
+	}
+}
+
+// mainEnvOf is the agent container's environment, by name.
+func mainEnvOf(t *testing.T, ds *appsv1.DaemonSet) map[string]string {
+	t.Helper()
+	containers := ds.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("the pod has %d containers, want 1", len(containers))
+	}
+	env := map[string]string{}
+	for _, variable := range containers[0].Env {
+		env[variable.Name] = variable.Value
+	}
+	return env
+}
+
+// logCollectorOn is the annotation value the log collector ships.
+const logCollectorOn = "true"
+
+// The storage node's agent pods are marked for the log collector, alongside
+// whatever other annotation the TLS rollout puts on them.
+//
+// Regression: 2026-10-06-graylog-receives-nothing — the agent that starts and
+// supervises SPDK on every storage node was never marked, so its logs never
+// reached Graylog while the SPDK pod it creates was.
+func TestTheStorageNodeAgentIsShippedToTheLogCollector(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+
+	for _, tc := range []struct {
+		name       string
+		tlsEnabled bool
+		revision   string
+	}{
+		{name: "without TLS"},
+		{name: "with a TLS revision", tlsEnabled: true, revision: "42"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := BuildStorageNodeDaemonSet(sn, tc.tlsEnabled, false, "", tc.revision, "")
+			annotations := ds.Spec.Template.Annotations
+			if got := annotations[AnnotationLogCollector]; got != logCollectorOn {
+				t.Errorf("pod template %s = %q, want \"true\"", AnnotationLogCollector, got)
+			}
+			if tc.revision != "" && annotations[AnnotationTLSSecretRevision] != tc.revision {
+				t.Errorf("the TLS revision annotation was lost: %v", annotations)
+			}
+		})
+	}
+}
+
+// Regression: 2026-10-06-snodeapi-tls-accept-wedge. A network cut left the
+// node agent's accept loop blocked forever on a half-open TLS handshake. The
+// pod stayed Running and failed its readiness probe 311 times without being
+// restarted, and the control plane, which reaches SPDK only through that
+// agent, kept the storage node unreachable until a human intervened.
+//
+// The probe has to need an answer from the agent: a TCP connect succeeds
+// against a listener nobody accepts on until its backlog fills.
+func TestTheStorageNodeAgentIsRestartedWhenItStopsAnswering(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+
+	for _, tc := range []struct {
+		name                  string
+		tlsEnabled, mutualTLS bool
+		wantScheme            corev1.URIScheme
+	}{
+		{name: "without TLS", wantScheme: corev1.URISchemeHTTP},
+		{name: "with TLS", tlsEnabled: true, wantScheme: corev1.URISchemeHTTPS},
+		{name: "with mutual TLS", tlsEnabled: true, mutualTLS: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ds := BuildStorageNodeDaemonSet(sn, tc.tlsEnabled, tc.mutualTLS, "", "", "")
+			probe := ds.Spec.Template.Spec.Containers[0].LivenessProbe
+			if probe == nil {
+				t.Fatal("the node agent has no liveness probe, so nothing restarts it once it stops answering")
+			}
+			if probe.TCPSocket != nil {
+				t.Fatal("a TCP liveness probe passes against an agent that no longer accepts connections")
+			}
+			switch {
+			case tc.mutualTLS:
+				// The kubelet presents no client certificate, so an HTTPS
+				// probe is refused by an agent that demands one.
+				if probe.Exec == nil {
+					t.Fatalf("under mutual TLS the probe must run in the container, got %#v", probe.ProbeHandler)
+				}
+			default:
+				if probe.HTTPGet == nil {
+					t.Fatalf("expected an HTTP probe, got %#v", probe.ProbeHandler)
+				}
+				if got := probe.HTTPGet.Scheme; got != tc.wantScheme && (got != "" || tc.wantScheme != corev1.URISchemeHTTP) {
+					t.Errorf("probe scheme %q, want %q", got, tc.wantScheme)
+				}
+			}
+		})
+	}
+}
+
+// Regression: 2026-11-03-snodeapi-healthcheck-log-noise. Under mutual TLS,
+// both probes only completed a bare TLS handshake and treated the agent's
+// expected certificate-less rejection as success. The agent logged every one
+// of those rejections as a handshake failure, indistinguishable from a real
+// fault, on every probe interval. The in-container exec check has the
+// agent's own certificate mounted beside it (the same volume node_webapp.py
+// serves with), so it can present one and complete a genuine, mutually
+// authenticated handshake instead of forcing a rejection.
+func TestTheStorageNodeAgentHealthChecksPresentACertificateUnderMutualTLS(t *testing.T) {
+	sn := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "sn", Namespace: "ns"},
+	}
+	ds := BuildStorageNodeDaemonSet(sn, true, true, "", "", "")
+	container := ds.Spec.Template.Spec.Containers[0]
+
+	for _, tc := range []struct {
+		name  string
+		probe *corev1.Probe
+	}{
+		{"readiness", container.ReadinessProbe},
+		{"liveness", container.LivenessProbe},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.probe == nil || tc.probe.Exec == nil {
+				t.Fatalf("expected an exec probe under mutual TLS, got %#v", tc.probe)
+			}
+			script := strings.Join(tc.probe.Exec.Command, " ")
+			if !strings.Contains(script, "load_cert_chain") {
+				t.Errorf("the probe never presents the agent's own certificate: %s", script)
+			}
+			if strings.Contains(script, "CERT_NONE") {
+				t.Errorf("the probe still accepts, rather than authenticates, the handshake: %s", script)
+			}
+		})
+	}
+}

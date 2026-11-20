@@ -50,14 +50,14 @@ import (
 // after the Manager Describe regardless of Ginkgo's randomized container order.
 
 const (
-	rbacFooNS                 = "rbac-cluster-foo"
-	rbacBarNS                 = "rbac-cluster-bar"
-	rbacViewerSA              = "viewer-sa"
-	rbacEditorSA              = "editor-sa"
-	rbacOutsiderSA            = "outsider-sa"
-	rbacScopedSA              = "scoped-sa"
-	rbacScopedRoleName        = "rbac-foo-admin"
-	rbacScopedClusterAllowed  = "rbac-allowed"
+	rbacFooNS                  = "rbac-cluster-foo"
+	rbacBarNS                  = "rbac-cluster-bar"
+	rbacViewerSA               = "viewer-sa"
+	rbacEditorSA               = "editor-sa"
+	rbacOutsiderSA             = "outsider-sa"
+	rbacScopedSA               = "scoped-sa"
+	rbacScopedRoleName         = "rbac-foo-admin"
+	rbacScopedClusterAllowed   = "rbac-allowed"
 	rbacScopedClusterForbidden = "rbac-forbidden"
 )
 

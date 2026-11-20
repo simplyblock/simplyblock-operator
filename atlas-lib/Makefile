@@ -17,9 +17,23 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # generator this one is not a go.mod dependency but a pinned binary in .bin, so
 # the rules take `buf` as an order-only prerequisite: it installs the toolchain
 # when absent without a phony target forcing a regeneration on every make run.
-PROTO_DIRS := link/linkv1 storage/storagerpc/storagev1
+PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
+	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1 netcheck/netcheckrpc/netcheckv1 \
+	volstack/swaprpc/swapv1 \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 freeze/freezerpc/freezev1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
-	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go
+	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
+	link/sitev1/switchover.pb.go link/sitev1/switchover_grpc.pb.go \
+	link/sitev1/site.pb.go link/sitev1/site_grpc.pb.go \
+	storage/storagerpc/storagev1/nvme.pb.go storage/storagerpc/storagev1/nvme_grpc.pb.go \
+	nfsexport/nfsexportrpc/nfsexportv1/export.pb.go nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go \
+	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
+	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go \
+	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go \
+	volstack/swaprpc/swapv1/swap.pb.go volstack/swaprpc/swapv1/swap_grpc.pb.go \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go \
+	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go \
+	freeze/freezerpc/freezev1/freeze.pb.go freeze/freezerpc/freezev1/freeze_grpc.pb.go
 
 GENERATED := $(CPAPI_GEN) $(PROTO_GEN)
 
@@ -28,7 +42,7 @@ all: build test ## Build and test the library.
 generate: $(GENERATED) ## Generate the control-plane API client, its response validation, and the link protocol.
 
 internal/cpapi/cpapi.gen.go: ../shared/openapi.json internal/cpapi/oapi-codegen.yaml \
-		internal/cpapi/gen.go
+		internal/cpapi/overlay.yaml internal/cpapi/gen.go
 	go generate ./internal/cpapi/...
 
 # The rules are checked against the spec and resolved against the client, so
@@ -38,7 +52,7 @@ internal/cpapi/validation.gen.go: internal/cpapi/cpapi.gen.go internal/cpapi/val
 		internal/cpapi/gen/main.go
 	cd internal/cpapi && go run ./gen
 
-# Both files of a pair come out of one buf invocation; the grpc half is
+# Both files of a pair come out of one buf invocation; the gRPC half is
 # expressed as depending on the other so a single recipe runs, portably across
 # make versions (grouped targets would need GNU make 4.3+).
 link/linkv1/link.pb.go: link/linkv1/link.proto link/linkv1/buf.gen.yaml link/linkv1/buf.yaml | buf
@@ -46,10 +60,60 @@ link/linkv1/link.pb.go: link/linkv1/link.proto link/linkv1/buf.gen.yaml link/lin
 
 link/linkv1/link_grpc.pb.go: link/linkv1/link.pb.go
 
+link/sitev1/relay.pb.go: link/sitev1/relay.proto link/sitev1/buf.gen.yaml link/sitev1/buf.yaml | buf
+	cd link/sitev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+link/sitev1/relay_grpc.pb.go: link/sitev1/relay.pb.go
+
+# One buf invocation generates every file of the module, so the second pair
+# rides the first's recipe.
+link/sitev1/switchover.pb.go: link/sitev1/switchover.proto | link/sitev1/relay.pb.go
+
+link/sitev1/switchover_grpc.pb.go: link/sitev1/switchover.pb.go
+
+link/sitev1/site.pb.go: link/sitev1/site.proto | link/sitev1/relay.pb.go
+
+link/sitev1/site_grpc.pb.go: link/sitev1/site.pb.go
+
 storage/storagerpc/storagev1/nvme.pb.go: storage/storagerpc/storagev1/nvme.proto storage/storagerpc/storagev1/buf.gen.yaml storage/storagerpc/storagev1/buf.yaml | buf
 	cd storage/storagerpc/storagev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 storage/storagerpc/storagev1/nvme_grpc.pb.go: storage/storagerpc/storagev1/nvme.pb.go
+
+nfsexport/nfsexportrpc/nfsexportv1/export.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.proto nfsexport/nfsexportrpc/nfsexportv1/buf.gen.yaml nfsexport/nfsexportrpc/nfsexportv1/buf.yaml | buf
+	cd nfsexport/nfsexportrpc/nfsexportv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+nfsexport/nfsexportrpc/nfsexportv1/export_grpc.pb.go: nfsexport/nfsexportrpc/nfsexportv1/export.pb.go
+
+conntrack/conntrackrpc/conntrackv1/flow.pb.go: conntrack/conntrackrpc/conntrackv1/flow.proto conntrack/conntrackrpc/conntrackv1/buf.gen.yaml conntrack/conntrackrpc/conntrackv1/buf.yaml | buf
+	cd conntrack/conntrackrpc/conntrackv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go: conntrack/conntrackrpc/conntrackv1/flow.pb.go
+
+placement/placementrpc/placementv1/placement.pb.go: placement/placementrpc/placementv1/placement.proto placement/placementrpc/placementv1/buf.gen.yaml placement/placementrpc/placementv1/buf.yaml | buf
+	cd placement/placementrpc/placementv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+placement/placementrpc/placementv1/placement_grpc.pb.go: placement/placementrpc/placementv1/placement.pb.go
+
+netcheck/netcheckrpc/netcheckv1/check.pb.go: netcheck/netcheckrpc/netcheckv1/check.proto netcheck/netcheckrpc/netcheckv1/buf.gen.yaml netcheck/netcheckrpc/netcheckv1/buf.yaml | buf
+	cd netcheck/netcheckrpc/netcheckv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go: netcheck/netcheckrpc/netcheckv1/check.pb.go
+
+volstack/swaprpc/swapv1/swap.pb.go: volstack/swaprpc/swapv1/swap.proto volstack/swaprpc/swapv1/buf.gen.yaml volstack/swaprpc/swapv1/buf.yaml | buf
+	cd volstack/swaprpc/swapv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+volstack/swaprpc/swapv1/swap_grpc.pb.go: volstack/swaprpc/swapv1/swap.pb.go
+
+bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.proto bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.gen.yaml bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.yaml | buf
+	cd bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go
+
+freeze/freezerpc/freezev1/freeze.pb.go: freeze/freezerpc/freezev1/freeze.proto freeze/freezerpc/freezev1/buf.gen.yaml freeze/freezerpc/freezev1/buf.yaml | buf
+	cd freeze/freezerpc/freezev1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+freeze/freezerpc/freezev1/freeze_grpc.pb.go: freeze/freezerpc/freezev1/freeze.pb.go
 
 build: $(GENERATED) ## Build all packages.
 	go build ./...

@@ -1,0 +1,16 @@
+{
+  "name": "wiped-fat12",
+  "tool": "mkfs.vfat",
+  "tool_version": "Usage: mkfs.vfat [OPTIONS] TARGET [BLOCKS]",
+  "command": "mkfs.vfat -F 12, then wipefs -a",
+  "device_size": 16777216,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:47Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "424c89561e9e65ccff7a7123b3b2fe6c6fc07fb24381ab6e90e4d3ab68f71281",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 8 bytes were erased at offset 0x00000036 (vfat): 46 41 54 31 32 20 20 20;1 byte was erased at offset 0x00000000 (vfat): eb;2 bytes were erased at offset 0x000001fe (vfat): 55 aa. "
+}

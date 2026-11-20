@@ -1,0 +1,1 @@
+worker-01/sda: declined by allow and deny lists because it is in the deny list

@@ -1,0 +1,27 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-net-71
+  name: discovered-discover-net-71
+spec:
+  cluster:
+    clusterMode: Dual
+    enableNodeAffinity: true
+    name: discovered-discover-net-71-cluster
+    network: null
+    stripe:
+      dataChunks: 1
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5e:00.1
+        - 0000:5e:00.2
+        - 0000:5e:00.3
+      name: group-1-nvme-4x3T
+      networkAttachment:
+        management: storage-mgmt
+      workers:
+      - worker-01
+      - worker-02
+    name: discovered

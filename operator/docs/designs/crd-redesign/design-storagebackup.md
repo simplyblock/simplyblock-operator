@@ -1,8 +1,8 @@
 # Design Document: The Data-Protection Chain
 
-**Status:** Draft  
+**Status:** Implemented, with the exceptions §14 records  
 **Author:** Christoph Engelbert (noctarius)  
-**Date:** 2026-08-30  
+**Date:** 2026-08-30 (last updated 2026-09-17)  
 **Test Plan:** [`tests/test-plan-storagebackup.md`](../../tests/test-plan-storagebackup.md)
 
 This document specifies the target model for the whole data-protection layer.
@@ -171,10 +171,16 @@ ClaimSelector *metav1.LabelSelector `json:"claimSelector,omitempty"`
 ```
 
 **An absent selector selects nothing, and that is the whole argument for the
-default.** The alternative reading, that an empty selector matches everything, is
-what `metav1.LabelSelector` means in most Kubernetes APIs and is wrong here: the
-cost of backing up too much is silent and recurring, and the cost of backing up
-too little is an error somebody sees.
+default.** A policy that silently covered every claim in the namespace would back
+up more than its author intended, and the failure would be a bill rather than an
+error: the cost of backing up too much is silent and recurring, and the cost of
+backing up too little is an error somebody sees.
+
+**An explicitly empty selector still means every claim in the namespace.** That is
+what two empty braces mean in every other Kubernetes API and what somebody who
+wrote them asked for, and omitting a field and writing it empty are different
+statements. Only the first has a silent cost, so only the first is the one the
+default guards.
 
 **The policy attaches and detaches as claims come and go.** A claim that starts
 matching is attached, a claim that stops matching is detached, and
@@ -184,9 +190,25 @@ retention: a policy governs what is taken, not what is kept.
 
 ### 4.2 Schedule and retention
 
-`spec.schedule` is a cron expression, `spec.maxVersions` is how many backups to
-keep, and `spec.maxAge` is how long to keep them. All three are passed to the
-control plane, which does the scheduling and the pruning (§9).
+`spec.schedule` is an interval, `spec.maxVersions` is how many backups to keep,
+and `spec.maxAge` is how long to keep them. All three are passed to the control
+plane, which does the scheduling and the pruning (§9).
+
+**The schedule is the control plane's own format rather than cron**, because the
+control plane is what reads it. It is a space-separated list of
+`<interval>,<retention>` pairs, where the interval is a number and one of `m`,
+`h`, `d`, or `w`, and the schema carries that as a pattern so a value the control
+plane would refuse is refused at admission instead. Accepting cron here would mean
+the operator translating one scheduling language into another and being the place
+a mistranslation lives.
+
+**All three are immutable, and that is a property of the control plane rather than
+a choice.** §10 lists a `PUT` that applies a changed schedule, and the v2 API
+offers no such endpoint: it creates, deletes, attaches, and detaches a policy and
+nothing else. A mutable field the operator cannot reconcile would leave the
+declaration and the backups actually being taken permanently disagreeing, with the
+object still reporting `Active`, so all three are fixed at creation until the
+endpoint exists. Changing one means replacing the policy.
 
 **The operator does not run the schedule.** It reconciles the policy into the
 control plane and reports what the control plane did. That is deliberate: a
@@ -197,33 +219,30 @@ schedule nobody could rely on.
 
 ## 5. StorageBackup
 
-Declared in `operator/api/v1alpha1/storagebackup_types.go`, short name `sb`, and
+Declared in `operator/api/v1alpha2/storagebackup_types.go`, short name `sb`, and
 reconciled by `StorageBackupReconciler` in
 `operator/internal/controllers/backup/storagebackup_controller.go`. The type is
 Appendix B.
 
 ### 5.1 A backup object is discovered, not declared
 
-**Every `StorageBackup` is created by the operator from what the store holds.** The
-cluster names an S3 location and its credentials, the operator walks it, and one object
-appears per backup it finds. Nothing about a backup is a request, so the spec is
-identity and nothing else:
+**Every `StorageBackup` that records a copy is created by the operator from what the
+control plane reports the store holds.** A person may also create one to request a
+backup (§5.3). The operator mirrors the cluster's backup stream and one record
+appears per backup on it, and a record's spec names the cluster:
 
 ```go
-// ClusterRef names the StorageCluster whose store this backup was found in. With
-// BackupID it is the whole of this object's identity.
-// +kubebuilder:validation:Required
+// ClusterRef names the StorageCluster whose store this backup was found in.
+// +kubebuilder:validation:MaxLength=63
 // +k8s:immutable
-ClusterRef string `json:"clusterRef"`
-
-// BackupID is the identifier the store holds the backup under, and what a
-// restore addresses.
-// +kubebuilder:validation:Required
-// +k8s:immutable
-BackupID string `json:"backupID"`
+ClusterRef string `json:"clusterRef,omitempty"`
 ```
 
-**A user creates none and deletes none.** A validating webhook refuses both from every
+The backup's identifier is in `status.backup.backupID`, for a record and a request
+alike. It is observed, not asked for: the control plane assigns it and a request has
+none until the backup exists. `StorageBackup.BackupID()` reads it.
+
+**A user creates no record and deletes none.** A validating webhook refuses both from every
 identity except a service account in the operator's namespace, which is the same rule
 [`design-storagedevice.md`](design-storagedevice.md) §5.3 applies to a device object and
 for the same reason: the object is an observation of something the operator did not
@@ -237,11 +256,29 @@ somebody's bucket, governed by that bucket's lifecycle policy and by the retenti
 control plane applies (§9). An object that could be deleted would invite the reading
 that deleting it frees the storage, and it does not.
 
-**What a policy schedules and what the operator discovers meet in the same objects.**
+**The control plane is the inventory, and the operator does not open the bucket.**
+It has S3 credentials in `StorageCluster.spec.backup` and never uses them to list:
+the control plane already reports every copy it wrote, so a second reader of the
+same bucket would be a second opinion about what exists, reachable only where the
+operator's own network can see the endpoint and disagreeing with the control plane
+whenever a write is in flight. An absence is therefore decided by whether the
+cluster's stream has synced, and by nothing about any other object, which is the
+same shape [`design-storagedevice.md`](design-storagedevice.md) gives the device
+mirror.
+
+**What a policy schedules and what the operator mirrors meet in the same objects.**
 `StorageBackupPolicy` tells the control plane which claims to back up and how often
-(§4), the control plane writes the copies into the store, and the walk finds them. The
-policy is the only thing that decides a backup is taken, so a policy and a discovery run
-are two halves of one loop rather than two ways of creating an object.
+(§4), the control plane writes the copies into the store and reports them, and the
+mirror turns each into an object. The policy is the only thing that decides a
+backup is taken, so a policy and the mirror are two halves of one loop rather than
+two ways of creating an object.
+
+**No `StorageBackup` carries an owner reference to the policy that caused it.** The
+control plane reports nothing about which policy took a copy, so the edge cannot be
+built from what is on the wire, and it would be the wrong lifetime in any case: the
+object goes when the store stops reporting the copy, not when a policy is deleted.
+What a policy governs is what is taken rather than what is kept, which is the same
+reading §9 gives retention.
 
 ### 5.2 Status, in three groups
 
@@ -288,6 +325,31 @@ the terminal success, and it is not called `Succeeded` because a backup is not a
 operation: what matters afterward is that the copy can be restored, not that the
 copying finished.
 
+### 5.3 A backup can be requested
+
+A person who wants one backup of one claim creates a `StorageBackup` with
+`spec.source.claimName`, the way a `VolumeSnapshot` is created. A CEL rule admits
+exactly one of `source` (a request) and `clusterRef` (a record).
+
+The request reconciler snapshots the claim's volume, then asks the control plane to
+back the snapshot up. They are two calls because the control plane reports a failed
+inline backup only in its log. The cluster is the one whose UUID is in the volume's
+handle, found in any namespace, so the request sits beside its claim. The snapshot is
+named from the request's UID and the backup is the one that names the snapshot, so a
+retry repeats neither call. A claim that is not bound, or a cluster with no
+`spec.backup`, holds the request in `Pending`.
+
+A requested backup has one object, the request. The mirror finds the owner through an
+index on `status.backup.backupID` and records no second object for it. A record made
+before the request learned the ID is removed. When the store stops reporting the copy
+the mirror marks the request `Failed`, because a request is a person's object and is not
+deleted the way a record is. When the request is deleted the copy stays in the store, and
+the deletion queues the backup so the mirror records it. The write guard leaves a request
+alone, and deleting one does not delete the copy. A restore names the request or a record
+and reads the identifier from status either way.
+
+---
+
 ---
 
 ## 6. StorageBackupOps
@@ -304,9 +366,9 @@ type StorageBackupOpsAction string
 
 | Action    | Steps                                                     | Target                              |
 |-----------|-----------------------------------------------------------|-------------------------------------|
-| `Restore` | `Validating` → `Restoring` → `AwaitingVolume` → `Binding` | A `StorageBackup` in this namespace |
+| `Restore` | `Validating` → `Restoring` → `AwaitingVolume` → `Binding` | A `StorageBackup`, in its namespace |
 
-**`spec.backupRef` is required, and names a `StorageBackup` in this namespace.** Every
+**`spec.backupRef` is required, and names a `StorageBackup`.** Every
 backup in the cluster's store has an object (§5.1), so a restore always has one to
 address and the reference is never optional.
 
@@ -363,9 +425,9 @@ and rejects the create when it does not resolve.
 |--------------------------------------------|---------------------------------------------|------------------------------------------|
 | `StorageBackupPolicy.spec.clusterRef`      | a `StorageCluster` in this namespace        | No such object                           |
 | `StorageBackup.spec.clusterRef`            | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackupOps.spec.clusterRef`         | a `StorageCluster` in this namespace        | No such object                           |
-| `StorageBackupOps.spec.backupRef`          | a `StorageBackup` in this namespace         | No such object, or its phase is `Failed` |
-| `StorageBackupOps.spec.restore.targetPool` | a `StoragePool` in this namespace           | No such object                           |
+| `StorageBackupOps.spec.clusterRef`         | a `StorageCluster`, in its namespace        | No such object, or no read access        |
+| `StorageBackupOps.spec.backupRef`          | a `StorageBackup`, in its namespace         | No such object, or its phase is `Failed` |
+| `StorageBackupOps.spec.restore.targetPool` | a `StoragePool` in the cluster's namespace  | No such object                           |
 | `StorageBackupOps.spec.restore.claimName`  | a claim to create, which must not exist yet | A claim of that name already exists (§8) |
 
 **Existence is the webhook's and shape is the type's**, which is the division
@@ -379,6 +441,21 @@ is a fact about a different object that CEL cannot see.
 `StorageBackup` whose phase is `Failed` has no copy behind it, so a restore naming it
 is naming a record of something that does not exist. That is decided once and stays
 decided: a backup does not recover from `Failed`, it is replaced by another backup.
+
+**A restore can reach across namespaces.** `spec.backupRef` and `spec.clusterRef` are
+`{name, namespace}` references whose namespace defaults to the operation's. The backup is
+read from its namespace and the cluster and its pool from the cluster's, and the claim is
+always created beside the operation. A team restores into its own namespace by creating
+the operation there, whether the backup and the cluster are in that namespace or in
+others.
+
+The operator reads what the restore needs with its own rights, so a reference that leaves
+the operation's namespace is checked against the requester. The webhook runs a
+`SubjectAccessReview` for the requesting user before it resolves anything: `get` on the
+backup in its namespace, and `get` on the cluster and on the pool in the cluster's
+namespace. A reference that stays put asks nothing. The backup's lock names its holder
+`namespace/name` when the operation is in another namespace, because operations of one
+name in different namespaces can name one backup.
 
 **`spec.restore.claimName` is the one row where admission narrows a race it cannot
 close.** A claim can be created between the operation's admission and its
@@ -407,12 +484,22 @@ there is no object for it to resolve to, the API server validates its syntax, an
 §4.1's reading that an absent selector selects nothing is reported by
 `SelectorEmpty` rather than refused.
 
-**`failurePolicy: Fail`**, for the reason
+**Two of the three are `failurePolicy: Fail`**, for the reason
 [`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md) §5 gives:
 the webhook server runs inside the operator pod, so its availability tracks the
 operator's, and while the operator is down nothing reconciles a backup anyway. A
 window in which unresolvable immutable references are admitted is a window in which
 objects that can only be deleted are created.
+
+**`StorageBackupValidator` is `Ignore`, because it is the one that guards
+`DELETE`.** A webhook failing closed on a delete blocks the namespace controller
+as well as a user, so an operator that is down would leave every namespace holding
+a `StorageBackup` stuck in `Terminating` until somebody edited the webhook
+configuration by hand. That is a worse failure than the one failing open admits,
+which is a backup record deletable while the operator is down: the record is an
+observation, so the mirror writes it back on the next sync and the copy in the
+bucket was never at risk. The other two guard `CREATE` alone, where failing closed
+costs a rejected write and nothing more.
 
 The webhooks need `get` on `storageclusters`, `storagebackups`, `storagepools`, and
 `persistentvolumeclaims`, all of which the manager already reads to reconcile these
@@ -669,7 +756,7 @@ of a round trip catches it.
 | `BackupRestore`                                                                     | `StorageBackupOps` (§6)                                                     | Absorbed as `spec.action: Restore`, which is now the kind's only action                                                                            |
 | `BackupImport`                                                                      | Retired                                                                     | The store is the inventory (§3), so a backup another cluster wrote needs no import                                                                 |
 | `StorageBackup` declared to request a copy                                          | Discovered from the store (§5.1)                                            | Behavioral, and the largest change here. The object is an observation, and neither creatable nor deletable by a user                               |
-| `StorageCluster.spec.backup`, an S3 target                                          | The same field, a `BackupStoreSpec` (`design-storagecluster.md` Appendix A) | The type is renamed away from a collision with `design-controlplane.md`'s, and gains the bucket, prefix, and region the walk needs                 |
+| `StorageCluster.spec.backup`, an S3 target                                          | The same field, a `BackupStoreSpec` (`design-storagecluster.md` Appendix A) | The type is renamed away from a collision with `design-controlplane.md`'s, and gains the bucket and region the walk needs                          |
 | `spec.clusterName` on all four                                                      | `spec.clusterRef`                                                           | Spec rename, matching every other reference in the group                                                                                           |
 | No claim selector on the policy                                                     | `spec.claimSelector` (§4.1)                                                 | Additive, and it is the Kubernetes half the policy never had                                                                                       |
 | `status.attachedLvols`                                                              | `status.attachedClaims` (§4.1)                                              | Status regrouping, in Kubernetes terms rather than control-plane ones                                                                              |
@@ -681,9 +768,9 @@ of a round trip catches it.
 | No exclusion between two restores of one backup                                     | `StorageBackup.status.activeOpsRef` (§6)                                    | New, and the same lock every other entity with an `Ops` companion carries. Two restores of one backup now queue rather than run together (§14, Q5) |
 | No `shortName` on `BackupPolicy` or `StorageBackup`                                 | `sbp` and `sb`                                                              | Additive. `br` and `bi` are retired with their kinds                                                                                               |
 | `spec.backup.snapshotBackups`, `withCompression`, `secondaryTarget`, `localTesting` | Removed (`design-storagecluster.md` Appendix A)                             | The store is a location, so how a copy is taken stays with the control plane                                                                       |
-| No owner reference from a policy to its backups                                     | Established (§5.1)                                                          | Deleting a policy deletes the backup objects it created, not the backups themselves                                                                |
+| No owner reference from a policy to its backups                                     | Still none (§5.1)                                                           | The control plane reports no policy attribution, so the edge cannot be built. The object's lifetime is the store's report rather than the policy's |
 | Restore's claim owned by the operation                                              | Unowned, and created only at `Binding` (§8)                                 | Deleting the audit record no longer deletes the recovered volume, and a failed restore leaves no claim                                             |
-| Polling every backend read                                                          | A `?watch=true` subscription (§10)                                          | Depends on `design-sse-push-notifications.md`, on the `sse` branch, as every other design in the group does                                        |
+| Polling every backend read                                                          | A `?watch=true` subscription (§10)                                          | The mirror of §5.1 reads it, so a walk of the bucket is never performed                                                                            |
 | No event, no metric                                                                 | Fourteen reasons and eight metrics (§11)                                    | New infrastructure                                                                                                                                 |
 
 **The two kind removals are the breaking ones and they are not symmetrical with
@@ -721,16 +808,6 @@ snapshot lineage §5.2 publishes are read from. A prefix convention plus a metad
 object per backup is the obvious shape and the control plane owns the format, so this is
 a question for whoever writes it rather than one this document can settle. Until it is
 settled, `status.source` and `status.backup` are fields with no stated source.
-
-**Q4: How a one-off backup is requested.** §5.1 makes every `StorageBackup` a discovery,
-so nothing in this design takes a backup on demand: a policy schedules them and the
-control plane performs them. Somebody wanting one copy of one claim right now has a
-policy with a schedule they do not want, or nothing. The candidates are an action on
-`StorageBackupOps` whose target is a claim rather than a backup, which breaks the rule
-that an `Ops` kind names one kind of target; a `StorageBackupPolicy` with a one-shot
-schedule, which makes the policy a request object; and a field on the claim, which puts
-storage policy in an application's object. None is obviously right, and the gap is real
-enough to name.
 
 **Q5: Whether the backup is the right thing a restore locks.** §6 puts
 `activeOpsRef` on `StorageBackup` because that is the target `spec.backupRef` names
@@ -781,18 +858,35 @@ type StorageBackupPolicySpec struct {
 	// +optional
 	ClaimSelector *metav1.LabelSelector `json:"claimSelector,omitempty"`
 
-	// Schedule is a cron expression the control plane runs the policy on.
+	// Schedule is the interval the control plane runs the policy on, in its own
+	// format: a space-separated list of <interval>,<retention> pairs, where an
+	// interval is a number and one of m, h, d, or w.
+	//
+	// Immutable, and that is a property of the control plane rather than a
+	// choice. §10 lists a PUT that applies a changed schedule, and the v2 API
+	// offers no such endpoint: it creates, deletes, attaches, and detaches a
+	// policy and nothing else. A mutable field the operator cannot reconcile
+	// would leave the declaration and the backups actually being taken
+	// permanently disagreeing, with the object still reporting Active, so the
+	// schedule is fixed at creation until the endpoint exists. Changing one
+	// means replacing the policy.
+	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
+	// +k8s:immutable
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
 
 	// MaxVersions is how many backups of one claim to keep. Zero means no limit
-	// by count.
+	// by count. Immutable, for the reason Schedule is.
 	// +kubebuilder:validation:Minimum=0
+	// +k8s:immutable
 	// +optional
 	MaxVersions *int32 `json:"maxVersions,omitempty"`
 
-	// MaxAge is how long to keep a backup ("720h", "30d"). Empty means no limit
-	// by age. Retention is enforced by the control plane, not here.
+	// MaxAge is how long to keep a backup ("30d", "720h"). Empty means no limit
+	// by age. Retention is enforced by the control plane, not here. Immutable,
+	// for the reason Schedule is.
+	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
+	// +k8s:immutable
 	// +optional
 	MaxAge string `json:"maxAge,omitempty"`
 }
@@ -807,6 +901,12 @@ type AttachedClaim struct {
 	// PersistentVolumeName is the volume behind it.
 	// +optional
 	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// ClusterID is the backend cluster the claim's volume is in, whose policy
+	// it is attached to. For a policy on a supercluster it says which
+	// member's policy covers the claim (design-superclusters.md §9.5).
+	// +optional
+	ClusterID string `json:"clusterID,omitempty"`
 
 	// AttachedAt is when the claim started matching the selector.
 	// +optional
@@ -963,24 +1063,19 @@ type BackupCopy struct {
 	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
 }
 
-// StorageBackupSpec is the identity of one backup the operator found in a
-// cluster's store, and nothing else. The object is created by the operator and by
-// nobody else (§5.1), so there is no request here to carry: what the backup is of,
-// how big it is, and where it came from are all observations and live in status.
+// StorageBackupSpec is a record of a copy the store holds (clusterRef) or a
+// request for a new one (source). The identifier is in status.backup.backupID.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.source) != has(self.clusterRef)",message="set exactly one of source (to request a backup) or clusterRef (to record one the store holds)"
 type StorageBackupSpec struct {
-	// ClusterRef names the StorageCluster whose store this backup was found in.
-	// With BackupID it is the whole of this object's identity.
-	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef string `json:"clusterRef,omitempty"`
 
-	// BackupID is the identifier the store holds the backup under, and what a
-	// restore addresses. It is the store's identifier rather than a name this
-	// operator assigns, so the same backup is the same object however many
-	// clusters have the location configured.
-	// +kubebuilder:validation:Required
+	// +optional
 	// +k8s:immutable
-	BackupID string `json:"backupID"`
+	Source *BackupRequest `json:"source,omitempty"`
 }
 
 // StorageBackupStatus is the observed state of one backup, in three groups: the
@@ -1097,8 +1192,7 @@ const (
 // RestoreSpec parameterizes the Restore action and is ignored by the other.
 type RestoreSpec struct {
 	// ClaimName is the PersistentVolumeClaim to create. It must not already
-	// exist: a restore that adopted an existing claim would replace a running
-	// workload's data with the backup's.
+	// exist: a restore that adopted an existing claim would replace a running workload's data with the backup's.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
 	ClaimName string `json:"claimName"`
@@ -1123,17 +1217,17 @@ type RestoreSpec struct {
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
 type StorageBackupOpsSpec struct {
-	// ClusterRef names the StorageCluster the operation runs against.
+	// ClusterRef names the StorageCluster the operation runs against. Its
+	// namespace defaults to the operation's.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	ClusterRef string `json:"clusterRef"`
+	ClusterRef NamespacedDnsReference `json:"clusterRef"`
 
-	// BackupRef names the StorageBackup this operation acts on. Required, since
-	// Restore is the only action and every backup in the store has an object
-	// (§5.1).
+	// BackupRef names the StorageBackup this operation acts on. Its namespace
+	// defaults to the operation's.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
-	BackupRef string `json:"backupRef"`
+	BackupRef NamespacedReference `json:"backupRef"`
 
 	// Action is the operation to perform.
 	// +kubebuilder:validation:Required
@@ -1195,7 +1289,7 @@ type StorageBackupOpsStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=sbops
-// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef"
+// +kubebuilder:printcolumn:name="Backup",type=string,JSONPath=".spec.backupRef.name"
 // +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"

@@ -1,7 +1,10 @@
 package cluster
 
 import (
+	"context"
 	"errors"
+	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -107,5 +110,94 @@ func TestWithTeardownIsTheCreateFailureAlone(t *testing.T) {
 	create := errors.New("create cluster sbi-1: exit status 1")
 	if err := withTeardown(create, nil); err.Error() != create.Error() {
 		t.Errorf("a clean teardown changed the error: %v", err)
+	}
+}
+
+// TestLineWriterSplitsOnBothTerminators covers the reason this type exists.
+// talosctl redraws its progress in place, so a carriage return ends a line as
+// much as a newline does, and treating only newlines as terminators delivers a
+// whole cluster creation as one line at the end.
+func TestLineWriterSplitsOnBothTerminators(t *testing.T) {
+	var got []string
+	w := &lineWriter{emit: func(format string, args ...any) {
+		got = append(got, args[0].(string))
+	}}
+
+	// Deliberately split mid-line across writes, because that is what a pipe
+	// delivers and a writer that assumes whole lines loses the seam.
+	for _, chunk := range []string{"downloading", " image\rbooting", " nodes\nwaiting"} {
+		if _, err := w.Write([]byte(chunk)); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	w.flush()
+
+	want := []string{"downloading image", "booting nodes", "waiting"}
+	if len(got) != len(want) {
+		t.Fatalf("emitted %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d is %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+// TestLineWriterDropsEmptyLines keeps a redraw from emitting a blank line for
+// every frame it paints.
+func TestLineWriterDropsEmptyLines(t *testing.T) {
+	emitted := 0
+	w := &lineWriter{emit: func(string, ...any) { emitted++ }}
+
+	if _, err := w.Write([]byte("\r\n   \r\n\n")); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	w.flush()
+
+	if emitted != 0 {
+		t.Errorf("emitted %d lines from whitespace alone, want 0", emitted)
+	}
+}
+
+// TestDefaultConfigNarrates pins the default this package chose. Silence is the
+// wrong default for an operation measured in minutes, so a Config that names no
+// logger still gets one.
+func TestDefaultConfigNarrates(t *testing.T) {
+	cfg := Config{}
+	cfg.applyDefaults()
+
+	if cfg.Logf == nil {
+		t.Error("a defaulted Config discards talosctl's output, so a create is silent until it returns")
+	}
+}
+
+// Regression: 2026-11-18-ubuntu-2604-sudo-rs. Ubuntu 26.04 runners ship
+// sudo-rs, which ignores -E with a warning on stderr. talosctl then ran with
+// root's HOME and no KUBECONFIG, and the warning landed in the JSON the
+// harness parses, so every suite failed to bring its cluster up. Under sudo the
+// variables talosctl needs are sudo's own VAR=value arguments, which both sudo
+// builds accept under the SETENV grant the README documents.
+func TestSudoPassesHomeAndKubeconfigByName(t *testing.T) {
+	sudo := true
+	c := &Cluster{cfg: Config{TalosctlPath: "talosctl", Sudo: &sudo}, kubeconfig: "/work/kubeconfig"}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		t.Skipf("no home directory to pass: %v", err)
+	}
+
+	args := c.talosctlCommand(context.Background(), "config", "info").Args
+	if slices.Contains(args, "-E") {
+		t.Errorf("args = %q, want no -E, which sudo-rs ignores", args)
+	}
+	// The scoped grants in the README authorize talosctl with SETENV, and
+	// nothing else: a run through env would prompt for it.
+	if len(args) < 2 || args[0] != "sudo" || slices.Contains(args, "env") {
+		t.Errorf("args = %q, want sudo to run talosctl itself, with the variables as its own arguments", args)
+	}
+	for _, want := range []string{"HOME=" + home, "KUBECONFIG=/work/kubeconfig"} {
+		i := slices.Index(args, want)
+		if i < 0 || i > slices.Index(args, "talosctl") {
+			t.Errorf("args = %q, want %s before talosctl", args, want)
+		}
 	}
 }

@@ -78,6 +78,12 @@ var responseRules = []responseRule{
 		keys: []string{"retry_count", "max_retries", "snaps_migrated", "snaps_total", "error_message"},
 	},
 	{
+		typ: ClusterDTO{},
+		rules: map[string]string{
+			"Id": "required",
+		},
+	},
+	{
 		// NvmeConnectEntry's rules, plus what GET /api/v2/clusters/{cluster_id}/storage-pools/{pool_id}/volumes/{volume_id}/connect promises on top.
 		typ: LvolConnectEntry{},
 		rules: map[string]string{
@@ -103,6 +109,17 @@ func (d *BatchMigrationDTO) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	*d = BatchMigrationDTO(v)
+	return Validate(data, d)
+}
+
+// UnmarshalJSON decodes and validates a ClusterDTO.
+func (d *ClusterDTO) UnmarshalJSON(data []byte) error {
+	type plain ClusterDTO // shed this method, so the decode below does not recurse
+	var v plain
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*d = ClusterDTO(v)
 	return Validate(data, d)
 }
 

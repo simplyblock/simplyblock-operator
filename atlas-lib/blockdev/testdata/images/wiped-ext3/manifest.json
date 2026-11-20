@@ -1,0 +1,16 @@
+{
+  "name": "wiped-ext3",
+  "tool": "mkfs.ext3",
+  "tool_version": "mke2fs 1.47.2 (1-Jan-2025)",
+  "command": "mkfs.ext3 -q -F, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:42Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "1ef230891bb5c67bc4dfaae4f6b1aba4ac21b39adffbee3ff1203383a14d8827",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 2 bytes were erased at offset 0x00000438 (ext3): 53 ef. "
+}

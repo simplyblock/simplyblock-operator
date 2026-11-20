@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
@@ -450,7 +451,9 @@ func hostIdentity(t Target, fileNQN, fileID string) (hostNQN, hostID string, err
 // readTrim reads a one-line file, e.g., /etc/nvme/hostnqn, and returns "" when
 // it is absent, because an unset host identity is a fallback, not a failure.
 func readTrim(path string) string {
-	b, err := os.ReadFile(path)
+	b, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+		return os.ReadFile(path)
+	})
 	if err != nil {
 		return ""
 	}

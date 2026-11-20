@@ -110,6 +110,7 @@ type persistedLvolState struct {
 	ClusterID    string    `json:"clusterID,omitempty"`
 	BrokenAt     time.Time `json:"brokenAt,omitempty"`
 	SubsystemNQN string    `json:"subsystemNQN,omitempty"`
+	StripeOf     string    `json:"stripeOf,omitempty"`
 }
 
 type guardianState struct {
@@ -132,6 +133,11 @@ type LvolState struct {
 	// that subsystemLvolIDs can identify siblings even after the NVMe path
 	// drops and the device disappears from sysfs.
 	SubsystemNQN string `json:"subsystemNQN,omitempty"`
+
+	// StripeOf is, for a member s1..sN of a striped volume, the lvol ID of the
+	// volume's first member: the one its volume handle names and NodeUnpublish
+	// releases. Empty for every other lvol.
+	StripeOf string `json:"stripeOf,omitempty"`
 }
 
 // Guardian tracks which pod uses which lvol and restarts affected pods
@@ -203,6 +209,7 @@ func (g *Guardian) loadState() {
 				ClusterID:    pls.ClusterID,
 				BrokenAt:     pls.BrokenAt,
 				SubsystemNQN: pls.SubsystemNQN,
+				StripeOf:     pls.StripeOf,
 			}
 		}
 	}
@@ -280,9 +287,42 @@ func Start(ctx context.Context, cfg Config, manager *sbkube.Manager) (*Guardian,
 
 // RegisterPublish records that a volume (identified by its per-namespace lvol
 // UUID) is published to a pod via targetPath.
+//
+// A volume this cannot attribute to a pod is one the guardian can never
+// restart, and that is worth a line in the log rather than a silent return: the
+// only other trace such a volume leaves is MarkBrokenLvol reporting it as
+// unknown, minutes or hours later, in a message that reads like a publish
+// ordering problem and is not one.
 func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
+	g.registerPublish(clusterID, lvolID, targetPath, "")
+}
+
+// RegisterPublishStriped records a striped volume published to a pod: its
+// first member (lvolID, the one its handle names) and every other member, each
+// its own NVMe-oF subsystem. A member that loses every path is reported to
+// MarkBrokenLvol under its own ID, so the guardian has to know it belongs to
+// the pod, or the break is dropped as an unknown lvol and the pod keeps a
+// stripe with a hole in it. The other members are released together with the
+// first by RegisterUnpublish, which only ever sees the first.
+func (g *Guardian) RegisterPublishStriped(clusterID, lvolID string, members []string, targetPath string) {
+	g.registerPublish(clusterID, lvolID, targetPath, "")
+	if lvolID == "" {
+		return
+	}
+	for _, m := range members {
+		if m != "" && m != lvolID {
+			g.registerPublish(clusterID, m, targetPath, lvolID)
+		}
+	}
+}
+
+func (g *Guardian) registerPublish(clusterID, lvolID, targetPath, stripeOf string) {
 	podUID := podUIDFromTargetPath(targetPath)
 	if lvolID == "" || podUID == "" || clusterID == "" {
+		klog.Warningf(
+			"Guardian: not tracking lvol %q: cluster=%q pod=%q from target path %q"+
+				" — a path loss on this volume cannot be recovered by a restart",
+			lvolID, clusterID, podUID, targetPath)
 		return
 	}
 
@@ -299,6 +339,7 @@ func (g *Guardian) RegisterPublish(clusterID, lvolID, targetPath string) {
 	}
 	st.PodUIDs[podUID] = struct{}{}
 	st.ClusterID = clusterID
+	st.StripeOf = stripeOf
 
 	if _, exists := g.clusterWasInactive[clusterID]; !exists {
 		g.clusterWasInactive[clusterID] = true
@@ -327,13 +368,15 @@ func (g *Guardian) RegisterUnpublish(lvolID, targetPath string) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	st, ok := g.lvols[lvolID]
-	if !ok || st == nil || st.PodUIDs == nil {
-		return
-	}
-	delete(st.PodUIDs, podUID)
-	if len(st.PodUIDs) == 0 {
-		delete(g.lvols, lvolID)
+	// The members of a striped volume whose first member this is go with it.
+	for id, st := range g.lvols {
+		if st == nil || st.PodUIDs == nil || (id != lvolID && st.StripeOf != lvolID) {
+			continue
+		}
+		delete(st.PodUIDs, podUID)
+		if len(st.PodUIDs) == 0 {
+			delete(g.lvols, id)
+		}
 	}
 
 	g.persistLocked()
@@ -932,20 +975,54 @@ func (g *Guardian) setLastRestart(podUID string) {
 	g.lastRestart[podUID] = time.Now()
 }
 
-// Extract pod UID from kubelet targetPath.
-// Example: /var/lib/kubelet/pods/<uid>/volumes/kubernetes.io~csi/.../mount
+// podUIDFromTargetPath reads the pod UID out of the path kubelet publishes a
+// volume at. There is one shape per volume mode and the guardian needs both,
+// because a volume it cannot attribute to a pod is a volume it can never
+// restart:
+//
+//	filesystem: /var/lib/kubelet/pods/<podUID>/volumes/kubernetes.io~csi/<pv>/mount
+//	block:      /var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/<pv>/<podUID>
+//
+// The block shape carries the pod UID in its last segment and no /pods/ segment
+// at all, which is how every raw device went untracked: its break was reported
+// and discarded, and the pod holding the dead device node was never restarted.
+//
+// The block shape is read first, and a /pods/ segment only counts when the
+// segment after the UID is volumes. A /pods/ segment can appear anywhere else:
+// in a PersistentVolume named pods, or in kubelet's --root-dir, where matching
+// it returned an empty string or another directory's name as the pod UID.
 func podUIDFromTargetPath(p string) string {
-	const marker = "/pods/"
-	i := strings.Index(p, marker)
-	if i < 0 {
+	const (
+		podsMarker    = "/pods/"
+		volumesMarker = "/volumes/"
+		publishMarker = "/volumeDevices/publish/"
+	)
+
+	if i := strings.Index(p, publishMarker); i >= 0 {
+		// Everything after the marker is <pv>/<podUID>. A path that stops at the
+		// PersistentVolume name names no pod, and is no more usable than a path
+		// of another shape entirely.
+		rest := strings.TrimSuffix(p[i+len(publishMarker):], "/")
+		if j := strings.LastIndex(rest, "/"); j >= 0 {
+			return rest[j+1:]
+		}
 		return ""
 	}
-	rest := p[i+len(marker):]
-	j := strings.Index(rest, "/")
-	if j < 0 {
-		return ""
+
+	for rest := p; ; {
+		i := strings.Index(rest, podsMarker)
+		if i < 0 {
+			return ""
+		}
+		rest = rest[i+len(podsMarker):]
+		j := strings.Index(rest, "/")
+		if j < 0 {
+			return ""
+		}
+		if j > 0 && strings.HasPrefix(rest[j:], volumesMarker) {
+			return rest[:j]
+		}
 	}
-	return rest[:j]
 }
 
 func (g *Guardian) persistLocked() {
@@ -967,6 +1044,7 @@ func (g *Guardian) persistLocked() {
 			ClusterID:    lvs.ClusterID,
 			BrokenAt:     lvs.BrokenAt,
 			SubsystemNQN: lvs.SubsystemNQN,
+			StripeOf:     lvs.StripeOf,
 		}
 		for uid := range lvs.PodUIDs {
 			pls.PodUIDs = append(pls.PodUIDs, uid)

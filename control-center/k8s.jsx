@@ -234,7 +234,6 @@ function StorageClassDetail({o: s, nav}) {
             </tbody></table>
         </div></div>
       </div>
-      {window.CRSection && <CRSection vm={s} nav={nav} />}
     </div>
   );
 }
@@ -293,7 +292,6 @@ function PvcDetail({o: p, nav}) {
           </div></div>
         </div>
       </div>
-      {window.CRSection && <CRSection vm={p} nav={nav} />}
     </div>
   );
 }

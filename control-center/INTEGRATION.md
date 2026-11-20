@@ -34,17 +34,13 @@ the console and points the console's proxy at it — the console image itself
 runs completely unmodified.
 
 The console is a static document transpiled in the browser, served by nginx,
-with an in-pod reverse proxy in front of the APIs it is allowed to use.
+with an in-pod reverse proxy in front of the three APIs it is allowed to use.
 There is no build step for the application itself and no server-side code.
 
 ```
-browser ──► nginx (this pod) ──┬──► kube-apiserver             /k8s/*
-                               ├──► control plane v2 API       /cp/local/*
-                               ├──► simplyblock-operator       /operator/v1/*
-                               ├──► Prometheus                 /prometheus/api/v1/*
-                               └──► per context <name>
-                                     ├──► its kube-apiserver   /k8s/<name>/*
-                                     └──► its control plane    /cp/<name>/*
+browser ──► nginx (this pod) ──┬──► kube-apiserver          /k8s/*
+                               ├──► simplyblock-operator    /operator/v1/*
+                               └──► Prometheus              /prometheus/api/v1/*
 ```
 
 Everything else is refused by the server block. The browser only ever makes
@@ -95,9 +91,8 @@ kubectl -n simplyblock port-forward svc/simplyblock-operator-control-center 8080
 ```
 
 The chart templates (`control-center.yaml`, `control-center-rbac.yaml`,
-`control-center-networkpolicy.yaml`, `control-center-remote-access.yaml`,
-`control-center-mock.yaml`, `_control_center_helpers.tpl`, and
-`_control_center_rbac.tpl`) are self-contained — they define their own `sbcc.*` helpers rather than calling the
+`control-center-networkpolicy.yaml` and `_control_center_helpers.tpl`) are
+self-contained — they define their own `sbcc.*` helpers rather than calling the
 host chart's. All of the console's values sit under the `controlCenter:` key;
 `deploy/k8s/` holds the same objects as plain manifests if you are not using
 Helm. Verify before applying:
@@ -116,89 +111,32 @@ console renders empty.
 One image serves any cluster: `config.js` is generated at container start from
 the environment, into the writable scratch mount. Nothing is baked in.
 
-| Variable                   | Default                              | Meaning                                                                                                             |
-|----------------------------|--------------------------------------|---------------------------------------------------------------------------------------------------------------------|
-| `SB_MODE`                  | `full`                               | `full`: the storage console with a Disaster recovery section. `dr`: the DR-only console — see below                 |
-| `SB_NAMESPACE`             | `simplyblock`                        | namespace the console manages                                                                                       |
-| `SB_DR_NAMESPACE`          | `ramen-ops`                          | Ramen's ops namespace on the DR hub: default namespace of discovered ProtectedApplications and of the access review |
-| `SB_AUTH_MODE`             | `serviceaccount`                     | `serviceaccount` or `passthrough` — see below                                                                       |
-| `SB_K8S_API`               | `https://kubernetes.default.svc`     | API server                                                                                                          |
-| `SB_K8S_HOST`              | `kubernetes.default.svc`             | SNI and Host — must be on the API server's certificate                                                              |
-| `SB_K8S_CA_FILE`           | the projected SA CA                  | CA bundle used to verify it                                                                                         |
-| `SB_OPERATOR_URL`          | `http://simplyblock-operator:8080`   | operator API; empty disables the proxy location (answers a 503 Status)                                              |
-| `SB_HELM_URL`              | `http://simplyblock-operator:8080`   | Helm release view; empty disables it                                                                                |
-| `SB_PROMETHEUS_URL`        | `http://simplyblock-prometheus:9090` | metrics; empty disables it                                                                                          |
-| `SB_LOGO_URL`              | `vendor/logo-white.svg`              | brand mark, vendored into the image                                                                                 |
-| `SB_MOCK`                  | `false`                              | `true` runs on fixtures (needs a `KEEP_MOCKS=1` image)                                                              |
-| `SB_TOKEN_REFRESH_SECONDS` | `600`                                | how often every proxied token is re-read                                                                            |
-| `SB_CP_URL`                | `http://simplyblock-webappapi:5000`  | the local control plane v2 API, proxied as `/cp/local/`                                                             |
-| `SB_CP_TOKEN_FILE`         | the projected SA token               | bearer token for `/cp/local/`                                                                                       |
-| `SB_CP_CA_FILE`            | the image's system bundle            | CA that verifies an HTTPS `SB_CP_URL`                                                                               |
-| `SB_CP_HOST`               | the URL's host                       | SNI and Host for an HTTPS `SB_CP_URL`                                                                               |
-| `SB_CONTEXTS_FILE`         | `/etc/sb/contexts/contexts.json`     | the contexts file, read when present                                                                                |
-| `SB_LOCAL_CONTEXT_NAME`    | `local`                              | the local cluster's name among the contexts                                                                         |
-| `SB_LOCAL_LABELS`          | empty                                | `site=…,stage=…,tenant=…` labels of the local cluster                                                               |
-| `SB_LOCAL_NAMESPACES`      | `SB_NAMESPACE`                       | comma list of namespaces the console manages locally                                                                |
-| `SB_FEATURES`              | empty                                | comma list of feature flags, handed to the console as `features`                                                    |
+| Variable | Default | Meaning |
+|---|---|---|
+| `SB_MODE` | `full` | `full`: the storage console with a Disaster recovery section. `dr`: the DR-only console — see below |
+| `SB_NAMESPACE` | `simplyblock` | namespace the console manages |
+| `SB_DR_NAMESPACE` | `ramen-ops` | Ramen's ops namespace on the DR hub: default namespace of discovered ProtectedApplications and of the access review |
+| `SB_AUTH_MODE` | `serviceaccount` | `serviceaccount` or `passthrough` — see below |
+| `SB_K8S_API` | `https://kubernetes.default.svc` | API server |
+| `SB_K8S_HOST` | `kubernetes.default.svc` | SNI and Host — must be on the API server's certificate |
+| `SB_K8S_CA_FILE` | the projected SA CA | CA bundle used to verify it |
+| `SB_OPERATOR_URL` | `http://simplyblock-operator:8080` | operator API; empty disables the proxy location (answers a 503 Status) |
+| `SB_CONTROLPLANE_URL` | empty | management API v2 (fully qualified: nginx resolves it per request); needs the njs module, GET only, every response scrubbed of credentials |
+| `SB_CONTROLPLANE_TOKEN_FILE` | empty | a static admin token for the control plane; else the proxied ServiceAccount token (the operator must list the account in `SB_EXTRA_ADMIN_SERVICE_ACCOUNTS`) |
+| `SB_CONTROLPLANE_CA_FILE`, `SB_CONTROLPLANE_CLIENT_CERT`, `SB_CONTROLPLANE_CLIENT_KEY` | empty | TLS to an https control plane: CA to verify it, client certificate where it requires one |
+| `SB_GRAYLOG_URL` | empty | the log store: Graylog's search API, which the Logs view reads (fully qualified, resolved per request); needs the njs module, GET on `/api/search/universal/{absolute,relative}` only, every response scrubbed of credentials (field names and credential-looking text in log lines). Empty: the Logs view falls back to a pod's live tail from the Kubernetes API |
+| `SB_GRAYLOG_USER`, `SB_GRAYLOG_PASSWORD_FILE` | `admin`, empty | HTTP Basic credentials attached by the proxy; the chart mounts the observability stack's own secret |
+| `SB_GRAYLOG_TOKEN_FILE` | empty | a Graylog access token instead (sent as `<token>:token`); wins over the password |
+| `SB_GRAYLOG_CA_FILE` | empty | CA to verify an https Graylog |
+| `SB_HELM_URL` | `http://simplyblock-operator:8080` | Helm release view; empty disables it |
+| `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics; empty disables it |
+| `SB_LOGO_URL` | `vendor/logo-white.svg` | brand mark, vendored into the image |
+| `SB_MOCK` | `false` | `true` runs on fixtures (needs a `KEEP_MOCKS=1` image) |
+| `SB_TOKEN_REFRESH_SECONDS` | `600` | how often the proxied token is re-read |
 
 Pointing `SB_K8S_API` at anything other than the in-cluster service means
 moving `SB_K8S_HOST` and `SB_K8S_CA_FILE` with it: TLS verification stays on,
 so the name has to match the certificate and the CA has to be one you mount.
-
-## Contexts: several clusters in one console
-
-A context is another Kubernetes cluster the console reaches through its pod.
-The browser calls same-origin `/k8s/<name>/` and `/cp/<name>/`; nginx proxies
-the first to that cluster's API server and the second to its control plane v2
-API, each with a credential mounted into the pod. The browser never holds a
-URL, a CA, or a token for any cluster: `config.js` lists only the names,
-labels, namespaces, and base paths. The local cluster is the context named
-`local` (`SB_LOCAL_CONTEXT_NAME`), on `/k8s/` and `/cp/local/`.
-
-The control plane v2 API accepts a ServiceAccount token of the cluster it runs
-in, so `/cp/local/` uses the pod's own projected token and a remote context's
-credential is a ServiceAccount token from that cluster. It is never reached
-through the API server's `services/proxy`, which strips the `Authorization`
-header; each context names its control plane URL directly.
-
-**The contexts file**, `/etc/sb/contexts/contexts.json`, is a JSON array of
-`{name, kubernetesApi, kubernetesApiHost, namespaces, labels, controlPlane:
-{url, host}}`, read once at container start and optional. A name is a path
-segment (lowercase letters, digits, and dashes, at most 32 characters) and
-none of `api`, `apis`, `version`, `openapi`, `healthz`, `livez`, `readyz`,
-`metrics`, or `local`; the entrypoint refuses to start on a violation, since
-a context named `apis` would shadow `/k8s/apis/`.
-
-**The per-context Secret** is mounted at `/etc/sb/contexts/<name>/` with the
-keys `token` and `ca.crt`, and optionally `cp-token` and `cp-ca.crt` when the
-control plane needs a different credential or CA (each falls back to the
-Kubernetes one, and the CA then to the image's system bundle). Every token is
-re-read on the `SB_TOKEN_REFRESH_SECONDS` timer with one nginx reload, so a
-rotated Secret needs no restart; a changed contexts file rolls the pods.
-
-**Producing the credential** on the remote cluster:
-`controlCenter.remoteAccess.enabled=true` (or `deploy/k8s/remote-access.yaml`)
-creates a ServiceAccount with the console's ClusterRole and a long-lived token
-Secret, `<fullname>-remote-token`. Copy its `token` and `ca.crt` into the hub's
-context Secret. The remote cluster need not run a console of its own, and a
-hub's console acts there with exactly the authority it has at home: the chart
-renders both roles from one shared rule list.
-
-**With the chart**, `controlCenter.contexts[]` carries the fields above plus
-`secretName` and `egress[]` (`{cidr, port}` pairs the NetworkPolicy opens);
-`controlCenter.localContext` names and labels the local cluster,
-`controlCenter.controlPlaneUrl` overrides the local control plane (empty means
-the chart's own service, HTTPS with the chart's CA bundle when `tls.enabled`),
-and `controlCenter.features` lists feature flags. With the mock enabled every
-context points at the mock's `/k8s/<name>` and `/cp/<name>` routes.
-
-**Through an Ingress**, watches and SSE streams need `proxy-buffering: "off"`
-and `proxy-read-timeout: "3600"` (the chart's default annotations), and the
-console should be served over HTTP/2, since browsers cap HTTP/1.1 connections
-per origin at about six and a fleet dashboard holds more streams than that.
-
-[deploy/README.md](deploy/README.md) has the field-by-field reference, the
-Secret layout, and the remote-access commands.
 
 ## Disaster recovery and the DR-only console
 
@@ -294,20 +232,15 @@ RHACM install. Writes are deliberately narrow:
   change that, and declaring them once at server level would have dropped them
   from the document itself
 - `DENY` framing, `nosniff`, `no-referrer`
-- a NetworkPolicy capping egress to the in-namespace upstreams, the API
-  server, each context's declared `egress[]`, and DNS
+- a NetworkPolicy capping egress to the three upstreams plus DNS
   (`controlCenter.networkPolicy.enabled` in the chart, or the plain manifest in
   `deploy/k8s/ingress.yaml`). The API-server rule ships as the RFC1918 ranges,
   because the right value is cluster-specific — **narrow it** to your API
   server endpoint (`kubectl get endpoints kubernetes -n default`) or your
   service CIDR. A rule with ports and no `to:` selector would allow 443 to the
   whole internet
-- every proxied token, the projected ServiceAccount token and each context's,
-  is re-read on a timer and nginx reloaded, because a token read once at
-  startup expires while the pod still runs
-- context names are validated at startup against a pattern and a reserved
-  list, so no context can shadow `/k8s/apis/` or `/cp/local/`; API URLs, CA
-  paths, and tokens stay in the pod and never reach `config.js`
+- the projected ServiceAccount token is re-read on a timer and nginx reloaded,
+  because a token read once at startup expires while the pod still runs
 
 ## Probes and scaling
 

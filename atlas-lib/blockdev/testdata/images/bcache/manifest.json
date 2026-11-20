@@ -1,0 +1,16 @@
+{
+  "name": "bcache",
+  "tool": "make-bcache",
+  "tool_version": "bcache-tools 1.0.8-5",
+  "command": "make-bcache -B",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:18:27Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "DEVNAME=/dev/loop0 VERSION=1 UUID=29d2ab71-07eb-4b13-b2de-25fde4394cbb BLOCK_SIZE=512 TYPE=bcache USAGE=other",
+  "head_sha256": "60edbf1a63d4450b0f733ab3df49285eff4bc2ae9201eb36fb228f26ad263f75",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "a backing device: the superblock is at 4096 and the first block is zero, which is what makes a rule that reads only the first block unsafe"
+}

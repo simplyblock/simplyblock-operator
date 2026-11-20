@@ -13,11 +13,16 @@ Arguments:
 
 Options:
   -f, --force              Skip interactive confirmation
-      --helm-release NAME  Helm release to uninstall (default: simplyblock-operator,
-                           or \$HELM_RELEASE)
+      --keep-snapshot-crds Keep the VolumeSnapshot and VolumeGroupSnapshot CRDs the chart
+                           installed, even when nothing else uses them
       --csi-driver NAME    CSI driver name whose PVs are cleaned up
                            (default: csi.simplyblock.io, or \$CSI_DRIVER)
   -h, --help               Show this help message
+
+On OpenShift, the MachineConfigPool, MachineConfigs, and KubeletConfigs of the
+storage clusters in NAMESPACE are removed too, with those an earlier cleanup left
+of a cluster that no longer exists. A pool that still has nodes is kept, with
+everything named after its cluster.
 EOF
     exit 0
 }
@@ -33,8 +38,9 @@ require_value() {
 
 FORCE=false
 NAMESPACE=""
-HELM_RELEASE_ARG=""
 CSI_DRIVER_ARG=""
+KEEP_SNAPSHOT_CRDS=false
+snapshot_users=""
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -45,13 +51,8 @@ while [[ $# -gt 0 ]]; do
         -h|--help)
             usage
             ;;
-        --helm-release)
-            require_value "$1" "${2:-}"
-            HELM_RELEASE_ARG="$2"
-            shift 2
-            ;;
-        --helm-release=*)
-            HELM_RELEASE_ARG="${1#*=}"
+        --keep-snapshot-crds)
+            KEEP_SNAPSHOT_CRDS=true
             shift
             ;;
         --csi-driver)
@@ -79,9 +80,8 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Precedence for HELM_RELEASE / CSI_DRIVER: CLI flag > environment variable > default.
+# Precedence for CSI_DRIVER: CLI flag > environment variable > default.
 NAMESPACE="${NAMESPACE:-simplyblock}"
-HELM_RELEASE="${HELM_RELEASE_ARG:-${HELM_RELEASE:-simplyblock-operator}}"
 CRD_GROUP="storage.simplyblock.io"
 CSI_DRIVER="${CSI_DRIVER_ARG:-${CSI_DRIVER:-csi.simplyblock.io}}"
 
@@ -106,6 +106,12 @@ else
     exit 1
 fi
 
+# The JSON lists read below reach Python through files in here, never through
+# the environment: a cluster's PVs or pods together can pass the kernel's limit
+# on a process's arguments and environment (1 MiB on macOS), and the exec fails.
+JSON_DIR=$(mktemp -d)
+trap 'rm -rf "$JSON_DIR"' EXIT
+
 # ---------------------------------------------------------------------------
 # Interactive confirmation
 # ---------------------------------------------------------------------------
@@ -116,7 +122,7 @@ section "Cleanup target"
 echo -e "  Context:      ${RED}${CURRENT_CONTEXT}${NC}"
 echo -e "  Cluster:      ${RED}${CLUSTER_NAME}${NC}"
 echo -e "  Namespace:    ${RED}${NAMESPACE}${NC}"
-echo -e "  Helm release: ${RED}${HELM_RELEASE}${NC}"
+echo -e "  Helm release: ${RED}every simplyblock-operator release in the namespace${NC}"
 echo -e "  CSI driver:   ${RED}${CSI_DRIVER}${NC}"
 echo ""
 
@@ -141,25 +147,293 @@ if [[ "$FORCE" != true ]]; then
     esac
 fi
 
+# Prints the pods in the namespace that mount a volume of $CSI_DRIVER, one per
+# line as `name owner-kind owner-name`. Kubelet can only unmount such a volume
+# through the driver's node plugin, so these pods must be gone before the plugin
+# is: once it is uninstalled they stay Terminating, and the namespace with them.
+# Fails when any list fails, because an empty answer is then not known to be
+# true, and uninstalling the plugin on it would strand the pods it missed.
+pods_on_csi_volumes() {
+    local pods="$JSON_DIR/csi-pods.json" pvcs="$JSON_DIR/csi-pvcs.json" pvs="$JSON_DIR/csi-pvs.json"
+    $KUBECTL get pods -n "$NAMESPACE" -o json > "$pods" 2>/dev/null || return 1
+    $KUBECTL get pvc -n "$NAMESPACE" -o json > "$pvcs" 2>/dev/null || return 1
+    $KUBECTL get pv -o json > "$pvs" 2>/dev/null || return 1
+    DRIVER="$CSI_DRIVER" python3 -c '
+import json, os, sys
+driver = os.environ["DRIVER"]
+pods, pvcs, pvs = (json.load(open(path))["items"] for path in sys.argv[1:4])
+on_driver = {p["metadata"]["name"] for p in pvs
+             if (p["spec"].get("csi") or {}).get("driver") == driver}
+claims = {c["metadata"]["name"] for c in pvcs
+          if c["spec"].get("volumeName") in on_driver}
+for p in pods:
+    used = {(v.get("persistentVolumeClaim") or {}).get("claimName") for v in p["spec"].get("volumes", [])}
+    if used & claims or any(v.get("csi", {}).get("driver") == driver for v in p["spec"].get("volumes", [])):
+        owner = next((o for o in p["metadata"].get("ownerReferences", []) if o.get("controller")), {})
+        print(p["metadata"]["name"], owner.get("kind", "-"), owner.get("name", "-"))
+' "$pods" "$pvcs" "$pvs"
+}
+
+# Stops before the node plugin is uninstalled, which is the step that cannot be
+# taken back for a pod still mounting one of its volumes.
+abort_before_uninstall() {
+    error "$*"
+    error "Stopping before the Helm uninstall: the CSI node plugin is still needed to"
+    error "unmount the volumes above. Resolve this, then re-run the script."
+    exit 1
+}
+
+# The controller that would replace a deleted pod, as `kind name`: the owner
+# itself, or for a ReplicaSet the Deployment that owns it. Fails for an owner it
+# cannot stop.
+controller_of() {
+    local kind="$1" name="$2" parent
+    case "$kind" in
+        StatefulSet|DaemonSet|Job|Deployment) echo "$kind $name" ;;
+        ReplicaSet)
+            parent=$($KUBECTL get replicaset "$name" -n "$NAMESPACE" -o \
+                jsonpath='{range .metadata.ownerReferences[?(@.controller==true)]}{.kind} {.name}{end}' \
+                2>/dev/null) || return 1
+            if [[ "$parent" == Deployment\ * ]]; then
+                echo "$parent"
+            else
+                echo "ReplicaSet $name"
+            fi
+            ;;
+        -) echo "" ;;
+        *) return 1 ;;
+    esac
+}
+
+# Prints the NFSExports, in any namespace, that serve a volume of a storage
+# cluster in this namespace, one per line as `namespace name`. An export lives in
+# the namespace of the claim it serves, not the cluster's, and its volumeRef
+# begins with its cluster's UUID.
+nfsexports_of_this_cluster() {
+    local uuids exports="$JSON_DIR/nfsexports.json"
+    uuids=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].status.uuid}' 2>/dev/null) || return 1
+    [[ -z "$uuids" ]] && return 0
+    $KUBECTL get "nfsexports.$CRD_GROUP" -A -o json > "$exports" 2>/dev/null || return 1
+    UUIDS="$uuids" python3 -c '
+import json, os, sys
+uuids = os.environ["UUIDS"].split()
+for e in json.load(open(sys.argv[1]))["items"]:
+    if e["spec"].get("volumeRef", "").split(":")[0] in uuids:
+        print(e["metadata"]["namespace"], e["metadata"]["name"])
+' "$exports"
+}
+
+# Prints the $CSI_DRIVER StorageClasses of the storage clusters in this
+# namespace, one name per line: those whose cluster_id is one of $1 (the
+# clusters' UUIDs), and those labeled with this namespace (such as the
+# default class created with the cluster). A
+# StorageClass is cluster-scoped and outlives the namespace. Left behind, the
+# next install under the same cluster name adopts the operator's class by its
+# labels, and its cluster_id, which cannot be changed, names the removed cluster.
+storage_classes_of_this_cluster() {
+    local classes="$JSON_DIR/storageclasses.json"
+    $KUBECTL get storageclass -o json > "$classes" 2>/dev/null || return 1
+    UUIDS="$1" DRIVER="$CSI_DRIVER" NS="$NAMESPACE" python3 -c '
+import json, os, sys
+uuids, ns = os.environ["UUIDS"].split(), os.environ["NS"]
+for c in json.load(open(sys.argv[1]))["items"]:
+    if c.get("provisioner") != os.environ["DRIVER"]:
+        continue
+    labels = c["metadata"].get("labels") or {}
+    managed_here = labels.get("storage.simplyblock.io/namespace") == ns
+    if (c.get("parameters") or {}).get("cluster_id") in uuids or managed_here:
+        print(c["metadata"]["name"])
+' "$classes"
+}
+
+# Read now, while the StorageClusters exist: step 2 deletes them, and step 4
+# finds the clusters' StorageClasses by these UUIDs.
+CLUSTER_UUIDS=$($KUBECTL get "storageclusters.$CRD_GROUP" -n "$NAMESPACE" \
+    -o jsonpath='{.items[*].status.uuid}' 2>/dev/null || true)
+# The UUIDs of the storage clusters in every other namespace, or "unknown" when
+# they could not be listed. Step 7 never touches their MachineConfig objects.
+if other=$($KUBECTL get "storageclusters.$CRD_GROUP" -A \
+        -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{.status.uuid}{"\n"}{end}' 2>/dev/null); then
+    OTHER_CLUSTER_UUIDS=$(awk -v ns="$NAMESPACE" '$1 != ns && $2 != "" {print $2}' <<< "$other" | tr '\n' ' ')
+elif ! $KUBECTL get crd "storageclusters.$CRD_GROUP" >/dev/null 2>&1; then
+    OTHER_CLUSTER_UUIDS=""
+else
+    OTHER_CLUSTER_UUIDS=unknown
+fi
+
+# ---------------------------------------------------------------------------
+# 0a. Remove this cluster's NFSExports while the operator still runs
+# ---------------------------------------------------------------------------
+section "Removing NFSExports of the storage clusters in '$NAMESPACE'"
+
+# The operator's finalizer tears each export down on the metadata server, so
+# they go first, while the operator, the metadata server, and the CSI driver
+# all still run. Step 2 covers only this namespace, and an export left in
+# another one keeps its finalizer with no operator to clear it, and its CRD.
+if ! $KUBECTL get crd "nfsexports.$CRD_GROUP" >/dev/null 2>&1; then
+    info "No NFSExport CRD installed."
+elif ! exports=$(nfsexports_of_this_cluster); then
+    warn "Could not list the storage clusters or NFSExports; step 5 reports any left."
+elif [[ -z "$exports" ]]; then
+    info "No NFSExport serves a volume of a storage cluster in '$NAMESPACE'."
+else
+    while read -r ns name; do
+        info "Deleting NFSExport $ns/$name..."
+        $KUBECTL delete "nfsexports.$CRD_GROUP" "$name" -n "$ns" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || warn "  Could not delete NFSExport $ns/$name"
+    done <<< "$exports"
+    while read -r ns name; do
+        if ! $KUBECTL wait "nfsexports.$CRD_GROUP" "$name" -n "$ns" --for=delete \
+            --timeout=120s >/dev/null 2>&1; then
+            warn "  NFSExport $ns/$name was not torn down within 120s; clearing its finalizer."
+            $KUBECTL patch "nfsexports.$CRD_GROUP" "$name" -n "$ns" \
+                --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || \
+                warn "  Could not clear the finalizer of NFSExport $ns/$name"
+        fi
+    done <<< "$exports"
+fi
+
+# ---------------------------------------------------------------------------
+# 0b. Remove the OperatorOps while the operator still runs
+# ---------------------------------------------------------------------------
+section "Removing OperatorOps in '$NAMESPACE'"
+
+# The chart renders the initial discovery run as an OperatorOps that Helm
+# deletes on uninstall, and only the operator clears its finalizer. Step 0
+# stops the operator, so one left until step 1 holds `helm uninstall --wait`
+# until it times out, and the script exits with everything still deployed.
+ops_kind="operatorops.$CRD_GROUP"
+if ! $KUBECTL get crd "$ops_kind" >/dev/null 2>&1; then
+    info "No OperatorOps CRD installed."
+else
+    ops=$($KUBECTL get "$ops_kind" -n "$NAMESPACE" \
+        -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || \
+        abort_before_uninstall "Could not list the OperatorOps in '$NAMESPACE'."
+    if [[ -z "$ops" ]]; then
+        info "No OperatorOps in '$NAMESPACE'."
+    fi
+    for name in $ops; do
+        info "Deleting OperatorOps $name..."
+        $KUBECTL delete "$ops_kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || warn "  Could not delete OperatorOps $name"
+    done
+    for name in $ops; do
+        if ! $KUBECTL wait "$ops_kind" "$name" -n "$NAMESPACE" --for=delete \
+            --timeout=60s >/dev/null 2>&1; then
+            warn "  OperatorOps $name was not removed within 60s; clearing its finalizer."
+            $KUBECTL patch "$ops_kind" "$name" -n "$NAMESPACE" \
+                --type=merge -p '{"metadata":{"finalizers":[]}}' >/dev/null 2>&1 || \
+                warn "  Could not clear the finalizer of OperatorOps $name"
+        fi
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# 0c. Remove the OLM Subscription, or OLM restarts the operator step 0 stops
+# ---------------------------------------------------------------------------
+if $KUBECTL get crd subscriptions.operators.coreos.com >/dev/null 2>&1; then
+    section "Removing the OLM Subscription in '$NAMESPACE'"
+    subs=$($KUBECTL get subscriptions.operators.coreos.com -n "$NAMESPACE" -o \
+        jsonpath='{range .items[?(@.spec.name=="simplyblock-operator")]}{.metadata.name} {.status.installedCSV} {.status.currentCSV}{"\n"}{end}' 2>/dev/null || true)
+    while read -r sub csv current; do
+        [[ -z "$sub" ]] && continue
+        # A Subscription still installing has no installedCSV yet.
+        csv="${csv:-$current}"
+        info "Deleting Subscription $sub and ClusterServiceVersion ${csv:-none}..."
+        $KUBECTL delete subscriptions.operators.coreos.com "$sub" -n "$NAMESPACE" --ignore-not-found || true
+        [[ -n "$csv" ]] && { $KUBECTL delete csv "$csv" -n "$NAMESPACE" --ignore-not-found || true; }
+    done <<< "$subs"
+    # OLM generates this object and does not remove it with the Subscription.
+    $KUBECTL delete operators.operators.coreos.com "simplyblock-operator.${NAMESPACE}" \
+        --ignore-not-found >/dev/null 2>&1 || true
+fi
+
+# ---------------------------------------------------------------------------
+# 0. Release simplyblock volumes while the CSI node plugin still runs
+# ---------------------------------------------------------------------------
+section "Releasing simplyblock volumes mounted in namespace '$NAMESPACE'"
+
+# The operator recreates what it manages (the pNFS metadata server's
+# StatefulSet among it), so it stops first, and nothing goes on while it runs.
+operator_deploys=$($KUBECTL get deployment -n "$NAMESPACE" -l app=simplyblock-operator \
+    -o jsonpath='{.items[*].metadata.name}' 2>/dev/null) || \
+    abort_before_uninstall "Could not list the operator's Deployments."
+for deploy in $operator_deploys; do
+    info "Scaling the operator Deployment $deploy to 0..."
+    $KUBECTL scale deployment "$deploy" -n "$NAMESPACE" --replicas=0 >/dev/null 2>&1 || \
+        abort_before_uninstall "Could not scale the operator Deployment $deploy to 0."
+done
+if [[ -n "$operator_deploys" ]]; then
+    $KUBECTL wait pod -n "$NAMESPACE" -l app=simplyblock-operator \
+        --for=delete --timeout=60s >/dev/null 2>&1 || true
+    running=$($KUBECTL get pods -n "$NAMESPACE" -l app=simplyblock-operator -o name 2>/dev/null) || \
+        abort_before_uninstall "Could not check that the operator stopped."
+    [[ -z "$running" ]] || abort_before_uninstall "The operator is still running: $running"
+fi
+
+csi_pods=$(pods_on_csi_volumes) || \
+    abort_before_uninstall "Could not list the pods, claims, and volumes in '$NAMESPACE'."
+if [[ -z "$csi_pods" ]]; then
+    info "No pod in '$NAMESPACE' mounts a $CSI_DRIVER volume."
+else
+    # A pod's controller would replace a deleted pod, so every controller goes
+    # first, and then the pods.
+    controllers=""
+    while read -r pod kind owner; do
+        controller=$(controller_of "$kind" "$owner") || \
+            abort_before_uninstall "Pod $pod is owned by $kind $owner, which this script cannot stop."
+        [[ -n "$controller" ]] && controllers+="$controller"$'\n'
+    done <<< "$csi_pods"
+    while read -r kind name; do
+        [[ -z "$kind" ]] && continue
+        info "Deleting $kind $name, whose pods mount $CSI_DRIVER volumes..."
+        $KUBECTL delete "$kind" "$name" -n "$NAMESPACE" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || abort_before_uninstall "Could not delete $kind $name."
+    done <<< "$(echo "$controllers" | sort -u)"
+    for pod in $(echo "$csi_pods" | awk '{print $1}'); do
+        $KUBECTL delete pod "$pod" -n "$NAMESPACE" --ignore-not-found \
+            --wait=false >/dev/null 2>&1 || abort_before_uninstall "Could not delete pod $pod."
+    done
+    for pod in $(echo "$csi_pods" | awk '{print $1}'); do
+        $KUBECTL wait pod "$pod" -n "$NAMESPACE" --for=delete --timeout=180s >/dev/null 2>&1 || \
+            abort_before_uninstall "Pod $pod still exists after 180s."
+    done
+    # A replacement created before its controller went would not be in the list above.
+    left=$(pods_on_csi_volumes) || \
+        abort_before_uninstall "Could not check that the pods mounting $CSI_DRIVER volumes are gone."
+    [[ -z "$left" ]] || abort_before_uninstall "Pods still mount $CSI_DRIVER volumes: $(echo "$left" | awk '{print $1}' | xargs)"
+    info "No pod in '$NAMESPACE' mounts a $CSI_DRIVER volume any more."
+fi
+
 # ---------------------------------------------------------------------------
 # 1. Helm uninstall
 # ---------------------------------------------------------------------------
 section "Helm uninstall"
 
-if helm list -n "$NAMESPACE" | grep -q "^${HELM_RELEASE}\b"; then
-    info "Uninstalling helm release '$HELM_RELEASE' from namespace '$NAMESPACE'..."
-    helm uninstall "$HELM_RELEASE" -n "$NAMESPACE" --wait --timeout 120s
-    info "Helm uninstall complete."
-else
-    warn "Helm release '$HELM_RELEASE' not found in namespace '$NAMESPACE', skipping."
+# The release name is whatever the installer chose, so it is found by chart.
+releases=$(helm list -n "$NAMESPACE" -o json 2>/dev/null | python3 -c '
+import json, re, sys
+for r in json.load(sys.stdin) or []:
+    if re.fullmatch(r"simplyblock-operator-v?\d.*", r.get("chart", "")):
+        print(r["name"])
+' 2>/dev/null) || releases=""
+if [[ -z "$releases" ]]; then
+    warn "No simplyblock-operator Helm release in namespace '$NAMESPACE'; step 4b removes what one left."
 fi
+for release in $releases; do
+    info "Uninstalling helm release '$release' from namespace '$NAMESPACE'..."
+    helm uninstall "$release" -n "$NAMESPACE" --wait --timeout 120s
+    info "Helm uninstall of '$release' complete."
+done
 
 # ---------------------------------------------------------------------------
 # 2. Remove CR finalizers and delete CRs
 # ---------------------------------------------------------------------------
 section "Removing CRs and finalizers"
 
-CRDS=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
+# The FoundationDB CRDs come from the chart's crds/ directory, which helm uninstall keeps.
+CRDS=$($KUBECTL get crd -o name 2>/dev/null | { grep -E "$CRD_GROUP|apps\.foundationdb\.org" || true; } | sed 's|customresourcedefinition.apiextensions.k8s.io/||')
 
 for crd in $CRDS; do
     resources=$($KUBECTL get "$crd" -n "$NAMESPACE" --ignore-not-found -o jsonpath='{.items[*].metadata.name}' 2>/dev/null || true)
@@ -172,8 +446,14 @@ for crd in $CRDS; do
         $KUBECTL patch "$crd" "$name" -n "$NAMESPACE" \
             --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || \
             warn "  Could not patch finalizers on $crd/$name"
-        $KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
-            --ignore-not-found --timeout=30s 2>/dev/null || true
+        # The delete's own error is reported rather than discarded. A CR that
+        # will not go is as often refused by a validating webhook as held by a
+        # finalizer, and the two are indistinguishable from the final count
+        # alone: the wipe above says "no change" either way.
+        if ! delete_error=$($KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
+            --ignore-not-found --timeout=30s 2>&1); then
+            warn "  Could not delete $crd/$name: $delete_error"
+        fi
     done
 done
 
@@ -186,8 +466,10 @@ for crd in $CRDS; do
         $KUBECTL patch "$crd" "$name" -n "$NAMESPACE" \
             --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || \
             warn "  Could not patch finalizers on $crd/$name"
-        $KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
-            --ignore-not-found --force --grace-period=0 2>/dev/null || true
+        if ! delete_error=$($KUBECTL delete "$crd" "$name" -n "$NAMESPACE" \
+            --ignore-not-found --force --grace-period=0 2>&1); then
+            warn "  Could not delete $crd/$name: $delete_error"
+        fi
     done
 done
 
@@ -254,7 +536,10 @@ fi
 # ---------------------------------------------------------------------------
 section "Removing remaining workloads in namespace '$NAMESPACE'"
 
-for kind in pod daemonset deployment statefulset replicaset; do
+# Jobs first: the storage node Jobs (CPU topology, core isolation, and the
+# others the control plane starts) restart their pods on failure, so a running
+# Job brings back a pod deleted before it.
+for kind in job pod daemonset deployment statefulset replicaset; do
     count=$($KUBECTL get "$kind" -n "$NAMESPACE" --ignore-not-found --no-headers 2>/dev/null | wc -l | tr -d ' ')
     if [[ "$count" -gt 0 ]]; then
         info "Deleting ${count} ${kind}(s)..."
@@ -264,6 +549,50 @@ for kind in pod daemonset deployment statefulset replicaset; do
         info "No ${kind}s found."
     fi
 done
+
+# A pod whose containers have all exited but which kubelet still has not removed
+# is held by a volume it cannot unmount: with the CSI driver uninstalled, no node
+# plugin is left to do it, and the namespace waits on the pod for good. That
+# happens when the driver went before step 0 could release the pod. Its PVC and
+# PV may be gone already, so the pod is found by its state rather than its
+# volumes. Only a forced delete removes it, and its node keeps the mount and the
+# NVMe-oF connection until it reboots or they are removed by hand.
+stranded_pods() {
+    local pods="$JSON_DIR/stranded-pods.json"
+    $KUBECTL get pods -n "$NAMESPACE" -o json > "$pods" 2>/dev/null || return 1
+    python3 -c '
+import json, sys
+for p in json.load(open(sys.argv[1]))["items"]:
+    meta, status = p["metadata"], p.get("status", {})
+    if not meta.get("deletionTimestamp"):
+        continue
+    states = [c.get("state", {}) for key in
+              ("initContainerStatuses", "containerStatuses", "ephemeralContainerStatuses")
+              for c in status.get(key) or []]
+    # No status at all is not evidence that everything exited.
+    if states and all("terminated" in s for s in states):
+        print(meta["uid"], meta["name"], p["spec"].get("nodeName", "<unknown>"))
+' "$pods"
+}
+# The same pods, by UID, before and after kubelet's window: a pod that became
+# stranded during the wait has not had it yet, and one replaced under the same
+# name is not the pod that was waited on.
+if ! first=$(stranded_pods); then
+    warn "Could not list the pods in '$NAMESPACE'; not looking for stranded pods."
+    first=""
+fi
+if [[ -n "$first" ]]; then
+    sleep 30  # kubelet may still be finishing a teardown it can do
+    second=$(stranded_pods) || second=""
+    while read -r uid pod node; do
+        [[ -z "$uid" ]] && continue
+        grep -q "^$uid " <<< "$first" || continue
+        warn "Pod $pod exited but kubelet on $node has not removed it: a volume it cannot unmount."
+        warn "  Force-deleting it. Node $node keeps that mount and any NVMe-oF connection."
+        $KUBECTL delete pod "$pod" -n "$NAMESPACE" --force --grace-period=0 \
+            --ignore-not-found 2>/dev/null || warn "  Could not force-delete $pod"
+    done <<< "$second"
+fi
 
 # ---------------------------------------------------------------------------
 # 4. Remove PVCs and their associated PVs
@@ -331,17 +660,138 @@ for pv in $csi_pvs; do
     $KUBECTL delete pv "$pv" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
 
-# ---------------------------------------------------------------------------
-# 4b. Remove Deployments in kube-system owned by this Helm release
-# ---------------------------------------------------------------------------
-section "Removing kube-system Deployments owned by '$HELM_RELEASE'"
+# With the driver uninstalled, nothing detaches its VolumeAttachments. One whose
+# PV is gone attaches nothing and only lists a node as attached. An attachment
+# with an inline source names no PV, and a PV lookup that fails says nothing
+# about the PV: both are left alone.
+info "Cleaning up $CSI_DRIVER VolumeAttachments whose PV no longer exists..."
+attachments=$($KUBECTL get volumeattachments \
+    -o jsonpath="{range .items[?(@.spec.attacher==\"${CSI_DRIVER}\")]}{.metadata.name} {.spec.source.persistentVolumeName}{\"\n\"}{end}" \
+    2>/dev/null) || { warn "Could not list VolumeAttachments; leaving them."; attachments=""; }
+while read -r va pv; do
+    [[ -z "$va" || -z "$pv" ]] && continue
+    if ! found=$($KUBECTL get pv "$pv" --ignore-not-found -o name 2>/dev/null); then
+        warn "  Could not look up PV $pv; leaving VolumeAttachment $va."
+        continue
+    fi
+    [[ -n "$found" ]] && continue
+    info "  Deleting VolumeAttachment $va (PV $pv is gone)..."
+    $KUBECTL patch volumeattachment "$va" \
+        --type=merge -p '{"metadata":{"finalizers":[]}}' 2>/dev/null || true
+    $KUBECTL delete volumeattachment "$va" --ignore-not-found --timeout=30s 2>/dev/null || true
+done <<< "$attachments"
 
-deployments=$($KUBECTL get deployment -n kube-system --ignore-not-found \
-    -o jsonpath='{range .items[?(@.metadata.annotations.meta\.helm\.sh/release-name=="'"$HELM_RELEASE"'")]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
-for deploy in $deployments; do
-    info "Deleting Deployment $deploy in kube-system (owned by $HELM_RELEASE)..."
-    $KUBECTL delete deployment "$deploy" -n kube-system --ignore-not-found --timeout=60s 2>/dev/null || true
+info "Cleaning up the $CSI_DRIVER StorageClasses of the storage clusters in '$NAMESPACE'..."
+if ! classes=$(storage_classes_of_this_cluster "$CLUSTER_UUIDS"); then
+    warn "Could not list StorageClasses; leaving them."
+else
+    for sc in $classes; do
+        info "  Deleting StorageClass $sc..."
+        $KUBECTL delete storageclass "$sc" --ignore-not-found --timeout=30s 2>/dev/null || \
+            warn "  Could not delete StorageClass $sc"
+    done
+fi
+
+# ---------------------------------------------------------------------------
+# 4a. Remove the cluster-scoped objects of the operator's local-path-provisioner
+# ---------------------------------------------------------------------------
+section "Removing the local-path-provisioner installed by the operator"
+
+LP_SELECTOR="storage.simplyblock.io/installed-prerequisite=local-path-provisioner"
+$KUBECTL delete storageclass,clusterrolebinding,clusterrole -l "$LP_SELECTOR" \
+    --ignore-not-found --timeout=30s || warn "Could not delete the local-path-provisioner objects"
+
+# ---------------------------------------------------------------------------
+# 4b. Remove what a Helm release or OLM installed for this namespace outside it
+# ---------------------------------------------------------------------------
+# Helm annotates every object with the release's namespace, and OLM labels what
+# a CSV created with olm.owner.namespace. Both markers survive a lost release
+# record or a wrong release name, so this sweep does not depend on either.
+section "Removing objects installed for '$NAMESPACE' outside it"
+
+# Listed APIServices first: one without its Service breaks API discovery.
+SWEEP_CLUSTER_KINDS="apiservices mutatingwebhookconfigurations validatingwebhookconfigurations
+validatingadmissionpolicies validatingadmissionpolicybindings clusterroles clusterrolebindings
+storageclasses volumesnapshotclasses priorityclasses csidrivers clusterissuers"
+SWEEP_NAMESPACED_KINDS="deployments daemonsets statefulsets services serviceaccounts roles rolebindings
+configmaps secrets certificates issuers"
+
+sweep_dir="$JSON_DIR/sweep"
+mkdir -p "$sweep_dir"
+for kind in $SWEEP_CLUSTER_KINDS; do
+    $KUBECTL get "$kind" -o json > "$sweep_dir/c.$kind.json" 2>/dev/null || rm -f "$sweep_dir/c.$kind.json"
 done
+for kind in $SWEEP_NAMESPACED_KINDS; do
+    $KUBECTL get "$kind" -A -o json > "$sweep_dir/n.$kind.json" 2>/dev/null || rm -f "$sweep_dir/n.$kind.json"
+done
+# The names of the CSVs left in any namespace, or "unknown".
+csv_names=unknown
+if csv_json=$($KUBECTL get clusterserviceversions.operators.coreos.com -A -o json 2>/dev/null); then
+    csv_names=$(python3 -c 'import json, sys; print(" ".join({i["metadata"]["name"] for i in json.load(sys.stdin).get("items", [])}))' \
+        <<< "$csv_json") || csv_names=unknown
+fi
+
+# Prints `kind namespace-or-_ name` per object to delete. A Helm object counts
+# when its release is one of the simplyblock-operator chart's in this namespace,
+# so another chart's objects in a shared namespace stay.
+sweep=$(python3 - "$sweep_dir" "$NAMESPACE" "$releases" "$csv_names" <<'PY'
+import json, os, sys
+d, ns, given = sys.argv[1], sys.argv[2], set(sys.argv[3].split())
+csvs = None if sys.argv[4] == "unknown" else set(sys.argv[4].split())
+objs = []
+for f in sorted(os.listdir(d), key=lambda f: (not f.startswith("c.apiservices"), f)):
+    kind = f.split(".", 1)[1][:-5]
+    for o in json.load(open(os.path.join(d, f))).get("items", []):
+        objs.append((kind, o))
+ann = lambda m: m.get("annotations") or {}
+lab = lambda m: m.get("labels") or {}
+releases = set(given)
+for _, o in objs:
+    m = o["metadata"]
+    a = ann(m)
+    if a.get("meta.helm.sh/release-namespace") == ns and lab(m).get("app.kubernetes.io/name") == "simplyblock-operator":
+        releases.add(a.get("meta.helm.sh/release-name"))
+for kind, o in objs:
+    m = o["metadata"]
+    if m.get("namespace") == ns:
+        continue
+    a, l = ann(m), lab(m)
+    helm = a.get("meta.helm.sh/release-namespace") == ns and a.get("meta.helm.sh/release-name") in releases
+    olm = l.get("olm.owner.namespace") == ns and l.get("olm.owner", "").startswith("simplyblock-operator")
+    # OLM labels the kube-system auth-reader binding only olm.managed; it binds
+    # a ServiceAccount of this namespace, which dies with it.
+    olm_binding = (kind in ("rolebindings", "clusterrolebindings") and l.get("olm.managed") == "true"
+                   and m["name"].startswith("simplyblock-operator")
+                   and any(s.get("kind") == "ServiceAccount" and s.get("namespace") == ns
+                           for s in o.get("subjects") or []))
+    # OLM can leave olm.owner.namespace off cluster RBAC; such an object is an
+    # orphan once no CSV of its owner's name is left in any namespace.
+    owner = l.get("olm.owner", "")
+    olm_orphan = (csvs is not None and kind in ("clusterroles", "clusterrolebindings")
+                  and l.get("olm.managed") == "true" and "olm.owner.namespace" not in l
+                  and owner.startswith("simplyblock-operator.") and owner not in csvs)
+    if helm or olm or olm_binding or olm_orphan:
+        print(kind, m.get("namespace") or "_", m["name"])
+        # cert-manager keeps a Certificate's Secret after the Certificate goes.
+        secret = (o.get("spec") or {}).get("secretName") if kind == "certificates" else None
+        if secret:
+            print("secrets", m["namespace"], secret)
+# A Secret whose simplyblock Certificate went in an earlier run is an orphan.
+certs = {(o["metadata"]["namespace"], o["metadata"]["name"]) for k, o in objs if k == "certificates"}
+for kind, o in objs:
+    m = o["metadata"]
+    cert = ann(m).get("cert-manager.io/certificate-name", "")
+    if kind == "secrets" and cert.startswith("simplyblock-") and (m["namespace"], cert) not in certs:
+        print("secrets", m["namespace"], m["name"])
+PY
+) || { warn "Could not list the objects installed for '$NAMESPACE'; leaving them."; sweep=""; }
+while read -r kind ns name; do
+    [[ -z "$kind" ]] && continue
+    nsarg=(); [[ "$ns" != _ ]] && nsarg=(-n "$ns")
+    info "  Deleting $kind $name ${nsarg[*]}..."
+    $KUBECTL delete "$kind" "$name" "${nsarg[@]}" --ignore-not-found --timeout=60s >/dev/null 2>&1 || \
+        warn "  Could not delete $kind $name ${nsarg[*]}"
+done <<< "$sweep"
 
 # ---------------------------------------------------------------------------
 # 5. Remove CRDs
@@ -373,9 +823,117 @@ for crd in $CRDS; do
     $KUBECTL delete crd "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
 
+# Third-party CRDs the chart installs, which helm uninstall keeps. Only those
+# Helm installed for this namespace go, and only with no instance left.
+delete_chart_crd() {
+    local crd="$1" owner
+    owner=$($KUBECTL get crd "$crd" --ignore-not-found \
+        -o jsonpath='{.metadata.annotations.meta\.helm\.sh/release-namespace}' 2>/dev/null || true)
+    [[ "$owner" == "$NAMESPACE" ]] || return 0
+    if [[ -n "$($KUBECTL get "$crd" -A --no-headers 2>/dev/null || true)" ]]; then
+        warn "Keeping CRD $crd: instances of it remain."
+        return 0
+    fi
+    info "Deleting CRD $crd..."
+    $KUBECTL delete crd "$crd" --ignore-not-found --timeout=30s 2>/dev/null || warn "Could not delete CRD $crd"
+}
+
+delete_chart_crd mongodbcommunity.mongodbcommunity.mongodb.com
+
+# The chart installs the snapshot CRDs only where the cluster served none, so
+# ones annotated for this namespace are ours. They stay while another driver's
+# snapshot class or another snapshot controller shows something else uses them.
+SNAPSHOT_CRDS="volumesnapshots.snapshot.storage.k8s.io volumesnapshotcontents.snapshot.storage.k8s.io
+volumegroupsnapshots.groupsnapshot.storage.k8s.io volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io
+volumesnapshotclasses.snapshot.storage.k8s.io volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io"
+if [[ "$KEEP_SNAPSHOT_CRDS" == true ]]; then
+    info "Keeping the snapshot CRDs (--keep-snapshot-crds)."
+elif [[ "${#blocked_crds[@]}" -gt 0 ]]; then
+    warn "Keeping the snapshot CRDs; another namespace still uses simplyblock."
+else
+    # Our own class would otherwise count as an instance and keep its CRD.
+    if $KUBECTL get crd volumesnapshotclasses.snapshot.storage.k8s.io >/dev/null 2>&1; then
+        $KUBECTL delete volumesnapshotclass -l "storage.simplyblock.io/managed-by" \
+            --ignore-not-found --timeout=30s || warn "Could not delete the simplyblock VolumeSnapshotClass"
+    fi
+    for kind in volumesnapshotclasses.snapshot.storage.k8s.io volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io; do
+        others=$($KUBECTL get "$kind" -o jsonpath='{range .items[?(@.driver!="'"$CSI_DRIVER"'")]}{.metadata.name} {end}' 2>/dev/null || true)
+        [[ -n "$others" ]] && snapshot_users+=" ${kind%%.*}: $others"
+    done
+    controllers=$($KUBECTL get deployment -A -o json 2>/dev/null | python3 -c '
+import json, sys
+for d in json.load(sys.stdin).get("items", []):
+    m = d["metadata"]
+    images = [c.get("image", "") for c in d["spec"]["template"]["spec"].get("containers", [])]
+    if m["name"] != "simplyblock-snapshot-controller" and any("snapshot-controller" in i for i in images):
+        print(m["namespace"] + "/" + m["name"], end=" ")
+' 2>/dev/null) || controllers="<could not list Deployments>"
+    [[ -n "$controllers" ]] && snapshot_users+=" snapshot controllers: $controllers"
+    if [[ -n "$snapshot_users" ]]; then
+        warn "Keeping the snapshot CRDs; something else uses them:$snapshot_users"
+    else
+        for crd in $SNAPSHOT_CRDS; do delete_chart_crd "$crd"; done
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+# 5b. Remove the prerequisites the ControlPlane installed
+# ---------------------------------------------------------------------------
+# The operator labels every object of a prerequisite with its name. One goes
+# whole unless an instance of one of its CRDs remains: then something else uses it.
+section "Removing the prerequisites the operator installed"
+
+PREREQ_LABEL="storage.simplyblock.io/installed-prerequisite"
+if [[ "${#blocked_crds[@]}" -gt 0 ]]; then
+    warn "Another namespace still uses simplyblock; leaving the prerequisites."
+else
+    # Our CA Certificate and issuers first, or they count as users of cert-manager,
+    # which keeps a Certificate's Secret.
+    $KUBECTL get certificates.cert-manager.io -A -l "$PREREQ_LABEL" \
+        -o jsonpath='{range .items[*]}{.metadata.namespace} {.metadata.name} {.spec.secretName}{"\n"}{end}' 2>/dev/null |
+    while read -r ns name secret; do
+        [[ -z "$ns" ]] && continue
+        info "  Deleting Certificate $name and Secret $secret in $ns..."
+        $KUBECTL delete certificates.cert-manager.io "$name" -n "$ns" --ignore-not-found --timeout=30s >/dev/null 2>&1
+        $KUBECTL delete secret "$secret" -n "$ns" --ignore-not-found --timeout=30s >/dev/null 2>&1
+    done
+    for kind in issuers.cert-manager.io clusterissuers.cert-manager.io; do
+        $KUBECTL delete "$kind" -A -l "$PREREQ_LABEL" --ignore-not-found --timeout=30s >/dev/null 2>&1 || true
+    done
+    prereqs=$($KUBECTL get crd,deployment -A -l "$PREREQ_LABEL" \
+        -o jsonpath='{range .items[*]}{.metadata.labels.storage\.simplyblock\.io/installed-prerequisite}{"\n"}{end}' 2>/dev/null | sort -u)
+    for prereq in $prereqs; do
+        sel="$PREREQ_LABEL=$prereq"
+        if [[ "$prereq" == snapshot-controller && ( "$KEEP_SNAPSHOT_CRDS" == true || -n "$snapshot_users" ) ]]; then
+            warn "Keeping prerequisite $prereq: the snapshot CRDs stay."
+            continue
+        fi
+        used=""
+        for crd in $($KUBECTL get crd -l "$sel" -o name 2>/dev/null | sed 's|.*/||'); do
+            [[ -n "$($KUBECTL get "$crd" -A --no-headers 2>/dev/null || true)" ]] && used="$crd"
+        done
+        if [[ -n "$used" ]]; then
+            warn "Keeping prerequisite $prereq: instances of $used remain."
+            continue
+        fi
+        info "Deleting prerequisite $prereq..."
+        $KUBECTL delete deployment,daemonset,service,serviceaccount,role,rolebinding,configmap,secret \
+            -A -l "$sel" --ignore-not-found --timeout=60s >/dev/null 2>&1 || warn "  Could not delete some of $prereq"
+        $KUBECTL delete apiservice,mutatingwebhookconfiguration,validatingwebhookconfiguration,clusterrole,clusterrolebinding,storageclass,csidriver,crd,namespace \
+            -l "$sel" --ignore-not-found --timeout=60s >/dev/null 2>&1 || warn "  Could not delete some of $prereq"
+        # The controller creates its leader-election Lease itself, unlabeled.
+        if [[ "$prereq" == snapshot-controller ]] && [[ "$($KUBECTL get lease snapshot-controller-leader -n kube-system \
+            -o jsonpath='{.spec.holderIdentity}' 2>/dev/null)" == simplyblock-snapshot-controller-* ]]; then
+            $KUBECTL delete lease snapshot-controller-leader -n kube-system --ignore-not-found >/dev/null 2>&1 || \
+                warn "  Could not delete the Lease kube-system/snapshot-controller-leader"
+        fi
+    done
+fi
+
 # Confirm CRDs removed
 section "Confirming CRD removal"
-remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep "$CRD_GROUP" | wc -l | tr -d ' ')
+# grep -c exits 1 on zero matches, which pipefail and set -e would turn into an exit.
+remaining_crds=$($KUBECTL get crd -o name 2>/dev/null | grep -cE "$CRD_GROUP|apps\.foundationdb\.org" || true)
 if [[ "$remaining_crds" -eq 0 ]]; then
     info "All CRDs removed successfully."
 elif [[ "${#blocked_crds[@]}" -gt 0 ]]; then
@@ -386,8 +944,178 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+# 5a. Remove the cluster-scoped objects and node keys the operator created
+# ---------------------------------------------------------------------------
+# These are shared by every simplyblock install, so they go only when no CRD was
+# kept for an install in another namespace.
+section "Removing operator-created cluster-scoped objects"
+
+if [[ "${#blocked_crds[@]}" -gt 0 ]]; then
+    warn "Another namespace still uses simplyblock; leaving the shared cluster-scoped objects and node labels."
+else
+    $KUBECTL delete csidriver,clusterrolebinding,clusterrole \
+        -l "storage.simplyblock.io/managed-by" --ignore-not-found --timeout=30s || \
+        warn "Could not delete the operator-managed cluster-scoped objects"
+    # Created without labels. A metrics APIService left without its Service fails
+    # API discovery, which keeps the namespace Terminating.
+    $KUBECTL delete --ignore-not-found --timeout=30s \
+        "clusterrolebinding/simplyblock-storage-node-binding-${NAMESPACE}" \
+        clusterrole/simplyblock-storage-node-role \
+        validatingadmissionpolicybinding/simplyblock-pnfs-mds-state \
+        validatingadmissionpolicy/simplyblock-pnfs-mds-state \
+        apiservice/v1alpha2.metrics.simplyblock.io 2>/dev/null || \
+        warn "Could not delete some unlabeled operator objects"
+
+    info "Removing simplyblock labels and annotations from nodes..."
+    # Prints `label|annotate node key- key- ...` per node with simplyblock keys.
+    node_cmds=$($KUBECTL get nodes -o json 2>/dev/null | python3 -c '
+import json, sys
+prefixes = ("storage.simplyblock.io/", "subnet.storage.simplyblock.io/", "topology.simplyblock.io/")
+for n in json.load(sys.stdin).get("items", []):
+    m = n["metadata"]
+    for verb, d in (("label", m.get("labels")), ("annotate", m.get("annotations"))):
+        keys = [k + "-" for k in (d or {}) if k.startswith(prefixes)]
+        if keys:
+            print(verb, m["name"], *keys)
+' 2>/dev/null) || { warn "Could not list nodes; leaving their labels."; node_cmds=""; }
+    while read -r verb node keys; do
+        [[ -z "$verb" ]] && continue
+        # shellcheck disable=SC2086
+        $KUBECTL "$verb" node "$node" $keys >/dev/null || warn "Could not $verb $node"
+    done <<< "$node_cmds"
+fi
+
+# ---------------------------------------------------------------------------
+# 6. Remove the namespace
+# ---------------------------------------------------------------------------
+section "Removing namespace '$NAMESPACE'"
+$KUBECTL delete namespace "$NAMESPACE" --ignore-not-found --timeout=300s || \
+    warn "Namespace '$NAMESPACE' was not removed within 300s"
+
+# ---------------------------------------------------------------------------
+# 7. Remove the MachineConfig objects of the storage clusters (OpenShift)
+# ---------------------------------------------------------------------------
+# On OpenShift the CPU topology job gives a cluster's storage nodes their kubelet
+# settings through a MachineConfigPool, a MachineConfig, and KubeletConfigs named
+# after the first six characters of the cluster's UUID, and MCO generates kubelet
+# configs for the pool that it leaves behind when the pool goes. The core
+# isolation job isolates cores on the masters through a MachineConfig that
+# records the cluster.
+#
+# Removed are those of the clusters in this namespace, and those of a previous
+# cluster that an earlier cleanup left: a storage-<id> pool carrying the
+# custom-kubelet label the job gives it, or a MachineConfig or KubeletConfig
+# named after a cluster, whose cluster exists in no other namespace. A cluster that still exists in another namespace keeps its objects,
+# and when the other namespaces cannot be listed, only this namespace's go.
+# A pool that still has nodes is kept, and so is every object named after its
+# cluster: moving the nodes out of it reboots them, and deleting it deletes the
+# rendered config they run, which MCO then cannot update them from. Removing the
+# master objects rolls the master pool, which reboots the masters one at a time.
+
+# Prints the nodes whose current or desired config is a render of pool $1.
+nodes_on_render() {
+    local nodes="$JSON_DIR/mco-nodes.json"
+    $KUBECTL get nodes -o json > "$nodes" 2>/dev/null || { echo "<unknown>"; return; }
+    python3 -c '
+import json, sys
+prefix = "rendered-" + sys.argv[2] + "-"
+for n in json.load(open(sys.argv[1]))["items"]:
+    a = n["metadata"].get("annotations") or {}
+    if any(a.get("machineconfiguration.openshift.io/" + k, "").startswith(prefix)
+           for k in ("currentConfig", "desiredConfig")):
+        print(n["metadata"]["name"])
+' "$nodes" "$1"
+}
+
+# Prints the short IDs of the storage clusters whose MachineConfig objects exist,
+# one per line: the storage pools the CPU topology job created, and the
+# MachineConfigs and KubeletConfigs named after a cluster, which outlive a pool
+# an earlier cleanup removed.
+storage_mco_ids() {
+    local pools="$JSON_DIR/mco-pools.json" names
+    $KUBECTL get machineconfigpool -o json > "$pools" 2>/dev/null || return 1
+    names=$($KUBECTL get machineconfig -o name 2>/dev/null) || return 1
+    names="$names"$'\n'$($KUBECTL get kubeletconfig -o name 2>/dev/null) || return 1
+    python3 -c '
+import json, re, sys
+for p in json.load(open(sys.argv[1]))["items"]:
+    m = p["metadata"]
+    found = re.fullmatch(r"storage-([0-9a-f]{6})", m["name"])
+    if found and (m.get("labels") or {}).get("custom-kubelet") == "storage-cpumanager-" + found.group(1):
+        print(found.group(1))
+for name in sys.stdin.read().split():
+    name = name.rsplit("/", 1)[-1]
+    found = (re.fullmatch(r"storage-mc-([0-9a-f]{6})", name)
+             or re.fullmatch(r"9[0-9]-storage-([0-9a-f]{6})-generated-kubelet(-[0-9]+)?", name)
+             or re.fullmatch(r"storage-kubelet-([0-9a-f]{6})(-master)?", name))
+    if found:
+        print(found.group(1))
+' "$pools" <<< "$names"
+}
+
+# True when $1, a full or short cluster UUID, is a cluster in another namespace.
+of_other_cluster() {
+    local uuid
+    for uuid in $OTHER_CLUSTER_UUIDS; do
+        [[ "$uuid" == "$1"* || "${uuid:0:6}" == "$1" ]] && return 0
+    done
+    return 1
+}
+
+if $KUBECTL get crd machineconfigpools.machineconfiguration.openshift.io >/dev/null 2>&1; then
+    section "Removing the MachineConfig objects of the storage clusters in '$NAMESPACE'"
+
+    ids=""
+    for uuid in $CLUSTER_UUIDS; do ids="$ids ${uuid:0:6}"; done
+    if [[ "$OTHER_CLUSTER_UUIDS" == unknown ]]; then
+        warn "Could not list the storage clusters of other namespaces; leaving the MachineConfig objects of previous clusters."
+    elif found_ids=$(storage_mco_ids); then
+        for id in $found_ids; do
+            of_other_cluster "$id" || ids="$ids $id"
+        done
+    else
+        warn "Could not list the MachineConfig objects; removing only this namespace's."
+    fi
+    ids=$(tr ' ' '\n' <<< "$ids" | sort -u)
+
+    master_by=$($KUBECTL get machineconfig simplyblock-master-isolated \
+        -o jsonpath='{.metadata.annotations.simplyblock\.io/cluster-id}' 2>/dev/null || true)
+    # Ours, or a previous cluster's. Unrecorded (written before the annotation
+    # existed) is neither.
+    if [[ -n "$master_by" ]] && { [[ " $CLUSTER_UUIDS " == *" $master_by "* ]] ||
+        { [[ "$OTHER_CLUSTER_UUIDS" != unknown ]] && ! of_other_cluster "$master_by"; }; }; then
+        info "Deleting MachineConfig simplyblock-master-isolated; the masters reboot one at a time."
+        $KUBECTL delete machineconfig simplyblock-master-isolated --ignore-not-found --timeout=60s >/dev/null || \
+            warn "Could not delete MachineConfig simplyblock-master-isolated"
+    fi
+
+    for id in $ids; do
+        pool="storage-$id"
+        on=$(nodes_on_render "$pool" | tr '\n' ' ')
+        count=0
+        if $KUBECTL get machineconfigpool "$pool" >/dev/null 2>&1; then
+            count=$($KUBECTL get machineconfigpool "$pool" -o jsonpath='{.status.machineCount}' 2>/dev/null || echo unknown)
+        fi
+        if [[ -n "$on" || "${count:-0}" != 0 ]]; then
+            warn "MachineConfigPool $pool still has nodes (${on:-machineCount $count}); keeping it and the objects named after it."
+            continue
+        fi
+        for obj in "kubeletconfig/storage-kubelet-$id-master" "kubeletconfig/storage-kubelet-$id" \
+                   "machineconfig/storage-mc-$id" "machineconfigpool/$pool"; do
+            $KUBECTL delete "${obj%%/*}" "${obj#*/}" --ignore-not-found --timeout=60s >/dev/null || warn "Could not delete $obj"
+        done
+        # MCO's kubelet configs for the pool, which it keeps after the pool goes.
+        generated=$($KUBECTL get machineconfig -o name 2>/dev/null | sed 's#.*/##' \
+            | grep -E "^9[0-9]-$pool-generated-kubelet(-[0-9]+)?$" || true)
+        for mc in $generated; do
+            $KUBECTL delete machineconfig "$mc" --ignore-not-found --timeout=60s >/dev/null || warn "Could not delete MachineConfig $mc"
+        done
+        info "Removed the MachineConfig objects of storage cluster $id."
+    done
+fi
+
+# ---------------------------------------------------------------------------
 # Done
 # ---------------------------------------------------------------------------
 section "Cleanup complete"
 info "Namespace: $NAMESPACE"
-info "If the namespace itself should be removed, run: $KUBECTL delete namespace $NAMESPACE"

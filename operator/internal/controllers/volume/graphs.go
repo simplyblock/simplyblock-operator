@@ -1,0 +1,335 @@
+// The state graph of the PersistentVolumeOps action, declared as data.
+//
+// It is a MultiConfig although the kind carries one action, and not because a
+// second one is coming: every other Ops controller in this group drives its
+// steps through a MultiConfig keyed by action, and a kind that read differently
+// for having one entry would make a reader check whether the difference meant
+// something. A MultiConfig with one entry costs nothing.
+//
+// The graph is built per operation rather than shared, because one of its
+// bounds is computed. The copy's deadline scales with how many volumes the
+// migrated subsystem holds, which is only known once the migration has been
+// created, so the hook closes over that count — the shape atlas-lib's
+// statemachine documents for exactly this case.
+//
+// design-persistentvolumeops.md §5 is the specification.
+
+package volume
+
+import (
+	"context"
+	"time"
+
+	"github.com/simplyblock/atlas/statemachine"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+// step is the operation's step type, aliased so the graph literal below reads
+// as the graph rather than as a wall of package qualifiers.
+type step = simplyblockv1alpha2.PersistentVolumeOpsStep
+
+const (
+	stepValidating = simplyblockv1alpha2.PersistentVolumeOpsStepValidating
+	stepMigrating  = simplyblockv1alpha2.PersistentVolumeOpsStepMigrating
+	stepVerifying  = simplyblockv1alpha2.PersistentVolumeOpsStepVerifying
+)
+
+// The MultiConfig keys of the kind's two actions.
+const (
+	actionMigrate  = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionMigrate)
+	actionRelocate = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionRelocate)
+	actionJoin     = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup)
+)
+
+// How long each step may take before the operation is reported as stuck.
+//
+// They differ by what the step is waiting on rather than by preference.
+const (
+	// validatingDeadline bounds everything between creating the migration and
+	// continuing it: waiting for the consuming pods to be Running, and running
+	// one Job per consuming node. It is finite because the control plane does
+	// not hold a created-but-unstarted migration open indefinitely, and an
+	// operation that sat in this step past that window would continue a
+	// migration the backend has already given up on.
+	validatingDeadline = 15 * time.Minute
+
+	// copyBaseDeadline is what a migration of one volume gets, and the floor
+	// under every larger one.
+	copyBaseDeadline = 30 * time.Minute
+
+	// copyPerMemberDeadline is added for each volume the subsystem holds. A
+	// migration is addressed by the subsystem, so every sibling volume moves
+	// along with the named one and each of them is data to copy.
+	//
+	// There is no ceiling. A subsystem large enough to make this hours is one
+	// whose migration genuinely takes hours, and capping the bound would fail
+	// it for being big rather than for being stuck — which is the one thing a
+	// deadline here is for.
+	copyPerMemberDeadline = 10 * time.Minute
+
+	// verifyingDeadline bounds the cleanup: deleting the validation Jobs and
+	// confirming that no path they connected is left behind. It is short
+	// because nothing in it waits on the data path, and it is bounded at all
+	// because a cleanup that cannot finish has to be visible — a path connected
+	// with nothing tracking it blocks every later migration of the volume, and
+	// has.
+	verifyingDeadline = 10 * time.Minute
+
+	// replicatingBaseDeadline and replicatingPerMemberDeadline bound a
+	// Relocate's initial sync: the whole of every volume of the subsystem
+	// crosses into the target before the commit, so the bound grows with the
+	// count, as the copy's does.
+	replicatingBaseDeadline      = 2 * time.Hour
+	replicatingPerMemberDeadline = 30 * time.Minute
+
+	// committingDeadline bounds recording a task for every volume.
+	committingDeadline = 15 * time.Minute
+
+	// awaitingCutoverDeadline bounds one volume's wait for its cutover to be
+	// prepared: the control plane's catch-up and its shrink rounds.
+	awaitingCutoverDeadline = 30 * time.Minute
+
+	// attachingDeadline bounds one volume's path Jobs. Each Job gives up after
+	// preconnectJobDeadline, and a failed one is replaced.
+	attachingDeadline = 10 * time.Minute
+
+	// proceedingDeadline bounds one volume's release. The control plane
+	// proceeds alone two minutes into the wait, so the step ends well inside
+	// it unless the cutover itself is stuck.
+	proceedingDeadline = 10 * time.Minute
+)
+
+// The bounds of a JoinConsistencyGroup's steps. The steps inside the suspend
+// window carry the shortest: the window itself is enforced by the deadline in
+// status, which every host and the control plane are given, and these are
+// only the backstop for a pass that never comes back to it.
+const (
+	joinPlanningDeadline = 15 * time.Minute
+
+	// joinMigratingDeadline bounds the wait for the child migration, which
+	// carries its own per-step bounds and fails by itself when one of them
+	// passes. This one only catches a child nothing reconciles.
+	joinMigratingDeadline = 24 * time.Hour
+
+	joinJoiningDeadline = 10 * time.Minute
+	// joinLeavingDeadline bounds the leave's own calls: recording the split
+	// and detaching the volume from the group it leaves. The swap that splits
+	// it runs in the steps after SelectingSubsystem, under their deadlines.
+	joinLeavingDeadline = 10 * time.Minute
+
+	// joinSelectingDeadline covers waiting for another operation to release
+	// a volume the move touches, which can be a migration of hours.
+	joinSelectingDeadline = 6 * time.Hour
+
+	joinPreparingDeadline = 10 * time.Minute
+	joinAttachingDeadline = 10 * time.Minute
+	joinWindowDeadline    = 2 * time.Minute
+
+	// joinCommittingDeadline is reported but not acted on: the namespaces
+	// are in the target, so the commit is retried until it lands.
+	joinCommittingDeadline = time.Hour
+
+	joinReleasingDeadline = 10 * time.Minute
+)
+
+// replicatingDeadline is the bound on a Relocate's initial sync.
+func replicatingDeadline(members int32) time.Duration {
+	if members < 1 {
+		members = 1
+	}
+	return replicatingBaseDeadline + time.Duration(members)*replicatingPerMemberDeadline
+}
+
+// deadline is the entry hook every state here carries: it sets the step's
+// budget and performs nothing. The side effect of a step is performed on the
+// pass that follows, against the step the entry's patch persisted, which is
+// where the write-ahead record is needed and what it records.
+func deadline(d time.Duration) statemachine.TransitionFunc[step] {
+	return func(context.Context, step, step) (time.Duration, error) { return d, nil }
+}
+
+// copyDeadline is the bound on the copy, given how many volumes the subsystem
+// holds. A count of zero is a migration whose creation has not reported one
+// yet, and it gets the base bound rather than none: a step that cannot time out
+// is the failure mode the bounds exist to prevent.
+func copyDeadline(members int32) time.Duration {
+	if members < 1 {
+		members = 1
+	}
+	return copyBaseDeadline + time.Duration(members)*copyPerMemberDeadline
+}
+
+// graphs declares the state graph of each action, for a subsystem of the given
+// member count.
+func graphs(members int32) statemachine.MultiConfig[step] {
+	return statemachine.MultiConfig[step]{
+		actionMigrate: {
+			Initial: stepValidating,
+			States: map[step]statemachine.StateDef[step]{
+				// Validating and Migrating are abortable because both have
+				// something to take back: a backend migration that has not
+				// copied anything yet, and the paths its creation published on
+				// every consuming host.
+				stepValidating: {
+					To:        []step{stepMigrating},
+					Abortable: true,
+					OnEnter:   deadline(validatingDeadline),
+				},
+				stepMigrating: {
+					To:        []step{stepVerifying},
+					Abortable: true,
+					OnEnter:   deadline(copyDeadline(members)),
+				},
+				// Verifying is not. The copy has finished, the volume has
+				// moved, and what is left is the cleanup that makes the move
+				// safe — so stopping here would leave exactly the state this
+				// step exists to prevent.
+				stepVerifying: {OnEnter: deadline(verifyingDeadline)},
+			},
+		},
+		actionRelocate: {
+			Initial: stepValidating,
+			States: map[step]statemachine.StateDef[step]{
+				// Abortable until the commit: replication can be stopped and
+				// the source carries on as before.
+				stepValidating: {
+					To:        []step{stepReplicating},
+					Abortable: true,
+					OnEnter:   deadline(validatingDeadline),
+				},
+				stepReplicating: {
+					To:        []step{stepCommitting},
+					Abortable: true,
+					OnEnter:   deadline(replicatingDeadline(members)),
+				},
+				// From the commit on, the control plane cuts the volumes over
+				// and deletes their sources whatever the operation does, so no
+				// step after it can be stopped.
+				stepCommitting: {
+					To:      []step{stepAwaitingCutover},
+					OnEnter: deadline(committingDeadline),
+				},
+				stepAwaitingCutover: {
+					To:      []step{stepAttachingPaths},
+					OnEnter: deadline(awaitingCutoverDeadline),
+				},
+				stepAttachingPaths: {
+					To:      []step{stepProceeding},
+					OnEnter: deadline(attachingDeadline),
+				},
+				// The volumes of one subsystem are cut over one at a time,
+				// so a release leads to the next volume's cutover until every
+				// volume is served by the target.
+				stepProceeding: {
+					To:      []step{stepAwaitingCutover, stepVerifying},
+					OnEnter: deadline(proceedingDeadline),
+				},
+				stepVerifying: {OnEnter: deadline(verifyingDeadline)},
+			},
+		},
+		actionJoin: {
+			Initial: stepPlanning,
+			States: map[step]statemachine.StateDef[step]{
+				// Abortable until the swap starts: before it, nothing is on a
+				// host's data path, and what the operation reserved or created
+				// can be released.
+				stepPlanning: {
+					To:        []step{stepJoinMigrating, stepJoining, stepLeaving},
+					Abortable: true,
+					OnEnter:   deadline(joinPlanningDeadline),
+				},
+				// A volume in another group leaves it first. The step is
+				// entered before the swap that splits the volume out of that
+				// group's subsystem and again after it, and it detaches the
+				// volume, which is one-way, so an abort cannot be honored here.
+				stepLeaving: {
+					To:      []step{stepSelectingSubsystem, stepJoinMigrating, stepJoining},
+					OnEnter: deadline(joinLeavingDeadline),
+				},
+				stepJoinMigrating: {
+					To:        []step{stepJoining},
+					Abortable: true,
+					OnEnter:   deadline(joinMigratingDeadline),
+				},
+				// A join is one call, and membership is one-way: once it is
+				// asked for there is nothing an abort could take back.
+				stepJoining: {
+					To:      []step{stepSelectingSubsystem},
+					OnEnter: deadline(joinJoiningDeadline),
+				},
+				stepSelectingSubsystem: {
+					To:        []step{stepPreparingTarget, stepLeaving},
+					Abortable: true,
+					OnEnter:   deadline(joinSelectingDeadline),
+				},
+				stepPreparingTarget: {
+					To:        []step{stepJoinAttachingPaths, stepMovingNamespaces, stepReleasingPaths},
+					Abortable: true,
+					OnEnter:   deadline(joinPreparingDeadline),
+				},
+				stepJoinAttachingPaths: {
+					To:        []step{stepSuspending, stepReleasingPaths},
+					Abortable: true,
+					OnEnter:   deadline(joinAttachingDeadline),
+				},
+				// From the first hold on, the window is bounded by its own
+				// deadline, and the operation finishes or rolls back by itself.
+				stepSuspending: {
+					To:      []step{stepMovingNamespaces, stepJoinResuming, stepReleasingPaths},
+					OnEnter: deadline(joinWindowDeadline),
+				},
+				stepMovingNamespaces: {
+					To:      []step{stepJoinResuming, stepJoinCommitting, stepReleasingPaths},
+					OnEnter: deadline(joinWindowDeadline),
+				},
+				stepJoinResuming: {
+					To:      []step{stepJoinCommitting, stepReleasingPaths},
+					OnEnter: deadline(joinWindowDeadline),
+				},
+				stepJoinCommitting: {
+					To:      []step{stepReleasingPaths, stepLeaving},
+					OnEnter: deadline(joinCommittingDeadline),
+				},
+				stepReleasingPaths: {
+					To:      []step{stepLeaving},
+					OnEnter: deadline(joinReleasingDeadline),
+				},
+			},
+		},
+	}
+}
+
+// initialDeadline is the budget of the step every operation is born in. A
+// machine is already in its initial state when it is built, so that state's
+// OnEnter never runs and the graph's deadline for it is never set. Setting it
+// explicitly is what stops the first step from being the one step that cannot
+// time out.
+const initialDeadline = validatingDeadline
+
+// stepBudgets is what each step's deadline was set from, which is the other
+// half of the arithmetic that measures how long a step took: the deadline is in
+// status and the start is not, so the start is the deadline less the budget.
+// Migrating is absent because its budget is not a constant, and copyDeadline is
+// what answers for it.
+var stepBudgets = map[step]time.Duration{
+	stepValidating: validatingDeadline,
+	stepVerifying:  verifyingDeadline,
+}
+
+// UnabortableSteps are the declared steps an abort cannot be honored from,
+// sorted.
+//
+// It is exported for the DELETE guard on this kind, which asks the same
+// question this package's unwind asks: a deletion may not express something
+// spec.abort could not, so both channels read one graph (design-crd-model.md
+// §3.1). The guard has a step out of a status and no machine, which is the
+// whole reason this reads the graph rather than the machine the reconciler
+// holds.
+//
+// The member count is irrelevant to the answer, so the guard does not have to
+// know one: which steps can be stopped is a property of the graph's shape, and
+// the count only sets how long one of them may take.
+func UnabortableSteps() []step {
+	return statemachine.UnabortableMultiStates(graphs(0))
+}

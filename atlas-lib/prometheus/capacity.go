@@ -1,17 +1,19 @@
-// Capacity samples for logical volumes, devices, and storage nodes. The three
-// share this file because they share a shape: the control plane exports the same
-// five size gauges and a sample date under each prefix, so the only thing that
-// differs is the prefix and the label naming the entity.
+// Capacity samples for clusters, logical volumes, devices, storage nodes, and
+// storage pools. The five share this file because they share a shape: the
+// control plane's v2 exporter publishes the same size gauges under each prefix,
+// so the only thing that differs is the prefix and the label naming the entity.
+// It publishes no percentage and no sample date, so both are derived.
 
 package prometheus
 
 import (
 	"context"
+	"math"
 	"time"
 )
 
-// Capacity is one capacity sample for a logical volume, a device, or a storage
-// node. Every size is in bytes.
+// Capacity is one capacity sample for a cluster, a logical volume, a device, a
+// storage node, or a storage pool. Every size is in bytes.
 //
 // Provisioned against Used is the distinction the type exists for. A logical
 // volume is thin-provisioned, so the size it was asked for and the space it has
@@ -25,16 +27,14 @@ type Capacity struct {
 	// Free is what remains of Total.
 	Free int64
 	// Provisioned is the space promised out of it, which for an
-	// over-provisioned pool may exceed Total.
+	// over-provisioned pool may exceed Total. The exporter publishes it only for
+	// clusters and storage nodes; it is zero for the other kinds.
 	Provisioned int64
-	// UtilizationPercent is the control plane's own rounding of Used over
-	// Total, carried rather than recomputed so that it agrees with what the
-	// control plane's own interfaces report.
+	// UtilizationPercent is Used over Total, rounded.
 	UtilizationPercent int32
-	// SampledAt is when the control plane took the reading, which is not when
-	// it was scraped and not when it was asked for. It is the zero time when
-	// the control plane reports no date, which is how an entity that has never
-	// been sampled is distinguished from one sampled at the epoch.
+	// SampledAt is when this package read the sample; the exporter has no date
+	// of its own. It is the zero time when the total is zero, which is how an
+	// entity nothing has measured is told from an empty one.
 	SampledAt time.Time
 }
 
@@ -52,7 +52,36 @@ const (
 	deviceIDLabel      = "device"
 	nodeMetricPrefix   = "snode"
 	nodeIDLabel        = "snode"
+	poolMetricPrefix   = "pool"
+	poolIDLabel        = "pool"
+
+	// A cluster is the one entity whose identifying label is the same one every
+	// query already filters on, because every series in this exporter carries
+	// the cluster it belongs to. So the cluster family groups by `cluster` and
+	// yields exactly one entry.
+	clusterMetricPrefix = "cluster"
+	clusterIDLabel      = "cluster"
 )
+
+// ClusterCapacity returns the capacity sample for one cluster, and whether
+// there is one. A cluster Prometheus has no sample for yields false rather than
+// a zero sample, because zeros are the reading of an empty cluster.
+//
+// It differs from the other four in returning a single sample rather than a
+// map. The cluster is the scope every one of those queries is already narrowed
+// to, so grouping by the cluster label yields the one entry the caller asked
+// for, and handing back a map of size one would make every caller unwrap it.
+func (p *Provider) ClusterCapacity(
+	ctx context.Context,
+	clusterUUID string,
+) (Capacity, bool, error) {
+	samples, err := p.capacity(ctx, clusterMetricPrefix, clusterIDLabel, clusterUUID)
+	if err != nil {
+		return Capacity{}, false, err
+	}
+	sample, ok := samples[clusterUUID]
+	return sample, ok, nil
+}
 
 // VolumeCapacity returns the capacity sample for every logical volume in the
 // cluster, keyed by volume UUID. A volume Prometheus has no sample for is
@@ -97,6 +126,21 @@ func (p *Provider) NodeCapacity(
 	return p.capacity(ctx, nodeMetricPrefix, nodeIDLabel, clusterUUID)
 }
 
+// PoolCapacity returns the capacity sample for every storage pool in the
+// cluster, keyed by pool UUID. A pool Prometheus has no sample for is absent
+// from the result rather than present and zero.
+//
+// A pool's total is what its cluster has given it and its provisioned figure is
+// the sum of what the volumes in it were promised, so the two answer the
+// tenancy question the other families cannot: whether a pool is over-committed
+// against the capacity limit it was carved out with.
+func (p *Provider) PoolCapacity(
+	ctx context.Context,
+	clusterUUID string,
+) (map[string]Capacity, error) {
+	return p.capacity(ctx, poolMetricPrefix, poolIDLabel, clusterUUID)
+}
+
 // capacity assembles the samples for one entity kind. The metric names are
 // derived from the prefix rather than listed per kind, because the exporter
 // publishes the same set under both and a divergence between them would be a
@@ -105,33 +149,28 @@ func (p *Provider) capacity(
 	ctx context.Context,
 	prefix, idLabel, clusterUUID string,
 ) (map[string]Capacity, error) {
-	total := prefix + "_size_total"
-	used := prefix + "_size_used"
-	free := prefix + "_size_free"
-	prov := prefix + "_size_prov"
-	util := prefix + "_size_util"
-	date := prefix + "_date"
+	name := func(field string) string { return "simplyblock_" + prefix + "_size_" + field + "_bytes" }
+	total, used, free, prov := name("total"), name("used"), name("free"), name("provisioned")
 
 	families, err := p.queryFamilyByLabel(
-		ctx, []string{total, used, free, prov, util, date}, idLabel, clusterUUID,
+		ctx, []string{total, used, free, prov}, idLabel, clusterUUID,
 	)
 	if err != nil {
 		return nil, err
 	}
 
+	readAt := time.Now().UTC()
 	out := make(map[string]Capacity, len(families))
 	for id, series := range families {
 		c := Capacity{
-			Total:              whole(series[total]),
-			Used:               whole(series[used]),
-			Free:               whole(series[free]),
-			Provisioned:        whole(series[prov]),
-			UtilizationPercent: int32(whole(series[util])),
+			Total:       whole(series[total]),
+			Used:        whole(series[used]),
+			Free:        whole(series[free]),
+			Provisioned: whole(series[prov]),
 		}
-		// A date of zero is the control plane saying it has no reading, not a
-		// reading taken in 1970.
-		if seconds := whole(series[date]); seconds > 0 {
-			c.SampledAt = time.Unix(seconds, 0).UTC()
+		if c.Total > 0 {
+			c.UtilizationPercent = int32(math.Round(float64(c.Used) / float64(c.Total) * 100))
+			c.SampledAt = readAt
 		}
 		out[id] = c
 	}

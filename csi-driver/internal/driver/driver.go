@@ -26,20 +26,40 @@ package driver
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	csiaddonsidentity "github.com/csi-addons/spec/lib/go/identity"
+	csiaddonsreplication "github.com/csi-addons/spec/lib/go/replication"
+	csiaddonsvolumegroup "github.com/csi-addons/spec/lib/go/volumegroup"
+	"github.com/prometheus/client_golang/prometheus"
+	"google.golang.org/grpc"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/bucketdelivery/bucketdeliveryrpc"
+	"github.com/simplyblock/atlas/conntrack"
+	"github.com/simplyblock/atlas/conntrack/conntrackrpc"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
+	"github.com/simplyblock/atlas/inventory"
 	"github.com/simplyblock/atlas/link"
+	"github.com/simplyblock/atlas/netcheck"
+	"github.com/simplyblock/atlas/netcheck/netcheckrpc"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/storage"
 	"github.com/simplyblock/atlas/storage/storagerpc"
+	"github.com/simplyblock/atlas/volstack/swaprpc"
 
+	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/config"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/csi-driver/internal/csi/controller"
+	csiaddonsidentityserver "github.com/simplyblock/csi-driver/internal/csi/csiaddons/identity"
+	"github.com/simplyblock/csi-driver/internal/csi/fence"
 	"github.com/simplyblock/csi-driver/internal/csi/identity"
 	"github.com/simplyblock/csi-driver/internal/csi/node"
 	"github.com/simplyblock/csi-driver/internal/csilink"
@@ -65,8 +85,13 @@ func Run(conf *config.Config) {
 			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
 			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
 		}
+		// A ReadWriteMany claim needs this advertised or it cannot bind. A
+		// filesystem one is served by a pNFS export, and CreateVolume refuses it
+		// on any other fsType. A raw-block one takes the block path. The other
+		// multi-node modes are deliberately absent.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
 		}
 	)
 
@@ -77,6 +102,9 @@ func Run(conf *config.Config) {
 	if conf.IsControllerServer {
 		cd.AddControllerServiceCapabilities(controllerCaps)
 		cd.AddVolumeCapabilityAccessModes(volumeModes)
+		// The controller serves the GroupController service (VolumeGroupSnapshot,
+		// design §9); advertise it so the csi-snapshotter routes group snapshots here.
+		cd.EnableGroupController()
 	}
 
 	ids = identity.New(cd)
@@ -86,28 +114,60 @@ func Run(conf *config.Config) {
 	// its own in-cluster config + clientset. A missing in-cluster config is
 	// non-fatal, and the features that need it degrade to no-ops.
 	var kubeClient kubernetes.Interface
+	var dynClient dynamic.Interface
+	var exports controller.ExportRegistry
 	if k8sConfig, err := rest.InClusterConfig(); err != nil {
 		klog.Warningf("no in-cluster config; Kubernetes API features disabled: %v", err)
 	} else if clientset, err := kubernetes.NewForConfig(k8sConfig); err != nil {
 		klog.Warningf("failed to create kubernetes client; Kubernetes API features disabled: %v", err)
 	} else {
 		kubeClient = clientset
+		// The consistency-group watcher requests VolumeMigrations (the
+		// pre-join live migration) and pNFS provisioning creates its export
+		// resource, both without importing the operator's types.
+		if d, err := dynamic.NewForConfig(k8sConfig); err != nil {
+			klog.Warningf("failed to create dynamic client; pre-join migrations and pNFS volumes disabled: %v", err)
+		} else {
+			dynClient = d
+			exports = controller.NewExportRegistry(d)
+		}
 	}
 
+	var swapper *swaprpc.Swapper
 	if conf.IsNodeServer {
+		// Before anything is started: a node whose kernel has no NVMe/TCP
+		// initiator can stage no volume, so the plugin exits and says why, in its
+		// log, in the container's termination message, and as an event on its pod.
+		if err := node.RequireInitiator(context.Background()); err != nil {
+			recordStartRefusal(kubeClient, conf, err)
+			klog.Fatalf("the node plugin does not start: %s", err)
+		}
 		var err error
 		ns, err = startNodeServer(cd, kubeClient)
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
+		swapper = startSwapper(ns, cd.GetNodeID())
 	}
 
 	if conf.IsControllerServer {
 		var err error
-		cs, err = controller.New(cd, kubeClient)
+		cs, err = controller.New(cd, kubeClient, exports)
 		if err != nil {
 			klog.Fatalf("failed to create controller server: %s", err)
 		}
+		// A finished striped snapshot is sealed on its VolumeSnapshotContent,
+		// so a retried CreateSnapshot answers it rather than freezing again.
+		if dynClient != nil {
+			cs.SetSnapshotSealer(controller.NewContentSealer(dynClient))
+		}
+		// The membership label is live for the volume's whole life (design
+		// §4.5): a PVC watcher joins a volume when the label is added and
+		// detaches it when the label is removed. Degrades to a logged no-op
+		// without a Kubernetes client, like the other kube-backed features.
+		watcherCtx, watcherCancel := context.WithCancel(context.Background())
+		defer watcherCancel()
+		controller.StartConsistencyGroupLabelWatcher(watcherCtx, kubeClient, dynClient, conf.DriverName)
 	}
 
 	// The link to the operator, when enabled. It is independent of the CSI
@@ -116,26 +176,85 @@ func Run(conf *config.Config) {
 	if conf.LinkEnabled {
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
-		if err := startLink(ctx, conf); err != nil {
+		agent, err := startLink(ctx, conf, ns, swapper)
+		if err != nil {
 			klog.Fatalf("failed to start the operator link: %s", err)
+		}
+		// The controller asks the operator over the link which member of a
+		// supercluster a volume goes to (design-superclusters.md §7.2).
+		if cs != nil {
+			cs.SetPlacer(csilink.Placement{Agent: agent})
+			// And has the operator relay a striped volume's freeze to the node
+			// that stages it, for a crash-consistent snapshot.
+			cs.SetFreezer(csilink.Freezer{Agent: agent})
 		}
 	}
 
+	// The site link, on a controller plugin of a stretched cluster's member.
+	// Like the operator link it is independent of the CSI server.
+	if conf.SiteLinkEnabled && conf.IsControllerServer && kubeClient != nil {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		csilink.StartSiteLink(ctx, kubeClient, csilink.SiteLinkConfig{
+			Address:        conf.SiteLinkAddress,
+			AgentNamespace: conf.SiteLinkNamespace,
+			TokenFile:      conf.SiteLinkTokenFile,
+			ID:             link.ControllerPeer(conf.PodName),
+			InstanceUID:    conf.PodUID,
+		})
+	}
+
+	// The csi-addons Identity and Replication services register alongside the
+	// CSI services on the same socket. Identity is always registered (it just
+	// answers capability probes); Replication only when this process serves
+	// the controller (cs is nil on a node-only process).
+	register := []func(*grpc.Server){
+		func(gs *grpc.Server) {
+			csiaddonsidentity.RegisterIdentityServer(gs, csiaddonsidentityserver.New(conf.DriverName, conf.DriverVersion))
+		},
+	}
+	if cs != nil {
+		register = append(register, func(gs *grpc.Server) {
+			csiaddonsreplication.RegisterControllerServer(gs, cs)
+		})
+		// The csi-addons VolumeGroup service (design §14.3): the stock
+		// controller-manager dials it to form a backend consistency group before
+		// replicating the group as one unit.
+		register = append(register, func(gs *grpc.Server) {
+			csiaddonsvolumegroup.RegisterControllerServer(gs, cs)
+		})
+		// The csi-addons NetworkFence service (design-stretched-sync-replication-
+		// ramen.md §10.2): Ramen fences a lost site of a stretched cluster
+		// through it before failing over.
+		fences := fence.New(func(clusterID string) (fence.Backend, error) {
+			return clusters.ReplicationClient(context.Background(), clusterID)
+		}, soleSyncCluster)
+		register = append(register, func(gs *grpc.Server) { fences.Register(gs) })
+	}
+
 	s := csicommon.NewNonBlockingGRPCServer()
-	s.Start(conf.Endpoint, ids, cs, ns)
+	s.Start(conf.Endpoint, ids, cs, ns, register...)
 	s.Wait()
 }
 
-// startLink dials the operator as whichever peer this process is.
+// startLink dials the operator as whichever peer this process is, and returns
+// the agent holding the link.
 //
 // A node plugin serves its local NVMe state on the link, which is the point of
 // linking it, and is identified by the node it runs on. A controller plugin
-// links as itself and currently serves nothing. It is registered so the
-// operator can see it, and so services can be added without new plumbing.
-func startLink(ctx context.Context, conf *config.Config) error {
+// links as itself and serves nothing: it calls the operator's placement
+// service over the link instead.
+//
+// A node plugin also serves the swap service when it has one, which is what
+// lets the operator move a staged volume's namespace to another subsystem.
+func startLink(
+	ctx context.Context, conf *config.Config, ns *node.Server, swapper *swaprpc.Swapper,
+) (*link.Agent, error) {
 	cfg := csilink.Config{
 		HubAddress:  conf.LinkHubAddress,
 		CAFile:      conf.LinkCAFile,
+		CertFile:    conf.LinkCertFile,
+		KeyFile:     conf.LinkKeyFile,
 		ServerName:  conf.LinkServerName,
 		TokenFile:   conf.LinkTokenFile,
 		InstanceUID: conf.PodUID,
@@ -144,37 +263,129 @@ func startLink(ctx context.Context, conf *config.Config) error {
 	switch {
 	case conf.IsNodeServer:
 		if conf.NodeID == "" {
-			return fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
+			return nil, fmt.Errorf("link needs the node name (--nodeid); the operator verifies it")
 		}
 		// storage.Local reads this node through sysfs. It must be the local
 		// one: serving a remote accessor would make this node a proxy for
 		// another, which nothing wants and which doubles every round trip.
-		srv, err := storagerpc.NewServer(storage.Local(nvme.SysfsConfig{}))
+		local := storage.Local(nvme.SysfsConfig{})
+		srv, err := storagerpc.NewServer(local)
 		if err != nil {
-			return fmt.Errorf("node storage: %w", err)
+			return nil, fmt.Errorf("node storage: %w", err)
 		}
+		// The node forgets the connection-tracking entries translated to a dead
+		// pNFS metadata server pod when the operator asks. It runs on the host's
+		// network, so the table it reaches is the host's.
+		flows, err := conntrackrpc.NewServer(conntrack.Forget)
+		if err != nil {
+			return nil, fmt.Errorf("node flows: %w", err)
+		}
+		// The node answers the operator's host checks: the addresses of a NIC
+		// before a storage pod takes it, and whether a connection from the host
+		// to a storage listener succeeds. Both read the host's namespace, which
+		// is this process's.
+		checks, err := netcheckrpc.NewServer(
+			func(sel netcheck.Selector) (netcheck.Report, error) {
+				return netcheck.Interface(inventory.Config{}, sel)
+			},
+			netcheck.Connect,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("node host checks: %w", err)
+		}
+		// DeliverBucket/WithdrawBucket: ns itself satisfies
+		// bucketdeliveryrpc.Deliverer, wrapping its own NodeStageVolume family
+		// in-process (design-bucket-provisioning.md §5.2).
+		bucketDelivery, err := bucketdeliveryrpc.NewServer(ns)
+		if err != nil {
+			return nil, fmt.Errorf("node bucket delivery: %w", err)
+		}
+		// Freeze/Thaw: the controller suspends a striped volume staged here
+		// while it snapshots the members, through the operator's relay.
+		freezes, err := freezerpc.NewServer(ns)
+		if err != nil {
+			return nil, fmt.Errorf("node freeze: %w", err)
+		}
+		// No export service: exports are assembled in the metadata server's
+		// guest, never on a node.
 		cfg.ID = link.NodePeer(conf.NodeID)
-		cfg.Register = srv.Register
-		cfg.Capabilities = storagerpc.Capabilities()
+		cfg.Register = func(r grpc.ServiceRegistrar) {
+			srv.Register(r)
+			flows.Register(r)
+			checks.Register(r)
+			bucketDelivery.Register(r)
+			freezes.Register(r)
+			if swapper != nil {
+				swaprpc.NewServer(swapper).Register(r)
+			}
+		}
+		cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, netcheckrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, bucketdeliveryrpc.Capabilities()...)
+		cfg.Capabilities = append(cfg.Capabilities, freezerpc.Capabilities()...)
+		if swapper != nil {
+			cfg.Capabilities = append(cfg.Capabilities, swaprpc.Capabilities()...)
+		}
 
 	case conf.IsControllerServer:
 		if conf.PodName == "" {
-			return fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
+			return nil, fmt.Errorf("link needs the pod name (--pod-name); the operator verifies it")
 		}
 		cfg.ID = link.ControllerPeer(conf.PodName)
 
 	default:
-		return fmt.Errorf("link needs either --node or --controller")
+		return nil, fmt.Errorf("link needs either --node or --controller")
 	}
 
-	_, err := csilink.Start(ctx, cfg)
-	return err
+	return csilink.Start(ctx, cfg)
 }
 
-// startNodeServer builds the node service and starts the two background loops
-// that belong to a node plugin rather than to a request: the connection
-// monitor, which reconnects NVMe-oF paths the control plane still publishes,
-// and the guardian, which restarts the pods whose volumes lost every path.
+// startSwapper builds the node's swap service and resolves every mapping a
+// previous process of this plugin left suspended, before anything is served: a
+// suspended mapping is kernel state that outlives the process, and the pod on
+// it hangs until something resumes it. A swapper that cannot be built leaves the
+// node unable to move a namespace live, which is a degradation and not a reason
+// to refuse to serve.
+func startSwapper(ns *node.Server, nodeName string) *swaprpc.Swapper {
+	sw, err := ns.NewSwapper(node.SwapperConfig{NodeName: nodeName, Registerer: prometheus.DefaultRegisterer})
+	if err != nil {
+		klog.Errorf("failed to build the swap service; namespaces cannot move under a live consumer: %v", err)
+		return nil
+	}
+	if err := sw.Recover(context.Background()); err != nil {
+		klog.Errorf("failed to resolve mappings left suspended by a previous process: %v", err)
+	}
+	return sw
+}
+
+// serviceAccountNamespaceFile is where a pod reads its own namespace.
+const serviceAccountNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// recordStartRefusal leaves the reason the node plugin does not start as an
+// event on its own pod. The pod's name and UID come from the downward API, and
+// its namespace from the ServiceAccount mount. It is bounded, because the
+// process is about to exit and an API server that does not answer must not
+// hold that up.
+func recordStartRefusal(kubeClient kubernetes.Interface, conf *config.Config, reason error) {
+	namespace, err := os.ReadFile(serviceAccountNamespaceFile)
+	if err != nil {
+		klog.Warningf("the refusal is not recorded as an event: reading the pod's namespace: %v", err)
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	pod := node.PodRef{Namespace: strings.TrimSpace(string(namespace)), Name: conf.PodName, UID: conf.PodUID}
+	if err := node.RecordStartRefusal(ctx, kubeClient, pod, reason); err != nil {
+		klog.Warningf("the refusal is not recorded as an event: %v", err)
+	}
+}
+
+// startNodeServer builds the node service and starts the background loops that
+// belong to a node plugin rather than to a request: the connection monitor,
+// which reconnects NVMe-oF paths the control plane still publishes, the
+// guardian, which restarts the pods whose volumes lost every path, and the pNFS
+// layout primer, which takes the first layout after an MDS restart before a pod
+// can.
 //
 // They start here rather than inside the service's constructor because
 // constructing a service should not launch a daemon: a test wanting a node
@@ -193,8 +404,15 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	if err != nil {
 		return nil, err
 	}
+	// A striped volume left suspended by a previous run, mid-snapshot, is
+	// resumed before anything else: the deadline that would have resumed it
+	// went with that run.
+	ns.RecoverFreezes(context.Background())
 
 	nodeName := cd.GetNodeID()
+	// Before the service serves: a fresh stage reads the answer.
+	ns.ProbeDeviceMapper(context.Background(), nodeName)
+
 	podGuardian, err := guardian.Start(context.Background(), guardian.NewDefaultConfig(nodeName), manager)
 	if err != nil {
 		// A guardian that will not start costs pod restarts on total path loss,
@@ -205,8 +423,53 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	}
 
 	go reconnect.MonitorConnection(markBroken(podGuardian), manager, cd.GetName(), nodeName)
+	go node.KeepLayoutsPrimed(context.Background(), cd.GetName(), node.NewLayoutReporter(kubeClient, nodeName))
+
+	go advertiseVDOCapability(kubeClient, nodeName)
+	go advertiseKVMCapability(kubeClient, nodeName)
+	go advertiseSubnets(kubeClient, nodeName)
+	go advertiseHostNQN(kubeClient, nodeName)
 
 	return ns, nil
+}
+
+// advertiseVDOCapability runs once in the background, same as the guardian
+// above: a failure here degrades to "not yet advertised" rather than
+// blocking node plugin startup.
+func advertiseVDOCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseVDOCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise vdo-capable for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseKVMCapability publishes whether this node can host the pNFS metadata
+// server's guest, in the background for the same reason as the VDO probe.
+func advertiseKVMCapability(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseKVMCapability(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise kvm-capable for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseSubnets publishes the subnets this node's interfaces are on, which
+// place the pNFS metadata server on its data network, in the background for the
+// same reason as the VDO probe.
+func advertiseSubnets(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseSubnets(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise subnets for node %s: %v", nodeName, err)
+	}
+}
+
+// advertiseHostNQN publishes the kernel's default NVMe host NQN, which the
+// control plane revokes on the peer when it fences this node's host on a
+// two-node cluster, in the background for the same reason as the VDO probe.
+func advertiseHostNQN(kubeClient kubernetes.Interface, nodeName string) {
+	err := node.AdvertiseHostNQN(context.Background(), kubeClient, nodeName)
+	if err != nil {
+		klog.Errorf("failed to advertise the NVMe host NQN for node %s: %v", nodeName, err)
+	}
 }
 
 // markBroken is the monitor's hook into the guardian, tolerant of there being
@@ -217,4 +480,24 @@ func markBroken(g *guardian.Guardian) func(string) {
 		return nil
 	}
 	return g.MarkBrokenLvol
+}
+
+// soleSyncCluster is the cluster a fence naming none fences: the one
+// sync-replicated cluster in the driver's secret.
+func soleSyncCluster() (string, error) {
+	ids, err := clusters.List()
+	if err != nil {
+		return "", err
+	}
+	var sync []string
+	for _, id := range ids {
+		if _, ok, err := clusters.SyncSite(id); err == nil && ok {
+			sync = append(sync, id)
+		}
+	}
+	if len(sync) != 1 {
+		return "", fmt.Errorf(
+			"the secret has %d sync-replicated clusters; the fence must name one in parameter clusterID", len(sync))
+	}
+	return sync[0], nil
 }

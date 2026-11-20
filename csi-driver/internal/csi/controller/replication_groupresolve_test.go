@@ -1,0 +1,373 @@
+package controller
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/csi-addons/spec/lib/go/replication"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
+	atlascp "github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/csi-driver/internal/clusters"
+)
+
+// A VolumeGroupReplication keeps its original group handle across a relocate,
+// while the group it names is emptied by design (its demoted members are
+// deleted so a relocate back stays possible) and the data lives in the peer
+// group of the same name on the other site. The group verbs resolve the handle
+// through the control plane (2026-10-04, WordPress A -> B: Ramen's VRG waited
+// for destination info for ever against the emptied source group).
+
+const (
+	peerClusterID = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
+	peerGroupID   = "e5e5e5e5-e5e5-4e5e-8e5e-e5e5e5e5e5e5"
+	peerClone     = "f6666666-6666-4666-8666-666666666666"
+	origPV        = sanityClusterID + ":p-a:" + vgMember1
+)
+
+// writeTwoSiteSecret registers the named cluster (site A) and its peer (site
+// B), both answered by the one mock, with site B flagged local: the driver runs
+// on site B, where the relocate landed.
+func writeTwoSiteSecret(t *testing.T, mock *mockSBCLI, localCluster string) {
+	t.Helper()
+	data, _ := json.Marshal(clusters.Info{Clusters: []clusters.Config{
+		{ClusterID: sanityClusterID, ClusterEndpoint: mock.URL(), ClusterSecret: sanitySecret,
+			Local: localCluster == sanityClusterID},
+		{ClusterID: peerClusterID, ClusterEndpoint: mock.URL(), ClusterSecret: sanitySecret,
+			Local: localCluster == peerClusterID},
+	}})
+	f := filepath.Join(t.TempDir(), "secret.json")
+	if err := os.WriteFile(f, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPDKCSI_SECRET", f)
+}
+
+// movedGroup is the incident's state: the named group on A is empty, the data
+// lives in the peer group on B as a clone of the original volume.
+func movedGroup(t *testing.T, localCluster string) (*Server, *mockSBCLI) {
+	t.Helper()
+	mock := newMockSBCLI()
+	t.Cleanup(mock.Close)
+	mock.seedGroup(vgGroupID)
+	mock.seedGroup(peerGroupID, peerClone)
+	mock.groupResolution[vgGroupID] = map[string]any{
+		"cluster_id": sanityClusterID, "group_id": vgGroupID,
+		"active_cluster_id": peerClusterID, "active_group_id": peerGroupID,
+		"members": []map[string]string{{
+			"origin_handle": origPV, "active_handle": peerClusterID + ":p-b:" + peerClone}},
+	}
+	cs := newTestControllerServer(t, mock)
+	writeTwoSiteSecret(t, mock, localCluster)
+	return cs, mock
+}
+
+func TestDestinationInfoOfAGroupEmptiedByARelocateMapsItsPVs(t *testing.T) {
+	cs, _ := movedGroup(t, peerClusterID)
+
+	resp, err := cs.GetReplicationDestinationInfo(context.Background(),
+		&replication.GetReplicationDestinationInfoRequest{ReplicationSource: groupSource()})
+	if err != nil {
+		t.Fatalf("GetReplicationDestinationInfo: %v", err)
+	}
+	vg := resp.GetReplicationDestination().GetVolumegroup()
+	if vg.GetVolumeGroupId() != vgGroupHandle {
+		t.Fatalf("destination group = %q, want the VGR's own handle %q", vg.GetVolumeGroupId(), vgGroupHandle)
+	}
+	if got := vg.GetVolumeIds(); len(got) != 1 || got[origPV] != origPV {
+		t.Fatalf("map = %v, want the PV's original handle mapped to itself", got)
+	}
+}
+
+func TestDestinationInfoOfAGroupWithNoLiveMemberIsUnavailable(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+	mock.groupResolution[vgGroupID] = map[string]any{"cluster_id": sanityClusterID, "group_id": vgGroupID}
+
+	_, err := cs.GetReplicationDestinationInfo(context.Background(),
+		&replication.GetReplicationDestinationInfoRequest{ReplicationSource: groupSource()})
+	if status.Code(err) != codes.Unavailable {
+		t.Fatalf("code = %v, want Unavailable (retryable, never a partial map)", status.Code(err))
+	}
+}
+
+// The relocate back B -> A: Ramen demotes the VGR on B, which names the group
+// on A. Site B must demote the group it serves -- the peer group -- not the
+// empty one on A.
+func TestDemoteOfAMovedGroupActsOnTheLocalGroup(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+
+	if _, err := cs.DemoteVolume(context.Background(),
+		&replication.DemoteVolumeRequest{ReplicationSource: groupSource()}); err != nil {
+		t.Fatalf("DemoteVolume: %v", err)
+	}
+	if !mock.groups[peerGroupID].Demoted || mock.groups[vgGroupID].Demoted {
+		t.Fatalf("demoted: peer %v, named %v; want the peer group on site B only",
+			mock.groups[peerGroupID].Demoted, mock.groups[vgGroupID].Demoted)
+	}
+}
+
+// Site A, the old primary, demoting its side must stay on its own group.
+func TestDemoteOnTheOldPrimarysSiteStaysOnItsOwnGroup(t *testing.T) {
+	cs, mock := movedGroup(t, sanityClusterID)
+
+	if _, err := cs.DemoteVolume(context.Background(),
+		&replication.DemoteVolumeRequest{ReplicationSource: groupSource()}); err != nil {
+		t.Fatalf("DemoteVolume: %v", err)
+	}
+	if mock.groups[peerGroupID].Demoted || !mock.groups[vgGroupID].Demoted {
+		t.Fatal("site A demoted the live group on site B")
+	}
+}
+
+// Re-protection B -> A: Enable on the VGR's handle attaches the live group.
+func TestEnableOfAMovedGroupAttachesTheLiveGroup(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{replicationPolicyParam: vgPolicyID},
+	})
+	if err != nil {
+		t.Fatalf("EnableVolumeReplication: %v", err)
+	}
+	if mock.groups[peerGroupID].PolicyID != vgPolicyID || mock.groups[vgGroupID].PolicyID != "" {
+		t.Fatalf("policy: peer %q, named %q; want it on the live group only",
+			mock.groups[peerGroupID].PolicyID, mock.groups[vgGroupID].PolicyID)
+	}
+}
+
+func TestInfoOfAMovedGroupReadsTheLiveGroup(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+	mock.groups[peerGroupID].LastReplicatedAt = 1791105000
+
+	resp, err := cs.GetVolumeReplicationInfo(context.Background(),
+		&replication.GetVolumeReplicationInfoRequest{ReplicationSource: groupSource()})
+	if err != nil {
+		t.Fatalf("GetVolumeReplicationInfo: %v", err)
+	}
+	if resp.GetLastSyncTime().GetSeconds() != 1791105000 {
+		t.Fatalf("last sync = %v, want the live group's", resp.GetLastSyncTime())
+	}
+}
+
+// Promote stays on the named group: the control plane's group fail-over
+// resolves the peer itself, and redirecting it would turn a fail-back into a
+// no-op on the group being left.
+func TestPromoteOfAMovedGroupStaysOnTheNamedGroup(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+
+	if _, err := cs.PromoteVolume(context.Background(),
+		&replication.PromoteVolumeRequest{ReplicationSource: groupSource()}); err != nil {
+		t.Fatalf("PromoteVolume: %v", err)
+	}
+	if !mock.groups[vgGroupID].Promoted || mock.groups[peerGroupID].Promoted {
+		t.Fatal("promote did not reach the named group")
+	}
+}
+
+// A group still live where it was created resolves to itself.
+func TestAGroupLiveAtItsSourceIsActedOnAsNamed(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newGroupReplTestServer(t, mock)
+	mock.groupResolution[vgGroupID] = map[string]any{
+		"cluster_id": sanityClusterID, "group_id": vgGroupID,
+		"active_cluster_id": sanityClusterID, "active_group_id": vgGroupID,
+		"members": []map[string]string{{"origin_handle": origPV, "active_handle": origPV}},
+	}
+	if _, err := cs.DemoteVolume(context.Background(),
+		&replication.DemoteVolumeRequest{ReplicationSource: groupSource()}); err != nil {
+		t.Fatalf("DemoteVolume: %v", err)
+	}
+	if !mock.groups[vgGroupID].Demoted {
+		t.Fatal("the named, live group was not demoted")
+	}
+}
+
+func TestChooseGroup(t *testing.T) {
+	named := lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: vgGroupID}
+	live := lvol.GroupHandle{ClusterID: peerClusterID, GroupID: peerGroupID}
+	moved := atlascp.GroupResolution{Active: &live}
+	for _, tc := range []struct {
+		name  string
+		res   atlascp.GroupResolution
+		side  groupSide
+		local map[string]bool
+		want  lvol.GroupHandle
+	}{
+		{"not moved", atlascp.GroupResolution{Active: &named}, groupLocalSite, map[string]bool{peerClusterID: true}, named},
+		{"nothing live", atlascp.GroupResolution{}, groupActiveEnd, nil, named},
+		{"active end", moved, groupActiveEnd, map[string]bool{sanityClusterID: true}, live},
+		{"local on the live site", moved, groupLocalSite, map[string]bool{peerClusterID: true}, live},
+		{"local on the named site", moved, groupLocalSite, map[string]bool{sanityClusterID: true}, named},
+		{"no local flags", moved, groupLocalSite, nil, live},
+	} {
+		if got := chooseGroup(named, tc.res, tc.side, tc.local); got != tc.want {
+			t.Errorf("%s: got %s, want %s", tc.name, got.Handle(), tc.want.Handle())
+		}
+	}
+}
+
+// A re-protect after an unplanned fail-over: the driver on the healed site A
+// resyncs the VGR that names A's (now superseded) group; the data is live in
+// the peer group on B. The class parameter on A names B (the cluster A resyncs
+// FROM). sbcli reads the id it is sent as the cluster to fail back TO, so the
+// fail-back must name A, or B is told to replicate to itself (#34).
+func TestResyncOfAMovedGroupFailsBackToTheLocalSite(t *testing.T) {
+	cs, mock := movedGroup(t, sanityClusterID)
+
+	resp, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("ResyncVolume: %v", err)
+	}
+	if !resp.GetReady() {
+		t.Error("expected Ready (group status has no lag budget, so ready)")
+	}
+	if got := mock.groups[peerGroupID].FailbackSource; got != sanityClusterID {
+		t.Fatalf("live group's fail-back source = %q, want the local site %q, not the class parameter %q",
+			got, sanityClusterID, peerClusterID)
+	}
+	if got := mock.groups[vgGroupID].FailbackSource; got != "" {
+		t.Fatalf("the named (superseded) group was resynced with source %q; want it untouched", got)
+	}
+}
+
+func TestGroupFailbackCluster(t *testing.T) {
+	named := lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: vgGroupID}
+	live := lvol.GroupHandle{ClusterID: peerClusterID, GroupID: peerGroupID}
+	for _, tc := range []struct {
+		name   string
+		active lvol.GroupHandle
+		local  string // cluster flagged local, "" for none
+		param  string
+		want   string
+	}{
+		// A moved group: the data is on the peer, and whichever site resyncs,
+		// the members there replicate to the named group's site. On the
+		// relocate back the live site resyncs; naming its own cluster there was
+		// refused by the control plane (run 20261020-1300-ebs, test 2).
+		{"moved, named site is local (re-protect after a fail-over)", live, sanityClusterID, peerClusterID, sanityClusterID},
+		{"moved, live site is local (relocate back)", live, peerClusterID, sanityClusterID, sanityClusterID},
+		{"moved, no flag: the named site", live, "", peerClusterID, sanityClusterID},
+		// Moved onto a second group on the same site (a fail-back that built a
+		// new group beside the emptied one): the data is HERE, as at home.
+		{"moved within the site: the peer from the class",
+			lvol.GroupHandle{ClusterID: sanityClusterID, GroupID: peerGroupID},
+			sanityClusterID, peerClusterID, peerClusterID},
+		// A plain relocate: the group resolves to itself, its members are the
+		// demoted primaries on this site, and they replicate to the peer the
+		// class names -- never to this site (run 20261019-1541-ebs).
+		{"at home, named site is local: the peer from the class", named, sanityClusterID, peerClusterID, peerClusterID},
+		{"at home, no flag: the peer from the class", named, "", peerClusterID, peerClusterID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newMockSBCLI()
+			defer mock.Close()
+			writeTwoSiteSecret(t, mock, tc.local)
+			if got := groupFailbackCluster(named, tc.active, tc.param); got != tc.want {
+				t.Fatalf("groupFailbackCluster = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// A plain relocate A -> B: Ramen demotes A's group, then resyncs it on A
+// before promoting B. The group still resolves to itself (B holds nothing
+// yet), its members are A's demoted primaries, and the fail-back must point
+// them at B -- the peer the class names -- not at A. Naming A refused every
+// member ("source_cluster_id names the volume's own cluster") and no relocate
+// completed (run 20261019-1541-ebs, tests 1 and 3).
+func TestResyncOfAGroupAtHomeFailsBackToThePeer(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	mock.seedGroup(vgGroupID, vgMember1)
+	cs := newTestControllerServer(t, mock)
+	writeTwoSiteSecret(t, mock, sanityClusterID)
+
+	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("ResyncVolume: %v", err)
+	}
+	if got := mock.groups[vgGroupID].FailbackSource; got != peerClusterID {
+		t.Fatalf("fail-back source = %q, want the peer %q, never the group's own site", got, peerClusterID)
+	}
+}
+
+// The relocate back (B -> A, after A -> B): Ramen demotes B's group, resyncs it
+// on B, then Enables and Promotes on A. A's Enable carries A's policy, whose
+// target is B, and the VGR's handle resolves to the live group on B. Attaching
+// A's policy there told B's group to replicate to itself. The control plane now
+// refuses that (#1502), and since csi-addons Promotes only after Enable
+// succeeds, the relocate never completed (run 20261020-1300-ebs, test 2). The
+// promote's fail-back attaches the new primary's own policy, so the Enable on
+// the site being promoted has nothing to do while the data is still on the
+// peer. Regression: 2026-10-20-enable-on-peers-live-group.
+func TestEnableOnTheSiteBeingPromotedLeavesThePeersLiveGroupAlone(t *testing.T) {
+	cs, mock := movedGroup(t, sanityClusterID)
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: groupSource(),
+		Parameters: map[string]string{
+			replicationPolicyParam: vgPolicyID, sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("EnableVolumeReplication: %v", err)
+	}
+	if got := mock.groups[peerGroupID].PolicyID; got != "" {
+		t.Fatalf("the peer's live group was attached to this site's policy %q; want it left alone", got)
+	}
+	if got := mock.groups[vgGroupID].PolicyID; got != "" {
+		t.Fatalf("the named (empty) group was attached to policy %q; want it left alone", got)
+	}
+}
+
+// Without a local flag in the driver's secret (an older operator), the class's
+// sourceClusterID names the peer by convention: a live group on that cluster is
+// the peer's, and the Enable is the same no-op.
+func TestEnableWithoutALocalFlagTellsThePeerByTheClassParameter(t *testing.T) {
+	cs, mock := movedGroup(t, "")
+
+	_, err := cs.EnableVolumeReplication(context.Background(), &replication.EnableVolumeReplicationRequest{
+		ReplicationSource: groupSource(),
+		Parameters: map[string]string{
+			replicationPolicyParam: vgPolicyID, sourceClusterIDParam: peerClusterID},
+	})
+	if err != nil {
+		t.Fatalf("EnableVolumeReplication: %v", err)
+	}
+	if got := mock.groups[peerGroupID].PolicyID; got != "" {
+		t.Fatalf("the peer's live group was attached to this site's policy %q; want it left alone", got)
+	}
+}
+
+// The relocate back's resync runs on B, the site being left, where the live
+// group is: its members must replicate to A, the named group's site, not to B.
+// The driver named B, its own cluster, and only the control plane's guard
+// (#1502) corrected it (run 20261020-1300-ebs, test 2). Regression:
+// 2026-10-20-resync-on-the-live-site.
+func TestResyncOnTheSiteBeingLeftFailsBackToTheNamedSite(t *testing.T) {
+	cs, mock := movedGroup(t, peerClusterID)
+
+	_, err := cs.ResyncVolume(context.Background(), &replication.ResyncVolumeRequest{
+		ReplicationSource: groupSource(),
+		Parameters:        map[string]string{sourceClusterIDParam: sanityClusterID},
+	})
+	if err != nil {
+		t.Fatalf("ResyncVolume: %v", err)
+	}
+	if got := mock.groups[peerGroupID].FailbackSource; got != sanityClusterID {
+		t.Fatalf("live group's fail-back source = %q, want the named group's site %q, never the live group's own %q",
+			got, sanityClusterID, peerClusterID)
+	}
+}

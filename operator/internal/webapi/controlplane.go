@@ -1,0 +1,68 @@
+// Where the control plane is and how to authenticate against it, in the shape
+// atlas-lib's client takes.
+//
+// It lives in this package because resolving the endpoint is what this package
+// already does: the URL comes from an environment variable or a default, the
+// scheme follows the ControlPlane, and getting either wrong in a second place would
+// point half the operator at a control plane the other half is not talking to.
+// The client it configures is atlas-lib's, which is where the typed calls are
+// and where this package's own hand-rolled requests are headed.
+
+package webapi
+
+import (
+	"context"
+	"fmt"
+	"net/http"
+
+	"github.com/simplyblock/atlas/controlplane"
+	atlaskube "github.com/simplyblock/atlas/kube"
+)
+
+// ControlPlaneConfig resolves the endpoint and the bearer token a
+// control-plane client needs.
+//
+// A token that cannot be read is an error rather than an empty string, for the
+// same reason the stream config treats it that way: starting unauthenticated
+// pushes the failure to the first call, where it arrives as a 401 that says
+// nothing about the token.
+func ControlPlaneConfig() (controlplane.Config, error) {
+	token, err := atlaskube.ServiceAccountToken()
+	if err != nil {
+		return controlplane.Config{}, fmt.Errorf("read the service-account token: %w", err)
+	}
+	// The startup client already resolved both halves of how the control plane
+	// is reached: the base URL carries the scheme, and its transport carries the
+	// CA bundle and the client certificate this pod mounts. Carrying only the URL
+	// left the atlas-lib client to build its own connection, which is the system
+	// trust store and no certificate -- a client that cannot verify this
+	// deployment's CA and cannot authenticate to a control plane that asks.
+	startup := NewClient()
+	return controlplane.Config{
+		Endpoint:  startup.BaseURL,
+		Token:     token,
+		Transport: transportOf(startup),
+	}, nil
+}
+
+// transportOf is the connection a client was built with, and nil where it was
+// built with the default one. Nil is what controlplane.Config takes to mean the
+// same default, so the plaintext case stays the zero value.
+func transportOf(c *Client) http.RoundTripper {
+	if c == nil || c.HttpClient == nil {
+		return nil
+	}
+	return c.HttpClient.Transport
+}
+
+// AtlasConfig is this client's endpoint, connection, and credential in the
+// shape atlas-lib's client takes, for one call. The credential follows Do: a
+// token WithBearerToken attached to ctx, which is how a call authenticates as
+// a cluster, wins over the service-account token.
+func (c *Client) AtlasConfig(ctx context.Context) controlplane.Config {
+	token := c.saToken
+	if override, ok := BearerTokenFromContext(ctx); ok {
+		token = override
+	}
+	return controlplane.Config{Endpoint: c.BaseURL, Token: token, Transport: transportOf(c)}
+}

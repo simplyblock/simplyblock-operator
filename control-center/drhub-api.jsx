@@ -16,7 +16,7 @@
 // ---------------------------------------------------------------------------
 const DR_KINDS = {pplan: "ProtectionPlan", drpath: "DRPath", papp: "ProtectedApplication", rplan: "RecoveryPlan",
   raction: "RecoveryAction", tbubble: "TestBubble", tsched: "TestSchedule", restore: "RestoreAction",
-  siteprofile: "SiteProfile", drconfig: "DRConfig", dhcpserver: "DHCPServer"};
+  siteprofile: "SiteProfile", drconfig: "DRConfig", dhcpserver: "DHCPServer", sitedeploy: "StorageSiteDeployment"};
 const DR_ANN = {
   createdBy: "dr.simplyblock.io/created-by",
   confirmDelete: "dr.simplyblock.io/confirm-delete",
@@ -27,6 +27,24 @@ const DR_ANN = {
   schedule: "dr.simplyblock.io/schedule"
 };
 const VERDICT_RANK = {NotReady: 3, Degraded: 2, Unknown: 1, Ready: 0};
+
+// A Go metav1.Duration ("5m0s", "1h30m0s") in seconds; 0 when unparsable.
+const goDurationSeconds = d => {
+  let s = 0;
+  String(d || "").replace(/(\d+(?:\.\d+)?)(h|ms|m|s)/g, (_, n, u) => { s += +n * (u === "h" ? 3600 : u === "m" ? 60 : u === "s" ? 1 : 0.001); return ""; });
+  return Math.round(s);
+};
+// The RPO a failover would have now: seconds since the application's last
+// replicated consistency point (status.replication), against the plan's
+// interval. over is past 1.5 × the interval, where the hub's ramen-healthy
+// check reports RPOExceeded. null without async replication or a sync yet.
+const replicationLag = a => {
+  const r = a && a.replication;
+  const at = r ? Date.parse(r.lastSyncTime) : NaN;
+  if (isNaN(at)) return null;
+  const lag = Math.max(0, Math.round(((window.SB_NOW || Date.now()) - at) / 1000));
+  return {lag, interval: r.intervalSeconds, at: r.lastSyncTime, over: r.intervalSeconds > 0 && lag > 1.5 * r.intervalSeconds};
+};
 const ACTION_TERMINAL = ["Completed", "Failed", "RolledBack"];
 const TEST_TERMINAL = ["Completed", "Failed"];
 const RESTORE_TERMINAL = ["Completed", "Failed"];
@@ -85,7 +103,12 @@ const drCondOK = (o, type) => { const c = drCond(o, type); return c ? (c.status 
 const drConds = o => (((o.status || {}).conditions) || []).map(c => ({type: c.type, status: c.status, reason: c.reason, message: c.message, since: c.lastTransitionTime}));
 const nsName = (ns, name) => ns ? `${ns}/${name}` : name;
 const splitRef = s => { const i = String(s || "").indexOf("/"); return i < 0 ? {namespace: "", name: s || ""} : {namespace: s.slice(0, i), name: s.slice(i + 1)}; };
-const refName = r => (r && r.name) || "";
+// A reference is a plain name (DRPath/ProtectedApplication planRef, every
+// pathRef) or a LocalRef object ({name}): both read as the name.
+const refName = r => typeof r === "string" ? r : (r && r.name) || "";
+// Kinds that name an application and no path: Restart acts where it runs,
+// Resume and Revert on the move Ramen is still carrying out.
+const PATHLESS_KINDS = ["Restart", "Resume", "Revert"];
 const worstVerdict = vs => vs.reduce((w, v) => (VERDICT_RANK[v] || 0) > (VERDICT_RANK[w] || 0) ? v : w, vs[0] || "Unknown");
 const isSyncType = t => /^sync/.test(t || "");
 const durMs = (a, b) => a && b ? Math.max(0, Date.parse(b) - Date.parse(a)) : a ? Math.max(0, Date.now() - Date.parse(a)) : null;
@@ -111,6 +134,10 @@ function normPPlan(o) {
     status: ready === true ? "Ready" : ready === false ? "NotReady" : "Unknown",
     sites, siteNames: sites.map(s => s.name), methods, sync: methods.length > 0 && methods.every(m => isSyncType(m.type)),
     storageProfile: sp.storageProfile || {}, s3Profile: refName(sp.s3Profile), s3Profiles: sp.s3Profiles || [],
+    // dr-hub's probe of each site store (list, write, delete): ok, or the
+    // S3 service's own error code and message.
+    s3Stores: Object.fromEntries((st.s3Stores || []).map(x => [x.site, {ok: !!x.ok, step: x.step || "", code: x.code || "",
+      message: x.message || "", checkedAt: x.checkedAt || ""}])),
     autoRestart: sp.autoRestart || null, veleroNamespace: sp.veleroNamespace || "", pairs,
     pathNames: pairs.flatMap(p => p.paths), drPolicies: pairs.flatMap(p => p.drPolicies),
     counts: {sites: sites.length, methods: methods.length, paths: pairs.reduce((n, p) => n + p.paths.length, 0),
@@ -133,10 +160,22 @@ function normDRPath(o) {
 
 function normPApp(o) {
   const sp = o.spec || {}, st = o.status || {};
+  // A path is active when it starts where the application runs: only along it
+  // can an action move the application now. The other path (the way back) is
+  // evaluated by the hub too and fails at-path-source, which is not a problem
+  // of the application -- it must not make the application "not ready". The
+  // hub's own at-path-source check decides it: a path's from is a site name,
+  // currentCluster a cluster name, and they only coincide when sites are named
+  // after their clusters.
+  const atSource = p => !(((p.readiness || {}).checks) || []).some(c => c.name === "at-path-source" && c.status === "Fail");
   const paths = (st.paths || []).map(p => ({name: p.name, from: p.from, to: p.to, actions: p.actions || [],
-    verdict: ((p.readiness || {}).verdict) || "Unknown", checks: ((p.readiness || {}).checks) || [], since: (p.readiness || {}).lastTransitionTime}));
+    active: atSource(p),
+    verdict: ((p.readiness || {}).verdict) || "Unknown", checks: ((p.readiness || {}).checks) || [], since: (p.readiness || {}).lastTransitionTime}))
+    .sort((x, y) => (y.active ? 1 : 0) - (x.active ? 1 : 0));
   const protectedOK = drCondOK(o, "Protected");
-  const verdict = paths.length ? worstVerdict(paths.map(p => p.verdict)) : (protectedOK === false ? "NotReady" : "Unknown");
+  const activePaths = paths.filter(p => p.active);
+  const verdict = activePaths.length ? worstVerdict(activePaths.map(p => p.verdict))
+    : paths.length ? "Unknown" : (protectedOK === false ? "NotReady" : "Unknown");
   const anns = drMeta(o).annotations || {};
   return reg(Object.assign(base(o, "papp"), {
     status: verdict, verdict, protected: protectedOK, bound: drCondOK(o, "Bound"),
@@ -144,6 +183,15 @@ function normPApp(o) {
     managed: sp.managed || null, discovered: sp.discovered || null, drpcRef: refName(sp.drpcRef),
     probes: (sp.health || {}).probes || [], tiers: sp.tiers || [], externalHooks: sp.externalHooks || {}, dependsOn: sp.dependsOn || [],
     drpc: st.drpc || "", placement: st.placement || "", drPolicy: st.drPolicy || "", zoneBinding: st.zoneBinding || "", currentCluster: st.currentCluster || "",
+    // a Relocate or Failover Ramen is still carrying out (dr-hub status.move);
+    // Resume and Revert act on it
+    move: st.move ? {action: st.move.action || "", from: st.move.from || "", to: st.move.to || "", phase: st.move.phase || "InProgress",
+      since: st.move.since || null, progression: st.move.progression || "", blocking: st.move.blocking || "",
+      revertible: !!st.move.revertible, revertBlocked: st.move.revertBlocked || ""} : null,
+    // the last replicated consistency point and the interval (async only);
+    // replicationLag turns it into the RPO a failover would have now
+    replication: st.replication && st.replication.lastSyncTime
+      ? {lastSyncTime: st.replication.lastSyncTime, intervalSeconds: goDurationSeconds(st.replication.interval)} : null,
     paths, siteMapping: st.siteMapping || "Unknown", recipe: st.recipe || null, suggestedTiers: st.suggestedTiers || [], lastAction: st.lastAction ? splitRef(st.lastAction) : null,
     // site mapper (ADR 0020): VM network findings and guest addresses, resolved per declared path
     mapping: st.mapping ? {site: st.mapping.site || "", findings: st.mapping.findings || [], guests: st.mapping.guests || [], counts: st.mapping.counts || {open: 0, resolved: 0}} : null,
@@ -174,7 +222,8 @@ function normRAction(o) {
     appName: refName(sp.applicationRef), planName: refName(sp.planRef), targetName: refName(sp.applicationRef) || refName(sp.planRef),
     override: sp.override || null, timeout: sp.timeout || "", startTime: st.startTime, completionTime: st.completionTime,
     durationMs: durMs(st.startTime, st.completionTime), sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "",
-    steps: st.steps || [], children: st.children || [], report, reportKey: st.reportKey || "",
+    steps: st.steps || [], log: st.log || [], children: st.children || [], report, reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     rtoSeconds: report ? report.rtoSeconds : null, rpoSeconds: report ? report.achievedRPOSeconds : null,
     guests: report ? report.guests || [] : [],
     createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
@@ -193,7 +242,8 @@ function normTBubble(o) {
     cloneSource: sp.cloneSource || "latest-replicated-snapshot", holdFor: sp.holdFor || "", maxLifetime: sp.maxLifetime || "", abort: !!sp.abort,
     testID: st.testID || "", sourceCluster: st.sourceCluster || "", targetCluster: st.targetCluster || "", clonesReadyTime: st.clonesReadyTime,
     applications: st.applications || [], startTime: st.startTime, completionTime: st.completionTime, durationMs: durMs(st.startTime, st.completionTime),
-    bubbleNamespaces: st.bubbleNamespaces || [], steps: st.steps || [], invariants: st.invariants || [], checks: st.checks || [], report, reportKey: st.reportKey || "",
+    bubbleNamespaces: st.bubbleNamespaces || [], steps: st.steps || [], log: st.log || [], invariants: st.invariants || [], checks: st.checks || [], report, reportKey: st.reportKey || "",
+    completionMessage: ((st.conditions || []).find(c => c.type === "Completed") || {}).message || "",
     scheduleName: (drMeta(o).labels || {})[DR_ANN.schedule] || "", createdBy: (drMeta(o).annotations || {})[DR_ANN.createdBy] || (report && report.operator) || "",
     counts: {apps: (st.applications || []).length, steps: (st.steps || []).length, invariants: (st.invariants || []).length}
   }));
@@ -259,8 +309,31 @@ function normDHCPServer(o) {
   }));
 }
 
+// A managed site's storage deployment (StorageSiteDeployment): the hub-side
+// request the operator carries to the site through OCM. The status projects
+// the site's draft (the discovered nodes, for review) and, once approved, the
+// StorageCluster it expanded into.
+const SITE_DEPLOY_STATUS = {Pending: {c: "var(--idle)", rank: 2, label: "pending"}, Discovering: {c: "var(--info)", rank: 1, label: "discovering", blink: true},
+  Drafted: {c: "var(--accent)", rank: 3, label: "awaiting approval"}, Deploying: {c: "var(--info)", rank: 1, label: "deploying", blink: true},
+  Online: {c: "var(--ok)", rank: 0, label: "online"}, Failed: {c: "var(--bad)", rank: 4, label: "failed"}};
+Object.entries(SITE_DEPLOY_STATUS).forEach(([k, v]) => { if (!STATUS_META[k]) STATUS_META[k] = v; });
+function normSiteDeploy(o) {
+  const sp = o.spec || {}, st = o.status || {};
+  const draft = st.draft || null, sc = st.storageCluster || null;
+  const nodeSets = (draft && draft.nodeSets) || [];
+  const workers = nodeSets.flatMap(s => (s.groups || []).flatMap(g => g.workers || []));
+  return reg(Object.assign(base(o, "sitedeploy"), {
+    status: st.phase || "Pending", message: st.message || "",
+    site: sp.cluster || "", siteNamespace: sp.siteNamespace || "simplyblock", draftName: sp.draftName || "site-draft",
+    discover: sp.discover || {}, sizing: sp.sizing || null, approved: !!sp.approved,
+    draft, nodeSets, workers, storageCluster: sc, workName: st.workName || "",
+    counts: {nodes: workers.length, storageNodes: sc && sc.nodes ? sc.nodes.length : 0}
+  }));
+}
+
 const NORM = {pplan: normPPlan, drpath: normDRPath, papp: normPApp, rplan: normRPlan, raction: normRAction, tbubble: normTBubble,
-  tsched: normTSched, restore: normRestore, siteprofile: normSiteProfile, drconfig: normDRConfig, dhcpserver: normDHCPServer};
+  tsched: normTSched, restore: normRestore, siteprofile: normSiteProfile, drconfig: normDRConfig, dhcpserver: normDHCPServer,
+  sitedeploy: normSiteDeploy};
 
 // The resolution inbox (design 13.1): open findings of every application,
 // grouped by (path, category, source value) so one decision clears every
@@ -298,7 +371,56 @@ const dns63 = s => String(s).toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(
 const kvToObj = rows => Object.fromEntries((rows || []).filter(r => r.k).map(r => [r.k.trim(), (r.v || "").trim()]));
 const csv = s => String(s || "").split(/[,\s]+/).map(x => x.trim()).filter(Boolean);
 
+// ---- on-demand probes (dr-hub ADR 0021) -------------------------------------
+// The console never reaches S3 or a managed cluster: a Test button creates a
+// request the hub answers in its status, reads it until it is answered and
+// deletes it. A hub without the request kinds answers 404 on the create.
+const PROBE_POLL_MS = 1000, PROBE_WAIT_MS = 150000;
+const probeErr = (e, what, role) => {
+  if (e && e.status === 404) return new Error(`This DR hub cannot ${what} on demand yet (dr-hub before on-demand probes); the result shows on the saved object instead.`);
+  if (e && e.status === 403) return new Error(`Testing needs ${role}: create on ${what === "probe an S3 store" ? "s3proberequests" : what === "ask DHCP servers" ? "dhcpproberequests" : "healthproberequests"} in dr.simplyblock.io.`);
+  return e;
+};
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+async function runProbe(kind, namespace, spec, what, role) {
+  const name = `console-${stamp()}-${Math.random().toString(36).slice(2, 6)}`;
+  try {
+    await k8s.create(kind, {apiVersion: DR_API_GROUP, kind, metadata: {name, namespace, labels: {"app.kubernetes.io/created-by": "console"}}, spec}, {namespace});
+  } catch (e) { throw probeErr(e, what, role); }
+  const until = Date.now() + PROBE_WAIT_MS;
+  try {
+    for (;;) {
+      await sleep(PROBE_POLL_MS);
+      const o = await k8s.get(kind, name, {namespace});
+      const st = (o && o.status) || {};
+      if (["Passed", "Failed", "Error"].includes(st.phase)) return st;
+      if (Date.now() > until) throw new Error(`dr-hub did not answer within ${PROBE_WAIT_MS / 1000}s${st.message ? ` (${st.message})` : ""}. Is dr-hub running?`);
+    }
+  } finally {
+    // dr-hub deletes an answered request after a while anyway
+    await k8s.remove(kind, name, {namespace}).catch(() => {});
+  }
+}
+// One S3 store as a plan row names it: {site, bucket, endpoint, region, secretRef}.
+const probeS3 = store => runProbe("S3ProbeRequest", DR_NS(), Object.assign({bucket: store.bucket, endpoint: store.endpoint, secretRef: store.secretRef},
+  store.site ? {site: store.site} : {}, store.region ? {region: store.region} : {}), "probe an S3 store", "the dr-admin role");
+// Health probes: of an application where it runs ({app}), or on a plan's site
+// for one not protected yet ({plan, site, namespaces}); probes default to the
+// application's own.
+// The hub finds the cluster through the application or the plan: a plan a
+// form is still creating has neither yet.
+const probeHealth = ({app, plan, site, namespaces, probes, gates}) => !app && !plan
+  ? Promise.reject(new Error("Test is available once the plan exists. After saving, test under Tiers & probes."))
+  : runProbe("HealthProbeRequest", app ? app.namespace : DR_NS(),
+  Object.assign({}, app ? {applicationRef: {name: app.name}} : {}, plan ? {planRef: plan} : {}, site ? {site} : {},
+    namespaces && namespaces.length ? {namespaces} : {}, probes && probes.length ? {probes} : {}, gates && gates.length ? {gates} : {}),
+  gates && gates.length ? "test gates" : "run health probes", "the dr-operator role");
+// The DHCP servers of a VM network answer a short-lived pod on it (ADR 0021).
+const probeDHCP = ({cluster, nad}) => runProbe("DHCPProbeRequest", DR_NS(), {cluster, nad}, "ask DHCP servers", "the dr-admin role");
+
 const drhub = {
+  probeS3, probeHealth, probeDHCP,
+  discovery: () => window.loadDiscovery(),
   plans: () => drList("pplan"), plan: drById("pplan"),
   paths: () => drList("drpath"), path: drById("drpath"),
   apps: () => drList("papp"), app: drById("papp"),
@@ -310,6 +432,7 @@ const drhub = {
   siteProfiles: () => drList("siteprofile"), siteProfile: drById("siteprofile"),
   dhcpServers: () => drList("dhcpserver"), dhcpServer: drById("dhcpserver"),
   siteDHCPServers: id => Promise.all([drhub.siteProfile(id), drhub.dhcpServers()]).then(([sp, ds]) => ds.filter(d => d.site === sp.name)),
+  siteDeploys: () => drList("sitedeploy").catch(e => { if (e && e.status === 404) return []; throw e; }), siteDeploy: drById("sitedeploy"),
   configs: () => drList("drconfig"), config: () => drList("drconfig").then(cs => cs.find(c => c.name === "default") || cs[0] || null),
   // derived Ramen objects, read-only
   drpcs: () => k8s.list("DRPlacementControl", {allNamespaces: true}).catch(() => []),
@@ -343,15 +466,15 @@ const drhub = {
   runAction: ({kind, target, path, override, timeout}) => k8s.create("RecoveryAction", {
     apiVersion: DR_API_GROUP, kind: "RecoveryAction",
     metadata: {name: dns63(`${kind}-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({kind}, kind !== "Restart" && path ? {pathRef: {name: path}} : {},
+    spec: Object.assign({kind}, !PATHLESS_KINDS.includes(kind) && path ? {pathRef: path} : {},
       target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       override ? {override: {reason: override}} : {}, timeout ? {timeout} : {})
   }, {namespace: target.namespace}),
-  runTest: ({target, path, cloneSource, holdFor, maxLifetime}) => k8s.create("TestBubble", {
+  runTest: ({target, path, cloneSource, holdFor, maxLifetime, testID}) => k8s.create("TestBubble", {
     apiVersion: DR_API_GROUP, kind: "TestBubble",
     metadata: {name: dns63(`test-${target.name}-${stamp()}`), namespace: target.namespace},
-    spec: Object.assign({pathRef: {name: path}}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
-      cloneSource ? {cloneSource} : {}, holdFor ? {holdFor} : {}, maxLifetime ? {maxLifetime} : {})
+    spec: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
+      cloneSource ? {cloneSource} : {}, holdFor ? {holdFor} : {}, maxLifetime ? {maxLifetime} : {}, testID ? {testID} : {})
   }, {namespace: target.namespace}),
   abortTest: t => k8s.patch("TestBubble", t.name, {spec: {abort: true}}, {namespace: t.namespace}),
   holdTest: (t, holdFor) => k8s.patch("TestBubble", t.name, {spec: {holdFor}}, {namespace: t.namespace}),
@@ -362,18 +485,38 @@ const drhub = {
   }, {namespace: app.namespace}),
   createSchedule: ({name, namespace, schedule, target, path, cloneSource, keepLast, keepFor, suspend}) => k8s.create("TestSchedule", {
     apiVersion: DR_API_GROUP, kind: "TestSchedule", metadata: {name: dns63(name), namespace},
-    spec: Object.assign({schedule, template: Object.assign({pathRef: {name: path}}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
+    spec: Object.assign({schedule, template: Object.assign({pathRef: path}, target.kind === "rplan" ? {planRef: {name: target.name}} : {applicationRef: {name: target.name}},
       cloneSource ? {cloneSource} : {})}, {retention: Object.assign({}, keepLast ? {keepLast: Number(keepLast)} : {}, keepFor ? {keepFor} : {})}, suspend ? {suspend: true} : {})
   }, {namespace}),
   suspendSchedule: (s, suspend) => k8s.patch("TestSchedule", s.name, {spec: {suspend: !!suspend}}, {namespace: s.namespace}),
   createPlan: spec => k8s.create("ProtectionPlan", {apiVersion: DR_API_GROUP, kind: "ProtectionPlan", metadata: {name: dns63(spec.name)}, spec: spec.spec}),
+  // Mutable parts of a plan's spec: the per-site S3 stores and the Velero
+  // namespace (Ramen keys on sites and methods, which stay).
+  patchPlan: (p, spec) => k8s.patch("ProtectionPlan", p.name, {spec}),
+  // Tiers (boot order) and health probes of an application; a merge patch
+  // replaces the lists wholesale.
+  patchApp: (a, spec) => k8s.patch("ProtectedApplication", a.name, {spec}, {namespace: a.namespace}),
+  // A site profile's bindings: logical networks, guest networks, DHCP server.
+  patchSiteProfile: (s, spec) => k8s.patch("SiteProfile", s.name, {spec}),
   createPath: spec => k8s.create("DRPath", {apiVersion: DR_API_GROUP, kind: "DRPath", metadata: {name: dns63(spec.name)}, spec: spec.spec}),
   createApp: ({name, namespace, spec}) => k8s.create("ProtectedApplication", {apiVersion: DR_API_GROUP, kind: "ProtectedApplication", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
+  patchRPlan: (p, spec) => k8s.patch("RecoveryPlan", p.name, {spec}, {namespace: p.namespace}),
   createRPlan: ({name, namespace, spec}) => k8s.create("RecoveryPlan", {apiVersion: DR_API_GROUP, kind: "RecoveryPlan", metadata: {name: dns63(name), namespace}, spec}, {namespace}),
   // A DHCP server of a site (ADR 0020): dr-hub renders the guest reservations
   // into its ConfigMap on the site; the hub never talks to the server.
   createDHCPServer: ({name, site, namespace, configMap}) => k8s.create("DHCPServer", {apiVersion: "sitemap.simplyblock.io/v1alpha1", kind: "DHCPServer", metadata: {name: dns63(name)},
     spec: {site, type: "dnsmasq", dnsmasq: {namespace, configMap}}}),
+  // A managed site's storage (StorageSiteDeployment): the operator runs the
+  // discovery on the site, writes the sizing onto the draft it produced and
+  // delivers the approval -- all through OCM; the console writes this object
+  // only. Approval is one-way.
+  createSiteDeploy: ({site, namespace, enableControlPlaneNodes, workers, sizing}) => k8s.create("StorageSiteDeployment", {
+    apiVersion: "storage.simplyblock.io/v1alpha2", kind: "StorageSiteDeployment", metadata: {name: dns63(site), namespace},
+    spec: Object.assign({cluster: site, discover: Object.assign({enableControlPlaneNodes: !!enableControlPlaneNodes}, workers && workers.length ? {workers} : {})},
+      sizing && Object.keys(sizing).length ? {sizing} : {})
+  }, {namespace}),
+  patchSiteDeploySizing: (d, sizing) => k8s.patch("StorageSiteDeployment", d.name, {spec: {sizing}}, {namespace: d.namespace}),
+  approveSiteDeploy: d => k8s.patch("StorageSiteDeployment", d.name, {spec: {approved: true}}, {namespace: d.namespace}),
   // Optional per-application knob: opt out of the automatic restart after a
   // storage recovery (ADR 0017).
   setAutoRestart: (a, on) => k8s.patch("ProtectedApplication", a.name, {metadata: {annotations: {[DR_ANN.autoRestart]: on ? null : "false"}}}, {namespace: a.namespace}),
@@ -389,7 +532,8 @@ const drhub = {
 
 // The generic detail loader keys on the breadcrumb's layer name.
 Object.assign(GETTER, {pplan: drhub.plan, drpath: drhub.path, papp: drhub.app, rplan: drhub.rplan, raction: drhub.action,
-  tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer});
+  tbubble: drhub.test, tsched: drhub.schedule, restore: drhub.restoreAction, siteprofile: drhub.siteProfile, drconfig: drhub.config, dhcpserver: drhub.dhcpServer,
+  sitedeploy: drhub.siteDeploy});
 
-Object.assign(window, {drhub, DR_KINDS, DR_ANN, VERDICT_RANK, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
-  normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer});
+Object.assign(window, {drhub, PATHLESS_KINDS, DR_KINDS, DR_ANN, VERDICT_RANK, replicationLag, ACTION_TERMINAL, TEST_TERMINAL, worstVerdict, fmtSecs, drCond, drCondOK, splitRef, kvToObj, csv, dns63, openFindings,
+  normPPlan, normDRPath, normPApp, normRPlan, normRAction, normTBubble, normTSched, normRestore, normSiteProfile, normDRConfig, normDHCPServer, normSiteDeploy});

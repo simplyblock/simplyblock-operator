@@ -30,6 +30,13 @@ ifeq ($(origin CSI_IMAGE_TAG), undefined)
   CSI_IMAGE_TAG := latest
 endif
 CSI_IMAGE := $(CSI_IMAGE_REGISTRY)/spdkcsi:$(CSI_IMAGE_TAG)
+# pNFS MDS image, assembled from the pnfs-os guest image (spdkcsi:pnfsos) with QEMU
+# and mds-runner, released with the CSI image under the same registry and tag.
+MDS_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:pnfs-mds-$(CSI_IMAGE_TAG)
+GUEST_IMAGE ?= $(CSI_IMAGE_REGISTRY)/spdkcsi:pnfsos
+MDS_PLATFORMS ?= linux/amd64,linux/arm64
+# --push to publish; a multi-platform build cannot --load into a classic image store.
+MDS_BUILDX_FLAGS ?=
 
 # default target
 all: spdkcsi lint test
@@ -40,6 +47,24 @@ spdkcsi:
 	@echo === building spdkcsi binary
 	@mkdir -p $(BUILD_DIR)
 	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/spdkcsi ./cmd/
+
+.PHONY: mds-runner
+mds-runner:
+	@echo === building mds-runner binary
+	@mkdir -p $(BUILD_DIR)
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-runner ./cmd/mds-runner/
+
+.PHONY: mds-agent
+mds-agent:
+	@echo === building mds-agent binary
+	@mkdir -p $(BUILD_DIR)
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-agent ./cmd/mds-agent/
+
+.PHONY: mds-proxy
+mds-proxy:
+	@echo === building mds-proxy binary
+	@mkdir -p $(BUILD_DIR)
+	@CGO_ENABLED=0 GOARCH=$(GOARCH) GOOS=linux go build -buildvcs=false -o $(BUILD_DIR)/mds-proxy ./cmd/mds-proxy/
 
 # static code check, text lint
 # lint: golangci yamllint shellcheck mdl codespell
@@ -120,13 +145,21 @@ unit-test:
 # e2e test
 .PHONY: e2e-test
 # Pass extra arguments to e2e tests.
-# Use E2E_PROCS=N to run specs in parallel (requires the ginkgo CLI).
-# Use E2E_TEST_ARGS to pass additional ginkgo flags.
+# Use E2E_PROCS=N to run specs in parallel (only the ginkgo CLI path below
+# supports that). E2E_TEST_ARGS carries ginkgo flags either way; the default
+# E2E_PROCS=1 always runs through the ginkgo CLI, so '--focus'/'--skip' below
+# work as shown. Set E2E_PROCS= (empty) to fall back to plain 'go test', which
+# needs the '--ginkgo.'-prefixed flag spelling instead.
 # Examples:
 #   make e2e-test E2E_PROCS=4
 #   make e2e-test E2E_PROCS=4 E2E_TEST_ARGS='--skip="SPDKCSI-MULTICLUSTER|XFS"'
 #   make e2e-test E2E_TEST_ARGS='--focus="SPDKCSI-NVMEOF"'
-E2E_PROCS=
+#
+# Running against a live, operator-managed cluster (e.g. the S3 specs) also
+# needs OPERATOR_MODE=true, CSI_NAMESPACE=<namespace>, GATEWAY_IMAGE=<image>,
+# and POOL_NAME=<pool>; see TESTING.md at the repo root. deploy.sh prints the
+# exact invocation, with those filled in, once it finishes.
+E2E_PROCS=1
 E2E_TEST_ARGS=
 e2e-test:
 	@echo === running e2e test
@@ -162,7 +195,15 @@ image:
 	sudo docker buildx build --platform linux/arm64 -t $(CSI_IMAGE)-arm64 $$proxy_opt \
 	-f deploy/image/Dockerfile ..; \
 
+# The MDS image needs GUEST_IMAGE for every platform it is built for, which
+# pnfs-os publishes as a multi-architecture image.
+.PHONY: mds-image
+mds-image:
+	@echo === building $(MDS_IMAGE) for $(MDS_PLATFORMS) from $(GUEST_IMAGE)
+	docker buildx build --platform $(MDS_PLATFORMS) --build-arg GUEST_IMAGE=$(GUEST_IMAGE) \
+		-t $(MDS_IMAGE) $(MDS_BUILDX_FLAGS) -f deploy/image/Dockerfile.mds ..
+
 .PHONY: clean
 clean:
-	rm -f $(BUILD_DIR)/spdkcsi
+	rm -f $(BUILD_DIR)/spdkcsi $(BUILD_DIR)/mds-runner $(BUILD_DIR)/mds-agent $(BUILD_DIR)/mds-proxy
 	go clean -testcache

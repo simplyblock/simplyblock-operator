@@ -1,0 +1,19 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-fleet-02
+  namespace: simplyblock
+  creationTimestamp: "2026-10-24T09:00:00Z"
+spec:
+  action: Discover
+status:
+  environment: K3s
+  step: {}
+  workers:
+    - worker-01
+    - worker-02
+    - worker-03
+    - worker-06
+  phase: Succeeded
+  configRef: discovered-discover-fleet-02
+  message: 'wrote discovered-discover-fleet-02 awaiting approval: 2 workers with 8 nvme devices, in 1 group(s) across 1 node set(s); 0 refusal(s)'

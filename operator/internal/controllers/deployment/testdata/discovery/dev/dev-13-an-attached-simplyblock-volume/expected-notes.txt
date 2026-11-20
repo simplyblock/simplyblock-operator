@@ -1,0 +1,2 @@
+stripe is 1+0 as a single-node cluster (clusterMode Single), which protects nothing: the worker hands over 1 device for data, and a redundant scheme places each chunk of a stripe on its own device, so 1+1 needs two. A cluster's stripe cannot be changed afterward
+wrote discovered-discover-dev-13 in Draft: 1 workers with 1 nvme devices, in 1 group(s) across 1 node set(s); 1 refusal(s)

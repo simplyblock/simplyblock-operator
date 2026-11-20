@@ -38,20 +38,9 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
 | File | Role |
 |---|---|
 | `index.html` | Shell, design tokens, script load order |
-| `contexts.jsx` | **Contexts and feature flags.** The Kubernetes clusters the console reaches (`/k8s/<name>`), their control planes (`/cp/<name>`), their site/stage/tenant labels, and the flags that gate fixture-only views |
-| `k8s-client.jsx` | Kubernetes API transport per context: resource registry, paths, list/get/create/patch/delete, watch, pod logs, access reviews, the Ops object builders |
-| `cp-client.jsx` | **Control plane v2 client** per context: clusters, nodes, devices, pools, volumes, snapshots, tasks, the event log, capacity and I/O statistics, device health, SSE watch |
-| `store.jsx` | Cached collections per (context, kind): list once, follow a watch or poll, shared by every view; `useCollection`, `useV2` |
-| `fleet-model.jsx` | Identity across contexts (`objKey`), site/stage/tenant precedence, the joins between kinds (node set → nodes → devices, PV handle, Node labels) |
-| `k8s-sources.jsx` | The storage view models' inputs, assembled from CRDs, core objects, and the v2 DTOs |
-| `api.jsx` | **View models.** Normalizers, the `REG` registry, the `api.*` reads and actions (Ops objects, PVC and policy edits), `useResource` |
-| `agent.jsx` | Control plane pods and their logs, storage plane pod logs, device health (SMART) from the control plane, SPDK thread utilization from Prometheus |
-| `dashboard.jsx` | **Fleet dashboard:** roll-up, grouping by site / stage / tenant / context, the cluster matrix, sites |
-| `alerts.jsx` | **Alert engine and views:** rules derived from CR status, the event log, pods, operations; open and resolved history; silences; the bell and badges |
-| `logs.jsx` | **Consolidated logs** per cluster: storage plane and control plane pod logs, the event log, Kubernetes events, merged and filtered |
-| `tasks.jsx` | **Task and operation monitor:** Ops kinds, control plane tasks, subsystem migrations as one tree, with cancel where an API exists |
-| `cr-view.jsx` / `cr-headlines.jsx` | **Two-tier custom resource views:** essentials (editable spec, status, conditions), everything (trees, YAML), the Kubernetes side; the per-kind headline tables |
-| `panels.jsx` | Event log, control plane pods, SPDK threads and logs, SMART, the control plane section |
+| `api.jsx` | **API client.** Endpoints, response envelope, wire→view-model normalizers, `useResource` hook |
+| `agent.jsx` | **Agent / Prometheus client** — everything API v2 does *not* expose (see below) |
+| `panels.jsx` | Tasks, cluster log, control-plane containers, FDB backups, SPDK threads & logs, SMART |
 | `mock-backend.jsx` | Fixture store shaped like v2 payloads (snake_case, uuid FKs). Design/validation only |
 | `mock-api.jsx` | `fetch` interceptor serving the fixtures, including every mutation route |
 | `ui.jsx` | Primitives: traffic light, capacity bar, sparkline, metric block, icons, formatters |
@@ -221,74 +210,47 @@ There is no separate optimization field; the device class alone describes the
 cluster. Capabilities are carried on the cluster object:
 `{snapshot_replication, async_replication, rebalancing, tasks}`.
 
-## Contexts: several Kubernetes clusters
+## Data that is not in API v2
 
-The console manages storage across several Kubernetes clusters. Each is a named
-**context** in `SB_CONFIG.contexts`: the browser reaches its API server through
-the same-origin proxy at `k8sBase` (`/k8s` for the local cluster, `/k8s/<name>`
-for a remote one) and its control plane at `cpBase` (`/cp/<name>`). The console
-pod's nginx renders those locations from a contexts file and injects the right
-credential per context; the browser never holds one. A context without `cpBase`
-has no control plane reachable from the console: CRD views still work, and
-tasks, the event log, and live I/O say so instead of failing.
+`agent.jsx` is a deliberately separate client with its own base URL, because these
+sources are read straight from the containers / the node / Prometheus. Anywhere
+this data appears the UI carries a dashed **source tag** so operators know it has
+a different availability guarantee than the control plane API.
 
-```js
-window.SB_CONFIG = {
-  k8sBase: "/k8s", cpBase: "/cp/local",
-  contexts: [
-    {name: "local", labels: {site: "fra1", stage: "prd", tenant: ""}, k8sBase: "/k8s", cpBase: "/cp/local", namespaces: "all"},
-    {name: "edge-07", labels: {site: "edge-07", stage: "prd"}, k8sBase: "/k8s/edge-07", cpBase: "", namespaces: ["simplyblock"]}
-  ],
-  features: {zones: false, buckets: false, cgroups: false, migrationPaths: false, fileStorage: false, objectStorage: false, fdbBackups: false, accessRoles: false}
-};
-```
+| Data | Source | Endpoint used here ||---|---|---|
+| Live vCPU/RAM/disk allocation of fdb, simplyblock services, prometheus, and (if deployed) graylog / opensearch / mongo | container runtime | `GET {agent}/control-plane/containers` |
+| Control plane container logs | `kubectl logs` | `GET {agent}/control-plane/containers/{name}/logs` |
+| FoundationDB (state DB) backup versions + restore | fdbbackup agent | `GET {agent}/control-plane/fdb/backups`, `POST …/{id}/restore` |
+| SPDK and SPDK-proxy live log stream | node agent | `GET {agent}/nodes/{uuid}/logs/{spdk\|spdk-proxy}` |
+| SPDK thread utilization per core / per thread | Prometheus | `GET {prom}/query?query=spdk_thread_busy_percent{node="…"}` |
+| SMART output + on-demand re-read | nvme-cli on the node | `GET {agent}/devices/{uuid}/smart`, `POST …/smart/refresh` |
 
-The local context reads every namespace its role grants (a tenant-per-namespace
-layout keeps each tenant's clusters apart); the console's own namespace
-(`SB_CONFIG.namespace`) is only where it creates objects that name no other home.
+Tasks and the cluster event log *are* modelled on API v2
+(`/clusters/{uuid}/tasks`, `/tasks/{uuid}/subtasks`, `POST /tasks/{uuid}/cancel`,
+`/clusters/{uuid}/logs`) — move them to the agent client if that turns out to be wrong.
 
-## Fleet labels: site, stage, tenant
+## The three surfaces
 
-The dashboard groups clusters by site, lifecycle stage, tenant, or Kubernetes
-context. The console reads those from, in order of precedence:
-
-1. StorageCluster labels `storage.simplyblock.io/site`, `storage.simplyblock.io/stage`,
-   `storage.simplyblock.io/tenant` (site may be comma-separated for a stretched cluster)
-2. the same labels on the cluster's Namespace (tenant defaults to the namespace name)
-3. the context's configured labels
-4. for site only: the `topology.kubernetes.io/zone` (then `region`) labels of the
-   cluster's worker Nodes, so **sites are tagged nodes**; a cluster whose workers
-   span several zones is stretched and listed under each
-
-Every derived value shows where it came from. Stages sort `DEV < UAT < STAGING < PRD`;
-unknown names follow alphabetically.
-
-## The surfaces
+The console talks to exactly three things. It does **not** call the control plane
+REST API — anything the control plane knows reaches the UI through a CRD status
+written by a controller.
 
 | Surface | `SB_CONFIG` key | Serves |
 |---|---|---|
-| Kubernetes API, per context | `contexts[].k8sBase` | CRDs in `storage.simplyblock.io`; core objects (Node, Pod, PV, PVC, StorageClass, VolumeSnapshot, Event, Namespace, CustomResourceDefinition); pod logs; watches |
-| Control plane v2 API, per context | `contexts[].cpBase` | tasks, the cluster event log, capacity and I/O statistics, device health (SMART), live state (`?watch=true`, SSE); the one write is canceling a migration |
-| Prometheus | `promBase` | SPDK thread utilization |
+| Kubernetes API | `k8sBase` | CRDs in `storage.simplyblock.io/v1alpha1`; core objects (Node, Pod, PV, PVC, StorageClass, Secret, Event); pod logs |
+| Operator API | `operatorBase` | `/releases` compatibility matrix, SSE watch, and `/proposed/*` for kinds v1alpha1 does not model yet |
+| Log store | `graylogBase` | Graylog's universal search (`/search/universal/absolute`, oldest first): the Logs view. Without it the view tails a pod's log from the Kubernetes API |
 | Helm | `helmBase` | release, revision, chart, values |
-| Operator `/proposed/*` | `operatorBase` | nothing in a deployment; the fixture backend still serves the views behind the feature flags |
+| Control plane API (read-only) | `cpBase` | storage clusters, nodes, devices, pools, volumes, snapshots, tasks, logs and alerts where they are not CRDs here (a hub managing sites); GET only, credentials scrubbed by the proxy (`deploy/redact.js`) |
 
-What each view reads:
+`SB_CONFIG.upstreams` says which optional upstreams the pod proxies. A screen
+whose only source is off renders "Not available in this deployment" with the
+reason instead of an error. Without the operator API, Kubernetes clusters are
+the hub's OCM ManagedClusters with their dr-agents' inventory (`cpapi.jsx`).
 
-| Data | Source |
-|---|---|
-| Clusters, nodes, devices, pools, node sets, backups, policies, operations | the CRDs, joined by `spec.clusterName`, `spec.storageNodeSetRef`, `spec.nodeRef` |
-| Hosts | Kubernetes Nodes, joined to storage nodes by the `simplyblock.io/storage-node-uuid.<cluster>.<socket>` labels and `spec.workerNode` |
-| Logical volumes | PersistentVolumes of `csi.simplyblock.io`, their claims, their StorageClass, and the v2 volume by handle `<cluster>:<pool>:<volume>` |
-| Snapshots | VolumeSnapshots and their VolumeSnapshotContents, joined by the snapshot handle |
-| Storage classes, PVCs, Kubernetes clusters | the real objects; a "Kubernetes cluster" is a context |
-| Tasks, the event log, live I/O, SMART | the context's control plane |
-| Control plane services and their logs, storage plane logs | the pods (`simplyblock-*`, the SPDK pod `snode-spdk-pod-<rpc>-<cluster>`, the node API DaemonSet pod) and the pod-log subresource |
-| Alerts | derived in the console from all of the above (`alerts.jsx`) |
-
-Anywhere data comes from a container's stdout or from Prometheus the UI carries a
-dashed **source tag**, because it has a different availability guarantee than an
-object the API server stores.
+`k8s-client.jsx` is the only transport. `api.jsx` resolves one path grammar onto
+those surfaces and normalizes the results into view models; the components never
+see a wire format.
 
 ### Going live
 

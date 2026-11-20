@@ -25,6 +25,11 @@ const (
 	// There is normally one, but a rolling update briefly has two, which is
 	// why it is not named by anything singular.
 	PeerKindController PeerKind = "controller"
+	// PeerKindMDS is a pNFS metadata server pod, named by its pod name. Its
+	// StatefulSet keeps that name across restarts, so the operator addresses
+	// the same peer after the pod comes back, and the pod UID tells the
+	// restarted instance apart.
+	PeerKindMDS PeerKind = "mds"
 )
 
 // PeerID identifies a peer within its kind.
@@ -38,6 +43,9 @@ func NodePeer(node string) PeerID { return PeerID{Kind: PeerKindNode, Name: node
 
 // ControllerPeer is the id of the CSI controller plugin in the named pod.
 func ControllerPeer(pod string) PeerID { return PeerID{Kind: PeerKindController, Name: pod} }
+
+// MDSPeer is the id of the pNFS metadata server in the named pod.
+func MDSPeer(pod string) PeerID { return PeerID{Kind: PeerKindMDS, Name: pod} }
 
 // String renders the id as "kind/name", e.g. "node/worker-3".
 func (id PeerID) String() string { return string(id.Kind) + "/" + id.Name }

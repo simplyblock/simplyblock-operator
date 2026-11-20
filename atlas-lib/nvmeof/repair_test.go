@@ -157,7 +157,7 @@ func (k *kernel) subsystem() nvme.Subsystem {
 		ns := nvme.Namespace{
 			ID:         nsid,
 			Name:       fmt.Sprintf("nvme0n%d", nsid),
-			DevicePath: fmt.Sprintf("/dev/nvme0n%d", nsid),
+			DevicePath: devPath(fmt.Sprintf("nvme0n%d", nsid)),
 			Dev:        fmt.Sprintf("259:%d", nsid),
 			UUID:       k.uuids[nsid],
 		}
@@ -242,7 +242,7 @@ func TestAttach_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Device.Namespace.DevicePath != "/dev/nvme0n1" {
+	if res.Device.Namespace.DevicePath != devPath("nvme0n1") {
 		t.Errorf("device = %q, want /dev/nvme0n1", res.Device.Namespace.DevicePath)
 	}
 	if len(res.Defects) != 0 || len(res.Repairs) != 0 {
@@ -291,7 +291,7 @@ func TestAttach_RepairsSubsystemExportingNoNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("attach = %v, want the subsystem repaired", err)
 	}
-	if res.Device.Namespace.DevicePath != "/dev/nvme0n1" {
+	if res.Device.Namespace.DevicePath != devPath("nvme0n1") {
 		t.Errorf("device = %q, want a device after the repair", res.Device.Namespace.DevicePath)
 	}
 	if got := repairedKinds(res.Repairs); !slices.Equal(got, []DefectKind{DefectNoNamespace}) {

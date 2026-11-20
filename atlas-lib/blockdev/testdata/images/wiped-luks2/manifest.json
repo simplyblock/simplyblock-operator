@@ -1,0 +1,16 @@
+{
+  "name": "wiped-luks2",
+  "tool": "cryptsetup",
+  "tool_version": "cryptsetup 2.7.5 flags: UDEV BLKID KEYRING KERNEL_CAPI HW_OPAL ",
+  "command": "cryptsetup luksFormat --type luks2, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:44Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "82ebc483c89a167b5b932b01f42b1b3af8a325febf0303b54ede515a8f82a5b5",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 6 bytes were erased at offset 0x00000000 (crypto_LUKS): 4c 55 4b 53 ba be. sanitized: keyslot payload zeroed from offset 4096, which is key material and does not compress"
+}

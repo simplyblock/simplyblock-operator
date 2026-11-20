@@ -1,0 +1,805 @@
+// The management API and the workloads beside it: what the ApplyingAPI step
+// applies, and the Service status.endpoint resolves to.
+//
+// Four workloads share one image, one account, and one configuration, and they
+// differ in what they run. The management API serves the REST surface every
+// controller in this operator calls. The monitoring pool watches nodes, devices,
+// volumes, and snapshots and writes what it sees. The task runner executes the
+// queued work those two produce. The admin surface runs nothing and exists to be
+// exec'd into, which is why its command is a sleep.
+//
+// The exporter is the fifth object here and is not built from that image: it
+// reads FoundationDB's status JSON through the client library and publishes it
+// as metrics. It sits in this step rather than the FoundationDB one because what
+// it needs is the cluster file the database's own step produces, so it can only
+// run once that step has finished.
+
+package controlplane
+
+import (
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/atlas/ptr"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
+)
+
+// fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
+// metrics. It is upstream's exporter mirrored to simplyblock's registry, named
+// with its registry like every other control-plane image, and pinned for the
+// same reason the database's images are.
+const fdbExporterImage = "quay.io/simplyblock-io/foundationdb-exporter:3.1.0"
+
+// managementAPIObjects is everything the ApplyingAPI step writes, in the order it
+// depends on itself: the account and the configuration, then the roles that name
+// the account, then the workloads that run under it, then the Service in front
+// of the one that serves.
+func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
+	ns := cp.Namespace
+	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
+	objects := []client.Object{
+		serviceAccount(ns, serviceAccountName, eksRoleARNAnnotation(cp)),
+		sharedConfigMap(ns),
+		controlPlaneClusterRole(),
+		controlPlaneClusterRoleBinding(ns),
+		podTeardownRole(ns),
+		podTeardownRoleBinding(ns),
+		serviceReaderClusterRole(),
+		serviceReaderClusterRoleBinding(ns),
+		webAPIDeployment(cp),
+		webAPIService(cp),
+		webAPIDisruptionBudget(ns),
+		tasksDeployment(cp),
+		monitoringDeployment(cp),
+		adminControlDeployment(cp),
+		fdbExporterDeployment(cp),
+		fdbExporterService(ns),
+	}
+	objects = append(objects, prometheusObjects(cp)...)
+	return append(objects, servingCertificateObjects(cp)...)
+}
+
+// eksRoleARNAnnotation is the annotation that makes serviceAccountName
+// authenticate through its IAM role on Amazon EKS, read from the local
+// control plane's spec.source.local.eksRoleARN, or nil when it carries none.
+func eksRoleARNAnnotation(cp *simplyblockv1alpha2.ControlPlane) map[string]string {
+	local := cp.Spec.Source.Local
+	if local == nil || local.EKSRoleARN == "" {
+		return nil
+	}
+	return map[string]string{utils.EKSRoleARNAnnotation: local.EKSRoleARN}
+}
+
+// managementAPIClusterScoped is the half of that set the garbage collector will
+// not remove with the ControlPlane, and which the finalizer therefore deletes.
+func managementAPIClusterScoped() []client.Object {
+	return []client.Object{
+		controlPlaneClusterRole(),
+		controlPlaneClusterRoleBinding(""),
+		serviceReaderClusterRole(),
+		serviceReaderClusterRoleBinding(""),
+	}
+}
+
+// sharedConfigMap holds the one setting every workload reads at run time. It is
+// a ConfigMap rather than a field on each Deployment so that changing the log
+// level of a whole control plane is one edit, and so that the reloader can roll
+// the pods that read it.
+func sharedConfigMap(namespace string) *corev1.ConfigMap {
+	return &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: configMapName, Namespace: namespace},
+		Data: map[string]string{
+			logLevelKey:             defaultLogLevel,
+			"LOG_DELETION_INTERVAL": "3d",
+		},
+	}
+}
+
+// controlPlaneClusterRole is what the control plane does to Kubernetes.
+//
+// It is wide, and the width is the control plane's own architecture rather than
+// this install's choice: it reads and patches the storage-node workloads it
+// manages, execs into their pods to drive SPDK, labels nodes, and reviews the
+// tokens presented to its API. Narrowing it is worthwhile and is a change to the
+// control plane rather than to the object that grants it.
+func controlPlaneClusterRole() *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterRoleName},
+		Rules: []rbacv1.PolicyRule{
+			{
+				APIGroups: []string{""},
+				Resources: []string{"configmaps"},
+				Verbs:     []string{"get", "list", "watch", "patch", "update"},
+			},
+			{
+				APIGroups: []string{"", "apps"},
+				Resources: []string{"pods", "deployments", "statefulsets", "daemonsets"},
+				Verbs:     []string{"get", "list", "watch", "patch", "update"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"pods/log"},
+				Verbs:     []string{"get", "list"},
+			},
+			{
+				// Exec is how the control plane drives the storage nodes'
+				// processes, and it is the strongest grant in this role: exec
+				// into a privileged pod is that pod's privilege.
+				APIGroups: []string{""},
+				Resources: []string{"pods/exec"},
+				Verbs:     []string{"create", "get", "list", "watch", "patch", "update"},
+			},
+			{
+				APIGroups: []string{""},
+				Resources: []string{"nodes"},
+				Verbs:     []string{"get", "list", "watch", "patch", "update"},
+			},
+			{
+				APIGroups: []string{"storage.simplyblock.io"},
+				Resources: []string{
+					"pools", "lvols", "storageclusters", "storagenodesets", "devices",
+					"tasks", "storagebackups",
+				},
+				Verbs: []string{"get", "list", "patch", "update", "watch"},
+			},
+			{
+				APIGroups: []string{"storage.simplyblock.io"},
+				Resources: []string{
+					"pools/status", "lvols/status", "storageclusters/status",
+					"storagenodesets/status", "devices/status", "tasks/status",
+					"storagebackups/status",
+				},
+				Verbs: []string{"get", "patch", "update"},
+			},
+			{
+				// A TokenReview is how the control plane authenticates a caller
+				// presenting a service-account token instead of the static
+				// cluster secret.
+				APIGroups: []string{"authentication.k8s.io"},
+				Resources: []string{"tokenreviews"},
+				Verbs:     []string{"create"},
+			},
+		},
+	}
+}
+
+// podTeardownRole is the delete half of what the control plane does to a
+// storage node's pod and Service, and it is separate because it is the half
+// that never leaves the install namespace.
+//
+// rbac-justified: a node add that fails after spdk_process_start has already
+// created snode-spdk-pod-<port>-<cluster> deletes it straight through the API
+// server (_abort_started_spdk in the control plane's storage_node_ops). The node
+// agent that would otherwise do it runs on the host the add is abandoning and is
+// unreachable in exactly that case, so the fallback through the agent is not a
+// substitute. Left behind, the pod holds the host's hugepages, so every later
+// add on that host stays Pending on an "Insufficient hugepages-2Mi" event.
+//
+// A node on the pod network has a Service in front of that pod,
+// snode-spdk-svc-<port>-<cluster>, which the agent creates before the pod so
+// the pod can report the Service's address. The same abort, and a node removal,
+// delete it the same way (_delete_spdk_service_via_k8s), for the same reason.
+// Without the verb the teardown logs a 403 and the Service outlives the add.
+//
+// Containment: delete on pods and services in one namespace, with no create
+// beside it. The account cannot replace what it removes, and the workloads it
+// can remove are recreated by their own controllers. It is capped by the
+// manager's own cluster-wide delete on pods and services, which the storage
+// node and control plane reconcilers already hold.
+func podTeardownRole(namespace string) *rbacv1.Role {
+	return &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: podTeardownRoleName, Namespace: namespace},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"pods", "services"},
+			Verbs:     []string{"delete"},
+		}},
+	}
+}
+
+func podTeardownRoleBinding(namespace string) *rbacv1.RoleBinding {
+	return &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: podTeardownBindingName, Namespace: namespace},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName, Kind: "Role", Name: podTeardownRoleName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind: "ServiceAccount", Name: serviceAccountName, Namespace: namespace,
+		}},
+	}
+}
+
+func controlPlaneClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: clusterRoleBindingName},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: clusterRoleName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind: "ServiceAccount", Name: serviceAccountName, Namespace: namespace,
+		}},
+	}
+}
+
+// serviceReaderClusterRole lets the namespace's default account resolve
+// services, endpoints, and nodes. It is bound to `default` rather than to the
+// control plane's own account because what needs it is the tooling run inside
+// pods that did not name an account.
+func serviceReaderClusterRole() *rbacv1.ClusterRole {
+	return &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{Name: serviceReaderRoleName},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups: []string{""},
+			Resources: []string{"services", "pods", "endpoints", "nodes"},
+			Verbs:     []string{"get", "list", "watch"},
+		}},
+	}
+}
+
+func serviceReaderClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: serviceReaderBindingName},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName, Kind: "ClusterRole", Name: serviceReaderRoleName,
+		},
+		Subjects: []rbacv1.Subject{{
+			Kind: "ServiceAccount", Name: "default", Namespace: namespace,
+		}},
+	}
+}
+
+// webAPIDeployment is the management API: the endpoint every controller in this
+// operator calls, and the one workload whose absence is an outage.
+//
+// Two replicas by default, spread across machines, rolled one at a time with no
+// surge. That combination is what lets a pod be replaced while the control plane
+// keeps answering, and three things in the design rest on it: Degraded is a
+// component below its desired count while the probe still passes, a Restart
+// restarts the workload after draining rather than instead of serving, and an
+// Upgrade rolls this Deployment.
+func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
+	managed := cp.Spec.Source.Local
+	labels := map[string]string{appLabel: ComponentWebAPI}
+
+	//nolint:prealloc // the literal is the declaration; the append below is the shared set
+	env := []corev1.EnvVar{
+		logLevelEnv(),
+		{Name: "LVOL_NVMF_PORT_START", Value: lvolNVMfPortStart},
+		{Name: "ENABLE_MONITORING", Value: strconv.FormatBool(managed.MonitoringEnabled())},
+		namespaceEnv(),
+		{Name: "FLASK_DEBUG", Value: "False"},
+		{Name: "FLASK_ENV", Value: "production"},
+		// The operator's own account is the one caller the control plane has to
+		// trust before anything else works: every controller in this process
+		// authenticates with its token.
+		{Name: "SB_K8S_ADMIN_SERVICE_ACCOUNTS", Value: adminServiceAccounts(cp.Namespace)},
+		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS",
+			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"},
+	}
+	if ref := managed.AdminTokenSecretRef; ref != nil && ref.Name != "" {
+		// Sourced from the Secret directly rather than read and copied in here,
+		// so this operator never itself holds the plaintext -- the same reason
+		// resolveManaged reads ManagedControlPlane.CredentialsSecretRef on the
+		// other side only to attach it to a request, never to log or store it.
+		env = append(env, corev1.EnvVar{
+			Name: "SB_ADMIN_TOKENS",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: *ref,
+					Key:                  "token",
+				},
+			},
+		})
+	}
+	env = append(env, prometheusEnv()...)
+	env = append(env, monitoringSecretEnv(managed)...)
+	env = append(env, tlsEnv(managed)...)
+
+	spec := corev1.PodSpec{
+		ServiceAccountName: serviceAccountName,
+		Affinity:           spreadAcrossHosts(ComponentWebAPI),
+		Containers: []corev1.Container{{
+			Name:            "webappapi",
+			Image:           localImage(cp),
+			ImagePullPolicy: pullPolicyOf(managed),
+			Command:         []string{"python3", "simplyblock_web/app.py"},
+			Ports:           []corev1.ContainerPort{{ContainerPort: webAPIPort}},
+			Env:             env,
+			VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
+			Resources:       webAPIResources(managed),
+			LivenessProbe:   webAPILivenessProbe(managed),
+			ReadinessProbe:  webAPIReadinessProbe(managed),
+			// Removing a pod from the Service and stopping it start together, and
+			// the endpoint update takes a moment to reach every node. The pod keeps
+			// serving through webAPIDrainSeconds so that no request reaches a
+			// process that already stopped.
+			// An exec rather than the sleep action, which a cluster before
+			// Kubernetes 1.30 does not admit.
+			Lifecycle: &corev1.Lifecycle{PreStop: &corev1.LifecycleHandler{
+				Exec: &corev1.ExecAction{Command: []string{"sleep", strconv.Itoa(webAPIDrainSeconds)}},
+			}},
+		}},
+		TerminationGracePeriodSeconds: ptr.To(int64(webAPIDrainSeconds + webAPIShutdownSeconds)),
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
+			tlsVolume(managed)...),
+	}
+	scheduling(managed, &spec)
+
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ComponentWebAPI,
+			Namespace: cp.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr.To(apiReplicas(managed)),
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxSurge:       ptr.To(intstr.FromInt32(0)),
+					MaxUnavailable: ptr.To(intstr.FromInt32(1)),
+				},
+			},
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
+				Spec: spec,
+			},
+		},
+	}
+}
+
+// webAPIHealthPath answers whether the process itself is up, with no database
+// involved. webAPIReadyPath is the one that also reads FoundationDB, so a pod
+// passes it only once it can do something meaningful. Both are the v2 API's
+// /_meta mount; the v1 API had one endpoint conflating the two questions.
+const (
+	webAPIHealthPath = "/api/v2/_meta/health"
+	webAPIReadyPath  = "/api/v2/_meta/ready"
+)
+
+// webAPILivenessProbe asks only whether the process answers. It must not depend
+// on FoundationDB: a stall there is the readiness probe's job to act on, and a
+// liveness probe that also failed on it would restart every replica into the
+// same outage instead of just taking them out of the Service.
+func webAPILivenessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIHealthPath)
+}
+
+// webAPIReadinessProbe keeps the Service from routing to a pod that does not
+// answer yet. Without it a replacement pod receives connections the moment its
+// container starts, before the API listens, and callers see connection refused
+// for the seconds that takes; a rollout or a drain does this to every pod.
+//
+// Six failures five seconds apart take a pod out: a FoundationDB recovery or a
+// replacement moving roles pauses the database for seconds, and a probe that
+// failed both replicas on that would empty the Service and turn a slow answer
+// into a refused connection. A pod that never comes up, the case the probe is
+// for, still stays out of the Service until it answers.
+func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIReadyPath)
+}
+
+// webAPIProbe is the transport the liveness and readiness probes share, aimed
+// at whichever of the two endpoints the caller asks for.
+//
+// The kubelet cannot present a client certificate, so under mutual TLS the
+// probe runs curl in the container with the pod's own certificate. The server
+// is not verified: the probe connects to its own pod over loopback, and the
+// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
+// probes directly, over HTTPS when the API serves TLS.
+func webAPIProbe(managed *simplyblockv1alpha2.LocalControlPlane, path string) *corev1.Probe {
+	probe := &corev1.Probe{
+		PeriodSeconds:    5,
+		TimeoutSeconds:   4,
+		FailureThreshold: 6,
+		SuccessThreshold: 1,
+	}
+	switch {
+	case managed.RequiresClientCertificate():
+		probe.Exec = &corev1.ExecAction{Command: []string{
+			"curl", "--fail", "--silent", "--show-error", "--insecure", "--max-time", "3",
+			"--output", "/dev/null",
+			"--cert", tlsMountPath + "/tls.crt", "--key", tlsMountPath + "/tls.key",
+			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + path,
+		}}
+	case managed.ServesTLS():
+		probe.HTTPGet = &corev1.HTTPGetAction{
+			Path: path, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
+		}
+	default:
+		probe.HTTPGet = &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(webAPIPort)}
+	}
+	return probe
+}
+
+// webAPIDrainSeconds is how long a stopping management API pod keeps serving,
+// and webAPIShutdownSeconds how long it then has to finish what it is doing.
+const (
+	webAPIDrainSeconds    = 10
+	webAPIShutdownSeconds = 20
+)
+
+// webAPIDisruptionBudget lets a drain take one management API pod at a time.
+// The replicas are on separate nodes, but an EKS node group update drains its
+// nodes one after another on a timer: without the budget the second drain can
+// evict the other replica while the first one's replacement is still starting.
+func webAPIDisruptionBudget(namespace string) *policyv1.PodDisruptionBudget {
+	return &policyv1.PodDisruptionBudget{
+		ObjectMeta: metav1.ObjectMeta{Name: ComponentWebAPI, Namespace: namespace},
+		Spec: policyv1.PodDisruptionBudgetSpec{
+			MaxUnavailable: ptr.To(intstr.FromInt32(1)),
+			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{appLabel: ComponentWebAPI}},
+		},
+	}
+}
+
+// webAPIResources is what the management API asks for, or what the spec states.
+// The default is the chart's: enough headroom for the request volume a fleet
+// produces, and a limit that contains a leak rather than one anybody has
+// measured against.
+func webAPIResources(managed *simplyblockv1alpha2.LocalControlPlane) corev1.ResourceRequirements {
+	if managed != nil && (len(managed.Resources.Requests) > 0 || len(managed.Resources.Limits) > 0) {
+		return managed.Resources
+	}
+	return corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("200m"),
+			corev1.ResourceMemory: resource.MustParse("512Mi"),
+		},
+		Limits: corev1.ResourceList{
+			corev1.ResourceCPU:    resource.MustParse("500m"),
+			corev1.ResourceMemory: resource.MustParse("2Gi"),
+		},
+	}
+}
+
+// webAPIService is what status.endpoint resolves to, and the name the CSI
+// driver's configuration and the metrics scrape both carry.
+func webAPIService(cp *simplyblockv1alpha2.ControlPlane) *corev1.Service {
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        ComponentWebAPI,
+			Namespace:   cp.Namespace,
+			Annotations: servingCertAnnotations(cp),
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: map[string]string{appLabel: ComponentWebAPI},
+			Ports: []corev1.ServicePort{
+				{Name: "http", Port: webAPIPort, TargetPort: intstrFromInt(webAPIPort)},
+			},
+		},
+	}
+}
+
+// twoNodeEventCollectorBinary is where the control-plane image installs the Go
+// event collector (sbcli docker/Dockerfile, stage event-collector).
+const twoNodeEventCollectorBinary = "/usr/local/bin/sb-event-collector"
+
+// monitoringServices are the watchers the control plane runs: one per subject it
+// keeps state about. They are one pod rather than ten because each is a small
+// polling loop and the pod is what shares the cluster file and the log level.
+func monitoringServices() []service {
+	return []service{
+		{name: "storage-node-monitor", module: "simplyblock_core/services/storage_node_monitor.py"},
+		{
+			name:     "mgmt-node-monitor",
+			module:   "simplyblock_core/services/mgmt_node_monitor.py",
+			extraEnv: []corev1.EnvVar{{Name: "BACKEND_TYPE", Value: "k8s"}},
+		},
+		{name: "lvol-stats-collector", module: "simplyblock_core/services/lvol_stat_collector.py"},
+		{name: "main-distr-event-collector", module: "simplyblock_core/services/main_distr_event_collector.py"},
+		{name: "capacity-and-stats-collector", module: "simplyblock_core/services/capacity_and_stats_collector.py"},
+		{name: "capacity-monitor", module: "simplyblock_core/services/cap_monitor.py"},
+		{name: "health-check", module: "simplyblock_core/services/health_check_service.py"},
+		{name: "device-monitor", module: "simplyblock_core/services/device_monitor.py"},
+		{name: "lvol-monitor", module: "simplyblock_core/services/lvol_monitor.py"},
+		{name: "snapshot-monitor", module: "simplyblock_core/services/snapshot_monitor.py"},
+		// Two-node arbitration (sbcli docs/design/two-node-arbitration.md): the
+		// arbiter decides verdicts and renews leases; the event collector
+		// long-polls each node's jc_wait_events. Both run always: the component
+		// model has no per-cluster gate, and both idle while no cluster is a
+		// two-node cluster with arbitration on.
+		{name: "two-node-arbiter", module: "simplyblock_core/services/two_node_arbiter.py"},
+		{name: "two-node-event-collector", command: []string{twoNodeEventCollectorBinary}},
+	}
+}
+
+// taskServices are the runners that execute queued work. Their work is queued,
+// which is what makes this component non-essential in the phase table: a runner
+// at zero defers what is waiting rather than dropping it, and the queue is still
+// there when it comes back.
+func taskServices() []service {
+	portStart := []corev1.EnvVar{{Name: "LVOL_NVMF_PORT_START", Value: lvolNVMfPortStart}}
+	return []service{
+		{name: "tasks-node-add-runner", module: "simplyblock_core/services/tasks_runner_node_add.py", extraEnv: portStart},
+		{name: "tasks-runner-restart", module: "simplyblock_core/services/tasks_runner_restart.py"},
+		{name: "tasks-runner-migration", module: "simplyblock_core/services/tasks_runner_migration.py"},
+		{name: "tasks-runner-lvol-migration", module: "simplyblock_core/services/tasks_runner_lvol_migration.py"},
+		{name: "tasks-runner-batch-migration", module: "simplyblock_core/services/tasks_runner_batch_migration.py"},
+		{name: "tasks-runner-failed-migration", module: "simplyblock_core/services/tasks_runner_failed_migration.py"},
+		{name: "tasks-runner-cluster-status", module: "simplyblock_core/services/tasks_cluster_status.py"},
+		{name: "tasks-runner-new-device-migration", module: "simplyblock_core/services/tasks_runner_new_dev_migration.py"},
+		{name: "tasks-runner-port-allow", module: "simplyblock_core/services/tasks_runner_port_allow.py"},
+		{name: "tasks-runner-jc-comp-resume", module: "simplyblock_core/services/tasks_runner_jc_comp.py"},
+		{name: "tasks-runner-sync-lvol-del", module: "simplyblock_core/services/tasks_runner_sync_lvol_del.py"},
+		{name: "tasks-runner-sync-promote", module: "simplyblock_core/services/tasks_runner_sync_promote.py"},
+		{name: "tasks-runner-sync-resync", module: "simplyblock_core/services/tasks_runner_sync_resync.py"},
+		{name: "tasks-runner-cluster-expand", module: "simplyblock_core/services/tasks_runner_cluster_expand.py"},
+		{name: "tasks-runner-node-removal", module: "simplyblock_core/services/tasks_runner_node_removal.py"},
+		{name: "tasks-runner-snapshot-replication", module: "simplyblock_core/services/snapshot_replication.py"},
+		{name: "tasks-runner-backup", module: "simplyblock_core/services/tasks_runner_backup.py"},
+		{name: "tasks-runner-backup-merge", module: "simplyblock_core/services/backup_merge_service.py"},
+		{name: "tasks-runner-replication-final", module: "simplyblock_core/services/tasks_runner_replication_final.py"},
+	}
+}
+
+// monitoringDeployment and tasksDeployment are the same pod with a different
+// service list. One replica each: both are pollers over shared state, and a
+// second instance of either would do the same work twice.
+func monitoringDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
+	return servicePoolDeployment(cp, ComponentMonitoring, monitoringServices())
+}
+
+func tasksDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
+	return servicePoolDeployment(cp, ComponentTasks, taskServices())
+}
+
+// servicePoolDeployment builds one pod holding a list of the control plane's
+// long-running processes.
+func servicePoolDeployment(
+	cp *simplyblockv1alpha2.ControlPlane, name string, services []service,
+) *appsv1.Deployment {
+	managed := cp.Spec.Source.Local
+	labels := map[string]string{appLabel: name}
+
+	spec := corev1.PodSpec{
+		ServiceAccountName: serviceAccountName,
+		Containers:         containers(services, managed, localImage(cp), pullPolicyOf(managed)),
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
+			tlsVolume(managed)...),
+	}
+	scheduling(managed, &spec)
+
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: cp.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr.To(int32(1)),
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
+				Spec: spec,
+			},
+		},
+	}
+}
+
+// adminControlDeployment runs nothing. It is a pod with the control plane's
+// tooling, its cluster file, and its account, kept alive so that an
+// administrator can exec into it, which is how the command-line surface is
+// reached on a deployment that has no shell access to the control plane's hosts.
+func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
+	managed := cp.Spec.Source.Local
+	labels := map[string]string{appLabel: ComponentAdminControl}
+
+	//nolint:prealloc // the literal is the declaration; the append below is the shared set
+	env := []corev1.EnvVar{
+		{Name: "LVOL_NVMF_PORT_START", Value: lvolNVMfPortStart},
+		namespaceEnv(),
+		logLevelEnv(),
+	}
+	env = append(env, prometheusEnv()...)
+	env = append(env, monitoringSecretEnv(managed)...)
+	env = append(env, tlsEnv(managed)...)
+
+	spec := corev1.PodSpec{
+		ServiceAccountName: serviceAccountName,
+		Affinity:           spreadAcrossHosts(ComponentAdminControl),
+		Containers: []corev1.Container{{
+			Name:            "simplyblock-control",
+			Image:           localImage(cp),
+			ImagePullPolicy: pullPolicyOf(managed),
+			// Trapping the two signals is what makes the pod terminate promptly
+			// on a delete instead of waiting out its grace period: bash does not
+			// act on a signal while a foreground sleep is running.
+			Command:      []string{"/bin/bash", "-c", "trap : TERM INT; sleep infinity & wait"},
+			Env:          env,
+			VolumeMounts: append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("256Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("600m"),
+					corev1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+			},
+		}},
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
+			tlsVolume(managed)...),
+	}
+	scheduling(managed, &spec)
+
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ComponentAdminControl,
+			Namespace: cp.Namespace,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr.To(apiReplicas(managed)),
+			Strategy: appsv1.DeploymentStrategy{
+				Type: appsv1.RollingUpdateDeploymentStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDeployment{
+					MaxSurge:       ptr.To(intstr.FromInt32(0)),
+					MaxUnavailable: ptr.To(intstr.FromInt32(1)),
+				},
+			},
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
+				Spec: spec,
+			},
+		},
+	}
+}
+
+// fdbExporterDeployment publishes the database's own view of itself as metrics,
+// which is the half of a FoundationDB problem that pod counts cannot show: write
+// latency, storage lag, and coordinator health.
+func fdbExporterDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
+	const tmpVolume = "tmp"
+	labels := map[string]string{appLabel: ComponentFDBExporter}
+	// The exporter opens the database like any other client, so peer TLS is its
+	// decision too: the cluster file it is given names TLS coordinators, and a
+	// client with no certificate hangs in the handshake rather than failing.
+	peerTLS := fdbPeerTLS(cp)
+
+	spec := corev1.PodSpec{
+		SecurityContext: &corev1.PodSecurityContext{
+			RunAsNonRoot: ptr.To(true),
+			RunAsUser:    ptr.To(int64(4059)),
+			RunAsGroup:   ptr.To(int64(4059)),
+			FSGroup:      ptr.To(int64(4059)),
+		},
+		Volumes: append([]corev1.Volume{
+			{Name: tmpVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+			clusterFileVolumeSource(),
+		}, peerVolumeIf(peerTLS)...),
+		Containers: []corev1.Container{{
+			Name:  "exporter",
+			Image: fdbExporterImage,
+			Env: append([]corev1.EnvVar{
+				{Name: "FDB_CLUSTER_FILE", Value: clusterFilePath},
+			}, peerEnvIf(peerTLS)...),
+			Ports: []corev1.ContainerPort{{Name: "metrics", ContainerPort: fdbExporterPort}},
+			LivenessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{Path: "/metrics", Port: intstr.FromString("metrics")},
+				},
+				InitialDelaySeconds: 15,
+				PeriodSeconds:       30,
+			},
+			ReadinessProbe: &corev1.Probe{
+				ProbeHandler: corev1.ProbeHandler{
+					HTTPGet: &corev1.HTTPGetAction{Path: "/metrics", Port: intstr.FromString("metrics")},
+				},
+				InitialDelaySeconds: 5,
+				PeriodSeconds:       10,
+			},
+			SecurityContext: &corev1.SecurityContext{
+				ReadOnlyRootFilesystem:   ptr.To(true),
+				AllowPrivilegeEscalation: ptr.To(false),
+				Privileged:               ptr.To(false),
+			},
+			VolumeMounts: append([]corev1.VolumeMount{
+				{Name: tmpVolume, MountPath: "/tmp"},
+				{
+					Name:      clusterFileVolume,
+					MountPath: clusterFilePath,
+					SubPath:   clusterFileSubURL,
+					ReadOnly:  true,
+				},
+			}, peerMountIf(peerTLS)...),
+			Resources: corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("50m"),
+					corev1.ResourceMemory: resource.MustParse("64Mi"),
+				},
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("200m"),
+					corev1.ResourceMemory: resource.MustParse("128Mi"),
+				},
+			},
+		}},
+		TerminationGracePeriodSeconds: ptr.To(int64(10)),
+	}
+	scheduling(cp.Spec.Source.Local, &spec)
+
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ComponentFDBExporter,
+			Namespace: cp.Namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.DeploymentSpec{
+			Replicas: ptr.To(int32(1)),
+			Selector: &metav1.LabelSelector{MatchLabels: labels},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
+				},
+				Spec: spec,
+			},
+		},
+	}
+}
+
+func fdbExporterService(namespace string) *corev1.Service {
+	labels := map[string]string{appLabel: ComponentFDBExporter}
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      ComponentFDBExporter,
+			Namespace: namespace,
+			Labels:    labels,
+		},
+		Spec: corev1.ServiceSpec{
+			Selector: labels,
+			Ports: []corev1.ServicePort{
+				{Name: "metrics", Port: fdbExporterPort, TargetPort: intstr.FromString("metrics")},
+			},
+		},
+	}
+}
+
+// intstrFromInt names a numeric target port, which is what every Service here
+// takes except the exporter's. That one names its container port, because the
+// port is declared with a name and matching on it survives a renumber.
+func intstrFromInt(port int32) intstr.IntOrString {
+	return intstr.FromInt32(port)
+}
+
+// extraAdminAccountsEnv names the operator's own environment variable listing
+// further service accounts the management API must trust as administrators:
+// the Control Center's, which reads every storage cluster through the control
+// plane API on a hub whose clusters are not CRDs here. The chart sets it; an
+// operator without it trusts only itself, as before.
+const extraAdminAccountsEnv = "SB_EXTRA_ADMIN_SERVICE_ACCOUNTS"
+
+// adminServiceAccounts is the operator's own account followed by the extra
+// ones. An entry that is not a service account username is ignored rather than
+// passed on, so a typo can only narrow who is trusted, never widen it.
+func adminServiceAccounts(namespace string) string {
+	accounts := []string{"system:serviceaccount:" + namespace + ":simplyblock-operator"}
+	for _, a := range strings.Split(os.Getenv(extraAdminAccountsEnv), ",") {
+		a = strings.TrimSpace(a)
+		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {
+			accounts = append(accounts, a)
+		}
+	}
+	return strings.Join(accounts, ",")
+}

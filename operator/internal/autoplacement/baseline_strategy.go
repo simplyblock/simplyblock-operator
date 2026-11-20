@@ -5,7 +5,7 @@ import (
 	"fmt"
 
 	atlasprom "github.com/simplyblock/atlas/prometheus"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -18,11 +18,11 @@ type BaselineProvider interface {
 }
 
 // newBaselineProvider selects the BaselineProvider implementation for cfg.BaselineStrategy.
-// "benchmark" reads the frozen one-shot fio measurement from the StorageNodeSet CRs;
-// rollingWindow (the default, and the fallback for any unrecognised value) derives a robust
+// "Benchmark" reads the frozen one-shot fio measurement from the StorageNode CRs;
+// "RollingWindow" (the default, and the fallback for any unrecognized value) derives a robust
 // estimate from a rolling window of the probe latency series in Prometheus.
 func newBaselineProvider(k8sClient client.Client, cfg RebalancingConfig) (BaselineProvider, error) {
-	if cfg.BaselineStrategy == string(simplyblockv1alpha1.BaselineStrategyBenchmark) {
+	if cfg.BaselineStrategy == string(simplyblockv1alpha2.BaselineStrategyBenchmark) {
 		return &benchmarkBaselineProvider{client: k8sClient, percentile: cfg.LatencyPercentile}, nil
 	}
 	provider, err := atlasprom.New(cfg.PrometheusURL)
@@ -33,7 +33,7 @@ func newBaselineProvider(k8sClient client.Client, cfg RebalancingConfig) (Baseli
 }
 
 // benchmarkBaselineProvider reads the one-shot fio baseline recorded once per node by the
-// baseline Job and stored on StorageNodeSet.status.latencyMetrics.
+// baseline Job and stored on StorageNode.status.latencyMetrics.
 type benchmarkBaselineProvider struct {
 	client     client.Client
 	percentile string
@@ -45,21 +45,23 @@ func (b *benchmarkBaselineProvider) BaselineNS(
 ) (map[string]int64, error) {
 	result := make(map[string]int64)
 	for _, input := range inputs {
-		var snodeList simplyblockv1alpha1.StorageNodeSetList
-		if err := b.client.List(ctx, &snodeList, client.InNamespace(input.Namespace)); err != nil {
+		var nodes simplyblockv1alpha2.StorageNodeList
+		if err := b.client.List(ctx, &nodes, client.InNamespace(input.Namespace)); err != nil {
 			// Stay resilient to a transient list error: skip this namespace rather than
-			// failing the whole evaluation cycle (matches the previous CR-read behaviour).
+			// failing the whole evaluation cycle (matches the previous CR-read behavior).
 			continue
 		}
-		for _, snode := range snodeList.Items {
-			for _, lm := range snode.Status.LatencyMetrics {
-				baseline := lm.BaselineP50NS
-				if b.percentile == atlasprom.PercentileP99 {
-					baseline = lm.BaselineP99NS
-				}
-				if baseline > 0 {
-					result[lm.NodeUUID] = baseline
-				}
+		for _, node := range nodes.Items {
+			lm := node.Status.LatencyMetrics
+			if lm == nil {
+				continue
+			}
+			baseline := lm.BaselineP50NS
+			if b.percentile == atlasprom.PercentileP99 {
+				baseline = lm.BaselineP99NS
+			}
+			if baseline > 0 {
+				result[lm.NodeUUID] = baseline
 			}
 		}
 	}
@@ -107,19 +109,19 @@ type nodeBaseline struct {
 
 // reduceWindowedBaselines reduces per-node windowed samples to a single robust baseline each,
 // applying the cold-start policy. It is pure (no Prometheus, no metrics) so the cold-start
-// and estimator behaviour can be tested directly. A node is dropped when it is under-sampled
-// under the "defer" policy, or when no positive baseline can be computed from its samples.
+// and estimator behavior can be tested directly. A node is dropped when it is under-sampled
+// under the "Defer" policy, or when no positive baseline can be computed from its samples.
 func reduceWindowedBaselines(
 	windowed map[string]map[string][]float64,
 	cfg RebalancingConfig,
 ) []nodeBaseline {
-	deferUnderSampled := cfg.BaselineColdStart == string(simplyblockv1alpha1.BaselineColdStartDefer)
+	deferUnderSampled := cfg.BaselineColdStart == string(simplyblockv1alpha2.BaselineColdStartDefer)
 
 	var out []nodeBaseline
 	for clusterUUID, byNode := range windowed {
 		for nodeUUID, samples := range byNode {
-			// Cold start: an under-sampled node is either skipped ("defer") or computed
-			// from whatever samples exist ("partialWindow").
+			// Cold start: an under-sampled node is either skipped ("Defer") or computed
+			// from whatever samples exist ("PartialWindow").
 			if len(samples) < cfg.BaselineMinSamples && deferUnderSampled {
 				continue
 			}

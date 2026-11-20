@@ -1,0 +1,24 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-host-03
+  name: discovered-discover-host-03
+spec:
+  cluster:
+    enableJournalDevice: true
+    enableMetadataJournal: false
+    minHugePagesSize: null
+    name: discovered-discover-host-03-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 0
+  hostOS: null
+  nodeSets:
+  - groups:
+    - devices:
+        block:
+        - /dev/disk/by-id/nvme-eui.34333930547013130025384300000001
+        - /dev/disk/by-id/nvme-eui.34333930547014240025384300000001
+      name: group-1-block-2x1.74T
+      workers:
+      - worker-1
+    name: discovered

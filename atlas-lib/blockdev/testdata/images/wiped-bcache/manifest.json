@@ -1,0 +1,16 @@
+{
+  "name": "wiped-bcache",
+  "tool": "make-bcache",
+  "tool_version": "make-bcache: unrecognized option '--version'",
+  "command": "make-bcache -B, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:50Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "8da54a964fbb0c0b6c4e131188186f0e71242ee5e0a520fe9e8d99046bf042ce",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 16 bytes were erased at offset 0x00001018 (bcache): c6 85 73 f6 4e 1a 45 ca 82 65 f5 7f 48 ba 6d 81. a backing device: the superblock is at 4096 and the first block is zero, which is what makes a rule that reads only the first block unsafe"
+}

@@ -18,14 +18,14 @@ import (
 // name that was never actually created on that device, on a host whose LVM
 // devices file restricts default visibility to unrelated devices.
 func (m *Manager) VolumeGroup(ctx context.Context, pv PhysicalVolume) (VolumeGroup, error) {
-	out, err := m.exec(ctx, []string{pv.DevicePath}, "pvs", "--noheadings", "-o", "vg_name", pv.DevicePath)
+	name, err := m.pvsVGName(ctx, pv.DevicePath)
 	if err != nil {
 		if isNoPVSignature(err) {
 			return VolumeGroup{}, nil
 		}
 		return VolumeGroup{}, err
 	}
-	return VolumeGroup{Name: firstRealLine(out)}, nil
+	return VolumeGroup{Name: name}, nil
 }
 
 // isNoPVSignature reports whether err is pvs's own "this device carries no PV
@@ -41,12 +41,12 @@ func isNoPVSignature(err error) bool {
 // ListLogicalVolumes returns every logical volume volumeGroup currently
 // contains.
 func (m *Manager) ListLogicalVolumes(ctx context.Context, volumeGroup VolumeGroup) ([]LogicalVolume, error) {
-	out, err := m.exec(ctx, nil, "lvs", "--noheadings", "-o", "lv_name", volumeGroup.Name)
+	names, err := m.lvsLVNames(ctx, nil, volumeGroup.Name)
 	if err != nil {
 		return nil, err
 	}
 	var lvs []LogicalVolume
-	for name := range strings.FieldsSeq(out) {
+	for _, name := range names {
 		lvs = append(lvs, LogicalVolume{VolumeGroup: volumeGroup, Name: name})
 	}
 	return lvs, nil

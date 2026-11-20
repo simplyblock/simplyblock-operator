@@ -10,6 +10,8 @@ package layers
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +37,12 @@ type lvmCommands struct {
 	// when the members disagree about which group they belong to: one already in
 	// it, one not yet, one carrying somebody else's.
 	byDevice map[string]string
+
+	// unowned makes every group the fake reports carry no ownership tag, which
+	// is what a case about a refusal, or about adoption, sets. Left false, a
+	// tags listing nobody scripted answers with the tag, since every group the
+	// driver makes carries it.
+	unowned bool
 }
 
 func newLVM() *lvmCommands {
@@ -43,6 +51,11 @@ func newLVM() *lvmCommands {
 
 func (l *lvmCommands) run(_ context.Context, args ...string) (string, error) {
 	l.calls = append(l.calls, args)
+	// An adoption is what makes a group read as owned from then on, the way it
+	// does on a device.
+	if args[0] == "vgchange" && slices.Contains(args, "--addtag") && slices.Contains(args, lvm.OwnerTag) {
+		l.unowned = false
+	}
 	for _, key := range keysFor(args) {
 		if err, ok := l.err[key]; ok {
 			return "", err
@@ -54,16 +67,65 @@ func (l *lvmCommands) run(_ context.Context, args ...string) (string, error) {
 	if l.byDevice != nil && args[0] == "pvs" {
 		for _, arg := range args {
 			if out, ok := l.byDevice[arg]; ok {
-				return out, nil
+				return l.withOwnership(args, out), nil
 			}
 		}
 	}
 	for _, key := range keysFor(args) {
 		if out, ok := l.out[key]; ok {
-			return out, nil
+			return l.withOwnership(args, out), nil
 		}
 	}
-	return "", nil
+	if asksForTags(args) && !l.unowned && args[0] == "vgs" {
+		return "  " + lvm.OwnerTag + "\n", nil
+	}
+	return reportWrap(args, ""), nil
+}
+
+// withOwnership appends the owner tag to a device probe's answer when the probe
+// asked for tags and the fake is not set to refuse, so a case scripting only the
+// group's name still reads as the driver's group.
+func (l *lvmCommands) withOwnership(args []string, out string) string {
+	if asksForTags(args) && args[0] == "pvs" && !l.unowned {
+		if name := strings.TrimSpace(out); name != "" {
+			out = "  " + name + " " + lvm.OwnerTag + "\n"
+		}
+	}
+	return reportWrap(args, out)
+}
+
+// reportWrap wraps out as pvs/lvs --reportformat json would, when args asked for
+// it; every other answer passes through unchanged. out is treated as
+// whitespace-separated field values, matching how a test already scripts a
+// plain-text answer for the pre-JSON form of these same commands.
+func reportWrap(args []string, out string) string {
+	if !slices.Contains(args, "--reportformat") {
+		return out
+	}
+	kind, field := "pv", "vg_name"
+	if args[0] == "lvs" {
+		kind, field = "lv", "lv_name"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, `{"report":[{"%s":[`, kind)
+	for i, v := range strings.Fields(out) {
+		if i > 0 {
+			b.WriteString(",")
+		}
+		fmt.Fprintf(&b, `{"%s":"%s"}`, field, v)
+	}
+	b.WriteString("]}]}")
+	return b.String()
+}
+
+// asksForTags reports whether a command reads a group's tags.
+func asksForTags(args []string) bool {
+	for _, a := range args {
+		if strings.Contains(a, "vg_tags") {
+			return true
+		}
+	}
+	return false
 }
 
 // keysFor is what a test may key an answer on, most specific first.
@@ -310,6 +372,31 @@ func TestLVMPVRefusesWhenTheGroupCannotBeProbed(t *testing.T) {
 	}
 }
 
+// Total path loss removes the member device entirely, leaving nothing for
+// this layer to read a label from at all. That is not the same question as a
+// probe that failed to read a device that is there: Release is unconditionally
+// a no-op for this layer regardless of state, so reporting Absent here costs
+// nothing, while an error would abort the whole Down walk before it reaches
+// the volume-group layer above, whose Release has real work to do.
+func TestLVMPVObserveWithNoDeviceReportsAbsentWithoutError(t *testing.T) {
+	cmds := newLVM()
+	l := newLVMPV(cmds, blockdev.Reading{}, nil)
+
+	state, own, err := l.Observe(context.Background(), volstack.Artifact{})
+	if err != nil {
+		t.Fatalf("Observe: %v, want no error when there is no device to read at all", err)
+	}
+	if state != volstack.StateAbsent {
+		t.Errorf("state = %s, want Absent", state)
+	}
+	if len(own.Devices) != 0 {
+		t.Errorf("an absent layer exposed %d devices", len(own.Devices))
+	}
+	if len(cmds.calls) != 0 {
+		t.Errorf("Observe ran LVM commands with no device to scope them to:\n%s", cmds.issued())
+	}
+}
+
 // A physical-volume signature is not a hold, so there is nothing for this host to
 // give up. Release does nothing, and above all does not remove the label, which
 // is what separates it from Destroy.
@@ -346,5 +433,47 @@ func TestLVMPVRecordsNoParameters(t *testing.T) {
 	l := newLVMPV(newLVM(), blockdev.Reading{Content: blockdev.ContentBlank}, nil)
 	if _, ok := any(l).(volstack.Recorder); ok {
 		t.Error("the physical-volume layer declares parameters, which the record contract says it has none of")
+	}
+}
+
+// A clone's group carries its source's tag, and a clone of a volume made before
+// the tag existed carries none and is known by its names. A group that is
+// neither is somebody's: the re-identification that would have renamed it is
+// refused, and the group is left as it was found.
+func TestLVMPVRefusesToReidentifyAGroupThatIsNotTheDrivers(t *testing.T) {
+	cmds := newLVM()
+	cmds.unowned = true
+	cmds.out["pvs"] = "  somebody-elses-vg\n"
+	cmds.out["lvs"] = "  data\n"
+	l := newLVMPV(cmds, lvmLabel(), nil)
+	l.cfg.RecognizeStack = func(group string, volumes []string) bool { return false }
+
+	_, err := l.Ensure(context.Background(), belowArtifact())
+	if err == nil {
+		t.Fatalf("a group that is not the driver's was re-identified:\n%s", cmds.issued())
+	}
+	for _, forbidden := range []string{"vgimportclone", "lvrename", "pvcreate", "vgchange"} {
+		if cmds.ran(forbidden) {
+			t.Fatalf("the refusal ran %s:\n%s", forbidden, cmds.issued())
+		}
+	}
+}
+
+// The other reading of an untagged clone: the recognizer knows the names, so
+// the group is adopted on its device first and then re-identified.
+func TestLVMPVAdoptsAndReidentifiesARecognizedUntaggedClone(t *testing.T) {
+	cmds := newLVM()
+	cmds.unowned = true
+	cmds.out["pvs"] = "  vol-somebody-elses-volume\n"
+	cmds.out["lvs"] = "  lv-somebody-elses-volume\n"
+	l := newLVMPV(cmds, lvmLabel(), nil)
+	l.cfg.RecognizeStack = func(group string, volumes []string) bool {
+		return group == "vol-somebody-elses-volume" && len(volumes) == 1
+	}
+	if _, err := l.Ensure(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Ensure: %v", err)
+	}
+	if cmds.indexOfWith("vgchange", "--addtag") < 0 || !cmds.ran("vgimportclone") {
+		t.Fatalf("want the clone adopted and re-identified:\n%s", cmds.issued())
 	}
 }

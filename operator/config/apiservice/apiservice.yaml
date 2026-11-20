@@ -2,6 +2,11 @@
 # operator. Without this object the group does not exist: the operator's listener
 # is running, and nothing routes to it.
 #
+# An APIService registers a group version rather than a group, so a second served
+# version needs a second object here. The operator derives the same list from its
+# own scheme when it injects the CA bundles (internal/metricsapi/cert.go), so a
+# version added there without a manifest here comes up Available=False.
+#
 # The name is fixed by Kubernetes as <version>.<group> and takes no Kustomize
 # namePrefix, which is why it is spelled out rather than templated.
 #
@@ -12,10 +17,10 @@
 apiVersion: apiregistration.k8s.io/v1
 kind: APIService
 metadata:
-  name: v1alpha1.metrics.simplyblock.io
+  name: v1alpha2.metrics.simplyblock.io
 spec:
   group: metrics.simplyblock.io
-  version: v1alpha1
+  version: v1alpha2
   service:
     name: metrics-apiserver
     namespace: system

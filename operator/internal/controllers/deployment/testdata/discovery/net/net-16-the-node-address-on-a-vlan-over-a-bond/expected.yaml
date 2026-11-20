@@ -1,0 +1,20 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-net-16
+  name: discovered-discover-net-16
+spec:
+  cluster:
+    name: discovered-discover-net-16-cluster
+  nodeSets:
+  - groups:
+    - devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5e:00.1
+        - 0000:5e:00.2
+        - 0000:5e:00.3
+      mgmtInterface: bond0.100
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-01
+    name: discovered

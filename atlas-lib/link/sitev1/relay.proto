@@ -1,0 +1,59 @@
+syntax = "proto3";
+
+// Package atlas.link.site.v1 is the relay between the sites of a stretched
+// cluster: how a peer on one site opens a byte stream to a peer on another,
+// through its own site's forwarder and the relay on the hub.
+//
+// It carries no service of its own beyond the stream. Once the first frame has
+// named the target, every frame after it is opaque bytes, and the caller runs an
+// ordinary gRPC connection over them against whatever the target serves. No hop
+// parses that connection.
+package atlas.link.site.v1;
+
+option go_package = "github.com/simplyblock/atlas/link/sitev1;sitev1";
+
+// RelayService is served on every hop of a site-to-site stream, and each hop
+// calls the next one's:
+//
+//   - a site's forwarder serves it to that site's peers, which open their
+//     streams through it;
+//   - the relay on the hub serves it to the forwarders;
+//   - a forwarder serves it to the relay too, which delivers the streams
+//     addressed to that site through it;
+//   - a peer that accepts remote streams serves it to its forwarder.
+//
+// A hop that refuses a stream ends the call with a status before any data
+// frame moves, so a refused stream is never left half open.
+service RelayService {
+  // Open opens one byte stream to a peer. The caller's first frame names the
+  // two ends; every frame after it, in both directions, is data.
+  rpc Open(stream OpenRequest) returns (stream OpenResponse);
+}
+
+// OpenRequest is one frame from the side that opened the stream.
+message OpenRequest {
+  oneof kind {
+    // ends is the caller's first frame and only that one.
+    StreamEnds ends = 1;
+    // data is a chunk of the stream's bytes.
+    bytes data = 2;
+  }
+}
+
+// OpenResponse is one frame from the side the stream was opened to.
+message OpenResponse {
+  // data is a chunk of the stream's bytes.
+  bytes data = 1;
+}
+
+// StreamEnds names the two ends of a stream.
+message StreamEnds {
+  // target is the peer the stream is for, as "site/<site>/<kind>" for any linked
+  // peer of that kind on the site, or "site/<site>/<kind>/<name>" for one.
+  string target = 1;
+
+  // source is the peer the stream is from, in the same form. A peer opening a
+  // stream leaves it empty: its forwarder sets it from the peer's verified
+  // identity, and every later hop checks it rather than trusting it.
+  string source = 2;
+}

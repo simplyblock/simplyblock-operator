@@ -1,0 +1,22 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-role-09
+  name: discovered-discover-role-09
+spec:
+  cluster:
+    name: discovered-discover-role-09-cluster
+  nodeSets:
+  - groups:
+    - dataInterfaces:
+      - eth1
+      devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5f:00.0
+        - 0000:af:00.0
+        - 0000:b0:00.0
+      mgmtInterface: eth0
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-01
+    name: discovered

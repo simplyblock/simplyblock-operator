@@ -1,0 +1,27 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-host-02
+  name: discovered-discover-host-02
+spec:
+  cluster:
+    clusterMode: null
+    enableJournalDevice: true
+    enableNodeAffinity: true
+    minHugePagesSize: null
+    name: discovered-discover-host-02-cluster
+    stripe:
+      dataChunks: 1
+  hostOS: null
+  nodeSets:
+  - groups:
+    - devices:
+        block:
+        - /dev/sdb
+        - /dev/sdc
+      mgmtInterface: eth0
+      name: group-1-block-2x100G
+      workers:
+      - githubactions-lblk-storage-node-1
+      - githubactions-lblk-storage-node-2
+      - githubactions-lblk-storage-node-3
+    name: discovered

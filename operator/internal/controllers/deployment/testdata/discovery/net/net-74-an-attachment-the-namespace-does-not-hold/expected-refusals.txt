@@ -1,0 +1,2 @@
+worker-01: declined by network attachment because the namespace simplyblock holds no NetworkAttachmentDefinition storage-nope, only storage-data, storage-mgmt
+worker-02: declined by network attachment because the namespace simplyblock holds no NetworkAttachmentDefinition storage-nope, only storage-data, storage-mgmt

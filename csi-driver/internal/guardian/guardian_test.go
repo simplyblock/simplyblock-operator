@@ -4,6 +4,7 @@ package guardian
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -437,5 +438,237 @@ func TestCoordinatedSubsystemRestart_OptInViaAnnotation(t *testing.T) {
 	)
 	if got != 1 {
 		t.Fatalf("annotation opt-in should be accepted; expected 1, got %d", got)
+	}
+}
+
+// Regression: 2026-09-30-guardian-blind-to-block-volumes — a `volumeMode: Block`
+// volume was never registered with the guardian, so when its last NVMe-oF path
+// died the break was discarded with "unknown lvol (not published yet?)" and the
+// pod holding the dead device was never restarted. The device node stayed
+// present and every read returned ENXIO for as long as the pod lived.
+//
+// kubelet publishes a block volume at
+// /var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/<pvName>/<podUID>,
+// which carries the pod UID in its last segment and no /pods/ segment at all.
+func TestRegisterPublish_TracksBlockModeVolume(t *testing.T) {
+	const (
+		podUID     = "bffea11d-a2b8-418c-87f7-c1f0fa29a333"
+		lvolID     = "df2f242b-9217-4f22-b24a-d649adf90f14"
+		targetPath = "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/" +
+			"pvc-7a60be59-8833-4bcb-9bb2-8f474c528038/" + podUID
+	)
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.RegisterPublish("cid", lvolID, targetPath)
+
+	st, ok := g.lvols[lvolID]
+	if !ok || st == nil {
+		t.Fatal("a block-mode publish left the lvol untracked, so a later path loss is discarded")
+	}
+	if _, tracked := st.PodUIDs[podUID]; !tracked {
+		t.Errorf("pod UID not recovered from the block publish path; got %v", st.PodUIDs)
+	}
+
+	// The break the reconnect monitor reports has to land, since restarting the
+	// pod is the only recovery once the kernel has removed the namespace.
+	g.MarkBrokenLvol(lvolID)
+	if g.lvols[lvolID].BrokenAt.IsZero() {
+		t.Error("MarkBrokenLvol was discarded, so the pod holding the dead device is never restarted")
+	}
+}
+
+// Regression: 2026-09-30-guardian-blind-to-block-volumes — the unpublish side of
+// the same path shape. A block volume that was tracked has to be released again,
+// or the guardian keeps restarting pods for a volume nobody uses.
+func TestRegisterUnpublish_ReleasesBlockModeVolume(t *testing.T) {
+	const (
+		podUID     = "bffea11d-a2b8-418c-87f7-c1f0fa29a333"
+		lvolID     = "df2f242b-9217-4f22-b24a-d649adf90f14"
+		targetPath = "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/" +
+			"pvc-7a60be59-8833-4bcb-9bb2-8f474c528038/" + podUID
+	)
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.lvols[lvolID] = &LvolState{ClusterID: "cid", PodUIDs: map[string]struct{}{podUID: {}}}
+
+	g.RegisterUnpublish(lvolID, targetPath)
+
+	if _, ok := g.lvols[lvolID]; ok {
+		t.Error("a block-mode unpublish left the lvol tracked, so the guardian still owns a released volume")
+	}
+}
+
+// podUIDFromTargetPath has to read both of the shapes kubelet publishes into,
+// and has to refuse anything else rather than return a fragment of a path. The
+// block shape is the one that carried
+// Regression: 2026-09-30-guardian-blind-to-block-volumes.
+func TestPodUIDFromTargetPath(t *testing.T) {
+	const podUID = "bffea11d-a2b8-418c-87f7-c1f0fa29a333"
+
+	cases := []struct {
+		name string
+		path string
+		want string
+	}{{
+		name: "filesystem publish",
+		path: "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-7a60be59/mount",
+		want: podUID,
+	}, {
+		name: "block publish",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-7a60be59/" + podUID,
+		want: podUID,
+	}, {
+		name: "block publish with a trailing slash",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-7a60be59/" + podUID + "/",
+		want: podUID,
+	}, {
+		// A PersistentVolume may be named pods, which puts a /pods/ segment
+		// into the block shape. It is still the block shape.
+		name: "block publish of a volume named pods",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pods/" + podUID,
+		want: podUID,
+	}, {
+		// kubelet's --root-dir is configurable, and a /pods/ segment in it
+		// precedes the block shape the same way.
+		name: "block publish under a root dir containing pods",
+		path: "/data/pods/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-7a60be59/" + podUID,
+		want: podUID,
+	}, {
+		name: "filesystem publish under a root dir containing pods",
+		path: "/data/pods/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-7a60be59/mount",
+		want: podUID,
+	}, {
+		// The staging shape, which names no pod and must not be mistaken for one.
+		name: "block staging path",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/pvc-7a60be59/dev/" + podUID,
+		want: "",
+	}, {
+		name: "block publish stopping at the volume name",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/volumeDevices/publish/pvc-7a60be59",
+		want: "",
+	}, {
+		name: "filesystem publish stopping at the pod",
+		path: "/var/lib/kubelet/pods/" + podUID,
+		want: "",
+	}, {
+		name: "empty",
+		path: "",
+		want: "",
+	}, {
+		name: "neither shape",
+		path: "/var/lib/kubelet/plugins/kubernetes.io/csi/pv/pvc-7a60be59/globalmount",
+		want: "",
+	}}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := podUIDFromTargetPath(tc.path); got != tc.want {
+				t.Errorf("podUIDFromTargetPath(%q) = %q, want %q", tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// The filesystem counterpart of TestRegisterPublish_TracksBlockModeVolume, so
+// that widening the parser for the block shape cannot quietly cost the shape
+// that already worked.
+func TestRegisterPublish_TracksFilesystemVolume(t *testing.T) {
+	const (
+		podUID     = "1298cfdd-e6c0-4fff-83d9-6a2edd3090e8"
+		lvolID     = "5ae79005-ccf2-4227-9332-9b5979079340"
+		targetPath = "/var/lib/kubelet/pods/" + podUID +
+			"/volumes/kubernetes.io~csi/pvc-cf21c473/mount"
+	)
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.RegisterPublish("cid", lvolID, targetPath)
+
+	st, ok := g.lvols[lvolID]
+	if !ok || st == nil {
+		t.Fatal("a filesystem publish left the lvol untracked")
+	}
+	if _, tracked := st.PodUIDs[podUID]; !tracked {
+		t.Errorf("pod UID not recovered from the filesystem publish path; got %v", st.PodUIDs)
+	}
+}
+
+// A striped volume is one publish but N subsystems. The reconnect monitor
+// reports a member that lost every path under that member's own ID, so every
+// member has to be tracked for the pod, or the break is dropped as an unknown
+// lvol and the pod keeps running on a stripe with a hole in it.
+func TestRegisterPublishStriped_TracksEveryMember(t *testing.T) {
+	const (
+		podUID     = "0c8e1f3a-5b6d-4e7f-8a9b-0c1d2e3f4a5b"
+		targetPath = "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-s/mount"
+	)
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.RegisterPublishStriped("cid", "m0", []string{"m0", "m1", "m2"}, targetPath)
+
+	for _, id := range []string{"m0", "m1", "m2"} {
+		st := g.lvols[id]
+		if st == nil {
+			t.Fatalf("member %s not tracked", id)
+		}
+		if _, ok := st.PodUIDs[podUID]; !ok || st.ClusterID != "cid" {
+			t.Errorf("member %s: pods=%v cluster=%q", id, st.PodUIDs, st.ClusterID)
+		}
+	}
+	if g.lvols["m0"].StripeOf != "" || g.lvols["m1"].StripeOf != "m0" || g.lvols["m2"].StripeOf != "m0" {
+		t.Errorf("StripeOf: m0=%q m1=%q m2=%q", g.lvols["m0"].StripeOf, g.lvols["m1"].StripeOf, g.lvols["m2"].StripeOf)
+	}
+
+	g.MarkBrokenLvol("m2")
+	if g.lvols["m2"].BrokenAt.IsZero() {
+		t.Error("a member's break was discarded")
+	}
+}
+
+// NodeUnpublish only knows the first member (the volume handle's), so releasing
+// it has to release the other members of that volume, and nothing else the pod
+// holds.
+func TestRegisterUnpublish_ReleasesStripeMembers(t *testing.T) {
+	const podUID = "1d9f2a4b-6c7e-4f8a-9b0c-1d2e3f4a5b6c"
+	tp := "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-s/mount"
+	other := "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-o/mount"
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.RegisterPublishStriped("cid", "m0", []string{"m0", "m1", "m2"}, tp)
+	g.RegisterPublishStriped("cid", "n0", []string{"n0", "n1"}, other)
+	g.RegisterPublish("cid", "plain", other)
+
+	g.RegisterUnpublish("m0", tp)
+
+	for _, id := range []string{"m0", "m1", "m2"} {
+		if _, ok := g.lvols[id]; ok {
+			t.Errorf("member %s still tracked after its volume was unpublished", id)
+		}
+	}
+	for _, id := range []string{"n0", "n1", "plain"} {
+		if st := g.lvols[id]; st == nil {
+			t.Errorf("%s was wiped by unpublishing another volume of the same pod", id)
+		}
+	}
+}
+
+// The member link survives a restart of the node plugin, or an unpublish after
+// it would leave the members tracked for a pod that is gone.
+func TestStripeMembershipIsPersisted(t *testing.T) {
+	const podUID = "2e0a3b5c-7d8f-4a9b-8c1d-2e3f4a5b6c7d"
+	tp := "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-s/mount"
+	state := filepath.Join(t.TempDir(), "state.json")
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.cfg.StatePath = state
+	g.RegisterPublishStriped("cid", "m0", []string{"m0", "m1"}, tp)
+
+	g2 := newTestGuardian(fake.NewSimpleClientset())
+	g2.cfg.StatePath = state
+	g2.loadState()
+	if st := g2.lvols["m1"]; st == nil || st.StripeOf != "m0" {
+		t.Fatalf("member link not restored: %+v", st)
+	}
+	g2.RegisterUnpublish("m0", tp)
+	if len(g2.lvols) != 0 {
+		t.Errorf("lvols left after unpublish: %v", g2.lvols)
 	}
 }

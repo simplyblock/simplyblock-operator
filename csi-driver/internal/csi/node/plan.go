@@ -1,0 +1,501 @@
+// Which stack a volume is, and what it is built out of.
+//
+// Everything here is a pure function of what the RPC carries: the volume
+// context, the volume capability, and what the control plane answered. Nothing
+// reaches the host, which is what lets the shape a volume stages as be asserted
+// in a unit test rather than on a cluster.
+//
+// The shapes themselves are atlas-lib's, in volstack/plans. What stays here is
+// the selection, because which row a volume is gets read off Kubernetes types
+// and the rows do not.
+
+package node
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvm"
+	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
+	"github.com/simplyblock/atlas/nvme"
+	"github.com/simplyblock/atlas/ptr"
+	"github.com/simplyblock/atlas/volstack"
+	"github.com/simplyblock/atlas/volstack/plans"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
+	"github.com/simplyblock/csi-driver/internal/initiator"
+	"github.com/simplyblock/csi-driver/internal/mount"
+)
+
+// The layer names this build knows. They are the values Layer.Name() returns
+// and are stable across releases, because a teardown replays a record an
+// earlier version wrote.
+const (
+	layerFabric            = "fabric"
+	layerFilesystem        = "filesystem"
+	layerLVMPhysicalVolume = "lvmPhysicalVolume"
+	layerLVMVolumeGroup    = "lvmVolumeGroup"
+	layerLVMLogicalVolume  = "lvmLogicalVolume"
+	layerDMLinear          = "dmLinear"
+	layerMembers           = "members"
+)
+
+// vdoPoolName is the pool `lvcreate --type vdo` creates alongside the logical
+// volume, inside every volume's own group. It is not per volume: uniqueness
+// comes from the group, of which there is one per volume. Being the same name
+// in every group is what makes it structural, which is why the plan hands it to
+// the physical-volume layer as a name to preserve through a clone resolution.
+const vdoPoolName = "vdopool"
+
+// stackShape is which row of the plan catalog a volume is. It is named rather
+// than decided twice, because a stage reads it off the volume's parameters and
+// a teardown reads it off the stack record, and the two have to arrive at the
+// same list of layers or the teardown releases the wrong objects.
+type stackShape int
+
+const (
+	// shapeRawBlock is the fabric alone: a volume the pod opens as a block
+	// device, with nothing formatted on it.
+	shapeRawBlock stackShape = iota
+
+	// shapePlain is the fabric with a filesystem above it, which is what most
+	// volumes are.
+	shapePlain
+
+	// shapeLVM is the fabric with the three LVM layers above it and a filesystem
+	// on top: the shape a volume carrying client-side compression or
+	// deduplication takes.
+	shapeLVM
+
+	// shapeLVMRawBlock is shapeLVM without the filesystem, for a volume that
+	// asked for client-side compression or deduplication and is opened as a
+	// block device.
+	shapeLVMRawBlock
+
+	// shapeIndirectRawBlock and shapeIndirectPlain are shapeRawBlock and
+	// shapePlain with the dmLinear indirection above the fabric, so a volume's
+	// namespace can move to another subsystem under a live consumer
+	// (consistency-group co-location). Chosen for a fresh stage when the node
+	// runs with SPDKCSI_DM_INDIRECTION on a host with device-mapper, and
+	// afterward by the stack record:
+	// a volume never gains or loses the layer under a staged consumer.
+	shapeIndirectRawBlock
+	shapeIndirectPlain
+
+	// shapeIndirectLVM and shapeIndirectLVMRawBlock are the LVM shapes with
+	// the dmLinear indirection under the physical volume, so a VDO volume's
+	// namespace can move to another subsystem with the volume group, the VDO
+	// pool, and the filesystem left as they are.
+	shapeIndirectLVM
+	shapeIndirectLVMRawBlock
+
+	// shapeStriped is a striped volume: one fabric per member under the
+	// members composite, the three LVM layers striping them into one logical
+	// volume, and a filesystem on top (striped.go). shapeStripedRawBlock is the
+	// same without the filesystem.
+	shapeStriped
+	shapeStripedRawBlock
+)
+
+// planFor is the layer list one of the shapes means, built with the seams the
+// node was resolved with.
+//
+// Raw block mode is a shorter plan rather than a flag inside a stage function,
+// which is what keeps a block volume from sharing a code path with a formatting
+// one.
+func planFor(
+	node *plans.Node,
+	connection lvol.Connection,
+	volume plans.Volume,
+	options plans.LogicalVolumeOptions,
+	shape stackShape,
+) volstack.Plan {
+	switch shape {
+	case shapeRawBlock:
+		return node.RawBlock(connection)
+	case shapeIndirectRawBlock:
+		return node.IndirectRawBlock(connection, volume)
+	case shapeIndirectPlain:
+		return node.IndirectPlain(connection, volume)
+	case shapeIndirectLVM:
+		return node.IndirectLVM(connection, volume, options)
+	case shapeIndirectLVMRawBlock:
+		return node.IndirectLVMRawBlock(connection, volume, options)
+	case shapeLVM:
+		return node.LVM(connection, volume, options)
+	case shapeLVMRawBlock:
+		return node.LVMRawBlock(connection, volume, options)
+	case shapePlain:
+	}
+	return node.Plain(connection, volume)
+}
+
+// shapeFor is the row a volume stages as, read off what the RPC carries: the
+// capability decides whether there is a filesystem, and the class parameters
+// decide whether the LVM layers that provide client-side compression and
+// deduplication sit between it and the fabric.
+// indirect turns a shape into its dmLinear variant: the indirection goes
+// directly above the fabric, under whatever the shape builds there, so the
+// consumer never opens the namespace device a subsystem move would replace.
+// An indirect shape is its own variant.
+func indirect(shape stackShape) stackShape {
+	switch shape {
+	case shapeRawBlock:
+		return shapeIndirectRawBlock
+	case shapePlain:
+		return shapeIndirectPlain
+	case shapeLVM:
+		return shapeIndirectLVM
+	case shapeLVMRawBlock:
+		return shapeIndirectLVMRawBlock
+	}
+	return shape
+}
+
+// dmIndirectionEnabled is whether a fresh stage builds the dmLinear
+// indirection: SPDKCSI_DM_INDIRECTION does not turn it off, and the host has
+// device-mapper to build it with. On by default, since a volume staged without
+// it can never have its namespace moved to another subsystem under a live
+// consumer.
+func (ns *Server) dmIndirectionEnabled() bool {
+	return ns.deviceMapper && settingOn(os.Getenv(dmIndirectionEnv))
+}
+
+// settingOn reads SPDKCSI_DM_INDIRECTION: on unless it says off.
+func settingOn(setting string) bool {
+	switch strings.ToLower(strings.TrimSpace(setting)) {
+	case "0", "false", "no", "off":
+		return false
+	}
+	return true
+}
+
+func shapeFor(vc map[string]string, volCap *csi.VolumeCapability) stackShape {
+	block := volCap.GetBlock() != nil
+	switch {
+	case stripeWidth(vc) > 1 && block:
+		return shapeStripedRawBlock
+	case stripeWidth(vc) > 1:
+		return shapeStriped
+	case wantsVDO(vc) && block:
+		return shapeLVMRawBlock
+	case wantsVDO(vc):
+		return shapeLVM
+	case block:
+		return shapeRawBlock
+	}
+	return shapePlain
+}
+
+// wantsVDO reports whether the volume's class asked for client-side compression
+// or deduplication. Either one alone needs the whole mechanism, because VDO is
+// what provides both.
+func wantsVDO(vc map[string]string) bool {
+	return boolFromContext(vc[kube.ParamClientCompression]) ||
+		boolFromContext(vc[kube.ParamClientDeduplication])
+}
+
+// vdoOptions is what the LVM layers of such a volume are built with: a logical
+// volume of the type that compresses, deduplicates, or both, inside the pool
+// lvcreate creates for it, on a node that advertises the kernel module.
+//
+// The two parameters are independent, and a volume asking for one and not the
+// other gets exactly that: the handler in atlas-lib/lvm passes both switches to
+// lvcreate explicitly rather than letting an unset one fall to a default of its
+// own.
+func vdoOptions(vc map[string]string) plans.LogicalVolumeOptions {
+	return plans.LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{
+			Compression:      boolFromContext(vc[kube.ParamClientCompression]),
+			Deduplication:    boolFromContext(vc[kube.ParamClientDeduplication]),
+			LogicalSizeBytes: vdoLogicalBytes(vc),
+		},
+		PoolName:   vdoPoolName,
+		Capability: volstack.Capability(kube.LabelVDOCapable),
+	}
+}
+
+// vdoLogicalBytes is the size the controller asked the VDO volume to be
+// (csicommon.CtxVDOLogicalBytes), or zero for a context from before it named
+// one, which leaves VDO to size the volume as it always did.
+func vdoLogicalBytes(vc map[string]string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(vc[csicommon.CtxVDOLogicalBytes]), 10, 64)
+	if err != nil || n < 0 {
+		return 0
+	}
+	return n
+}
+
+// stackVolume is the volume as the filesystem layer needs it described.
+//
+// The filesystem is the one the volume was staged with when that was recorded,
+// and otherwise the one the capability asks for. Taking the recorded one is
+// what lets a volume staged by an earlier, more permissive driver come back up:
+// the layer refuses a device carrying a filesystem the plan did not name, and
+// on such a volume the class is not what is down there.
+func stackVolume(
+	stagingPath string,
+	vc map[string]string,
+	volCap *csi.VolumeCapability,
+) plans.Volume {
+	// Named by the record or the capability; empty otherwise, so the layer
+	// mounts what the device carries (a static PV without fsType: a test
+	// fail-over's clone, a PV Ramen restored without the field) and formats
+	// a blank device as ext4.
+	fsType := stagedFsType(vc, volCap)
+	return plans.Volume{
+		UUID:                  deviceLvolID(vc),
+		PVName:                vc[csicommon.CSIStoragePVNameKey],
+		PVCNamespace:          vc[csicommon.CSIStorageNamespaceKey],
+		PVCName:               vc[csicommon.CSIStorageNameKey],
+		StagingPath:           stagingPath,
+		FsType:                fsType,
+		DefaultFsType:         "ext4",
+		MountFlags:            volumeMountFlags(volCap),
+		FormatOptions:         formatOptions(volCap, vc),
+		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
+		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
+	}
+}
+
+// formatOptions is what mkfs is given beyond what the filesystem layer derives
+// itself. A striped volume's geometry is the layer's to state, from the striped
+// logical volume, so it gets no stripe hints of the driver's (mount.StripedFormatOptions).
+func formatOptions(volCap *csi.VolumeCapability, vc map[string]string) []string {
+	if stripeWidth(vc) > 1 {
+		return mount.StripedFormatOptions(fsTypeOrDefault(volCap))
+	}
+	return mount.FormatOptions(fsTypeOrDefault(volCap), vc, wantsVDO(vc))
+}
+
+// boolFromContext reads a flag the context carries as text, answering false for
+// one it does not carry and for one that cannot be read.
+//
+// False is the safe answer for both: it is the volume whose content the host
+// can read, and the guard that reading feeds is the strict one.
+func boolFromContext(value string) bool {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(value))
+	if err != nil {
+		return false
+	}
+	return parsed
+}
+
+// volumeMountFlags are the flags the volume itself asked for, plus the one the
+// access mode implies. What a filesystem requires in order to mount at all is
+// the layer's to add, so nothing of that is here.
+func volumeMountFlags(volCap *csi.VolumeCapability) []string {
+	flags := append([]string{}, volCap.GetMount().GetMountFlags()...)
+
+	switch volCap.GetAccessMode().GetMode() {
+	case csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY:
+		flags = append(flags, "ro")
+	case csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		csi.VolumeCapability_AccessMode_UNKNOWN:
+	}
+	return flags
+}
+
+// csiEndpoint is one reachable address as the volume context carries it. The
+// per-path tunables are single values on the context, because one set is
+// applied to every path.
+type csiEndpoint struct {
+	IP   string `json:"ip"`
+	Port int    `json:"port"`
+}
+
+// connectionFromContext rebuilds where the volume is published from the context
+// stashed beside its staging path.
+//
+// It is what the teardown path uses, and it deliberately asks the control plane
+// nothing: an unstage has to work when the control plane does not, and a
+// release needs no credentials because it attaches nothing. What it cannot
+// carry is the DHCHAP key material, which is why the attaching paths resolve
+// their connection from the control plane instead.
+func connectionFromContext(vc map[string]string) lvol.Connection {
+	connection := lvol.Connection{
+		NQN:  vc["nqn"],
+		NSID: uint32(namespaceID(vc)),
+		UUID: deviceLvolID(vc),
+	}
+
+	var endpoints []csiEndpoint
+	if raw := vc["connections"]; raw != "" {
+		if err := json.Unmarshal([]byte(raw), &endpoints); err != nil {
+			// A context whose endpoints cannot be read still identifies the
+			// namespace, and that is all a release needs: the device is found by
+			// its identity and detached, never by an address.
+			endpoints = nil
+		}
+	}
+
+	transport := strings.ToLower(vc["targetType"])
+	for _, endpoint := range endpoints {
+		connection.Endpoints = append(connection.Endpoints, lvol.Endpoint{
+			Transport:         transport,
+			Address:           endpoint.IP,
+			Port:              endpoint.Port,
+			NrIOQueues:        intFromContext(vc["nrIoQueues"]),
+			ReconnectDelaySec: intFromContext(vc["reconnectDelay"]),
+			CtrlLossTMOSec:    ptr.To(initiator.DefaultCtrlLossTmo),
+			HostIface:         vc["hostIface"],
+		})
+	}
+	return connection
+}
+
+// deviceLvolID is the identity the volume's namespace carries on this host,
+// which after a failover is the clone's rather than the volume's. It is what a
+// device lookup falls back to when the subsystem coordinates no longer find it.
+func deviceLvolID(vc map[string]string) string {
+	if target := strings.TrimSpace(vc["targetLvolID"]); target != "" {
+		return target
+	}
+	return strings.TrimSpace(vc["uuid"])
+}
+
+// namespaceID is the namespace the volume occupies within its subsystem. Zero
+// means the context names none, which the fabric layer reads as the
+// subsystem's only namespace.
+//
+// It answers in the type a namespace id is rather than in a machine-width int
+// that a caller would have to convert back. An NSID is 32 bits wide by the NVMe
+// specification, and on a 32-bit host the round trip through int turns the top
+// half of that range negative, which would point a repair at a namespace the
+// volume does not own.
+func namespaceID(vc map[string]string) nvme.NamespaceID {
+	nsID, err := strconv.ParseUint(strings.TrimSpace(vc["nsId"]), 10, 32)
+	if err != nil {
+		return 0
+	}
+	return nvme.NamespaceID(nsID)
+}
+
+// intFromContext reads a tunable the context carries as text, answering zero
+// for one it does not carry, which is what leaves the kernel at its default.
+func intFromContext(value string) int {
+	parsed, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil {
+		return 0
+	}
+	return parsed
+}
+
+// clusterIDFor is the cluster the volume's control plane calls go to: the one
+// the context names when a failover redirected the volume to another, and
+// otherwise the one encoded in the subsystem NQN.
+func clusterIDFor(vc map[string]string, handle *lvol.Handle) string {
+	if clusterID := strings.TrimSpace(vc[csicommon.ParamClusterID]); clusterID != "" {
+		return clusterID
+	}
+	if subsystem, ok := nqn.Parse(vc["nqn"]); ok && subsystem.ClusterID != "" {
+		return subsystem.ClusterID
+	}
+	if handle != nil {
+		return handle.ClusterID
+	}
+	return ""
+}
+
+// poolIDFor is the pool the volume's control plane calls go to, which a
+// redirected volume carries on its context and every other one takes from its
+// handle.
+func poolIDFor(vc map[string]string, handle *lvol.Handle) string {
+	if poolID := strings.TrimSpace(vc["poolID"]); poolID != "" {
+		return poolID
+	}
+	if handle != nil {
+		return handle.PoolRef
+	}
+	return ""
+}
+
+// recordedShapes is every layer list this build stages, against the shape it is.
+// A teardown matches a record against it rather than against a condition per
+// shape, so that adding a row to the catalog is one entry here and nothing else.
+var recordedShapes = []struct {
+	layers []string
+	shape  stackShape
+}{
+	{[]string{layerFabric}, shapeRawBlock},
+	{[]string{layerFabric, layerFilesystem}, shapePlain},
+	{[]string{layerFabric, layerDMLinear}, shapeIndirectRawBlock},
+	{[]string{layerFabric, layerDMLinear, layerFilesystem}, shapeIndirectPlain},
+	{
+		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
+		shapeLVMRawBlock,
+	},
+	{
+		[]string{layerFabric, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
+		shapeLVM,
+	},
+	{
+		[]string{layerFabric, layerDMLinear, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
+		shapeIndirectLVMRawBlock,
+	},
+	{
+		[]string{
+			layerFabric, layerDMLinear, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume,
+			layerFilesystem,
+		},
+		shapeIndirectLVM,
+	},
+	{
+		[]string{layerMembers, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume},
+		shapeStripedRawBlock,
+	},
+	{
+		[]string{layerMembers, layerLVMPhysicalVolume, layerLVMVolumeGroup, layerLVMLogicalVolume, layerFilesystem},
+		shapeStriped,
+	},
+}
+
+// knownLayers are the layer names the shapes above are made of, which is what
+// separates a record this build cannot release from one naming a layer it has
+// never heard of.
+var knownLayers = map[string]bool{
+	layerFabric:            true,
+	layerFilesystem:        true,
+	layerLVMPhysicalVolume: true,
+	layerLVMVolumeGroup:    true,
+	layerLVMLogicalVolume:  true,
+	layerDMLinear:          true,
+	layerMembers:           true,
+}
+
+// shapeFromRecord is the plan shape a recorded layer list describes.
+//
+// A teardown is driven by what was built rather than by what a class says now,
+// because a class can be edited or deleted after a volume is provisioned. A
+// layer name this build does not know stops the teardown and says which one it
+// was, rather than silently skipping an object nobody will release.
+func shapeFromRecord(recorded []string) (stackShape, error) {
+	for _, candidate := range recordedShapes {
+		if slices.Equal(recorded, candidate.layers) {
+			return candidate.shape, nil
+		}
+	}
+	for _, layer := range recorded {
+		if !knownLayers[layer] {
+			return shapePlain, fmt.Errorf(
+				"the stack record names the layer %q, which this build does not know how to release; "+
+					"releasing the rest would leave that layer's object behind with nothing to remove it",
+				layer)
+		}
+	}
+	return shapePlain, fmt.Errorf(
+		"the stack record names the layers %v, which is not a shape this build stages",
+		recorded)
+}

@@ -1,0 +1,159 @@
+# Spell-check terms for operator/docs/designs/crd-redesign and its test plans.
+#
+# Produced by running cspell with the repository's .cspell.json over the ten design
+# documents, their assets, and the nine test plans. Every entry below is a word that
+# run reported and the dictionary does not carry.
+#
+# This file is deliberately untracked and is a staging list, not a dictionary the
+# build reads. Nothing consumes it yet: MegaLinter reads .cspell.json's `words`, so
+# the groups below are the candidates for that list once each has been decided.
+#
+# Four groups, and only the last one is a judgment call.
+#
+#   kinds    Kind names, short names, and generated file names. Add as they are.
+#   code     Go, kubebuilder, and package identifiers appearing in prose. Add as they are.
+#   product  Product, protocol, and platform names not this repository's to spell.
+#            Add as they are, and check the casing variants are the ones actually used.
+#   prose    Words the design prose coins. Each is either added here or the prose is
+#            reworded; that decision has not been taken.
+
+# --- kinds (35) -----------------------------------------------
+autoplacement
+backupops
+backuppolicy
+backuprestore
+clusterdeploymentconfig
+controlplane
+controlplaneops
+cpops
+nodeset
+operatorops
+persistentvolume
+persistentvolumeclaims
+persistentvolumeops
+persistentvolumes
+pvops
+rollingrestart
+sbops
+sdops
+simplyblockdriver
+Snode
+snode
+spops
+storagebackup
+storagebackupops
+storagebackuppolicy
+storagebackups
+storageclass
+storageclasses
+storagecluster
+storageclusters
+storagedevice
+storagedeviceops
+storagepool
+storagepoolops
+storagepools
+
+# --- code (26) ------------------------------------------------
+corev
+cpinformer
+customresources
+envtest
+foundationdb
+kubebuilder
+livenessprobe
+metav
+metricsapi
+mongodbcommunity
+omitempty
+pernodeconfig
+printcolumn
+resizer
+sbcli
+SBTLS
+simplybk
+statemachine
+subresource
+subtest
+#   the two below are British spellings, and they are shipped Go test function
+#   names the test plans quote verbatim, not prose this corpus can reword.
+#   operator/internal/controller: TestSanitiseDNSLabel_*, *_NodeRollingRestart_Initialises
+Initialises
+Sanitise
+WEBAPI
+webapi
+webapimock
+webappapi
+
+# --- product (42) ---------------------------------------------
+AXYZ
+dhchap
+DHCHAP
+elon
+finalizers
+HCLS
+hostnames
+hostpath
+hugepages
+Ifname
+kubelet
+Kubelet
+lvol
+Lvol
+Lvols
+mbps
+Mbytes
+mbytes
+mgmt
+Mgmt
+MZQL
+NDCS
+ndcs
+npcs
+NPCS
+nvme
+NVME
+Nvme
+nvmeof
+Nvmf
+nvmf
+schedulable
+smartctl
+spdk
+Spdk
+SPDK
+subsys
+SUBSYS
+tolerations
+Tolerations
+VCPU
+vcpu
+
+# --- prose (26) -----------------------------------------------
+alertable
+antipattern
+catchable
+cutover
+deadlineless
+graphable
+metacharacter
+parameterizes
+provisionable
+Recasing
+regroupings
+Repointing
+sourceable
+streamability
+streamable
+unaddressable
+unasserted
+unbuilt
+undrainable
+unexempted
+unpartitioned
+Unprovisioned
+unreworked
+upserted
+upserts
+waivable
+

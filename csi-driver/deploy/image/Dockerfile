@@ -23,7 +23,58 @@ COPY csi-driver/cmd/ cmd/
 COPY csi-driver/internal/ internal/
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
 
-FROM simplyblock/spdkcsi:base_image
+FROM registry.access.redhat.com/ubi10/ubi:10.2
+LABEL name="simplyblock"
+LABEL vendor="Simplyblock"
+LABEL version="1.0.0"
+LABEL release="1"
+LABEL summary="Simplyblock csi driver component"
+LABEL description="Simplyblock csi driver container"
+LABEL maintainer="developers@simplyblock.io"
+COPY LICENSE /licenses/LICENSE
+
+ARG TARGETPLATFORM
+RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
+        echo "ARM64 version"; \
+        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/aarch64/getPackage/oraclelinux-release-el10-1.0-17.el10.aarch64.rpm ; \
+    else \
+        echo "AMD64 version"; \
+        dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
+    fi
+
+RUN dnf update -y  --nogpgcheck
+
+# lvm2 is what the node plugin's LVM layers shell out to: pvcreate, vgcreate,
+# lvcreate and the rest run in this container rather than through nsenter, so a
+# missing package is a volume that cannot be staged. It also brings
+# device-mapper, and with it the dmsetup that clears the nodes a volume leaves
+# behind when its backing device is gone.
+#
+# nfs-utils is the same arrangement for a pNFS client: mount.nfs mounts an
+# export from this container. The host needs no NFS service of its own: the
+# metadata server runs in a guest, and a SCSI layout's device is resolved by
+# the kernel, without blkmapd.
+RUN dnf install -y nvme-cli nfs-utils iscsi-initiator-utils e2fsprogs xfsprogs lvm2 util-linux kmod wget sudo rpm --nogpgcheck && \
+    dnf clean all
+
+# vdo provides vdoformat, which lvcreate --type vdo invokes internally to
+# format a new VDO pool (client-side compression/deduplication, issue #277).
+# No aarch64 build exists in this repository's package set, so the feature is
+# x86_64-only until that packaging gap closes; the arm64 leg of the multi-arch
+# build stays green without it.
+RUN if [ "$TARGETPLATFORM" != "linux/arm64" ]; then dnf install -y vdo --nogpgcheck && dnf clean all; fi
+
+# Trimmed to reduce the CVE surface picked up by the security scan. Guarded with
+# rpm -q so the build does not depend on whether the base still ships them, while a
+# package that IS present and fails to uninstall still fails the build.
+RUN set -eu; \
+    for p in python3-urllib3 python3-requests python3-idna vim-minimal; do \
+        if rpm -q "$p" >/dev/null 2>&1; then dnf remove -y --nogpgcheck "$p"; fi; \
+    done; \
+    dnf clean all
+
+RUN useradd -ms /bin/bash simplyblock
+RUN echo "simplyblock  ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
 
 USER root
 WORKDIR /app

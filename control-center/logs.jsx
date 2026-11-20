@@ -1,239 +1,387 @@
 // ---------------------------------------------------------------------------
-// LOGS — one consolidated log per cluster, from four sources
+// LOG EXPLORER
 //
-//   storage plane   the SPDK pods (spdk, spdk-proxy) and the node API pods of
-//                   the cluster's nodes, through the pod-log subresource
-//   control plane   the control plane's pods in the cluster's namespace
-//   event log       the control plane's own cluster event log (v2)
-//   kubernetes      Events about the cluster's objects, pods, and workers
+// The shipped logs of every pod fluent-bit collects (the hub's control plane
+// and, where the sites ship to the hub, the sites' simplyblock namespaces):
+// Graylog's search API behind the console's proxy (/graylog/api/, GET only,
+// credentials injected server-side, responses scrubbed by redact.js).
 //
-// Lines are merged by time with the level parsed from each line, filtered by
-// source, pod, container, level, text or regex, and time window, and rendered
-// in a windowed list. A deep link from an alert or an operation carries the
-// window and the object it is about. Follow mode re-reads each stream since
-// the newest line it has seen.
+// Oldest line first. A query is a keyword filter (simple mode: words AND-ed,
+// "quoted phrases", -word or NOT word; or raw Graylog/Lucene syntax), a time
+// range (relative preset or absolute from/to) and source filters (site,
+// namespace, pod, container, level). The whole query lives in the URL
+// (#logs?...), so a link reproduces it.
+//
+// Without Graylog the view falls back to the live tail of a pod straight from
+// the Kubernetes API; without either it says why logs are not available.
 // ---------------------------------------------------------------------------
-// an ISO timestamp as the log panels print it
-const fmtTs = s => String(s || "").replace("T", " ").replace(/(\.\d+)?Z$/, "");
-const LOG_SOURCES = {splane: "storage plane", cp: "control plane", eventlog: "event log", k8s: "kubernetes"};
-const LOG_RANGES = [["15m", 900], ["1h", 3600], ["6h", 21600], ["24h", 86400]];
-const LOG_TAILS = [200, 500, 2000, 10000];
-const LOG_CAP = 20000;
-const CONTAINER_ORDER = ["spdk-container", "spdk-proxy-container", "s-node-api-container"];
-const LEVEL_NORM = {DEBUG: "debug", INFO: "info", NOTICE: "info", WARN: "warn", WARNING: "warn", ERROR: "error", CRITICAL: "error", FATAL: "error"};
-const normLevel = l => LEVEL_NORM[String(l || "").toUpperCase()] || (l ? String(l).toLowerCase() : null);
+const LGC = window.SB_CONFIG;
+const graylogOn = () => !!LGC.mock || (!!LGC.graylogBase && !!(LGC.upstreams && LGC.upstreams.graylog));
+const graylogOffReason = () => LGC.graylogOff || "no log store (Graylog) is configured for this console";
 
-// Kubernetes Events for the cluster's objects, pods, and workers
-async function clusterEvents(ctx, cluster, pods, nodes) {
-  const ns = cluster.ns;
-  const names = new Set([cluster.name].concat(nodes.map(n => n.name), nodes.map(n => n.hostname), pods.map(p => p.name)));
-  const workers = new Set(nodes.map(n => n.worker).filter(Boolean));
-  const [nsEvents, nodeEvents] = await Promise.all([
-    k8s.list("Event", {ctx, namespace: ns}).catch(() => []),
-    k8s.list("Event", {ctx, namespace: "default", fieldSelector: "involvedObject.kind=Node"}).catch(() => [])
-  ]);
-  const mine = e => { const o = e.involvedObject || {}; return names.has(o.name) || (o.kind === "Node" && workers.has(o.name)) || (o.kind === "StorageDevice" || o.kind === "StoragePool" || /Ops$/.test(o.kind || "")) && (e.metadata || {}).namespace === ns; };
-  return nsEvents.concat(nodeEvents).filter(mine).map(e => {
-    const t = e.lastTimestamp || e.eventTime || (e.metadata || {}).creationTimestamp;
-    const o = e.involvedObject || {};
-    return {id: "ev:" + (e.metadata || {}).uid, tsMs: Date.parse(t) || 0, ts: t, src: "k8s", pod: null, container: null, node: o.kind === "Node" ? o.name : null, snode: null,
-      level: e.type === "Warning" ? "warn" : "info", msg: `${e.reason || ""} ${o.kind}/${o.name}${e.count > 1 ? ` (×${e.count})` : ""}: ${e.message || ""}`,
-      raw: JSON.stringify(e), event: e.reason, objectRef: {kind: o.kind, name: o.name, namespace: o.namespace}};
-  });
-}
+const LOG_PAGE = 200;
+// OpenSearch serves offset + limit up to its max_result_window (10,000 by
+// default); a page beyond it is refused, so the explorer asks for a narrower
+// range instead.
+const LOG_WINDOW_MAX = 10000;
+const LOG_FIELDS = ["timestamp", "source", "message", "kubernetes_namespace_name", "kubernetes_pod_name",
+  "kubernetes_container_name", "kubernetes_host"];
+const LOG_RANGES = [["15m", 900, "15 min"], ["1h", 3600, "1 hour"], ["6h", 21600, "6 hours"], ["24h", 86400, "24 hours"], ["7d", 604800, "7 days"]];
+const rangeSecs = k => (LOG_RANGES.find(r => r[0] === k) || LOG_RANGES[1])[1];
+const LEVEL_TERMS = {ERROR: ["ERROR", "FATAL", "CRITICAL"], WARN: ["WARN", "WARNING"], INFO: ["INFO"], DEBUG: ["DEBUG"]};
 
-// the merged read for one cluster and one filter; `cursor` holds the newest
-// time per stream so a follow re-reads only what is new
-async function readLogs(cluster, nodes, pods, filter, cursor) {
-  const ctx = cluster.ctx;
-  const srcs = filter.src && filter.src.length ? filter.src : Object.keys(LOG_SOURCES);
-  const wantPod = p => !filter.pod || !filter.pod.length || filter.pod.includes(p.name);
-  const wantGroup = p => (p.group === "spdk" || p.group === "node-api") ? srcs.includes("splane") : srcs.includes("cp");
-  const wantNode = p => !filter.snode || p.nodeId === filter.snode;
-  const chosen = pods.filter(p => wantGroup(p) && wantPod(p) && wantNode(p));
-  const since = filter.from ? null : (filter.since || 3600);
-  const tail = filter.tail || 2000;
-  const jobs = [];
-  chosen.forEach(p => (p.containers || []).filter(c => !filter.container || !filter.container.length || filter.container.includes(c)).forEach(c => {
-    const key = `${p.name}/${c}`;
-    const opts = Object.assign({container: c, tailLines: tail, timestamps: true},
-      cursor && cursor[key] ? {sinceTime: new Date(cursor[key] + 1).toISOString()} : filter.from ? {sinceTime: new Date(filter.from).toISOString()} : since ? {sinceSeconds: since} : {});
-    jobs.push(sources.podLog(ctx, p.namespace, p.name, opts)
-      .then(text => parsePodLog(text, {pod: p.name, container: c, node: p.worker || null, snode: p.nodeId || null, src: (p.group === "spdk" || p.group === "node-api") ? "splane" : "cp"}))
-      .then(lines => lines.map(l => Object.assign(l, {id: `${key}|${l.tsMs}|${hashKey(l.msg)}`, level: normLevel(l.level)})))
-      .catch(e => [{id: `${key}|err`, tsMs: Date.now(), ts: new Date().toISOString(), src: "cp", pod: p.name, container: c, level: "error", msg: `cannot read ${key}: ${e.message}`, raw: "", unreadable: true}]));
-  }));
-  if (srcs.includes("eventlog") && hasControlPlane(ctx) && isUuid(cluster.id)) {
-    jobs.push(cp.logs(ctx, cluster.id, Math.min(tail, 2000)).then(rs => rs.map(r => ({
-      id: "el:" + r.id, tsMs: r.tsMs || 0, ts: r.ts, src: "eventlog", pod: null, container: null, node: null, snode: r.nodeId || null,
-      level: normLevel(r.level), msg: `${r.event} ${r.message}`, raw: JSON.stringify(r.raw), event: r.event, objectRef: r.nodeId ? {kind: "node", uuid: r.nodeId} : null
-    }))).catch(() => []));
+// ---- query building --------------------------------------------------------
+// Lucene's reserved characters in a bare word; a quoted phrase only needs its
+// quotes and backslashes escaped.
+const luceneWord = w => w.replace(/([+\-&|!(){}[\]^"~*?:\\/])/g, "\\$1");
+const lucenePhrase = p => '"' + p.replace(/(["\\])/g, "\\$1") + '"';
+// simple mode: words AND-ed, "quoted phrases", -word / NOT word excluded
+function simpleQuery(text) {
+  const out = [];
+  const re = /(?:(-|NOT\s+))?(?:"([^"]*)"|(\S+))/g;
+  let m;
+  while ((m = re.exec(String(text || "")))) {
+    const neg = !!m[1];
+    if (m[3] !== undefined && /^(AND|OR|NOT)$/.test(m[3])) continue;
+    const term = m[2] !== undefined ? (m[2].trim() ? lucenePhrase(m[2]) : "") : luceneWord(m[3]);
+    if (!term) continue;
+    out.push(neg ? `NOT ${term}` : term);
   }
-  if (srcs.includes("k8s")) jobs.push(clusterEvents(ctx, cluster, pods, nodes).catch(() => []));
-  const lines = (await Promise.all(jobs)).flat();
-  return lines;
+  return out.join(" AND ");
+}
+const fieldIs = (f, v) => `${f}:${lucenePhrase(v)}`;
+const anyOf = (f, vs) => vs.length === 1 ? fieldIs(f, vs[0]) : `${f}:(${vs.map(lucenePhrase).join(" OR ")})`;
+// The effective Graylog query of a filter state, and its parts for display.
+function buildLogQuery(f, siteNodes) {
+  const parts = [];
+  const kw = f.adv ? String(f.q || "").trim() : simpleQuery(f.q);
+  if (kw) parts.push(f.adv ? `(${kw})` : kw);
+  if (f.ns) parts.push(fieldIs("kubernetes_namespace_name", f.ns));
+  if (f.pod) parts.push(fieldIs("kubernetes_pod_name", f.pod));
+  if (f.container) parts.push(fieldIs("kubernetes_container_name", f.container));
+  if (f.source) parts.push(fieldIs("source", f.source));
+  else if (f.site) {
+    const ns = (siteNodes || {})[f.site] || [];
+    // a site whose nodes are not known yet matches nothing rather than everything
+    parts.push(ns.length ? anyOf("source", ns) : fieldIs("source", `__no_known_node_of_${f.site}`));
+  }
+  if (f.level) parts.push(`message:(${(LEVEL_TERMS[f.level] || [f.level]).join(" OR ")})`);
+  return parts.length ? parts.join(" AND ") : "*";
 }
 
-function applyFilter(lines, filter) {
-  const q = (filter.q || "").trim();
-  let re = null;
-  if (q && filter.regex) { try { re = new RegExp(q, "i"); } catch (e) { re = null; } }
-  const ql = q.toLowerCase();
-  const from = filter.from || (filter.since ? Date.now() - filter.since * 1000 : 0), to = filter.to || Infinity;
-  return lines.filter(l => (!filter.level || !filter.level.length || filter.level.includes(l.level || "none"))
-    && (l.src === "eventlog" || l.src === "k8s" || !l.tsMs || (l.tsMs >= from && l.tsMs <= to))
-    && (!(l.src === "eventlog" || l.src === "k8s") || !l.tsMs || !filter.from || (l.tsMs >= from && l.tsMs <= to))
-    && (!filter.snode || l.snode === filter.snode || l.src === "eventlog" && l.snode === filter.snode || (!l.snode && l.src === "k8s"))
-    && (!q || (re ? re.test(l.msg) : l.msg.toLowerCase().includes(ql))));
+// The time window a filter state means right now: relative presets end now.
+function logWindow(f, now) {
+  const t = now || Date.now();
+  if (f.from || f.to) {
+    const from = f.from ? Date.parse(f.from) : t - rangeSecs("1h") * 1000;
+    const to = f.to ? Date.parse(f.to) : t;
+    return {from: new Date(Math.min(from, to)), to: new Date(Math.max(from, to)), live: !f.to};
+  }
+  return {from: new Date(t - rangeSecs(f.range) * 1000), to: new Date(t), live: true};
 }
 
-function useLogMerge(cluster, nodes, pods, filter, follow) {
-  const [state, setState] = React.useState({lines: [], loading: true, error: null, errors: [], at: null});
-  const cursor = React.useRef({});
-  const all = React.useRef(new Map());
-  const key = JSON.stringify([cluster && cluster.id, (pods || []).map(p => p.name), filter.src, filter.pod, filter.container, filter.snode, filter.since, filter.from, filter.to, filter.tail]);
-  React.useEffect(() => { cursor.current = {}; all.current = new Map(); setState(s => Object.assign({}, s, {lines: [], loading: true})); }, [key]);
-  const load = React.useCallback(async quiet => {
-    if (!cluster || !pods) return;
-    if (!quiet) setState(s => Object.assign({}, s, {loading: true}));
-    try {
-      const fresh = await readLogs(cluster, nodes || [], pods, filter, quiet ? cursor.current : null);
-      fresh.forEach(l => { all.current.set(l.id, l); if (l.pod && l.tsMs) { const k = `${l.pod}/${l.container}`; cursor.current[k] = Math.max(cursor.current[k] || 0, l.tsMs); } });
-      let lines = Array.from(all.current.values()).sort((a, b) => (a.tsMs || 0) - (b.tsMs || 0) || (a.src < b.src ? -1 : 1));
-      let capped = false;
-      if (lines.length > LOG_CAP) { lines = lines.slice(lines.length - LOG_CAP); capped = true; all.current = new Map(lines.map(l => [l.id, l])); }
-      setState({lines, loading: false, error: null, errors: lines.filter(l => l.unreadable), at: Date.now(), capped});
-    } catch (e) { setState(s => Object.assign({}, s, {loading: false, error: e})); }
-  }, [key]);
-  React.useEffect(() => { load(false); }, [key]);
-  React.useEffect(() => {
-    if (!follow) return;
-    const t = setInterval(() => load(true), 3000);
-    return () => clearInterval(t);
-  }, [key, follow, load]);
-  return Object.assign({}, state, {reload: () => load(false)});
+// ---- permalink -------------------------------------------------------------
+const LOG_KEYS = ["q", "adv", "range", "from", "to", "site", "ns", "pod", "container", "source", "level", "follow"];
+const DEFAULT_LOG_FILTER = {q: "", adv: false, range: "1h", from: "", to: "", site: "", ns: "", pod: "", container: "", source: "", level: "", follow: false};
+function filterFromHash(hash) {
+  const h = String(hash || "");
+  const i = h.indexOf("?");
+  if (!/^#logs\b/.test(h)) return null;
+  const p = new URLSearchParams(i >= 0 ? h.slice(i + 1) : "");
+  const f = Object.assign({}, DEFAULT_LOG_FILTER);
+  LOG_KEYS.forEach(k => { if (p.has(k)) f[k] = p.get(k); });
+  f.adv = f.adv === true || f.adv === "1";
+  f.follow = f.follow === true || f.follow === "1";
+  if (!LOG_RANGES.some(r => r[0] === f.range)) f.range = "1h";
+  return f;
+}
+function hashOfFilter(f) {
+  const p = new URLSearchParams();
+  LOG_KEYS.forEach(k => {
+    const v = f[k];
+    if (v === true) p.set(k, "1");
+    else if (v && v !== DEFAULT_LOG_FILTER[k]) p.set(k, v);
+  });
+  const s = p.toString();
+  return "#logs" + (s ? "?" + s : "");
+}
+// A link to #logs opens the explorer: the shell restores its location from
+// localStorage, so point it at the logs layer before the shell mounts.
+if (filterFromHash(window.location.hash)) {
+  try { localStorage.setItem(LGC.mode === "dr" ? "sb.drpath" : "sb.path", JSON.stringify([{t: "logs"}])); } catch (e) {}
 }
 
-const LEVEL_COLOR = {error: "var(--bad)", warn: "var(--warn)", info: "var(--dim)", debug: "var(--dim2)"};
-const SRC_CLASS = {splane: "splane", cp: "cp", eventlog: "eventlog", k8s: "k8s"};
-function LogRow({l, open, onToggle, q, nav, cluster}) {
-  const hl = (text) => {
-    if (!q) return text;
-    const i = text.toLowerCase().indexOf(q.toLowerCase());
-    if (i < 0) return text;
-    return <>{text.slice(0, i)}<mark className="lhl">{text.slice(i, i + q.length)}</mark>{text.slice(i + q.length)}</>;
-  };
-  const who = l.pod ? `${l.pod}` : l.src === "eventlog" ? (l.snode ? (REG[l.snode] || {}).hostname || shortId(l.snode) : "cluster") : l.node || (l.objectRef ? `${l.objectRef.kind}/${l.objectRef.name}` : "");
+// ---- transport -------------------------------------------------------------
+const glMsg = m => {
+  const x = m.message || m;
+  const msg = String(x.message || x.full_message || "");
+  return {id: x._id || `${x.timestamp}|${x.source}|${msg.slice(0, 40)}`, ts: x.timestamp || "", source: x.source || x.kubernetes_host || "",
+    ns: x.kubernetes_namespace_name || "", pod: x.kubernetes_pod_name || "", container: x.kubernetes_container_name || "",
+    level: levelOf(msg), msg};
+};
+async function glGet(path) {
+  if (!graylogOn()) throw notInDeployment("The log store (Graylog)", "is not part of this deployment: " + graylogOffReason(), path);
+  let res;
+  try { res = await fetch((LGC.graylogBase || "/graylog/api") + path, {headers: {Accept: "application/json"}}); }
+  catch (e) { throw new ApiError(0, "Cannot reach the log store (Graylog)", path, "Unreachable"); }
+  let body = null;
+  try { body = await res.json(); } catch (e) {}
+  const failed = body && body.kind === "Status" && body.status === "Failure";
+  if (!res.ok || failed) {
+    const msg = (body && (body.message || body.type)) || res.statusText || "Request failed";
+    const e = new ApiError((body && body.code) || res.status, msg, path, (body && body.reason) || null);
+    e.source = "log store (Graylog)";
+    throw e;
+  }
+  return body || {};
+}
+const logs = {
+  // GET /search/universal/absolute — oldest first, one page
+  search: async ({query, from, to, offset, limit}) => {
+    const p = new URLSearchParams({query: query || "*", from: from.toISOString(), to: to.toISOString(),
+      offset: String(offset || 0), limit: String(limit || LOG_PAGE), sort: "timestamp:asc", fields: LOG_FIELDS.join(","), decorate: "false"});
+    const r = await glGet("/search/universal/absolute?" + p.toString());
+    return {total: Number(r.total_results) || 0, lines: (r.messages || []).map(glMsg), builtQuery: r.built_query || null};
+  }
+};
+
+// Values to filter by: the hub's own pods and nodes, the sites' nodes from
+// their dr-agent inventory, and whatever the loaded lines carry.
+async function logSourcesKnown() {
+  const [pods, hubNodes, sites] = await Promise.all([
+    k8s.list("Pod").catch(() => []),
+    k8s.list("Node").catch(() => []),
+    (typeof hubSites === "function" ? hubSites() : Promise.resolve([])).catch(() => [])]);
+  const siteNodes = {hub: hubNodes.map(n => n.metadata.name)};
+  sites.forEach(s => { siteNodes[s.name] = (s.nodes || []).map(n => n.name); });
+  return {siteNodes, pods: pods.map(p => ({name: p.metadata.name, ns: p.metadata.namespace || NS(),
+    containers: ((p.spec || {}).containers || []).map(c => c.name)}))};
+}
+
+// ---- view ------------------------------------------------------------------
+const toLocalInput = d => { if (!d || isNaN(d)) return ""; const z = new Date(d.getTime() - d.getTimezoneOffset() * 60000); return z.toISOString().slice(0, 16); };
+const fromLocalInput = v => { if (!v) return ""; const d = new Date(v); return isNaN(d) ? "" : d.toISOString(); };
+const fmtLineTs = s => (s || "").replace("T", " ").replace(/Z$/, "");
+
+function LogsView({nav}) {
+  const [f, setF] = useState(() => filterFromHash(window.location.hash) || Object.assign({}, DEFAULT_LOG_FILTER));
+  const set = patch => setF(p => Object.assign({}, p, patch));
+  useEffect(() => {
+    const h = e => e.detail && setF(Object.assign({}, DEFAULT_LOG_FILTER, e.detail));
+    window.addEventListener("sb-logs-query", h);
+    return () => window.removeEventListener("sb-logs-query", h);
+  }, []);
+  // keep the URL in step: the address bar is the permalink of what is shown
+  useEffect(() => {
+    try { window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
+  }, [f]);
+  useEffect(() => () => {
+    try { if (/^#logs\b/.test(window.location.hash)) window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) {}
+  }, []);
+  const store = graylogOn();
   return (
-    <div className={"lgrow" + (open ? " open" : "")} style={{height: open ? "auto" : 22}} onClick={onToggle}>
-      <span className="lts mono">{l.ts ? fmtTs(l.ts) : "—"}</span>
-      <span className={"lsrc " + SRC_CLASS[l.src]}>{LOG_SOURCES[l.src]}</span>
-      <span className="lpod mono" title={who}>{who}</span>
-      <span className="lctr mono">{l.container || (l.event ? l.event : "")}</span>
-      <span className="llvl" style={{color: LEVEL_COLOR[l.level] || "var(--dim2)"}}>{l.level || ""}</span>
-      <span className="lmsgtxt">{hl(l.msg)}</span>
-      {open && <div className="lgx">
-        <pre className="code">{l.raw || l.msg}</pre>
-        <div className="labels">
-          {l.snode && nav && cluster && <button className="lab link" onClick={e => { e.stopPropagation(); nav.openNode(cluster.id, l.snode); }}><Icon n="node" s={10} />open node</button>}
-          {l.pod && <span className="lab"><i>pod</i>{l.pod}</span>}
-          {l.node && <span className="lab"><i>worker</i>{l.node}</span>}
-          <button className="lab link" onClick={e => { e.stopPropagation(); navigator.clipboard && navigator.clipboard.writeText(l.raw || l.msg); window.__toast("Line copied"); }}><Icon n="copy" s={10} />copy</button>
-        </div>
+    <div className="scroll">
+      <div className="sech"><h2>Logs</h2><span className="ln"></span>
+        <SourceTag what={store ? "log store (Graylog), shipped by fluent-bit" : "live tail from the Kubernetes API"} /></div>
+      {store ? <LogExplorer f={f} set={set} setF={setF} /> : <LiveTail f={f} set={set} />}
+    </div>
+  );
+}
+
+function LogExplorer({f, set, setF}) {
+  const [qDraft, setQDraft] = useState(f.q);
+  useEffect(() => setQDraft(f.q), [f.q]);
+  const {data: known} = useResource("logsrc", () => logSourcesKnown());
+  const siteNodes = (known || {}).siteNodes || {};
+  const query = buildLogQuery(f, siteNodes);
+  const [run, setRun] = useState(0);
+  const [st, setSt] = useState({loading: true, error: null, lines: [], total: 0, win: null, offset: 0, capped: false});
+  const listRef = useRef(null);
+  const atEnd = useRef(true);
+  const key = JSON.stringify([query, f.range, f.from, f.to, f.follow, run]);
+
+  // a new query: the first page, or with follow the newest page
+  useEffect(() => {
+    let dead = false;
+    const win = logWindow(f);
+    setSt(p => Object.assign({}, p, {loading: true, error: null}));
+    (async () => {
+      try {
+        let r = await logs.search({query, from: win.from, to: win.to, offset: 0, limit: LOG_PAGE});
+        let offset = 0;
+        if (f.follow && r.total > LOG_PAGE) {
+          offset = Math.max(0, Math.min(r.total, LOG_WINDOW_MAX) - LOG_PAGE);
+          r = Object.assign(await logs.search({query, from: win.from, to: win.to, offset, limit: LOG_PAGE}), {total: r.total});
+        }
+        if (!dead) setSt({loading: false, error: null, lines: r.lines, total: r.total, win, offset, capped: r.total > LOG_WINDOW_MAX});
+      } catch (e) { if (!dead) setSt({loading: false, error: e, lines: [], total: 0, win, offset: 0, capped: false}); }
+    })();
+    return () => { dead = true; };
+  }, [key]);
+
+  // follow: append what arrived since the last line, every few seconds
+  useEffect(() => {
+    if (!f.follow || !st.win || !st.win.live || st.error) return;
+    const i = setInterval(async () => {
+      const last = st.lines.length ? st.lines[st.lines.length - 1].ts : st.win.from.toISOString();
+      try {
+        const r = await logs.search({query, from: new Date(last), to: new Date(), offset: 0, limit: 500});
+        setSt(p => {
+          const seen = new Set(p.lines.map(l => l.id));
+          const add = r.lines.filter(l => !seen.has(l.id));
+          return add.length ? Object.assign({}, p, {lines: p.lines.concat(add), total: p.total + add.length}) : p;
+        });
+      } catch (e) {}
+    }, 5000);
+    return () => clearInterval(i);
+  }, [f.follow, st.win, st.error, st.lines.length && st.lines[st.lines.length - 1].id, query]);
+
+  useEffect(() => {
+    const el = listRef.current;
+    if (el && f.follow && atEnd.current) el.scrollTop = el.scrollHeight;
+  }, [st.lines.length, f.follow]);
+
+  const loaded = st.offset + st.lines.length;
+  const more = !f.follow && loaded < Math.min(st.total, LOG_WINDOW_MAX);
+  const loadMore = async () => {
+    if (!more || st.loading) return;
+    setSt(p => Object.assign({}, p, {loading: true}));
+    try {
+      const r = await logs.search({query, from: st.win.from, to: st.win.to, offset: loaded, limit: LOG_PAGE});
+      setSt(p => Object.assign({}, p, {loading: false, lines: p.lines.concat(r.lines)}));
+    } catch (e) { setSt(p => Object.assign({}, p, {loading: false, error: e})); }
+  };
+  const onScroll = e => {
+    const el = e.target;
+    atEnd.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+    if (atEnd.current && more) loadMore();
+  };
+
+  // filter values: known sources plus what the loaded lines carry
+  const uniq = xs => [...new Set(xs.filter(Boolean))].sort();
+  const pods = (known || {}).pods || [];
+  const nsOpts = uniq(pods.map(p => p.ns).concat(st.lines.map(l => l.ns), [f.ns]));
+  const podOpts = uniq(pods.filter(p => !f.ns || p.ns === f.ns).map(p => p.name).concat(st.lines.filter(l => !f.ns || l.ns === f.ns).map(l => l.pod), [f.pod]));
+  const ctrOpts = uniq(pods.filter(p => !f.pod || p.name === f.pod).flatMap(p => p.containers).concat(st.lines.filter(l => !f.pod || l.pod === f.pod).map(l => l.container), [f.container]));
+  const siteOpts = uniq(Object.keys(siteNodes).concat([f.site]));
+  const srcOpts = uniq((f.site ? siteNodes[f.site] || [] : Object.values(siteNodes).flat()).concat(st.lines.map(l => l.source), [f.source]));
+
+  const text = () => st.lines.map(l => `${l.ts} ${l.source} ${l.ns}/${l.pod}/${l.container} ${l.level} ${l.msg}`).join("\n");
+  const download = () => {
+    try {
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(new Blob([text() + "\n"], {type: "text/plain"}));
+      a.download = `logs-${st.win ? st.win.from.toISOString() : "now"}.log`.replace(/:/g, "-");
+      document.body.appendChild(a); a.click(); a.remove();
+    } catch (e) {}
+  };
+  const win = st.win || logWindow(f);
+  const sel = (label, k, opts, all) => (
+    <select className={"sel lx-" + k} value={f[k] || ""} title={label} onChange={e => set({[k]: e.target.value, ...(k === "ns" ? {pod: "", container: ""} : k === "pod" ? {container: ""} : k === "site" ? {source: ""} : {})})}>
+      <option value="">{all}</option>{opts.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+  return (
+    <div className="card lx">
+      <div className="ptools" style={{flexWrap: "wrap", gap: 6}}>
+        <div className="search" style={{minWidth: 280, flex: 1}}><Icon n="search" s={13} c="var(--dim2)" />
+          <input className="lx-q" value={qDraft} placeholder={f.adv ? 'Graylog query, e.g. message:"lvol" AND NOT level:debug' : 'Keywords, "a phrase", -exclude'}
+            onChange={e => setQDraft(e.target.value)} onKeyDown={e => { if (e.key === "Enter") set({q: e.target.value}); }} onBlur={e => e.target.value !== f.q && set({q: e.target.value})} /></div>
+        <label className="chip lx-adv" title="Write the query in Graylog (Lucene) syntax instead"><input type="checkbox" checked={f.adv} onChange={e => set({adv: e.target.checked})} /> Query syntax</label>
+        {LOG_RANGES.map(([k, , l]) => <button key={k} className={"chip lx-range" + (!f.from && !f.to && f.range === k ? " on" : "")} title={`last ${l}`}
+          style={!f.from && !f.to && f.range === k ? {borderColor: "var(--info)", color: "var(--info)"} : null} onClick={() => set({range: k, from: "", to: ""})}>{k}</button>)}
+        <span style={{fontSize: 11, color: "var(--dim)"}}>from</span>
+        <input type="datetime-local" className="sel lx-from" value={toLocalInput(f.from ? new Date(f.from) : null)} onChange={e => set({from: fromLocalInput(e.target.value)})} />
+        <span style={{fontSize: 11, color: "var(--dim)"}}>to</span>
+        <input type="datetime-local" className="sel lx-to" value={toLocalInput(f.to ? new Date(f.to) : null)} onChange={e => set({to: fromLocalInput(e.target.value), follow: false})} title="empty: now" />
+      </div>
+      <div className="ptools" style={{flexWrap: "wrap", gap: 6, marginTop: 6}}>
+        {sel("Site or cluster", "site", siteOpts, "All sites")}
+        {sel("Node", "source", srcOpts, "All nodes")}
+        {sel("Namespace", "ns", nsOpts, "All namespaces")}
+        {sel("Pod", "pod", podOpts, "All pods")}
+        {sel("Container", "container", ctrOpts, "All containers")}
+        <select className="sel lx-level" value={f.level} onChange={e => set({level: e.target.value})}>
+          <option value="">All levels</option>{["ERROR", "WARN", "INFO", "DEBUG"].map(l => <option key={l} value={l}>{l}</option>)}
+        </select>
+        <label className="chip lx-follow" title="Append new lines as they arrive (relative ranges and open-ended absolute ranges)">
+          <input type="checkbox" checked={f.follow} disabled={!!f.to} onChange={e => set({follow: e.target.checked})} /> Follow</label>
+        <button className="chip lx-clear" onClick={() => setF(Object.assign({}, DEFAULT_LOG_FILTER))}>Clear</button>
+        <div className="spacer"></div>
+        <span className="count lx-count">{st.lines.length}{st.total > st.lines.length ? ` of ${st.total}` : ""}</span>
+        <CopyBtn get={() => window.location.href} label="Copy link" />
+        <CopyBtn get={text} label="Copy lines" />
+        <button className="chip lx-download" onClick={download}><Icon n="cloud" s={12} />Download</button>
+        <button className="chip" onClick={() => setRun(r => r + 1)}><Icon n="refresh" s={12} />Run</button>
+      </div>
+      <div className="lx-effective" style={{fontSize: 11, color: "var(--dim)", margin: "6px 0", overflowWrap: "anywhere"}}>
+        <span className="mono lx-query">{query}</span> · <span className="lx-window">{fmtLineTs(win.from.toISOString())} → {f.to ? fmtLineTs(win.to.toISOString()) : "now"}</span> · oldest first · Graylog
+      </div>
+      {st.capped && <div className="banner lx-capped"><Icon n="alert" s={14} /><span>{st.total} lines match. The log store serves the first {LOG_WINDOW_MAX.toLocaleString()} of a query: narrow the time range or the filter to see the rest.</span></div>}
+      {st.error ? <div className="bd"><ErrorState error={st.error} onRetry={() => setRun(r => r + 1)} /></div> :
+      <div className="logstream lx-lines" ref={listRef} onScroll={onScroll} style={{maxHeight: 560}}>
+        {st.loading && !st.lines.length ? <div className="lmsg">loading…</div>
+          : !st.lines.length ? <div className="lmsg lx-empty">No log lines match this query in this time range.</div>
+          : st.lines.map(l => (
+            <div className="lrow lx-row" key={l.id}>
+              <span className="lts">{fmtLineTs(l.ts)}</span>
+              <span className="lts" style={{minWidth: 0, color: "var(--dim2)"}} title={`${l.source} · ${l.ns}/${l.pod}/${l.container}`}>{l.pod || l.source}{l.container ? "/" + l.container : ""}</span>
+              <span className="llvl" style={{color: LEVEL_C[l.level] || "var(--dim)"}}>{l.level}</span>
+              <span className="lmsgtxt">{l.msg}</span>
+            </div>))}
+        {more && <div className="lmsg"><button className="chip lx-more" onClick={loadMore}>{st.loading ? "loading…" : `Load ${Math.min(LOG_PAGE, Math.min(st.total, LOG_WINDOW_MAX) - loaded)} more`}</button></div>}
+        {f.follow && <div className="lmsg lx-following"><span className="live"><i></i>following</span></div>}
       </div>}
     </div>
   );
 }
 
-function downloadText(name, text) {
-  const blob = new Blob([text], {type: "text/plain"});
-  const a = document.createElement("a");
-  a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
-  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
-}
-const fmtLine = l => `${l.ts || ""} ${l.src} ${l.pod || l.node || ""}${l.container ? "/" + l.container : ""} ${l.level || ""} ${l.msg}`;
-
-// LogsView: section-level (route logs under a cluster or a node) or embedded
-function LogsView({seg, nav, clusterSeg, nodeSeg, cluster: clusterProp, node: nodeProp, embedded}) {
-  const cid = clusterProp ? clusterProp.id : clusterSeg ? clusterSeg.id : null;
-  const nid = nodeProp ? nodeProp.id : nodeSeg ? nodeSeg.id : null;
-  const p = (seg && seg.p) || {};
-  const {data: cluster} = useResource("logc|" + cid, () => cid ? api.cluster(cid) : Promise.resolve(null));
-  const {data: nodes} = useResource("logn|" + cid, () => cid ? api.nodes(cid) : Promise.resolve([]), 30000);
-  // keyed on the cluster's arrival too, or the loader would run once with no cluster and never again
-  const {data: pods, error: podErr, reload: reloadPods} = useResource("logp|" + cid + "|" + (cluster ? cluster.id : "-"), () => cluster ? sources.clusterPods(cluster.ctx, cluster) : Promise.resolve(null), 30000);
-  const [filter, setFilter] = React.useState(() => Object.assign({src: [], pod: [], container: [], level: [], q: "", regex: false, since: 3600, tail: 2000, snode: nid || null}, p));
-  const [follow, setFollow] = React.useState(!p.from);
-  const [open, setOpen] = React.useState(null);
-  React.useEffect(() => { if (nid) setFilter(f => Object.assign({}, f, {snode: nid})); }, [nid]);
-  // without a chosen pod, the view reads the node you came from, else the first five pods
-  const podList = React.useMemo(() => {
-    const ps = pods || [];
-    if (filter.pod.length) return ps;
-    if (filter.snode) return ps.filter(x => x.nodeId === filter.snode || x.group === "control-plane" || x.group === "fdb").slice(0, 12);
-    return ps.slice(0, 5).concat(ps.filter(x => x.group === "fdb" || x.group === "control-plane").slice(0, 3));
-  }, [pods, filter.pod, filter.snode]);
-  const effective = React.useMemo(() => Object.assign({}, filter, {pod: filter.pod.length ? filter.pod : podList.map(x => x.name)}), [filter, podList]);
-  const m = useLogMerge(cluster, nodes, pods, effective, follow);
-  const lines = React.useMemo(() => applyFilter(m.lines, filter), [m.lines, filter.level, filter.q, filter.regex, filter.from, filter.to, filter.since, filter.snode]);
-  const counts = React.useMemo(() => { const c = {src: {}, level: {}}; m.lines.forEach(l => { c.src[l.src] = (c.src[l.src] || 0) + 1; c.level[l.level || "none"] = (c.level[l.level || "none"] || 0) + 1; }); return c; }, [m.lines]);
-  const toggle = (k, v) => setFilter(f => Object.assign({}, f, {[k]: f[k].includes(v) ? f[k].filter(x => x !== v) : f[k].concat([v])}));
-  const containers = Array.from(new Set((pods || []).flatMap(x => x.containers))).sort((a, b) => (CONTAINER_ORDER.indexOf(a) + 100) % 100 - (CONTAINER_ORDER.indexOf(b) + 100) % 100 || a.localeCompare(b));
-  const listRef = React.useRef(null);
-  React.useEffect(() => { const el = listRef.current; if (follow && el && !open) el.scrollTop = el.scrollHeight; }, [lines.length, follow]);
-  if (!cid) return <div className="scroll"><div className="empty"><Icon n="list" s={24} /><b>Pick a cluster</b><span>Logs are read per cluster.</span></div></div>;
-  const body = (
+// Without a log store: the live tail of one pod from the Kubernetes API, the
+// keyword and time filters applied to those lines.
+function LiveTail({f, set}) {
+  const {data: pods, error: pErr} = useResource("ltpods", () => k8s.list("Pod"));
+  const list = (pods || []).map(p => ({name: p.metadata.name, containers: ((p.spec || {}).containers || []).map(c => c.name)}));
+  const pod = f.pod && list.some(p => p.name === f.pod) ? f.pod : (list[0] || {}).name || "";
+  const cs = (list.find(p => p.name === pod) || {}).containers || [];
+  const container = cs.length > 1 ? (cs.includes(f.container) ? f.container : cs[0]) : "";
+  const [tail, setTail] = useState(POD_LOG_TAIL);
+  const {data, loading, error, reload} = useResource("lt|" + pod + "|" + container + "|" + tail, () => pod ? podLogs(pod, container, tail) : Promise.resolve([]), f.follow ? 4000 : 0);
+  const win = logWindow(f);
+  const words = [];
+  const re = /(?:(-|NOT\s+))?(?:"([^"]*)"|(\S+))/g; let m;
+  while ((m = re.exec(f.q || ""))) { const t = (m[2] !== undefined ? m[2] : m[3]).toLowerCase(); if (t && !/^(and|or|not)$/.test(t)) words.push({neg: !!m[1], t}); }
+  const inWin = l => { const t = Date.parse(l.ts); return isNaN(t) || (t >= win.from.getTime() && t <= win.to.getTime()); };
+  const lines = (data || []).filter(l => inWin(l) && (!f.level || l.level === f.level)
+    && words.every(w => l.msg.toLowerCase().includes(w.t) !== w.neg));
+  if (pErr) return <div className="card"><div className="bd"><ErrorState error={notInDeployment("Logs", `are not available in this deployment: ${graylogOffReason()}, and the console may not read pods here (${pErr.message})`)} /></div></div>;
+  return (
     <>
-      {podErr && <ErrorState error={podErr} onRetry={reloadPods} />}
-      {filter.from && <div className="banner" style={{color: "var(--accent)", background: "var(--accent-soft)", borderColor: "var(--accent-line)"}}><Icon n="clock" s={15} />
-        <span>Showing {fmtTs(new Date(filter.from).toISOString())} to {fmtTs(new Date(filter.to || Date.now()).toISOString())}{filter.snode && REG[filter.snode] ? ` around ${REG[filter.snode].hostname}` : ""}. </span>
-        <button className="chip" onClick={() => { setFilter(f => Object.assign({}, f, {from: null, to: null, since: 3600})); setFollow(true); }}>Clear window</button></div>}
-      {m.capped && <div className="banner"><Icon n="alert" s={15} /><span>More than {LOG_CAP} lines; the oldest were dropped. Narrow the window or the pods.</span></div>}
+      <div className="banner lx-livetail" style={{marginBottom: 10}}><Icon n="alert" s={14} /><span><b>Live tail, last {tail} lines.</b> No log store is configured ({graylogOffReason()}), so this reads the pod's log from the Kubernetes API: no history beyond those lines.</span></div>
       <div className="card">
-        <div className="ptools" style={{flexWrap: "wrap"}}>
-          <div className="chips">{Object.keys(LOG_SOURCES).map(s => <button key={s} className={"chip" + (filter.src.includes(s) ? " on" : "")} onClick={() => toggle("src", s)} title={s === "eventlog" && cluster && !hasControlPlane(cluster.ctx) ? "needs a reachable control plane" : ""}>{LOG_SOURCES[s]}<span className="n">{counts.src[s] || 0}</span></button>)}</div>
-          <select className="sel" multiple={false} value={filter.pod[0] || ""} onChange={e => setFilter(f => Object.assign({}, f, {pod: e.target.value ? [e.target.value] : []}))} style={{maxWidth: 260}} title="pod">
-            <option value="">{filter.snode && REG[filter.snode] ? `pods of ${REG[filter.snode].hostname}` : `first pods (${podList.length})`}</option>
-            {["spdk", "node-api", "control-plane", "fdb"].map(g => (pods || []).filter(x => x.group === g).length ? <optgroup key={g} label={g}>{(pods || []).filter(x => x.group === g).map(x => <option key={x.name} value={x.name}>{x.name}{x.worker ? ` · ${x.worker}` : ""}</option>)}</optgroup> : null)}
-          </select>
-          <select className="sel" value={filter.container[0] || ""} onChange={e => setFilter(f => Object.assign({}, f, {container: e.target.value ? [e.target.value] : []}))} title="container">
-            <option value="">all containers</option>{containers.map(c => <option key={c} value={c}>{c}</option>)}
-          </select>
-          {nodes && nodes.length > 0 && <select className="sel" value={filter.snode || ""} onChange={e => setFilter(f => Object.assign({}, f, {snode: e.target.value || null, pod: []}))} title="storage node">
-            <option value="">all nodes</option>{nodes.map(n => <option key={n.id} value={n.id}>{n.hostname}</option>)}
-          </select>}
-          <div className="chips">{["error", "warn", "info", "debug"].map(l => <button key={l} className={"chip" + (filter.level.includes(l) ? " on" : "")} onClick={() => toggle("level", l)}><Dot c={LEVEL_COLOR[l]} />{l}<span className="n">{counts.level[l] || 0}</span></button>)}</div>
-          <div className="search" style={{minWidth: 200}}><Icon n="search" s={13} c="var(--dim2)" />
-            <input value={filter.q} placeholder={filter.regex ? "regular expression…" : "filter lines…"} onChange={e => setFilter(f => Object.assign({}, f, {q: e.target.value}))} />
-            <button className={"chip" + (filter.regex ? " on" : "")} style={{padding: "0 5px"}} title="regular expression" onClick={() => setFilter(f => Object.assign({}, f, {regex: !f.regex}))}>.*</button></div>
-          <div className="seg">{LOG_RANGES.map(([l, s]) => <button key={l} className={!filter.from && filter.since === s ? "on" : ""} onClick={() => setFilter(f => Object.assign({}, f, {since: s, from: null, to: null}))}>{l}</button>)}</div>
-          <select className="sel" value={filter.tail} onChange={e => setFilter(f => Object.assign({}, f, {tail: Number(e.target.value)}))} title="lines per stream">{LOG_TAILS.map(t => <option key={t} value={t}>{t} lines</option>)}</select>
-          <div className="spacer"></div>
-          <span className="count">{lines.length}</span>
-          <button className={"chip" + (follow ? " on" : "")} onClick={() => setFollow(!follow)}><span className="live"><i></i>follow</span></button>
-          <button className="chip" onClick={m.reload} title="Re-read"><Icon n="refresh" s={12} /></button>
-          <CopyBtn get={() => lines.map(fmtLine).join("\n")} label="Copy" />
-          <button className="chip" onClick={() => downloadText(`${cluster ? cluster.name : "cluster"}-logs-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.txt`, lines.map(fmtLine).join("\n"))}><Icon n="cloud" s={11} />Download</button>
-        </div>
-        <div className="lglist" ref={listRef} style={{maxHeight: embedded ? 520 : "calc(100vh - 330px)"}}>
-          {m.loading && !lines.length ? <div className="lmsg">reading {podList.length} pod{podList.length === 1 ? "" : "s"}…</div>
-            : m.error ? <ErrorState error={m.error} onRetry={m.reload} />
-            : !lines.length ? <div className="lmsg">{m.lines.length ? "No line matches the filter." : pods && !pods.length ? "No pod of this cluster is running in its namespace." : "No lines in this window."}</div>
-            : lines.length > 400 && !open ? <VirtualList rows={lines} rowHeight={22} height={embedded ? 520 : Math.max(300, window.innerHeight - 340)} render={(l, i) => <LogRow key={l.id} l={l} q={filter.q} nav={nav} cluster={cluster} open={false} onToggle={() => setOpen(l.id)} />} />
-            : lines.map(l => <LogRow key={l.id} l={l} q={filter.regex ? "" : filter.q} nav={nav} cluster={cluster} open={open === l.id} onToggle={() => setOpen(open === l.id ? null : l.id)} />)}
-        </div>
-        {m.errors && m.errors.length > 0 && <p className="mdesc" style={{margin: "8px 12px"}}>{m.errors.length} stream{m.errors.length === 1 ? "" : "s"} could not be read; the error is shown as a line.</p>}
+        <LogStream lines={lines} loading={loading} error={error} onRetry={reload} height={560} empty={pod ? "No lines match the current filter." : "No pod to read."} tools={
+          <div className="ptools" style={{flexWrap: "wrap", gap: 6}}>
+            <select className="sel lt-pod" value={pod} onChange={e => set({pod: e.target.value, container: ""})}>{list.map(p => <option key={p.name} value={p.name}>{p.name}</option>)}</select>
+            {cs.length > 1 && <select className="sel lt-container" value={container} onChange={e => set({container: e.target.value})}>{cs.map(c => <option key={c} value={c}>{c}</option>)}</select>}
+            <select className="sel lt-tail" value={tail} onChange={e => setTail(Number(e.target.value))}>{[200, 500, 2000, 5000].map(n => <option key={n} value={n}>last {n} lines</option>)}</select>
+            <select className="sel" value={f.level} onChange={e => set({level: e.target.value})}>
+              <option value="">All levels</option>{["ERROR", "WARN", "INFO", "DEBUG"].map(l => <option key={l} value={l}>{l}</option>)}</select>
+            <div className="search" style={{minWidth: 220}}><Icon n="search" s={13} c="var(--dim2)" />
+              <input className="lt-q" value={f.q} placeholder='Keywords, "a phrase", -exclude' onChange={e => set({q: e.target.value})} /></div>
+            {LOG_RANGES.map(([k]) => <button key={k} className={"chip" + (!f.from && !f.to && f.range === k ? " on" : "")} onClick={() => set({range: k, from: "", to: ""})}>{k}</button>)}
+            <label className="chip"><input type="checkbox" checked={f.follow} onChange={e => set({follow: e.target.checked})} /> Follow</label>
+            <div className="spacer"></div>
+            <span className="count lt-count">{lines.length}</span>
+            <CopyBtn get={() => lines.map(l => `${l.ts} ${l.level} ${l.msg}`).join("\n")} />
+          </div>} />
       </div>
     </>
   );
-  if (embedded) return body;
-  return (
-    <div className="scroll">
-      <div className="dhead"><div style={{flex: 1, minWidth: 0}}><h1>Logs{cluster ? ` · ${cluster.name}` : ""}{filter.snode && REG[filter.snode] ? ` · ${REG[filter.snode].hostname}` : ""}</h1>
-        <div className="mdesc" style={{marginTop: 4}}>Storage plane and control plane pod logs, the control plane's event log, and Kubernetes events, merged by time.</div></div></div>
-      {body}
-    </div>
-  );
 }
 
-Object.assign(window, {LogsView, readLogs, applyFilter, useLogMerge, LOG_SOURCES, downloadText, clusterEvents});
+// A chip that opens the explorer on a query; entry points from the control
+// plane, nodes, clusters and DR runs.
+const LogsLink = ({params, label}) => window.__nav && window.__nav.logs
+  ? <button className="chip lx-link" onClick={() => window.__nav.logs(params)} title="Shipped logs: any time range, keyword search, oldest first"><Icon n="search" s={11} />{label || "Search logs"}</button>
+  : null;
+
+Object.assign(window, {LogsView, LogsLink, logs, graylogOn, buildLogQuery, simpleQuery, filterFromHash, hashOfFilter, logWindow, DEFAULT_LOG_FILTER});

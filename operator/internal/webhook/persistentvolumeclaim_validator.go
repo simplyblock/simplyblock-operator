@@ -15,7 +15,7 @@ import (
 
 	"github.com/simplyblock/atlas/kube"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -141,7 +141,7 @@ func (v *PersistentVolumeClaimValidator) nodeInCluster(ctx context.Context, clus
 // operator manages. Used when the PVC is not yet bound and the cluster cannot be
 // resolved from a PV.
 func (v *PersistentVolumeClaimValidator) nodeInAnyCluster(ctx context.Context, nodeUUID string) (bool, error) {
-	var clusters simplyblockv1alpha1.StorageClusterList
+	var clusters simplyblockv1alpha2.StorageClusterList
 	if err := v.Client.List(ctx, &clusters); err != nil {
 		return false, fmt.Errorf("list StorageClusters: %w", err)
 	}

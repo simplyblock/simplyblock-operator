@@ -1,0 +1,1 @@
+wrote discovered-discover-numa-03 in Draft: 1 workers with 3 nvme devices, in 1 group(s) across 1 node set(s); 1 refusal(s)

@@ -26,10 +26,6 @@ type ResourceDef struct {
 	GVR
 	Kind       string
 	Namespaced bool
-	// Internal marks a type the mock keeps for itself (control plane tasks,
-	// which the v2 API projects and watches); the Kubernetes API neither
-	// discovers nor serves it.
-	Internal bool
 }
 
 func (d ResourceDef) listKind() string { return d.Kind + "List" }
@@ -59,12 +55,6 @@ type Store struct {
 	rng      *rand.Rand
 	rngMu    sync.Mutex
 	now      func() time.Time
-
-	// The control plane event log, per cluster UUID, oldest first. It is the
-	// store's because it is world state: the generator seeds it, the simulator
-	// appends to it, and a reset swaps it together with the objects.
-	logMu sync.Mutex
-	cplog map[string][]LogRecord
 }
 
 func NewStore(seed uint64) *Store {
@@ -75,98 +65,7 @@ func NewStore(seed uint64) *Store {
 		watchers: map[GVR]map[*watcher]struct{}{},
 		rng:      rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)),
 		now:      time.Now,
-		cplog:    map[string][]LogRecord{},
 	}
-}
-
-// ---- control plane event log -------------------------------------------------
-
-// LogRecord is one entry of the control plane's cluster event log, in the
-// field names GET /api/v2/clusters/{id}/logs returns.
-type LogRecord struct {
-	Date      string `json:"Date"` // YYYY-MM-DD HH:MM:SS.mmm, UTC
-	NodeID    string `json:"NodeId"`
-	Event     string `json:"Event"` // STATUS_CHANGE, device_status, node_status, CAPACITY, JM_*
-	Level     string `json:"Level"` // Debug | Info | Warning | Error | Critical
-	Message   string `json:"Message"`
-	StorageID string `json:"Storage_ID"` // the device, node, or volume the record is about
-	VUID      string `json:"VUID"`
-	Status    string `json:"Status"` // the status the record announces, when it does
-}
-
-// logCap bounds the per-cluster ring; the real control plane keeps far more,
-// but a UI never pages past this.
-const logCap = 5000
-
-func logDate(t time.Time) string { return t.UTC().Format("2006-01-02 15:04:05.000") }
-
-// AppendLog adds a record to a cluster's event log.
-func (s *Store) AppendLog(clusterUUID string, r LogRecord) {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
-	recs := append(s.cplog[clusterUUID], r)
-	if len(recs) > logCap {
-		recs = recs[len(recs)-logCap:]
-	}
-	s.cplog[clusterUUID] = recs
-}
-
-// Logs returns a cluster's records newest first, at most limit (0 = all).
-func (s *Store) Logs(clusterUUID string, limit int) []LogRecord {
-	s.logMu.Lock()
-	defer s.logMu.Unlock()
-	recs := s.cplog[clusterUUID]
-	out := make([]LogRecord, 0, len(recs))
-	for i := len(recs) - 1; i >= 0; i-- {
-		if limit > 0 && len(out) == limit {
-			break
-		}
-		out = append(out, recs[i])
-	}
-	return out
-}
-
-// ---- control plane tasks -------------------------------------------------------
-//
-// Tasks are the control plane's own objects (no CRD carries them with their
-// master/sub structure), kept as an internal resource so the v2 API can list,
-// get, and watch them with the same machinery as everything else. The object
-// is {"metadata": {name: id, namespace: cluster uuid}, "task": TaskDTO}.
-
-func cpTaskDef() ResourceDef {
-	return ResourceDef{GVR: GVR{mockGroup, "v1", "controlplanetasks"}, Kind: "ControlPlaneTask", Namespaced: true, Internal: true}
-}
-
-// AddTask stores a TaskDTO-shaped map under its cluster and announces it.
-func (s *Store) AddTask(clusterUUID string, task map[string]any) map[string]any {
-	created, err := s.Create(cpTaskDef(), clusterUUID, map[string]any{
-		"metadata": map[string]any{"name": getStr(task, "id")},
-		"task":     task,
-	})
-	if err != nil {
-		return nil
-	}
-	return created["task"].(map[string]any)
-}
-
-// UpdateTask replaces a task's DTO.
-func (s *Store) UpdateTask(clusterUUID string, task map[string]any) {
-	s.Update(cpTaskDef(), clusterUUID, map[string]any{
-		"metadata": map[string]any{"name": getStr(task, "id")},
-		"task":     task,
-	})
-}
-
-// Tasks lists a cluster's TaskDTOs in id order.
-func (s *Store) Tasks(clusterUUID string) []map[string]any {
-	items, _ := s.List(cpTaskDef(), clusterUUID, "", "")
-	out := make([]map[string]any, 0, len(items))
-	for _, it := range items {
-		if t, ok := it["task"].(map[string]any); ok {
-			out = append(out, t)
-		}
-	}
-	return out
 }
 
 func (s *Store) Register(defs ...ResourceDef) {

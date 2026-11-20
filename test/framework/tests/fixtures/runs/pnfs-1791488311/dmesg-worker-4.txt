@@ -1,0 +1,25 @@
+2026-10-08T12:08:11,233790+00:00 sbtest-clock-probe wall=2026-10-08T12:10:52+00:00
+2026-10-08T13:40:47,050137+00:00 sbtest-clock-probe wall=2026-10-08T13:43:28
+2026-10-08T13:40:50,255176+00:00 sbtest-clock-probe wall=2026-10-08T13:43:31+00:00
+2026-10-08T14:16:38,417744+00:00 sbtest-clock-probe wall=2026-10-08T14:19:20+00:00
+2026-10-08T14:16:57,021002+00:00 sbtest-clock-probe wall=2026-10-08T14:19:38
+2026-10-08T18:35:51,387338+00:00 sbtest-clock-probe wall=2026-10-08T18:38:33+00:00
+2026-10-08T19:34:30,507947+00:00 cni0: port 2(veth470e2ad3) entered disabled state
+2026-10-08T19:34:30,508584+00:00 veth470e2ad3 (unregistering): left allmulticast mode
+2026-10-08T19:34:30,508594+00:00 veth470e2ad3 (unregistering): left promiscuous mode
+2026-10-08T19:34:30,508612+00:00 cni0: port 2(veth470e2ad3) entered disabled state
+2026-10-08T19:34:31,050161+00:00 nvme nvme1: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:d85d3ec5-2957-4eba-a51d-fb85ff7f3675"
+2026-10-08T19:34:31,160032+00:00 nvme nvme0: Removing ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:d85d3ec5-2957-4eba-a51d-fb85ff7f3675"
+2026-10-08T19:36:14,662294+00:00 nvme nvme0: creating 3 I/O queues.
+2026-10-08T19:36:14,689415+00:00 nvme nvme0: mapped 3/0/0 default/read/poll queues.
+2026-10-08T19:36:14,691853+00:00 nvme nvme0: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:0991424e-a48b-496c-928f-d6a6748c116b", addr 10.10.10.143:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:1e7fd145-e346-48d0-9c33-d37b13d97104
+2026-10-08T19:36:14,714354+00:00 nvme nvme1: creating 3 I/O queues.
+2026-10-08T19:36:14,742111+00:00 nvme nvme1: mapped 3/0/0 default/read/poll queues.
+2026-10-08T19:36:14,743740+00:00 nvme nvme1: new ctrl: NQN "nqn.2023-02.io.simplyblock:06075ebb-8c40-4857-a5f1-40b13bca10a7:lvol:0991424e-a48b-496c-928f-d6a6748c116b", addr 10.10.10.144:4430, hostnqn: nqn.2014-08.io.simplyblock:uuid:1e7fd145-e346-48d0-9c33-d37b13d97104
+2026-10-08T19:36:16,955681+00:00 cni0: port 2(veth922c6b60) entered blocking state
+2026-10-08T19:36:16,955694+00:00 cni0: port 2(veth922c6b60) entered disabled state
+2026-10-08T19:36:16,955713+00:00 veth922c6b60: entered allmulticast mode
+2026-10-08T19:36:16,955817+00:00 veth922c6b60: entered promiscuous mode
+2026-10-08T19:36:16,966341+00:00 cni0: port 2(veth922c6b60) entered blocking state
+2026-10-08T19:36:16,966346+00:00 cni0: port 2(veth922c6b60) entered forwarding state
+2026-10-08T19:42:53,444866+00:00 sbtest-clock-probe wall=2026-10-08T19:45:35+00:00

@@ -79,3 +79,18 @@ func TestDecodeSSE_CRLF(t *testing.T) {
 		t.Errorf("got {%q, %q}, want {created, x}", got.Name, got.Data)
 	}
 }
+
+// A deleted record is reported with an empty body and its id in the `id:` field.
+func TestDecodeSSECarriesTheEventID(t *testing.T) {
+	var got []sseEvent
+	err := decodeSSE(strings.NewReader("event: deleted\nid: c1/b1\ndata: {}\n\n"),
+		func(ev sseEvent) error { got = append(got, ev); return nil },
+		func() {},
+	)
+	if err != nil {
+		t.Fatalf("decodeSSE: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != "c1/b1" {
+		t.Errorf("events = %+v, want one with ID c1/b1", got)
+	}
+}

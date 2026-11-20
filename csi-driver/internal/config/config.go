@@ -19,14 +19,28 @@ type Config struct {
 	LinkEnabled bool
 	// LinkHubAddress is the operator's link endpoint, `host:port`.
 	LinkHubAddress string
-	// LinkCAFile signs the operator's serving certificate. Empty uses the
-	// system roots.
+	// LinkCAFile signs the operator's serving certificate. Empty dials
+	// plaintext.
 	LinkCAFile string
+	// LinkCertFile and LinkKeyFile are the client keypair presented to an
+	// operator that requires mutual TLS. Both or neither.
+	LinkCertFile string
+	LinkKeyFile  string
 	// LinkServerName overrides the name verified against that certificate.
 	LinkServerName string
 	// LinkTokenFile is the projected ServiceAccount token presented to the
 	// operator. It must be projected with the audience the operator expects.
 	LinkTokenFile string
+
+	// SiteLinkEnabled links a controller plugin to its site's fleet agent too,
+	// on a member of a stretched cluster.
+	SiteLinkEnabled bool
+	// SiteLinkAddress is the site's fleet agent, `host:port`.
+	SiteLinkAddress string
+	// SiteLinkNamespace is the agent's namespace, where it publishes its CA.
+	SiteLinkNamespace string
+	// SiteLinkTokenFile is the projected token with the site link's audience.
+	SiteLinkTokenFile string
 
 	// PodUID identifies this process lifetime to the operator, so a restarted
 	// pod supersedes the session its predecessor left behind. From the

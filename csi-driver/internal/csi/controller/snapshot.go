@@ -16,6 +16,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
 	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
@@ -107,13 +108,25 @@ func (cs *Server) CreateSnapshot(
 		klog.Errorf("failed to get spdk volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid source volume ID %q: %v", volumeID, err)
 	}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		return cs.createStripedSnapshot(ctx, req, spdkVol, width)
+	}
 	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		klog.Errorf("failed to create spdk client: %v", err)
 		return nil, status.Error(codes.Unavailable, err.Error())
 	}
 
-	volSize, err := sbclient.GetVolumeSize(ctx, spdkVol.VolumeID)
+	var volSize string
+	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			size, err := c.GetVolumeSize(ctx, h.VolumeID)
+			if err == nil {
+				// The snapshot is taken of the volume that answered.
+				volSize, spdkVol, sbclient = size, h, c
+			}
+			return err
+		})
 	klog.Infof("CreateSnapshot : volSize=%s", volSize)
 	if err != nil {
 		klog.Errorf("failed to get volume info, volumeID: %s err: %v", volumeID, err)
@@ -164,6 +177,13 @@ func (cs *Server) DeleteSnapshot(
 
 	unlock := cs.volumeLocks.Lock(csiSnapshotID)
 	defer unlock()
+
+	// A striped snapshot's id is its first member's with the width appended.
+	if base, width, ok := lvol.SplitStripeMarker(csiSnapshotID); ok && width > 1 {
+		if first, err := parseSnapshotID(base); err == nil {
+			return cs.deleteStripedSnapshot(ctx, csiSnapshotID, first, width)
+		}
+	}
 
 	sbSnapshot, err := parseSnapshotID(csiSnapshotID)
 	if err != nil {
@@ -227,8 +247,12 @@ func (cs *Server) ListSnapshots(
 	}
 
 	var all []*csi.ListSnapshotsResponse_Entry
-	for _, entry := range entries {
-		snapshotID := fmt.Sprintf("%s:%s:%s", entry.ClusterID, entry.PoolID, entry.UUID)
+	// A striped snapshot is one entry, under its first member snapshot, and
+	// the others are not listed as snapshots of their own.
+	for _, view := range foldStripedSnapshots(entries) {
+		entry := view.entry
+		snapshotID := lvol.WithStripeMarker(
+			fmt.Sprintf("%s:%s:%s", entry.ClusterID, entry.PoolID, entry.UUID), view.width)
 		sourceVolumeID := lvolIDFromURL(entry.LvolURL)
 
 		if req.GetSnapshotId() != "" && req.GetSnapshotId() != snapshotID {
@@ -241,7 +265,7 @@ func (cs *Server) ListSnapshots(
 		createdAt, _ := time.Parse(time.RFC3339Nano, entry.CreatedAt)
 		all = append(all, &csi.ListSnapshotsResponse_Entry{
 			Snapshot: &csi.Snapshot{
-				SizeBytes:      entry.Size,
+				SizeBytes:      view.size,
 				SnapshotId:     snapshotID,
 				SourceVolumeId: sourceVolumeID,
 				CreationTime:   timestamppb.New(createdAt),

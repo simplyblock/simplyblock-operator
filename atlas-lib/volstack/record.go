@@ -16,6 +16,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/simplyblock/atlas/internal/recordfile"
 )
 
 // RecordVersion is the schema version this package writes and the only one it
@@ -78,18 +80,7 @@ func NewStore(dir string) *Store { return &Store{dir: dir} }
 // handle carries made safe for a filename. It never leaves the store's own
 // directory, whatever it is handed.
 func (s *Store) path(handle string) string {
-	safe := strings.Map(func(r rune) rune {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '.':
-			return r
-		default:
-			return '_'
-		}
-	}, handle)
-	if safe == "" || strings.Trim(safe, ".") == "" {
-		safe = "_"
-	}
-	return filepath.Join(s.dir, safe+".json")
+	return recordfile.Path(s.dir, handle)
 }
 
 // Write persists rec.
@@ -218,4 +209,35 @@ func (s *Store) Remove(handle string) error {
 		return fmt.Errorf("volstack: remove the record for %s: %w", handle, err)
 	}
 	return nil
+}
+
+// List returns every record in the store, in no particular order. A file that
+// is not a record (a temporary file of a write in flight, or anything else left
+// in the directory) is skipped rather than failing the listing, and a store
+// whose directory does not exist yet holds nothing.
+func (s *Store) List() ([]Record, error) {
+	entries, err := os.ReadDir(s.dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("volstack: list the records in %s: %w", s.dir, err)
+	}
+	var records []Record
+	for _, e := range entries {
+		name := e.Name()
+		if e.IsDir() || strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(s.dir, name))
+		if err != nil {
+			continue
+		}
+		var rec Record
+		if json.Unmarshal(data, &rec) != nil || rec.Version != RecordVersion || rec.VolumeHandle == "" {
+			continue
+		}
+		records = append(records, rec)
+	}
+	return records, nil
 }

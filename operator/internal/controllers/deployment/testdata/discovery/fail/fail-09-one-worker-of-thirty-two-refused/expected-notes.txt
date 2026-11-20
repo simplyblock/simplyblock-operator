@@ -1,0 +1,1 @@
+wrote discovered-discover-fail-09 in Draft: 31 workers with 124 nvme devices, in 1 group(s) across 1 node set(s); 5 refusal(s)

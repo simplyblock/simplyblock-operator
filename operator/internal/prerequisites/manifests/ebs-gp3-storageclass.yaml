@@ -1,0 +1,16 @@
+# The gp3 StorageClass of the AWS EBS CSI driver for the control plane's volumes
+# on Amazon EKS. The operator creates it only when no StorageClass of the driver
+# provisions gp3 volumes already, under any name, and makes it the default only
+# on a cluster that has no default class. WaitForFirstConsumer creates each
+# volume in the availability zone of the node its pod is scheduled to.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-gp3
+provisioner: ebs.csi.aws.com
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true
+parameters:
+  type: gp3
+  encrypted: "true"

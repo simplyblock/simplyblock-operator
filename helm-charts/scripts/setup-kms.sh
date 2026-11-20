@@ -16,6 +16,13 @@ info() { echo "[INFO]  $*"; }
 warn() { echo "[WARN]  $*" >&2; }
 die()  { echo "[ERROR] $*" >&2; exit 1; }
 
+# Dumps the pod's log so a failure shows what the server said.
+die_with_logs() {
+  echo "[ERROR] $*" >&2
+  kubectl -n "$NAMESPACE" logs "$POD" --tail=200 >&2 || true
+  exit 1
+}
+
 bao() {
   kubectl -n "$NAMESPACE" exec -i "$POD" -- \
     env BAO_ADDR="$BAO_ADDR" BAO_TOKEN="$ROOT_TOKEN" bao "$@"
@@ -30,6 +37,8 @@ Env vars:
   STORAGE_CLASS     StorageClass for data PVC   (default: local-path)
   UNSEAL_KEYS_FILE  File to save init output    (default: stdout only)
   BAO_TOKEN         Skip init/unseal, use token (default: run init)
+  ISSUER_WAIT_TIMEOUT   Seconds to wait for the ClusterIssuer (default: 300)
+  ISSUER_POLL_INTERVAL  Seconds between issuer lookups        (default: 5)
 EOF
   exit 0
 fi
@@ -37,9 +46,17 @@ fi
 command -v kubectl &>/dev/null || die "kubectl not found"
 command -v helm    &>/dev/null || die "helm not found"
 
-info "Checking for ClusterIssuer simplyblock-certificate-authority-issuer..."
-kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null \
-  || die "ClusterIssuer 'simplyblock-certificate-authority-issuer' not found — ensure cert-manager is installed, the issuer exists, and the ControlPlane is installed with TLS enabled"
+# The operator creates the issuer after it starts, so a run right after its
+# install has to wait for it.
+ISSUER_WAIT_TIMEOUT="${ISSUER_WAIT_TIMEOUT:-300}"
+ISSUER_POLL_INTERVAL="${ISSUER_POLL_INTERVAL:-5}"
+info "Waiting up to ${ISSUER_WAIT_TIMEOUT}s for ClusterIssuer simplyblock-certificate-authority-issuer..."
+deadline=$(( SECONDS + ISSUER_WAIT_TIMEOUT ))
+until kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null; do
+  (( SECONDS < deadline )) \
+    || die "ClusterIssuer 'simplyblock-certificate-authority-issuer' not found after ${ISSUER_WAIT_TIMEOUT}s — ensure cert-manager is installed, the issuer exists, and the ControlPlane is installed with TLS enabled"
+  sleep "$ISSUER_POLL_INTERVAL"
+done
 
 # ── Install ────────────────────────────────────────────────────────────────────
 info "Installing OpenBao..."
@@ -59,9 +76,30 @@ kubectl -n "$NAMESPACE" wait pod/"$POD" \
 
 # ── Init + unseal ──────────────────────────────────────────────────────────────
 if [[ -z "$ROOT_TOKEN" ]]; then
+  # Phase Running only means the container started; the listener comes up later.
+  # bao status exits 2 for a sealed or uninitialized server, which is the answer wanted.
+  info "Waiting for the OpenBao listener..."
+  for _ in $(seq 1 60); do
+    rc=0
+    kubectl -n "$NAMESPACE" exec "$POD" -- \
+      env BAO_ADDR="$BAO_ADDR" bao status &>/dev/null || rc=$?
+    [[ $rc -ne 1 ]] && break
+    sleep 2
+  done
+  [[ $rc -ne 1 ]] || die_with_logs "OpenBao did not answer on $BAO_ADDR within 120s"
+
+  # A data volume that outlives the release leaves OpenBao initialized, and
+  # init on it fails. Its keys were printed once, by the run that created it.
+  STATUS="$(kubectl -n "$NAMESPACE" exec "$POD" -- \
+    env BAO_ADDR="$BAO_ADDR" bao status -format=json 2>/dev/null || true)"
+  if grep -Eq '"initialized": *true' <<<"$STATUS"; then
+    die "OpenBao is already initialized. Unseal it if it is sealed, then rerun with BAO_TOKEN set to its root token. Without the keys, uninstall the release and delete its PVCs in $NAMESPACE to start over."
+  fi
+
   info "Initializing OpenBao..."
   INIT_OUTPUT="$(kubectl -n "$NAMESPACE" exec "$POD" -- \
-    env BAO_ADDR="$BAO_ADDR" bao operator init 2>&1)"
+    env BAO_ADDR="$BAO_ADDR" bao operator init 2>&1)" \
+    || die_with_logs "bao operator init failed: $INIT_OUTPUT"
 
   echo ""
   echo "=========================================="
@@ -129,7 +167,7 @@ bao write auth/cert/certs/simplyblock-webappapi \
 
 info "Enabling secrets engines..."
 bao secrets enable -path=simplyblock/transit transit        || warn "transit already enabled, continuing..."
-bao secrets enable -path=simplyblock/kv kv  || warn "kv already enabled, continuing..."
+bao secrets enable -path=simplyblock/kv -version=2 kv  || warn "kv already enabled, continuing..."
 
 # ── Done ───────────────────────────────────────────────────────────────────────
 info "Done."

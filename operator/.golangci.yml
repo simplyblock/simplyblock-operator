@@ -22,6 +22,11 @@ linters:
     - unparam
     - unused
   settings:
+    misspell:
+      # exportfs(8) is the name of the command that publishes an NFS export.
+      # misspell reads it as a typo for the plural of export, which it is not.
+      ignore-rules:
+        - exportfs
     revive:
       rules:
         - name: comment-spacings

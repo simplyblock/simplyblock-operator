@@ -1,0 +1,40 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-net-65
+  name: discovered-discover-net-65
+spec:
+  cluster:
+    clusterMode: null
+    name: discovered-discover-net-65-cluster
+    stripe:
+      dataChunks: 1
+      parityChunks: 0
+  nodeSets:
+  - groups:
+    - dataInterfaces:
+      - ens5f0
+      devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5e:00.1
+        - 0000:5e:00.2
+        - 0000:5e:00.3
+      mgmtInterface: eth0
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-01
+    name: discovered-1
+  - groups:
+    - dataInterfaces:
+      - ens6f0
+      devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5e:00.1
+        - 0000:5e:00.2
+        - 0000:5e:00.3
+      mgmtInterface: eth0
+      name: group-1-nvme-4x3T
+      workers:
+      - worker-02
+    name: discovered-2

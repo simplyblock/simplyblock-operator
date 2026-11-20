@@ -44,6 +44,10 @@ func newPVCWatcherReconciler(t *testing.T, objects ...client.Object) (*PVCAnnota
 
 const testSCName = "fast"
 
+// testPolicySlotPVC1 is the slot the PVC annotation watcher names for claim
+// pvc1 under policy pol.
+const testPolicySlotPVC1 = "pol-pvc1"
+
 func pvcRequest(name string) ctrl.Request {
 	return ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "default", Name: name}}
 }
@@ -251,7 +255,7 @@ func TestPVCWatcher_PolicyRemoved_DeletesSlot(t *testing.T) {
 	// No annotation on PVC.
 	pvc := boundPVC(nil)
 	existingSlot := &simplyblockv1alpha1.ReplicationSlot{
-		ObjectMeta: metav1.ObjectMeta{Name: "pol-pvc1", Namespace: "default"},
+		ObjectMeta: metav1.ObjectMeta{Name: testPolicySlotPVC1, Namespace: "default"},
 		Spec: simplyblockv1alpha1.ReplicationSlotSpec{
 			PolicyRef: "pol", PVCRef: "pvc1", VolumeID: "c:p:v",
 		},
@@ -272,7 +276,7 @@ func TestPVCWatcher_PolicyRemoved_DeletesSlot(t *testing.T) {
 		t.Fatalf("list slots: %v", err)
 	}
 	for _, s := range slotList.Items {
-		if s.DeletionTimestamp == nil && s.Name == "pol-pvc1" {
+		if s.DeletionTimestamp == nil && s.Name == testPolicySlotPVC1 {
 			t.Errorf("slot %q was not deleted", s.Name)
 		}
 	}
@@ -285,7 +289,7 @@ func TestPVCWatcher_SlotPendingDeletion_Waits(t *testing.T) {
 	pvc := boundPVC(map[string]string{utils.AnnotationReplicationPolicy: "pol"})
 	existingSlot := &simplyblockv1alpha1.ReplicationSlot{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "pol-pvc1", Namespace: "default",
+			Name: testPolicySlotPVC1, Namespace: "default",
 			Finalizers:        []string{utils.FinalizerReplicationSlot},
 			DeletionTimestamp: &now,
 		},

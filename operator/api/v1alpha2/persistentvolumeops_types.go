@@ -1,0 +1,810 @@
+// PersistentVolumeOps: one imperative operation performed against one
+// PersistentVolume, which today means moving its backing logical volume to
+// another storage node.
+//
+// It is the one Ops kind in this group whose target is a core Kubernetes type
+// rather than a kind this group defines, and almost everything unusual about it
+// follows from that. Its target cannot carry a status.activeOpsRef, so the lock
+// moves to an annotation on the volume. It is cluster-scoped because a
+// PersistentVolume is, which in turn costs it the owner reference its creator
+// would otherwise hold, so the creator is named in the spec instead. And it is
+// told no cluster: the volume's CSI handle carries the cluster, pool, and
+// volume UUIDs, and that is where all three come from.
+//
+// The kind is introduced by the redesign, so it has no v1alpha1 spelling, no
+// spoke to convert from, and no Hub method: its CRD declares one version.
+//
+// The registered VolumeMigration stays registered and keeps running beside it
+// for at least one release. The two do not convert into one another — a rename
+// and a scope change make a new CRD rather than a new version — so in-flight
+// migrations are drained on the old kind rather than carried over, and nothing
+// creates objects of both kinds for one volume.
+//
+// design-persistentvolumeops.md is the specification.
+
+package v1alpha2
+
+import (
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/simplyblock/atlas/statemachine"
+)
+
+// PersistentVolumeOpsLock is the annotation on a PersistentVolume naming the
+// operation currently allowed to act on it, and absent when none is. An
+// operation takes it on every volume of its NVMe-oF subsystem, because a
+// migration moves the subsystem as a whole.
+//
+// It is what status.activeOpsRef is for every other kind in this group: taken
+// with an optimistic-lock patch so two reconcilers cannot both win, released
+// only while it still names the releaser, and released on every terminal path
+// including deletion. It sits in metadata rather than status because a
+// PersistentVolume is a core type this operator must not add fields to, and it
+// touches neither spec nor status, so it cannot conflict with the provisioner
+// or the volume's own controllers.
+const PersistentVolumeOpsLock = "storage.simplyblock.io/active-ops"
+
+// StorageClusterMigrationSlot is the annotation on a StorageCluster naming the
+// one PersistentVolumeOps allowed to migrate a volume of that cluster, and
+// absent when none is. The control plane runs one data migration per cluster
+// and refuses the rest, so every other operation waits at Pending until the
+// holder reaches a terminal phase and releases it.
+//
+// It follows PersistentVolumeOpsLock: taken with an optimistic-lock patch,
+// released only while it still names the releaser, and broken when the named
+// operation is terminal or gone.
+const StorageClusterMigrationSlot = "storage.simplyblock.io/active-volume-migration"
+
+// PersistentVolumeOpsManagedByLabel carries the kind of the controller that
+// created an operation, which is what a watch mapping and a List select on: a
+// reference in the spec cannot be selected on, and a label value admits no
+// namespace separator.
+//
+// It narrows rather than identifies. The label finds the operations some drain
+// created, and the UID in spec.creatorRef says which drain.
+const PersistentVolumeOpsManagedByLabel = "storage.simplyblock.io/managed-by"
+
+// PersistentVolumeOpsTargetNodeLabel carries the backend UUID of the node an
+// operation raised by another controller moves its volume to. The spec names
+// the node object rather than the UUID, and the UUID is what the creator chose
+// by and what it reads back when the operation fails: a retry that does not
+// know where the failed move was headed sends the volume back there.
+const PersistentVolumeOpsTargetNodeLabel = "storage.simplyblock.io/target-node"
+
+// PinnedVolumeLabel marks a move the pinned-volume controller raised because a
+// claim's storage-node pin changed. Its value is a hash of the volume's name,
+// because a PersistentVolume name can exceed the 63 characters a label value
+// allows, and it is how the controller finds a volume's pin-driven moves
+// without knowing their names, which depend on the target.
+//
+// A pinned volume is moved by its pin and by nothing else, and this label is
+// how a move tells which of the two it is: a labeled move runs only while the
+// pin still names its target, so a pin removed or changed again before the move
+// started leaves the volume where it is.
+const PinnedVolumeLabel = "storage.simplyblock.io/pinned-volume-pv"
+
+// PersistentVolumeOpsAction is the operation a PersistentVolumeOps performs.
+// The kind is named for its target rather than for the action, so that a
+// second action did not rename it.
+// +kubebuilder:validation:Enum=Migrate;Relocate;JoinConsistencyGroup
+type PersistentVolumeOpsAction string
+
+const (
+	// PersistentVolumeOpsActionMigrate moves the volume's backing logical
+	// volume to a different storage node.
+	PersistentVolumeOpsActionMigrate PersistentVolumeOpsAction = "Migrate"
+
+	// PersistentVolumeOpsActionRelocate moves the volume to another member
+	// cluster of its supercluster, together with every volume sharing its
+	// NVMe-oF subsystem.
+	PersistentVolumeOpsActionRelocate PersistentVolumeOpsAction = "Relocate"
+
+	// PersistentVolumeOpsActionJoinConsistencyGroup moves the volume onto its
+	// consistency group's node, adds it to the group, and brings it into the
+	// group's NVMe-oF subsystem while its consumers keep running.
+	PersistentVolumeOpsActionJoinConsistencyGroup PersistentVolumeOpsAction = "JoinConsistencyGroup"
+)
+
+// PersistentVolumeOpsPhase is the operation's own progress. Succeeded rather
+// than the registered kind's Completed, so that every Ops kind in this group
+// reports the same five phases and an alert on completion matches one value.
+// +kubebuilder:validation:Enum=Pending;Running;Succeeded;Failed;Aborted
+type PersistentVolumeOpsPhase string
+
+const (
+	// PersistentVolumeOpsPhasePending is an operation waiting for the volume's
+	// lock, or holding nothing yet.
+	PersistentVolumeOpsPhasePending PersistentVolumeOpsPhase = "Pending"
+	// PersistentVolumeOpsPhaseRunning is an operation holding the lock and
+	// working.
+	PersistentVolumeOpsPhaseRunning PersistentVolumeOpsPhase = "Running"
+	// PersistentVolumeOpsPhaseSucceeded is a finished operation that did what
+	// it said.
+	PersistentVolumeOpsPhaseSucceeded PersistentVolumeOpsPhase = "Succeeded"
+	// PersistentVolumeOpsPhaseFailed is a finished operation that did not.
+	PersistentVolumeOpsPhaseFailed PersistentVolumeOpsPhase = "Failed"
+	// PersistentVolumeOpsPhaseAborted is an operation stopped on request, or
+	// stopped because its volume went away, whose unwind has finished.
+	PersistentVolumeOpsPhaseAborted PersistentVolumeOpsPhase = "Aborted"
+)
+
+// PersistentVolumeOpsStep is one step of a running volume operation. The
+// registered kind merges these with the phases above into one enum, so that
+// Validating sits beside Completed and neither can be read without the other's
+// values in mind.
+// +kubebuilder:validation:Enum=Validating;Migrating;Verifying;Replicating;Committing;AwaitingCutover;AttachingPaths;Proceeding;Completed;Planning;Joining;SelectingSubsystem;PreparingTarget;Suspending;MovingNamespaces;Resuming;ReleasingPaths;Leaving
+type PersistentVolumeOpsStep string
+
+const (
+	// PersistentVolumeOpsStepValidating creates the backend migration and
+	// starts a Job on every node consuming the subsystem, to check that each of
+	// them can reach the target on the paths the migration published.
+	PersistentVolumeOpsStepValidating PersistentVolumeOpsStep = "Validating"
+	// PersistentVolumeOpsStepMigrating continues the migration, which is what
+	// starts the data copy. It is not called Running, because status.phase
+	// already has that value and a step sharing a phase's name is the confusion
+	// this split exists to end.
+	PersistentVolumeOpsStepMigrating PersistentVolumeOpsStep = "Migrating"
+	// PersistentVolumeOpsStepVerifying deletes the validation Jobs and confirms
+	// no path was left connected. It is a declared step rather than a deferred
+	// call because a crash between the copy finishing and the cleanup must
+	// restart into it: paths that outlived their Jobs poisoned the data path
+	// and blocked every later migration of the volume.
+	PersistentVolumeOpsStepVerifying PersistentVolumeOpsStep = "Verifying"
+
+	// PersistentVolumeOpsStepReplicating replicates every volume of the
+	// subsystem into the target cluster until it is in sync.
+	PersistentVolumeOpsStepReplicating PersistentVolumeOpsStep = "Replicating"
+	// PersistentVolumeOpsStepCommitting asks the control plane to cut each
+	// volume over to the target and delete its source afterward.
+	PersistentVolumeOpsStepCommitting PersistentVolumeOpsStep = "Committing"
+	// PersistentVolumeOpsStepAwaitingCutover waits while the control plane
+	// catches the target up with a volume's latest writes and prepares its
+	// cutover. The message carries the control plane's progress.
+	PersistentVolumeOpsStepAwaitingCutover PersistentVolumeOpsStep = "AwaitingCutover"
+	// PersistentVolumeOpsStepAttachingPaths connects the target's paths on
+	// every node consuming the subsystem while a volume's cutover waits for
+	// them.
+	PersistentVolumeOpsStepAttachingPaths PersistentVolumeOpsStep = "AttachingPaths"
+	// PersistentVolumeOpsStepProceeding releases a volume's cutover once its
+	// consumers hold the target's paths.
+	PersistentVolumeOpsStepProceeding PersistentVolumeOpsStep = "Proceeding"
+	// PersistentVolumeOpsStepCompleted is the terminal step of an operation that succeeded.
+	PersistentVolumeOpsStepCompleted PersistentVolumeOpsStep = "Completed"
+
+	// PersistentVolumeOpsStepPlanning resolves the consistency group and checks
+	// that the volume can join it and that the group's node can hold the NVMe-oF
+	// subsystems the join needs.
+	PersistentVolumeOpsStepPlanning PersistentVolumeOpsStep = "Planning"
+	// PersistentVolumeOpsStepJoining adds the volume to the group.
+	PersistentVolumeOpsStepJoining PersistentVolumeOpsStep = "Joining"
+	// PersistentVolumeOpsStepSelectingSubsystem chooses the subsystem the group
+	// ends up in and reserves its namespace slots.
+	PersistentVolumeOpsStepSelectingSubsystem PersistentVolumeOpsStep = "SelectingSubsystem"
+	// PersistentVolumeOpsStepPreparingTarget creates the target subsystem when
+	// it is new.
+	PersistentVolumeOpsStepPreparingTarget PersistentVolumeOpsStep = "PreparingTarget"
+	// PersistentVolumeOpsStepSuspending holds the I/O of every moving volume on
+	// every node consuming it.
+	PersistentVolumeOpsStepSuspending PersistentVolumeOpsStep = "Suspending"
+	// PersistentVolumeOpsStepMovingNamespaces moves every moving volume's
+	// namespace into the target subsystem.
+	PersistentVolumeOpsStepMovingNamespaces PersistentVolumeOpsStep = "MovingNamespaces"
+	// PersistentVolumeOpsStepResuming points every consuming node at the
+	// subsystem the namespaces are in and releases their I/O.
+	PersistentVolumeOpsStepResuming PersistentVolumeOpsStep = "Resuming"
+	// PersistentVolumeOpsStepReleasingPaths disconnects the subsystem the
+	// volumes left, on every node that no longer uses it.
+	PersistentVolumeOpsStepReleasingPaths PersistentVolumeOpsStep = "ReleasingPaths"
+	// PersistentVolumeOpsStepLeaving takes a volume out of the consistency
+	// group it is a member of, so that it can join the group its claim now
+	// names: the volume first leaves the NVMe-oF subsystem it shares with that
+	// group's members, then the group itself.
+	PersistentVolumeOpsStepLeaving PersistentVolumeOpsStep = "Leaving"
+)
+
+// SubsystemSide is which NVMe-oF subsystem a moving volume's namespace is
+// exported by.
+// +kubebuilder:validation:Enum=Source;Target
+type SubsystemSide string
+
+const (
+	// SubsystemSideSource is the subsystem the namespace was in before the
+	// operation.
+	SubsystemSideSource SubsystemSide = "Source"
+	// SubsystemSideTarget is the subsystem the operation moves it to.
+	SubsystemSideTarget SubsystemSide = "Target"
+)
+
+// StorageNodeReference locates a StorageNode from a cluster-scoped object.
+//
+// Every other reference in this API group is a bare string, which works because
+// both objects are namespaced and a name means the same namespace. A
+// cluster-scoped object has no namespace for a bare name to mean, and two
+// clusters in two namespaces may each hold a node called worker-3, so this one
+// carries both — for the same reason pv.spec.claimRef does in core Kubernetes.
+type StorageNodeReference struct {
+	// Namespace is where the StorageNode lives, which is the namespace of the
+	// StorageCluster that owns it.
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace"`
+
+	// Name is the StorageNode object's name.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+}
+
+// MigrateVolumeSpec parameterizes the Migrate action.
+type MigrateVolumeSpec struct {
+	// TargetNodeRef locates the StorageNode to move the volume's backing
+	// logical volume to. It names the Kubernetes object rather than the backend
+	// UUID, so that a migration can be written by hand without looking one up;
+	// the controller resolves the UUID from the node's status. The node's
+	// cluster must be the volume's, which the webhook checks rather than the
+	// type, because that is a fact about two other objects.
+	//
+	// The marker sits on the reference rather than on its fields, so the pair
+	// is immutable together and a target cannot be half-changed into a name in
+	// one cluster and a namespace in another.
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	TargetNodeRef StorageNodeReference `json:"targetNodeRef"`
+}
+
+// RelocateVolumeSpec parameterizes the Relocate action.
+type RelocateVolumeSpec struct {
+	// TargetClusterRef names the member StorageCluster to move the volume to,
+	// in the namespace of the volume's current member. It must be another
+	// member of the same supercluster, and must accept new volumes.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +k8s:immutable
+	TargetClusterRef string `json:"targetClusterRef"`
+}
+
+// JoinConsistencyGroupSpec parameterizes the JoinConsistencyGroup action.
+type JoinConsistencyGroupSpec struct {
+	// GroupName is the consistency group to join, by the name its members'
+	// claims carry in the storage.simplyblock.io/consistency-group label.
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +k8s:immutable
+	GroupName string `json:"groupName"`
+
+	// SuspendTimeoutSeconds is the longest time any node may hold the I/O of a
+	// moving volume while its namespace changes subsystem. A node that has not
+	// been released by then resumes the volume on its own. Defaults to 10.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=30
+	// +kubebuilder:default=10
+	// +optional
+	// +k8s:immutable
+	SuspendTimeoutSeconds *int32 `json:"suspendTimeoutSeconds,omitempty"`
+}
+
+// CreatorReference names the object that created a PersistentVolumeOps.
+//
+// It exists because a cluster-scoped object cannot be owned by a namespaced
+// one: Kubernetes treats such a reference as unresolvable and garbage-collects
+// the dependent. Core Kubernetes has the same situation twice and answers it
+// the same way: a PersistentVolume names its claim through spec.claimRef and a
+// VolumeSnapshotContent names its snapshot through spec.volumeSnapshotRef, both
+// with a UID, and that shape carries over here unchanged.
+type CreatorReference struct {
+	// Kind is the creating object's kind, which is StorageNodeOps for a drain.
+	// +kubebuilder:validation:Required
+	Kind string `json:"kind"`
+
+	// Namespace is where the creator lives.
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace"`
+
+	// Name is the creator's object name.
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// UID is what makes the reference address one creator rather than one name:
+	// a creator deleted and recreated under the same name must not inherit the
+	// fan-out it did not issue, and cascade a delete over it.
+	// +kubebuilder:validation:Required
+	UID types.UID `json:"uid"`
+}
+
+// PersistentVolumeOpsSpec is one operation to perform against one
+// PersistentVolume.
+//
+// The action and its parameter block have to agree: Migrate requires
+// spec.migrate, Relocate requires spec.relocate, and JoinConsistencyGroup
+// requires spec.joinConsistencyGroup, and no action accepts another's block.
+// +kubebuilder:validation:XValidation:rule="self.action == 'Migrate' ? has(self.migrate) : !has(self.migrate)",message="migrate is required for action Migrate and must be absent otherwise"
+// +kubebuilder:validation:XValidation:rule="self.action == 'Relocate' ? has(self.relocate) : !has(self.relocate)",message="relocate is required for action Relocate and must be absent otherwise"
+// +kubebuilder:validation:XValidation:rule="self.action == 'JoinConsistencyGroup' ? has(self.joinConsistencyGroup) : !has(self.joinConsistencyGroup)",message="joinConsistencyGroup is required for action JoinConsistencyGroup and must be absent otherwise"
+type PersistentVolumeOpsSpec struct {
+	// PersistentVolumeName names the PersistentVolume this operation acts on.
+	// It is a name rather than a reference because a PersistentVolume is
+	// cluster-scoped, and it names the volume rather than the claim because a
+	// claim can be deleted while its volume is retained — under a Retain
+	// reclaim policy the logical volume still occupies capacity on a node that
+	// may be draining, and is still worth moving.
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	PersistentVolumeName string `json:"persistentVolumeName"`
+
+	// Action is the operation to perform. Immutable: an operation that changed
+	// what it was doing halfway through would have a status describing neither.
+	// +kubebuilder:validation:Required
+	// +k8s:immutable
+	Action PersistentVolumeOpsAction `json:"action"`
+
+	// Abort asks a running operation to stop at its next step and unwind. It is
+	// expressible from Validating and Migrating and not from Verifying, which
+	// the action's graph declares rather than this field: once the copy has
+	// finished, the volume has moved and there is nothing to undo.
+	// +optional
+	Abort bool `json:"abort,omitempty"`
+
+	// Migrate parameterizes action Migrate.
+	// +optional
+	Migrate *MigrateVolumeSpec `json:"migrate,omitempty"`
+
+	// Relocate parameterizes action Relocate.
+	// +optional
+	Relocate *RelocateVolumeSpec `json:"relocate,omitempty"`
+
+	// JoinConsistencyGroup parameterizes action JoinConsistencyGroup.
+	// +optional
+	JoinConsistencyGroup *JoinConsistencyGroupSpec `json:"joinConsistencyGroup,omitempty"`
+
+	// CreatorRef names the object that created this one, and that object's
+	// finalizer is what aborts and deletes this one when it goes. Absent on an
+	// operation written by hand, which has no creator to cascade from.
+	// Immutable, because an operation changing whose fan-out it belongs to
+	// would change who cascades over it.
+	// +optional
+	// +k8s:immutable
+	CreatorRef *CreatorReference `json:"creatorRef,omitempty"`
+}
+
+// MigrationConnection is one NVMe-oF path the migration published on the
+// target.
+//
+// The connect parameters travel with the address because the path is connected
+// on a consuming host rather than here, and what is recorded has to be the
+// connect that will actually be made: the host attaches every path with the
+// same controller-loss timeout the CSI driver uses, which is not the hour the
+// control plane answers with, and a record of the control plane's answer would
+// describe a connect nobody performs.
+type MigrationConnection struct {
+	// NQN is the subsystem the target answers this path for.
+	// +optional
+	NQN string `json:"nqn,omitempty"`
+	// Address and Port are where it answers.
+	// +optional
+	Address string `json:"address,omitempty"`
+	// +optional
+	Port *int32 `json:"port,omitempty"`
+	// Transport is the fabric, which is TCP.
+	// +optional
+	Transport string `json:"transport,omitempty"`
+
+	// +optional
+	NrIOQueues *int32 `json:"nrIOQueues,omitempty"`
+	// +optional
+	ReconnectDelaySeconds *int32 `json:"reconnectDelaySeconds,omitempty"`
+	// CtrlLossTimeoutSeconds and FastIOFailTimeoutSeconds are pointers because
+	// zero is a choice ("fail I/O immediately") rather than a missing value.
+	// +optional
+	CtrlLossTimeoutSeconds *int32 `json:"ctrlLossTimeoutSeconds,omitempty"`
+	// +optional
+	FastIOFailTimeoutSeconds *int32 `json:"fastIOFailTimeoutSeconds,omitempty"`
+	// +optional
+	KeepAliveTimeoutSeconds *int32 `json:"keepAliveTimeoutSeconds,omitempty"`
+}
+
+// ValidationJob is one Job started to check a path is reachable from one node.
+//
+// It is tracked so that Verifying can delete every Job the operation started,
+// including after a restart. The namespace is recorded for the same reason
+// spec.migrate.targetNodeRef carries one: a Job is namespaced and this object
+// is not, so a name alone would not locate it.
+type ValidationJob struct {
+	// +kubebuilder:validation:Required
+	Namespace string `json:"namespace"`
+	// +kubebuilder:validation:Required
+	Name string `json:"name"`
+
+	// Node is the worker the Job is pinned to, which is a node consuming one of
+	// the migrated subsystem's volumes.
+	// +optional
+	Node string `json:"node,omitempty"`
+
+	// Succeeded records a node whose paths were checked and found ready, so a
+	// restart does not run the check again on a node that already passed and
+	// whose Job its own TTL may already have reaped.
+	// +optional
+	Succeeded bool `json:"succeeded,omitempty"`
+}
+
+// MigrationStatus is everything about the migration rather than about the
+// operation. It is durable working state: a controller that restarts mid-copy
+// reads it to find the backend migration it started and the Jobs it has to
+// clean up.
+type MigrationStatus struct {
+	// MigrationUUID is the control plane's identifier for the copy.
+	// +optional
+	MigrationUUID string `json:"migrationUUID,omitempty"`
+
+	// ClusterUUID, PoolUUID, and VolumeUUID are the three parts of the volume's
+	// CSI volume handle, recorded so that later steps address the backend
+	// without re-reading the PersistentVolume, and so that a failed operation
+	// says which volume it was working on after the volume is gone.
+	// +optional
+	ClusterUUID string `json:"clusterUUID,omitempty"`
+	// +optional
+	PoolUUID string `json:"poolUUID,omitempty"`
+	// +optional
+	VolumeUUID string `json:"volumeUUID,omitempty"`
+
+	// SubsystemNQN is the volume's NVMe-oF subsystem, which is what the
+	// migration is addressed by: the control plane migrates a subsystem rather
+	// than one volume inside it.
+	// +optional
+	SubsystemNQN string `json:"subsystemNQN,omitempty"`
+
+	// SourceNodeUUID is where the volume was before the move, recorded so that
+	// a failure says what it was and not only what it was going to be.
+	// +optional
+	SourceNodeUUID string `json:"sourceNodeUUID,omitempty"`
+
+	// TargetNodeUUID is the backend identifier resolved from
+	// spec.migrate.targetNodeRef, recorded so the later steps address the
+	// target without resolving the node object again.
+	// +optional
+	TargetNodeUUID string `json:"targetNodeUUID,omitempty"`
+
+	// ContinuedAt is when this operation asked the control plane to start the
+	// copy, written before the call rather than after it.
+	//
+	// The order is what makes the request at-most-once, and that is the point.
+	// A repeated continue is the shape that has lost writes here: a read
+	// timeout on a call that had in fact committed made the operator retry a
+	// transfer, and the retry copied nothing while the source was unfrozen. So
+	// a recorded continue is never issued again, and an operation that crashed
+	// between this write and the call waits out its step's deadline instead —
+	// a rare stall, against a silent data loss.
+	// +optional
+	ContinuedAt *metav1.Time `json:"continuedAt,omitempty"`
+
+	// MemberCount is how many volumes the migrated NVMe-oF subsystem holds, as
+	// the control plane reports it. More than one member means the sibling
+	// volumes move along with the named one, so the count is both the
+	// operation's blast radius and the term the copy's deadline scales by.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MemberCount *int32 `json:"memberCount,omitempty"`
+
+	// Connections are the paths the migration published on the target.
+	// Verifying confirms none of them is left connected.
+	// +optional
+	Connections []MigrationConnection `json:"connections,omitempty"`
+
+	// ValidationJobs are the Jobs started to check those paths.
+	// +optional
+	ValidationJobs []ValidationJob `json:"validationJobs,omitempty"`
+}
+
+// RelocatedVolume is one volume a Relocate moves, and how far its cutover is.
+//
+// The control plane cuts the volumes of one subsystem over one at a time, so
+// each carries its own task and its own release rather than the operation
+// carrying one for all of them.
+type RelocatedVolume struct {
+	// VolumeUUID is the volume's backend UUID in the source member.
+	// +kubebuilder:validation:Required
+	VolumeUUID string `json:"volumeUUID"`
+
+	// PersistentVolumeName is the PersistentVolume carrying the volume, when one
+	// does. It is what the volume's new location is recorded on.
+	// +optional
+	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// TaskID is the control plane's task carrying the volume's cutover and the
+	// deletion of its source, from the commit's answer.
+	// +optional
+	TaskID string `json:"taskID,omitempty"`
+
+	// Proceeded is set before the volume's cutover is first released. The
+	// release is resent while the cutover waits for it.
+	// +optional
+	Proceeded bool `json:"proceeded,omitempty"`
+
+	// CutOver is set once the target serves the volume.
+	// +optional
+	CutOver bool `json:"cutOver,omitempty"`
+
+	// TargetVolumeUUID is the volume's backend UUID in the target member.
+	// +optional
+	TargetVolumeUUID string `json:"targetVolumeUUID,omitempty"`
+}
+
+// RelocateStatus is the progress of a Relocate.
+type RelocateStatus struct {
+	// SourceClusterUUID is the member the volume started in.
+	// +optional
+	SourceClusterUUID string `json:"sourceClusterUUID,omitempty"`
+
+	// TargetClusterUUID is the member the volume is moving to.
+	// +optional
+	TargetClusterUUID string `json:"targetClusterUUID,omitempty"`
+
+	// TargetPoolUUID is the pool in the target member the volumes land in: the
+	// target's pool of the same supercluster pool as the source's.
+	// +optional
+	TargetPoolUUID string `json:"targetPoolUUID,omitempty"`
+
+	// Committed is set before the first commit is requested. It refuses an
+	// abort from then on, because a committed cutover cannot be taken back.
+	// +optional
+	Committed bool `json:"committed,omitempty"`
+
+	// Volumes are every volume moving together: the named one and those
+	// sharing its subsystem.
+	// +listType=map
+	// +listMapKey=volumeUUID
+	// +optional
+	Volumes []RelocatedVolume `json:"volumes,omitempty"`
+
+	// PathJobs are the Jobs that connect the target's paths on the nodes
+	// consuming the subsystem, one per node.
+	// +optional
+	PathJobs []ValidationJob `json:"pathJobs,omitempty"`
+
+	// NodesMissingPaths are the consuming nodes that did not hold the target's
+	// paths when the control plane cut a volume over without waiting for them.
+	// Pods on these nodes lose the volume until they are restarted, and the
+	// operation fails once the volume's new location is recorded.
+	// +listType=set
+	// +optional
+	NodesMissingPaths []string `json:"nodesMissingPaths,omitempty"`
+}
+
+// MovingVolume is one volume whose namespace changes NVMe-oF subsystem.
+type MovingVolume struct {
+	// VolumeUUID is the volume's backend UUID.
+	// +kubebuilder:validation:Required
+	VolumeUUID string `json:"volumeUUID"`
+
+	// PersistentVolumeName is the volume's PersistentVolume, when it has one.
+	// +optional
+	PersistentVolumeName string `json:"persistentVolumeName,omitempty"`
+
+	// SourceNQN is the subsystem the namespace leaves.
+	// +optional
+	SourceNQN string `json:"sourceNQN,omitempty"`
+
+	// TargetNSID is the namespace ID the volume takes in the target subsystem.
+	// +optional
+	TargetNSID int32 `json:"targetNSID,omitempty"`
+}
+
+// SwapHost is one node consuming a moving volume, and how far its part of the
+// swap got.
+type SwapHost struct {
+	// Node is the Kubernetes node.
+	// +kubebuilder:validation:Required
+	Node string `json:"node"`
+
+	// PersistentVolumes are the moving volumes the node consumes, which are
+	// the ones it holds and releases.
+	// +listType=set
+	// +optional
+	PersistentVolumes []string `json:"persistentVolumes,omitempty"`
+
+	// InstanceUID identifies the CSI node plugin process that acknowledged the
+	// steps below. A different value means the plugin restarted since.
+	// +optional
+	InstanceUID string `json:"instanceUID,omitempty"`
+
+	// Prepared is set once the node holds paths to the target subsystem.
+	// +optional
+	Prepared bool `json:"prepared,omitempty"`
+
+	// Suspended is set once the node holds the I/O of every moving volume it
+	// consumes.
+	// +optional
+	Suspended bool `json:"suspended,omitempty"`
+
+	// Resumed is set once the node released that I/O on the subsystem named by
+	// namespacesAt.
+	// +optional
+	Resumed bool `json:"resumed,omitempty"`
+
+	// Released is set once the node disconnected the subsystem it no longer
+	// uses.
+	// +optional
+	Released bool `json:"released,omitempty"`
+}
+
+// JoinConsistencyGroupStatus is the progress of a JoinConsistencyGroup.
+type JoinConsistencyGroupStatus struct {
+	// GroupUUID is the group's backend UUID, resolved from spec.groupName.
+	// +optional
+	GroupUUID string `json:"groupUUID,omitempty"`
+
+	// MigrationName is the Migrate operation this one created to bring the
+	// volume onto the group's node, when it needed one.
+	// +optional
+	MigrationName string `json:"migrationName,omitempty"`
+
+	// Joined is set once the volume is a member of the group.
+	// +optional
+	Joined bool `json:"joined,omitempty"`
+
+	// MoveID is the backend's identity for the subsystem move.
+	// +optional
+	MoveID string `json:"moveID,omitempty"`
+
+	// TargetNQN is the subsystem the group ends up in.
+	// +optional
+	TargetNQN string `json:"targetNQN,omitempty"`
+
+	// TargetIsNew is set when the target subsystem was created for this move.
+	// +optional
+	TargetIsNew bool `json:"targetIsNew,omitempty"`
+
+	// NamespacesAt is the subsystem the moving namespaces are exported by now.
+	// +optional
+	NamespacesAt SubsystemSide `json:"namespacesAt,omitempty"`
+
+	// SuspendDeadline is the time by which every node resumes, whatever
+	// happened.
+	// +optional
+	SuspendDeadline *metav1.Time `json:"suspendDeadline,omitempty"`
+
+	// Volumes are the volumes whose namespaces change subsystem.
+	// +listType=map
+	// +listMapKey=volumeUUID
+	// +optional
+	Volumes []MovingVolume `json:"volumes,omitempty"`
+
+	// Hosts are the nodes consuming any of those volumes.
+	// +listType=map
+	// +listMapKey=node
+	// +optional
+	Hosts []SwapHost `json:"hosts,omitempty"`
+
+	// RollbackReason is why the move is being taken back, set once the
+	// operation stops moving the group forward. The operation ends Failed with
+	// it once every node is back on the subsystem it started on.
+	// +optional
+	RollbackReason string `json:"rollbackReason,omitempty"`
+
+	// Leave is the progress of leaving the consistency group the volume was a
+	// member of when the operation started. It is absent when the volume was in
+	// no group, or already in the one spec.groupName names.
+	// +optional
+	Leave *ConsistencyGroupLeaveStatus `json:"leave,omitempty"`
+}
+
+// ConsistencyGroupLeaveStatus is how far a volume got in leaving the
+// consistency group it was a member of. Leaving a group is permanent: a volume
+// that left keeps its place in the generations taken while it was a member, and
+// never rejoins that group.
+type ConsistencyGroupLeaveStatus struct {
+	// GroupUUID is the backend UUID of the group the volume leaves.
+	// +kubebuilder:validation:Required
+	GroupUUID string `json:"groupUUID"`
+
+	// SplitNQN is the NVMe-oF subsystem the volume was moved into when it
+	// shared its subsystem with that group's members. It is empty when the
+	// volume shared its subsystem with no other volume.
+	// +optional
+	SplitNQN string `json:"splitNQN,omitempty"`
+
+	// Split is set once the volume no longer shares an NVMe-oF subsystem with
+	// the members of the group it leaves.
+	// +optional
+	Split bool `json:"split,omitempty"`
+
+	// Detached is set once the volume is no longer a member of that group.
+	// +optional
+	Detached bool `json:"detached,omitempty"`
+}
+
+// PersistentVolumeOpsStatus is the observed state of one volume operation.
+type PersistentVolumeOpsStatus struct {
+	// Phase is the operation's own progress.
+	// +optional
+	Phase PersistentVolumeOpsPhase `json:"phase,omitempty"`
+
+	// Step is the position of the running action's state machine. It is
+	// persisted before the side effect that step performs, so a step reported
+	// here is a step that started.
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding','Completed','Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths','Leaving']",message="unknown step"
+	// +optional
+	Step statemachine.KubeSnapshot `json:"step,omitempty"`
+
+	// Migration is everything about the migration rather than about the
+	// operation.
+	// +optional
+	Migration *MigrationStatus `json:"migration,omitempty"`
+
+	// Relocate is the progress of a Relocate.
+	// +optional
+	Relocate *RelocateStatus `json:"relocate,omitempty"`
+
+	// JoinConsistencyGroup is the progress of a JoinConsistencyGroup.
+	// +optional
+	JoinConsistencyGroup *JoinConsistencyGroupStatus `json:"joinConsistencyGroup,omitempty"`
+
+	// DeferredSince is when the operation was first held — behind another
+	// operation's lock, or behind a control plane that is not accepting
+	// migrations yet. It is what the auto-rebalancer reads to decide whether a
+	// migration has waited long enough to give up on, and it is in status
+	// rather than in memory because the operator may restart and an observer
+	// needs to see that the operation is waiting and since when.
+	// +optional
+	DeferredSince *metav1.Time `json:"deferredSince,omitempty"`
+
+	// Message is the reason the phase is what it is: one sentence, replaced as
+	// the operation moves, and never a log.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// ObservedGeneration is the generation the rest of this status was computed
+	// from, so a stale status can be told from a current one.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// StartedAt is when the operation began.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// CompletedAt is when it reached a terminal phase.
+	// +optional
+	CompletedAt *metav1.Time `json:"completedAt,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:resource:scope=Cluster,shortName=pvops
+// +kubebuilder:printcolumn:name="Volume",type=string,JSONPath=".spec.persistentVolumeName"
+// +kubebuilder:printcolumn:name="Action",type=string,JSONPath=".spec.action"
+// +kubebuilder:printcolumn:name="Target",type=string,JSONPath=".spec.migrate.targetNodeRef.name"
+// +kubebuilder:printcolumn:name="Target Cluster",type=string,JSONPath=".spec.relocate.targetClusterRef"
+// +kubebuilder:printcolumn:name="Group",type=string,JSONPath=".spec.joinConsistencyGroup.groupName"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=".status.phase"
+// +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
+// +kubebuilder:printcolumn:name="Message",type=string,JSONPath=".status.message",priority=1
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
+
+// PersistentVolumeOps is a single operation performed against one
+// PersistentVolume. It is the one Ops kind in this group whose target is a core
+// Kubernetes type rather than a kind this group defines, so it locks its target
+// with an annotation rather than a status field, is cluster-scoped because its
+// target is, cannot be owned by the namespaced operation that created it, and
+// derives its cluster, pool, and volume from the volume's CSI handle rather
+// than being told.
+type PersistentVolumeOps struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   PersistentVolumeOpsSpec   `json:"spec,omitempty"`
+	Status PersistentVolumeOpsStatus `json:"status,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// PersistentVolumeOpsList contains a list of PersistentVolumeOps.
+type PersistentVolumeOpsList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []PersistentVolumeOps `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&PersistentVolumeOps{}, &PersistentVolumeOpsList{})
+}

@@ -12,7 +12,9 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
 
+	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/csi-driver/internal/clusters"
+	"github.com/simplyblock/csi-driver/internal/controlplane"
 	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
@@ -24,6 +26,9 @@ func (cs *Server) handleVolumeContentSource(
 	sizeBytes int64,
 ) (*csi.Volume, error) {
 	volumeSource := req.GetVolumeContentSource()
+	if err := refuseStripedSourceForPlainClass(volumeSource); err != nil {
+		return nil, err
+	}
 	switch volumeSource.GetType().(type) {
 	case *csi.VolumeContentSource_Snapshot:
 		return cs.handleSnapshotSource(ctx, volumeSource.GetSnapshot(), req, poolName, vol, sizeBytes)
@@ -65,19 +70,30 @@ func (cs *Server) handleSnapshotSource(
 	pvcNamespace, pvcNamespaceSelected := params[csicommon.CSIStorageNamespaceKey]
 
 	pvcFullName := pvcName
+	consistencyGroup := ""
 	if pvcNameSelected && pvcNamespaceSelected {
 		pvcFullName = fmt.Sprintf("%s/%s", pvcNamespace, pvcName)
+		// A restore PVC carrying the consistency-group label forms a NEW group
+		// from the clones (design §7.2), so the label rides the clone body
+		// exactly as it rides the create body (design §4.1).
+		if _, pvcLabels, metaErr := cs.fetchPVCMeta(ctx, pvcName, pvcNamespace); metaErr == nil {
+			consistencyGroup = pvcLabels[consistencyGroupLabel]
+		} else {
+			klog.Errorf("failed to read PVC %s/%s labels for the clone: %v", pvcNamespace, pvcName, metaErr)
+		}
 	}
 	// Use raw bytes to avoid decimal/binary unit ambiguity in clone sizing.
 	newSize := strconv.FormatInt(sizeBytes, 10)
-	volumeID, err := sbclient.CloneSnapshot(ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName)
+	volumeID, err := sbclient.CloneSnapshot(
+		ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
 	if err != nil {
 		if !classifyCreateVolumeError(err).IsIdempotent() {
 			klog.Errorf("error cloning snapshot: %v", err)
 			return nil, err
 		}
 		// 409: a clone with this name already exists, so reconcile it.
-		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes)
+		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, snapshotName, sizeBytes, 0,
+			syncCluster(sbclient.ClusterID()))
 		if rerr != nil {
 			return nil, rerr
 		}
@@ -85,7 +101,8 @@ func (cs *Server) handleSnapshotSource(
 			vol.VolumeId = fmt.Sprintf("%s:%s:%s", sbclient.ClusterID(), sbclient.PoolID(), existingUUID)
 			return vol, nil
 		}
-		volumeID, err = sbclient.CloneSnapshot(ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName)
+		volumeID, err = sbclient.CloneSnapshot(
+			ctx, sbSnapshot.snapshotID, snapshotName, newSize, pvcFullName, consistencyGroup)
 		if err != nil {
 			klog.Errorf("error re-cloning snapshot after cleanup: %v", err)
 			return nil, err
@@ -137,14 +154,24 @@ func (cs *Server) handleVolumeSource(
 	// Use raw bytes to avoid decimal/binary unit ambiguity in clone sizing.
 	newSize := strconv.FormatInt(sizeBytes, 10)
 	klog.Infof("CloneVolume : cloneName=%s", cloneName)
-	volumeID, err := sbclient.CloneVolume(ctx, spdkVol.VolumeID, cloneName, newSize, pvcFullName)
+	var volumeID string
+	err = cs.onActiveVolume(ctx, srcVolumeID, spdkVol, sbclient,
+		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
+			id, err := c.CloneVolume(ctx, h.VolumeID, cloneName, newSize, pvcFullName)
+			if err == nil {
+				// The clone lands beside the volume it was taken of.
+				volumeID, spdkVol, sbclient = id, h, c
+			}
+			return err
+		})
 	if err != nil {
 		if !classifyCreateVolumeError(err).IsIdempotent() {
 			klog.Errorf("error cloning volume: %v", err)
 			return nil, err
 		}
 		// 409: a clone with this name already exists, so reconcile it.
-		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes)
+		existingUUID, rerr := reconcileExistingVolume(ctx, sbclient, cloneName, sizeBytes, 0,
+			syncCluster(sbclient.ClusterID()))
 		if rerr != nil {
 			return nil, rerr
 		}

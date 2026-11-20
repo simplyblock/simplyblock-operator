@@ -239,6 +239,23 @@
 // persisting the phase without the deadline yields one that can never time out,
 // which is why [Machine.Snapshot] returns both together.
 //
+// # Stopping
+//
+// Aborting is an edge above, because a VolumeMigration's phase type already has
+// an Aborted value for the edge to point at. A resource whose states are the
+// steps of a workflow usually does not: its outcome is recorded in an outer
+// phase, and an Aborted step would be a value in the step enum that no step ever
+// means. [StateDef.Abortable] is the same rule declared as a property of the
+// state instead, so the graph still answers whether a stop can be honored
+// without the state type paying for it:
+//
+//	promoting: {Abortable: false, OnEnter: r.onPromoting(op)},
+//
+// A caller holding the machine asks [Machine.CanAbort]. A caller holding only a
+// persisted state — an admission webhook reading a status — asks
+// [UnabortableStates] or [UnabortableMultiStates], which is also what keeps a
+// table written beside the graph from drifting away from it.
+//
 // # One graph per action
 //
 // A VolumeMigration does one thing, so one graph describes it. An Ops resource
@@ -365,6 +382,20 @@ type StateDef[S comparable] struct {
 	// That is distinct from a state omitted from Config.States, which is an
 	// error.
 	To []S
+
+	// Abortable declares that the work this state represents can still be called
+	// off. It is the graph's answer to a caller asking to stop, and it defaults
+	// to false because a state that has started something is the common case and
+	// the safe default: the graph has to say a stop is safe, rather than say it
+	// is not.
+	//
+	// It is a property of the state rather than an edge to a terminal one,
+	// because the alternative costs a state. A resource whose state type is its
+	// own persisted enum would need an extra value in that enum for every
+	// workflow that can be aborted, and the outcome is usually already recorded
+	// somewhere else — in the outer phase, for the Ops kinds this was built for.
+	// See [Machine.CanAbort], which is what a caller asks.
+	Abortable bool
 
 	// OnEnter runs when the machine enters this state. It may be nil, in which
 	// case entering always succeeds and leaves the state without a deadline.
@@ -569,8 +600,9 @@ func (sm *Machine[S]) CurrentState() S {
 //	status, err := r.storage.MigrationStatus(sm.Context(), vm.Status.MigrationUUID)
 //
 // The returned context is replaced on every transition, so fetch it per use
-// rather than caching it. [Machine.ClearTimeout] replaces it too: dropping a
-// deadline cancels the work that deadline was bounding.
+// rather than caching it. [Machine.ClearTimeout] and [Machine.Extend] replace it
+// too: dropping a deadline cancels the work that deadline was bounding, and a
+// context's deadline cannot be moved in place.
 func (sm *Machine[S]) Context() context.Context {
 	return sm.stateCtx
 }
@@ -608,17 +640,63 @@ func (sm *Machine[S]) TimeoutReached() bool {
 }
 
 // ClearTimeout drops the current state's deadline without changing state,
-// acknowledging a timeout the caller has handled some other way:
+// acknowledging a timeout the caller has handled some other way and leaving the
+// state unbounded from then on:
 //
 //	if sm.TimeoutReached() {
-//		sm.ClearTimeout()             // do not report it again on the next pass
-//		r.extendValidationDeadline(vm) // the operator granted it more time
+//		sm.ClearTimeout() // do not report it again on the next pass
+//		r.escalate(vm)    // somebody else decides now
 //	}
+//
+// A caller that grants the state more time instead uses [Machine.Extend], which
+// keeps it bounded.
 //
 // It cancels the context returned by [Machine.Context], on the grounds that work
 // bounded by a deadline which has just fired is void.
 func (sm *Machine[S]) ClearTimeout() {
 	sm.arm(0)
+}
+
+// Extend moves the current state's deadline to by from now, when that is later
+// than the deadline it has, and reports whether it moved. The state does not
+// change and no hook runs.
+//
+// It is how a caller grants a state more time for work that is still moving: a
+// deadline bounding a state that stopped making progress rather than one that
+// takes long. Persist [Machine.Snapshot] afterward, as after any transition, or
+// the extension does not survive the process:
+//
+//	if progressed {
+//		sm.Extend(stallBudget) // a whole budget again from this pass
+//	}
+//	status.Step = statemachine.ToKube(sm.Snapshot())
+//
+// It only ever moves a deadline out, so asking for less than is left changes
+// nothing. A state with no deadline stays without one: the graph declared it
+// unbounded, and extending is about a budget the graph gave. A deadline that
+// already passed is extended like any other, which revives the state, so a
+// caller for whom a lapse must fail checks [Machine.TimeoutReached] first.
+//
+// A moved deadline replaces the context [Machine.Context] returns, canceling
+// the previous one, because a context's deadline cannot be changed in place.
+// Work bound to the old context should be re-issued against the new one.
+//
+// It reports false, and changes nothing, on a closed machine and from inside a
+// [TransitionFunc], where the deadline is the one the entering hook is about to
+// return.
+func (sm *Machine[S]) Extend(by time.Duration) bool {
+	if sm.entering != nil || sm.base.Err() != nil {
+		return false
+	}
+	current, bounded := sm.stateCtx.Deadline()
+	if !bounded {
+		return false
+	}
+	if !time.Now().Add(by).After(current) {
+		return false
+	}
+	sm.arm(by)
+	return true
 }
 
 // TransitionTo moves the machine to state to.

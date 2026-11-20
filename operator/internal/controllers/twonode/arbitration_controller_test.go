@@ -1,0 +1,309 @@
+package twonode
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/atlas/ptr"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
+)
+
+const (
+	ns      = "simplyblock"
+	workerA = "worker-a"
+	workerB = "worker-b"
+)
+
+type fakeAPI struct {
+	rec       *Record
+	err       error
+	reports   []string // "<node>=<fenced>" per ReportFencing call
+	reportErr error
+	// settings, clientHosts and releases record the host-fencing calls.
+	settings    []string // "<arbitration>,<hostFencing>"
+	clientHosts map[string][]string
+	releases    []string
+	releaseErr  error
+}
+
+func (f *fakeAPI) SetTwoNodeSettings(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, arb, hf bool) error {
+	f.settings = append(f.settings, fmt.Sprintf("%t,%t", arb, hf))
+	return nil
+}
+
+func (f *fakeAPI) SetClientHosts(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, nqns []string) error {
+	if f.clientHosts == nil {
+		f.clientHosts = map[string][]string{}
+	}
+	f.clientHosts[id] = nqns
+	return nil
+}
+
+func (f *fakeAPI) ReleaseHostFence(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string) error {
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	f.releases = append(f.releases, id)
+	return nil
+}
+
+func (f *fakeAPI) ReportFencing(_ context.Context, _ *simplyblockv1alpha2.StorageCluster, id string, fenced bool) error {
+	if f.reportErr != nil {
+		return f.reportErr
+	}
+	v := "false"
+	if fenced {
+		v = "true"
+	}
+	f.reports = append(f.reports, id+"="+v)
+	return nil
+}
+
+func (f *fakeAPI) Get(context.Context, *simplyblockv1alpha2.StorageCluster) (*Record, error) {
+	return f.rec, f.err
+}
+
+func setup(t *testing.T, api *fakeAPI, extraTaint *corev1.Taint) (*ArbitrationReconciler, client.Client) {
+	t.Helper()
+	cluster := testsupport.Cluster(ns, "edge", "c-uuid")
+	cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
+	cluster.Spec.EnableArbitration = ptr.To(true)
+	objs := make([]client.Object, 0, 5)
+	objs = append(objs, cluster)
+	for _, w := range []struct{ sn, worker, id string }{{"sn-a", workerA, "id-a"}, {"sn-b", workerB, "id-b"}} {
+		objs = append(objs, &simplyblockv1alpha2.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: w.sn, Namespace: ns},
+			Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: "edge", WorkerNode: w.worker},
+			Status:     simplyblockv1alpha2.StorageNodeStatus{UUID: w.id},
+		})
+		node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: w.worker},
+			Status: corev1.NodeStatus{Conditions: []corev1.NodeCondition{{Type: corev1.NodeReady, Status: corev1.ConditionTrue}}}}
+		if extraTaint != nil && w.worker == workerB {
+			node.Spec.Taints = []corev1.Taint{*extraTaint}
+		}
+		objs = append(objs, node)
+	}
+	scheme := testsupport.NewScheme(t, clientgoscheme.AddToScheme)
+	c := testsupport.NewClient(t, scheme,
+		[]client.Object{&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}, &corev1.Node{}}, objs...)
+	fixed := time.Date(2026, 10, 9, 12, 0, 0, 0, time.UTC)
+	return &ArbitrationReconciler{Client: c, Scheme: scheme, API: api, Now: func() time.Time { return fixed }}, c
+}
+
+func reconcile(t *testing.T, r *ArbitrationReconciler) ctrl.Result {
+	t.Helper()
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: ns, Name: "edge"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
+}
+
+func fencedTaint(t *testing.T, c client.Client, worker string) *corev1.Taint {
+	t.Helper()
+	var n corev1.Node
+	if err := c.Get(context.Background(), client.ObjectKey{Name: worker}, &n); err != nil {
+		t.Fatal(err)
+	}
+	for i := range n.Spec.Taints {
+		if n.Spec.Taints[i].Key == simplyblockv1alpha2.TaintStorageFenced {
+			return &n.Spec.Taints[i]
+		}
+	}
+	return nil
+}
+
+func TestVerdictTaintsTheFencedNode(t *testing.T) {
+	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
+	r, c := setup(t, api, nil)
+	if res := reconcile(t, r); res.RequeueAfter != requeueActive {
+		t.Fatalf("requeue %v", res.RequeueAfter)
+	}
+	tb := fencedTaint(t, c, workerB)
+	if tb == nil || tb.Value != "8" || tb.Effect != corev1.TaintEffectNoExecute {
+		t.Fatalf("worker-b taint %+v", tb)
+	}
+	if fencedTaint(t, c, workerA) != nil {
+		t.Fatal("the winner must not be tainted")
+	}
+	var sn simplyblockv1alpha2.StorageNode
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
+	if sn.Status.Remediation == nil || sn.Status.Remediation.StorageFencedEpoch != 8 {
+		t.Fatalf("remediation %+v", sn.Status.Remediation)
+	}
+	var cl simplyblockv1alpha2.StorageCluster
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
+	if a := cl.Status.Arbitration; a == nil || a.State != "partitioned" || len(a.FencedNodes) != 1 || a.FencedNodes[0] != workerB {
+		t.Fatalf("status %+v", a)
+	}
+}
+
+func TestTaintStaysThroughHealingAndLeavesWhenSteady(t *testing.T) {
+	api := &fakeAPI{rec: &Record{State: "healing", Epoch: 9, FencedNodes: []string{"id-b"}}}
+	r, c := setup(t, api, nil)
+	reconcile(t, r)
+	if fencedTaint(t, c, workerB) == nil {
+		t.Fatal("healing must keep the taint")
+	}
+	api.rec = &Record{State: "steady", Epoch: 9}
+	if res := reconcile(t, r); res.RequeueAfter != requeueSteady {
+		t.Fatalf("requeue %v", res.RequeueAfter)
+	}
+	if fencedTaint(t, c, workerB) != nil {
+		t.Fatal("steady must remove the taint")
+	}
+}
+
+func TestIdempotent(t *testing.T) {
+	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-b"}}}
+	r, c := setup(t, api, nil)
+	reconcile(t, r)
+	var before corev1.Node
+	_ = c.Get(context.Background(), client.ObjectKey{Name: workerB}, &before)
+	reconcile(t, r)
+	var after corev1.Node
+	_ = c.Get(context.Background(), client.ObjectKey{Name: workerB}, &after)
+	if before.ResourceVersion != after.ResourceVersion || len(after.Spec.Taints) != 1 {
+		t.Fatalf("second reconcile changed the node: %s -> %s, %d taints", before.ResourceVersion, after.ResourceVersion, len(after.Spec.Taints))
+	}
+}
+
+func TestControlPlaneUnreachableChangesNothing(t *testing.T) {
+	existing := &corev1.Taint{Key: simplyblockv1alpha2.TaintStorageFenced, Value: "7", Effect: corev1.TaintEffectNoExecute}
+	r, c := setup(t, &fakeAPI{err: errors.New("connection refused")}, existing)
+	if res := reconcile(t, r); res.RequeueAfter != requeueError {
+		t.Fatalf("requeue %v", res.RequeueAfter)
+	}
+	if tb := fencedTaint(t, c, workerB); tb == nil || tb.Value != "7" {
+		t.Fatalf("an unreadable record must leave the taint: %+v", tb)
+	}
+}
+
+func TestOutOfServiceIsReportedNeverSet(t *testing.T) {
+	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "steady", Epoch: 3}}
+	r, c := setup(t, api, oos)
+	reconcile(t, r)
+	var sn simplyblockv1alpha2.StorageNode
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
+	if sn.Status.Remediation == nil || !sn.Status.Remediation.OutOfService {
+		t.Fatalf("remediation %+v", sn.Status.Remediation)
+	}
+	var a corev1.Node
+	_ = c.Get(context.Background(), client.ObjectKey{Name: workerA}, &a)
+	for _, tt := range a.Spec.Taints {
+		if tt.Key == simplyblockv1alpha2.TaintOutOfService {
+			t.Fatal("the operator must never set out-of-service")
+		}
+	}
+}
+
+func TestArbitrationOffRemovesTaints(t *testing.T) {
+	existing := &corev1.Taint{Key: simplyblockv1alpha2.TaintStorageFenced, Value: "7", Effect: corev1.TaintEffectNoExecute}
+	r, c := setup(t, &fakeAPI{}, existing)
+	var cl simplyblockv1alpha2.StorageCluster
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
+	cl.Spec.EnableArbitration = ptr.To(false)
+	if err := c.Update(context.Background(), &cl); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r)
+	if fencedTaint(t, c, workerB) != nil {
+		t.Fatal("arbitration off must withdraw the taint")
+	}
+}
+
+// A cluster that is not Dual has no arbitration, whatever enableArbitration
+// says: admission refuses the combination, and the controller does not act on
+// one that reached it some other way.
+func TestArbitrationNeedsDualClusterMode(t *testing.T) {
+	existing := &corev1.Taint{Key: simplyblockv1alpha2.TaintStorageFenced, Value: "7", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "partitioned", Epoch: 8, FencedNodes: []string{"id-a"}}}
+	r, c := setup(t, api, existing)
+	var cl simplyblockv1alpha2.StorageCluster
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cl)
+	cl.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeStandard
+	if err := c.Update(context.Background(), &cl); err != nil {
+		t.Fatal(err)
+	}
+	reconcile(t, r)
+	if fencedTaint(t, c, workerA) != nil || fencedTaint(t, c, workerB) != nil {
+		t.Fatal("a Standard cluster must carry no storage-fenced taint")
+	}
+}
+
+func TestFencingEvidenceIsReportedOnChangeOnly(t *testing.T) {
+	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4}}
+	r, _ := setup(t, api, oos)
+	reconcile(t, r)
+	if !testsupport.Contains(api.reports, "id-b=true") || !testsupport.Contains(api.reports, "id-a=false") {
+		t.Fatalf("first pass reports %v", api.reports)
+	}
+	api.reports = nil
+	reconcile(t, r)
+	if len(api.reports) != 0 {
+		t.Fatalf("unchanged evidence was reported again: %v", api.reports)
+	}
+}
+
+func TestFailedFencingReportIsRetried(t *testing.T) {
+	oos := &corev1.Taint{Key: simplyblockv1alpha2.TaintOutOfService, Value: "nodeshutdown", Effect: corev1.TaintEffectNoExecute}
+	api := &fakeAPI{rec: &Record{State: "degraded", Epoch: 4}, reportErr: errors.New("503")}
+	r, c := setup(t, api, oos)
+	reconcile(t, r)
+	var sn simplyblockv1alpha2.StorageNode
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
+	if sn.Status.Remediation == nil || sn.Status.Remediation.ReportedFenced != nil {
+		t.Fatalf("a failed report must not be recorded: %+v", sn.Status.Remediation)
+	}
+	api.reportErr = nil
+	reconcile(t, r)
+	if !testsupport.Contains(api.reports, "id-b=true") {
+		t.Fatalf("the report was not retried: %v", api.reports)
+	}
+	_ = c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "sn-b"}, &sn)
+	if rf := sn.Status.Remediation.ReportedFenced; rf == nil || !*rf {
+		t.Fatalf("reportedFenced %v", rf)
+	}
+}
+
+// I-08: a supercluster has no nodes and no backend cluster, so arbitration
+// neither reads it nor writes its status, which belongs to the supercluster
+// reconciler.
+func TestArbitrationLeavesASuperclusterAlone(t *testing.T) {
+	r, c := setup(t, &fakeAPI{}, nil)
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec = simplyblockv1alpha2.StorageClusterSpec{Supercluster: &simplyblockv1alpha2.SuperclusterSpec{}}
+	if err := c.Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Status.Arbitration = &simplyblockv1alpha2.ArbitrationStatus{Message: "left by somebody else"}
+	if err := c.Status().Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+
+	reconcile(t, r)
+
+	if err := c.Get(context.Background(), client.ObjectKey{Namespace: ns, Name: "edge"}, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	if cluster.Status.Arbitration == nil {
+		t.Error("arbitration rewrote the status of a supercluster")
+	}
+}

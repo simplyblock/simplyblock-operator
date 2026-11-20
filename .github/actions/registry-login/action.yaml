@@ -1,0 +1,95 @@
+# Every image-publishing workflow in this repository logs in to the same set
+# of registries (Docker Hub, ECR Public, Quay.io, registry.simplyblock.ai)
+# before it builds or pushes. This action carries that login sequence once so
+# a workflow selects which registries it needs instead of repeating the steps.
+
+name: "Login to container registries"
+description: "Logs in to Docker Hub, ECR Public, Quay.io, and registry.simplyblock.ai as selected"
+
+inputs:
+  dockerhub:
+    description: "Log in to Docker Hub"
+    required: false
+    default: "true"
+  dockerhub-username:
+    required: false
+    default: ""
+  dockerhub-password:
+    required: false
+    default: ""
+  ecr:
+    description: "Configure AWS credentials and log in to ECR Public"
+    required: false
+    default: "true"
+  aws-access-key-id:
+    required: false
+    default: ""
+  aws-secret-access-key:
+    required: false
+    default: ""
+  quay:
+    description: "Log in to Quay.io"
+    required: false
+    default: "false"
+  quay-username:
+    required: false
+    default: ""
+  quay-password:
+    required: false
+    default: ""
+  internal:
+    description: "Log in to registry.simplyblock.ai"
+    required: false
+    default: "true"
+  internal-username:
+    required: false
+    default: ""
+  internal-password:
+    required: false
+    default: ""
+
+outputs:
+  ecr-registry:
+    description: "The ECR Public registry hostname (set only when the ecr input is true)"
+    value: ${{ steps.login-ecr.outputs.registry }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Log in to Docker Hub
+      if: inputs.dockerhub == 'true'
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      with:
+        username: ${{ inputs.dockerhub-username }}
+        password: ${{ inputs.dockerhub-password }}
+
+    - name: Configure AWS credentials
+      if: inputs.ecr == 'true'
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
+      with:
+        aws-access-key-id: ${{ inputs.aws-access-key-id }}
+        aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+        aws-region: us-east-1
+
+    - name: Log in to ECR Public
+      if: inputs.ecr == 'true'
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419 # v2
+      with:
+        registry-type: public
+
+    - name: Log in to Quay.io
+      if: inputs.quay == 'true'
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      with:
+        registry: quay.io
+        username: ${{ inputs.quay-username }}
+        password: ${{ inputs.quay-password }}
+
+    - name: Log in to registry.simplyblock.ai
+      if: inputs.internal == 'true'
+      uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      with:
+        registry: registry.simplyblock.ai
+        username: ${{ inputs.internal-username }}
+        password: ${{ inputs.internal-password }}

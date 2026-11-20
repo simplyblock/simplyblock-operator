@@ -21,6 +21,7 @@ const (
 // unnamed event) and the concatenation of its `data:` lines.
 type sseEvent struct {
 	Name string
+	ID   string
 	Data []byte
 }
 
@@ -31,15 +32,16 @@ type sseEvent struct {
 //
 // It implements the parsing rules relevant to this contract: `field: value`
 // lines (a single leading space after the colon is stripped), multi-line
-// `data` joined with "\n", comment lines (leading ":"), and dispatch on a blank
-// line. `id:` and `retry:` are accepted and ignored — the contract emits no
-// `id:`, and reconnect backoff is handled by the caller. A trailing event not
+// `data` joined with a newline, comment lines (a leading colon), and dispatch on a blank
+// line. `id:` is kept, because a deleted record's id arrives only there; `retry:` is
+// ignored, since reconnect backoff is handled by the caller. A trailing event not
 // terminated by a blank line is discarded, per the SSE specification.
 func decodeSSE(r io.Reader, onEvent func(sseEvent) error, onComment func()) error {
 	br := bufio.NewReader(r)
 
 	var (
 		name string
+		id   string
 		data []byte
 		have bool // a field has been seen since the last dispatch
 	)
@@ -47,8 +49,8 @@ func decodeSSE(r io.Reader, onEvent func(sseEvent) error, onComment func()) erro
 		if !have {
 			return nil
 		}
-		ev := sseEvent{Name: name, Data: data}
-		name, data, have = "", nil, false
+		ev := sseEvent{Name: name, ID: id, Data: data}
+		name, id, data, have = "", "", nil, false
 		return onEvent(ev)
 	}
 
@@ -71,6 +73,8 @@ func decodeSSE(r io.Reader, onEvent func(sseEvent) error, onComment func()) erro
 				switch field {
 				case "event":
 					name = value
+				case "id":
+					id = value
 				case "data":
 					if data == nil {
 						data = []byte{}
@@ -79,7 +83,7 @@ func decodeSSE(r io.Reader, onEvent func(sseEvent) error, onComment func()) erro
 					}
 					data = append(data, value...)
 				default:
-					// id, retry, or unknown field — ignored.
+					// retry or unknown field — ignored.
 				}
 			}
 		}
@@ -94,7 +98,7 @@ func decodeSSE(r io.Reader, onEvent func(sseEvent) error, onComment func()) erro
 
 // openStream issues the watch request for one resource path and returns the
 // live response. The caller owns resp.Body and must close it. The request
-// carries the stream's lifetime via ctx; cancelling ctx aborts the in-flight read.
+// carries the stream's lifetime via ctx; canceling ctx aborts the in-flight read.
 func openStream(ctx context.Context, cfg StreamConfig, path string) (*http.Response, error) {
 	url := strings.TrimRight(cfg.Endpoint, "/") + path
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

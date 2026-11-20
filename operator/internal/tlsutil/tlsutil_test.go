@@ -23,7 +23,7 @@ func TestBuildStorageNodeSetAPIClientTrustsServingCert(t *testing.T) {
 
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeSetAPIClient("default", caPath, "", "")
+	c, err := BuildStorageNodeSetAPIClient("simplyblock-storage-node-api", "default", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildStorageNodeSetAPIClient returned error: %v", err)
 	}
@@ -46,7 +46,7 @@ func TestBuildStorageNodeSetAPIClientRejectsBadCA(t *testing.T) {
 	if err := os.WriteFile(caPath, []byte("not a certificate"), 0o600); err != nil {
 		t.Fatalf("write temp ca: %v", err)
 	}
-	if _, err := BuildStorageNodeSetAPIClient("default", caPath, "", ""); err == nil {
+	if _, err := BuildStorageNodeSetAPIClient("simplyblock-storage-node-api", "default", caPath, "", ""); err == nil {
 		t.Fatalf("expected error on garbage CA bundle")
 	} else if !strings.Contains(err.Error(), "no usable certificates") {
 		t.Fatalf("unexpected error: %v", err)
@@ -54,7 +54,7 @@ func TestBuildStorageNodeSetAPIClientRejectsBadCA(t *testing.T) {
 }
 
 func TestBuildStorageNodeSetAPIClientMissingCAFile(t *testing.T) {
-	if _, err := BuildStorageNodeSetAPIClient("default", "/no/such/file", "", ""); err == nil {
+	if _, err := BuildStorageNodeSetAPIClient("simplyblock-storage-node-api", "default", "/no/such/file", "", ""); err == nil {
 		t.Fatalf("expected error on missing CA file")
 	}
 }
@@ -64,7 +64,7 @@ func TestBuildStorageNodeSetAPIClientShape(t *testing.T) {
 	defer server.Close()
 	caPath := writeCertPEM(t, server.Certificate())
 
-	c, err := BuildStorageNodeSetAPIClient("kube-storage", caPath, "", "")
+	c, err := BuildStorageNodeSetAPIClient("simplyblock-storage-node-api", "kube-storage", caPath, "", "")
 	if err != nil {
 		t.Fatalf("BuildStorageNodeSetAPIClient: %v", err)
 	}
@@ -86,7 +86,7 @@ func TestBuildStorageNodeSetAPIClientShape(t *testing.T) {
 func TestBuildStorageNodeSetAPIClientMTLSShape(t *testing.T) {
 	caPath, certPath, keyPath := writeSelfSignedCertPairPEM(t)
 
-	c, err := BuildStorageNodeSetAPIClient("simplyblock", caPath, certPath, keyPath)
+	c, err := BuildStorageNodeSetAPIClient("simplyblock-storage-node-api", "simplyblock", caPath, certPath, keyPath)
 	if err != nil {
 		t.Fatalf("BuildStorageNodeSetAPIClient: %v", err)
 	}

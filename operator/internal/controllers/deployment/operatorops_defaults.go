@@ -12,31 +12,13 @@ package deployment
 
 import (
 	"fmt"
-	"os"
 )
 
 const (
 	// NodeProbeImageEnv names the image the probe Jobs run. The chart sets it
 	// to the operator's own image, which is where the probe binary ships.
 	NodeProbeImageEnv = "SB_NODEPROBE_IMAGE"
-
-	// NodeProbeServiceAccountEnv names the account the probe writes its report
-	// as. It is overridable because a deployment may rename it, and defaulted
-	// because most do not.
-	NodeProbeServiceAccountEnv = "SB_NODEPROBE_SERVICE_ACCOUNT"
-
-	// DefaultNodeProbeServiceAccount is the account the chart creates: a Role
-	// with create and update on ConfigMaps in one namespace, and nothing else.
-	DefaultNodeProbeServiceAccount = "simplyblock-nodeprobe-sa"
 )
-
-// nodeProbeServiceAccount is the account the probe Jobs run as.
-func nodeProbeServiceAccount() string {
-	if name := os.Getenv(NodeProbeServiceAccountEnv); name != "" {
-		return name
-	}
-	return DefaultNodeProbeServiceAccount
-}
 
 // NodeProbeImageError is what a run reports when nothing told the operator
 // which image its probes should run.

@@ -120,43 +120,61 @@ func (c *ClusterClient) poolForVolume(ctx context.Context, lvolID string) (strin
 // The returned Connection may be shared across multiple APIClients that
 // all reach the same webappapi service.
 func NewConnection(endpoint string) (*Connection, error) {
-	mode, err := parseTLSMode(os.Getenv(envTLSConnect))
+	endpoint, transport, err := TLSConnect(endpoint)
 	if err != nil {
 		return nil, err
-	}
-
-	transport := http.DefaultTransport
-	if mode != tlsDisabled {
-		caFile := envOr(envTLSCAFile, defaultTLSCAFile)
-		caData, err := os.ReadFile(caFile)
-		if err != nil {
-			return nil, fmt.Errorf("read TLS CA %s: %w", caFile, err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caData) {
-			return nil, fmt.Errorf("no certificates parsed from TLS CA %s", caFile)
-		}
-
-		endpoint = strings.Replace(endpoint, "http://", "https://", 1)
-		tlsCfg := &tls.Config{RootCAs: pool, ServerName: tlsServerName(endpoint)}
-
-		if mode == tlsAuthenticated {
-			certFile := envOr(envTLSCert, defaultTLSCert)
-			keyFile := envOr(envTLSKey, defaultTLSKey)
-			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
-			if err != nil {
-				return nil, fmt.Errorf("load TLS client keypair (%s, %s): %w", certFile, keyFile, err)
-			}
-			tlsCfg.Certificates = []tls.Certificate{cert}
-		}
-
-		transport = &http.Transport{TLSClientConfig: tlsCfg}
 	}
 
 	return &Connection{
 		Endpoint: endpoint,
 		HTTP:     &http.Client{Timeout: cfgRPCTimeoutSeconds * time.Second, Transport: transport},
 	}, nil
+}
+
+// TLSConnect resolves the TLS mode from the environment (SB_TLS_CONNECT, the CA
+// bundle, and the client keypair for authenticated mode) and returns the
+// endpoint to dial and the transport to dial it with. On "disabled" it returns
+// the endpoint unchanged and http.DefaultTransport. Otherwise, it upgrades the
+// scheme to HTTPS and builds a transport carrying the CA pool, the server name,
+// and (in authenticated mode) the client keypair.
+//
+// Every control-plane client the driver builds goes through it, so the
+// hand-rolled client (NewConnection) and the generated replication client
+// (clusters.ReplicationClient) reach a TLS control plane the same way. A client
+// that set the transport but not the scheme, or the reverse, would still fail.
+func TLSConnect(endpoint string) (string, http.RoundTripper, error) {
+	mode, err := parseTLSMode(os.Getenv(envTLSConnect))
+	if err != nil {
+		return "", nil, err
+	}
+	if mode == tlsDisabled {
+		return endpoint, http.DefaultTransport, nil
+	}
+
+	caFile := envOr(envTLSCAFile, defaultTLSCAFile)
+	caData, err := os.ReadFile(caFile)
+	if err != nil {
+		return "", nil, fmt.Errorf("read TLS CA %s: %w", caFile, err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caData) {
+		return "", nil, fmt.Errorf("no certificates parsed from TLS CA %s", caFile)
+	}
+
+	endpoint = strings.Replace(endpoint, "http://", "https://", 1)
+	tlsCfg := &tls.Config{RootCAs: pool, ServerName: tlsServerName(endpoint)}
+
+	if mode == tlsAuthenticated {
+		certFile := envOr(envTLSCert, defaultTLSCert)
+		keyFile := envOr(envTLSKey, defaultTLSKey)
+		cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+		if err != nil {
+			return "", nil, fmt.Errorf("load TLS client keypair (%s, %s): %w", certFile, keyFile, err)
+		}
+		tlsCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return endpoint, &http.Transport{TLSClientConfig: tlsCfg}, nil
 }
 
 // NewClusterClient creates a cluster-scoped API client.
@@ -197,21 +215,50 @@ func (c *ClusterClient) GetRelationship(ctx context.Context, lvolID string) (*Re
 
 // CreateLVolData is the data structure for creating a logical volume
 type CreateLVolData struct {
-	LvolName     string `json:"name"`
-	Size         string `json:"size"`
-	LvsName      string `json:"pool"`
-	Fabric       string `json:"fabric"`
-	Encryption   bool   `json:"encrypt"`
-	MaxRWIOPS    string `json:"max_rw_iops"`
-	MaxRWmBytes  string `json:"max_rw_mbytes"`
-	MaxRmBytes   string `json:"max_r_mbytes"`
-	MaxWmBytes   string `json:"max_w_mbytes"`
-	MaxSize      string `json:"max_size"`
-	MaxNamespace int    `json:"max_namespace_per_subsys"`
-	HostID       string `json:"host_id"`
-	LvolID       string `json:"uid"`
-	Namespaced   bool   `json:"namespaced"`
-	PvcName      string `json:"pvc_name"`
+	LvolName string `json:"name"`
+	Size     string `json:"size"`
+	LvsName  string `json:"pool"`
+
+	// Every optional string below omits itself when empty, and that is load
+	// bearing rather than tidiness. None of these has an empty value that means
+	// anything: an unstated ceiling is no ceiling, an unstated fabric is the
+	// cluster's, an unstated host is any host. The control plane says so too —
+	// each one is declared with a default, or read behind a falsy check — but a
+	// default only applies to a key that is absent, and a key present with ""
+	// is a value somebody chose.
+	//
+	// What that costs is exact. The API validates the ceilings as integers, so
+	// "" is a 422 and the claim never binds; "" for the fabric parses and is
+	// worse, reaching add_lvol_ha to build the attribute name active_<fabric>,
+	// which names nothing.
+	//
+	// None of it was reachable until recently. Every class the operator
+	// generated carried all four ceilings as "0" and the fabric as `tcp`, because
+	// v1alpha1's StorageClassParameters defaulted them on a block that was
+	// always materialized. v1alpha2 made them optional, which is the first time
+	// a class could state nothing and mean it.
+	//
+	// The numbers and booleans deliberately keep theirs: false and 0 are values
+	// here, not absences, and omitempty cannot tell the two apart.
+	Fabric           string `json:"fabric,omitempty"`
+	Encryption       bool   `json:"encrypt"`
+	MaxRWIOPS        string `json:"max_rw_iops,omitempty"`
+	MaxRWmBytes      string `json:"max_rw_mbytes,omitempty"`
+	MaxRmBytes       string `json:"max_r_mbytes,omitempty"`
+	MaxWmBytes       string `json:"max_w_mbytes,omitempty"`
+	MaxSize          string `json:"max_size,omitempty"`
+	MaxNamespace     int    `json:"max_namespace_per_subsys"`
+	HostID           string `json:"host_id,omitempty"`
+	LvolID           string `json:"uid,omitempty"`
+	Namespaced       bool   `json:"namespaced"`
+	PvcName          string `json:"pvc_name,omitempty"`
+	ConsistencyGroup string `json:"consistency_group,omitempty"`
+	// Site is the site a volume of a stretched, sync-replicated cluster is born
+	// led from. The control plane refuses it on any other cluster.
+	Site string `json:"site,omitempty"`
+	// PriorityClass is the I/O service class, by name or by the control
+	// plane's number; absent is Default.
+	PriorityClass string `json:"priority_class,omitempty"`
 }
 
 // CreateVolume creates a logical volume and returns volume ID
@@ -266,9 +313,9 @@ func (c *ClusterClient) ListSnapshots(ctx context.Context) ([]*SnapshotResp, err
 // CloneSnapshot clones a snapshot to a new volume
 func (c *ClusterClient) CloneSnapshot(
 	ctx context.Context,
-	snapshotID, cloneName, newSize, pvcName string,
+	snapshotID, cloneName, newSize, pvcName, consistencyGroup string,
 ) (string, error) {
-	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName)
+	lvolID, err := c.API.cloneSnapshot(ctx, c.poolID, snapshotID, cloneName, newSize, pvcName, consistencyGroup)
 	if err != nil {
 		return "", err
 	}

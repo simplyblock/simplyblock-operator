@@ -12,7 +12,7 @@ stale copy is a defect a reviewer can see.
 | `operator/config/rbac/role.yaml` and the other `*_role*.yaml`                         | `+kubebuilder:rbac:` markers                                   | `make -C operator manifests`       | same                                                           |
 | `operator/config/webhook/manifests.yaml`                                              | `+kubebuilder:webhook:` markers                                | `make -C operator manifests`       | same                                                           |
 | `operator/api/**/zz_generated.deepcopy.go`                                            | the API structs                                                | `make -C operator generate`        | same                                                           |
-| `operator/dist/install.yaml`                                                          | `kustomize build config/default`                               | `make -C operator build-installer` | `Operator: Manifests` → `git diff`, then `kubeconform -strict` |
+| `operator/dist/install.yaml` (not committed; attached to each release)               | `kustomize build config/default`                               | `make -C operator build-installer` | `Operator: Manifests` → `kubeconform -strict`                  |
 | `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                                    | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
 | `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                                         | `make helm-sync`                   | same                                                           |
 | `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`                      | `make helm-sync`                   | same                                                           |
@@ -34,7 +34,7 @@ stale copy is a defect a reviewer can see.
 | `operator/bundle/`                                        | `make -C operator bundle`                                  | packaged as a release asset                |
 | `operator/Dockerfile.cross`                               | `docker-buildx` (removed again at the end)                 |                                            |
 | `.bin/*`                                                  | `scripts/tools.sh`                                         | `.gitignore: .bin/`                        |
-| `helm-charts/charts/<version>/*.tgz`, `charts/index.yaml` | `helm package` + `helm repo index` in the release workflow | committed by the release flow, not by hand |
+| `helm-charts/charts/<version>/*.tgz`, `charts/index.yaml` | `helm package` + `helm repo index` in the release workflow | `.gitignore`; published through the `charts` branch |
 
 ## Which symptom points at which artifact
 
@@ -83,7 +83,7 @@ What every drift job does, and what to run locally before pushing:
 ```bash
 # Operator: Manifests → manifests job
 make -C operator manifests generate && git diff --exit-code
-make -C operator build-installer   && git diff --exit-code
+make -C operator build-installer   && git diff --exit-code   # only the image pin can change
 kubeconform -strict -summary \
   -skip CustomResourceDefinition,Certificate,ClusterIssuer \
   operator/dist/install.yaml
@@ -106,9 +106,11 @@ request that touches `operator/**`.
 - **Helm chart** (`Helm: Release`, on a change to the chart's `Chart.yaml`):
   `helm package` into `helm-charts/charts/<version>/`, then
   `helm repo index --url https://install.simplyblock.io/helm`.
-- **Chart repository merge** (`Helm: Merge Charts`): the operator and CSI chart
-  artifacts are merged into one index by
-  `helm-charts/scripts/merge_helm_repos.py`.
+- **Chart repository** (`Repo: Release`, job `release-helm`): the operator and
+  CSI chart artifacts are added to the `charts` branch by
+  `helm-charts/scripts/add-released-charts.sh`, and the branch is uploaded to
+  `https://install.simplyblock.io/helm`. The branch holds every released chart,
+  so a release from any release branch keeps the others.
 
 The chart's `version:` is the release trigger, `appVersion:` is `latest`, and the
 component image tags live in `values.yaml`, so a new operator image needs both

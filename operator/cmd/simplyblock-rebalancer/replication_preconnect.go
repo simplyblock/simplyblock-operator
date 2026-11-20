@@ -23,9 +23,10 @@ import (
 // is INACCESSIBLE before the ANA flip, which is expected and correct. All we need
 // is the controller to exist so the kernel can switch to it immediately.
 //
-// Source paths are included in REPL_CONNECTIONS to be safe; EnsureMigrationPaths
-// is idempotent for already-connected controllers, so existing source paths are
-// left untouched.
+// Source paths are included in REPL_CONNECTIONS to be safe; connecting is
+// idempotent for already-connected controllers, so existing source paths are
+// left untouched. Success requires EVERY path live: the source paths alone
+// would otherwise satisfy a one-live-path check while no target path exists.
 //
 // Environment variables:
 //   - REPL_CONNECTIONS  — JSON array of volumemigration.Connection (required)
@@ -68,7 +69,7 @@ func runReplicationPreconnect() {
 
 	var lastErr error
 	for attempt := 1; attempt <= attempts; attempt++ {
-		if err := volumemigration.EnsureMigrationPaths(ctx, sysRoot, conns); err != nil {
+		if err := volumemigration.EnsureAllMigrationPaths(ctx, sysRoot, conns); err != nil {
 			lastErr = err
 			log.Printf("replication-preconnect: attempt %d/%d failed: %v", attempt, attempts, err)
 			if attempt < attempts {

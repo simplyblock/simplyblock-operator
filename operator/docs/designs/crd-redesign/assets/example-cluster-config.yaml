@@ -25,7 +25,7 @@ spec:
   approved: false
 
   # Detected from the markers a distribution leaves, not asked for (§8.1). One of
-  # Vanilla, OpenShift, Rancher, K3s, or Talos.
+  # Vanilla, OpenShift, Rancher, K3s, Talos, EKS, GKE, AKS, or OKE.
   environment: OpenShift
   edgeCluster: false
 

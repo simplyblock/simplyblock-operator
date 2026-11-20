@@ -1,11 +1,14 @@
 # Root Makefile orchestrating build & test across the monorepo components:
-#   atlas-lib (shared library), csi-driver, operator
+#   atlas-lib (shared library), csi-driver, operator, fleet-manager, support-tool, gateway
 #
 # Each target delegates to the relevant component's own Makefile.
 
 ATLAS_DIR       := atlas-lib
 CSI_DIR         := csi-driver
 OPERATOR_DIR    := operator
+FLEET_DIR       := fleet
+SUPPORT_DIR     := support-tool
+GATEWAY_DIR     := gateway
 HELM_DIR        := helm-charts
 INTEGRATION_DIR := test/integration
 
@@ -50,21 +53,24 @@ SBCLI_REQUIREMENTS := $(wildcard $(SBCLI_DIR)/requirements.txt)
         atlas atlas-build atlas-test atlas-lint atlas-fmt atlas-vet \
         csi csi-build csi-test csi-lint csi-fmt csi-vet \
         operator operator-manifests operator-build-installer operator-build operator-test operator-lint operator-fmt operator-vet \
+        fleet fleet-manifests fleet-build fleet-test fleet-lint fleet-fmt fleet-vet \
+        support-tool support-tool-build support-tool-run support-tool-test support-tool-lint support-tool-fmt support-tool-vet \
+        gateway gateway-build gateway-test gateway-lint gateway-fmt gateway-vet \
         helm-sync \
         configure openapi-sync openapi-diff openapi-ref openapi-checkout
 
 # ─── Aggregate ──────────────────────────────────────────────────────────────
 all: build test ## Build and test every component.
 
-build: atlas-build csi-build operator-build-installer operator-build helm-sync ## Build every component.
+build: atlas-build csi-build operator-build-installer operator-build fleet-build support-tool-build gateway-build helm-sync ## Build every component.
 
-test: atlas-test csi-test operator-test ## Test every component.
+test: atlas-test csi-test operator-test fleet-test support-tool-test gateway-test ## Test every component.
 
-lint: atlas-lint csi-lint operator-lint ## Lint every component.
+lint: atlas-lint csi-lint operator-lint fleet-lint support-tool-lint gateway-lint ## Lint every component.
 
-fmt: atlas-fmt csi-fmt operator-fmt ## Format every component.
+fmt: atlas-fmt csi-fmt operator-fmt fleet-fmt support-tool-fmt gateway-fmt ## Format every component.
 
-vet: atlas-vet csi-vet operator-vet ## Vet every component.
+vet: atlas-vet csi-vet operator-vet fleet-vet support-tool-vet gateway-vet ## Vet every component.
 
 # ─── atlas ────────────────────────────────────────────────────────────────
 atlas: atlas-build atlas-test ## Build and test atlas.
@@ -114,6 +120,10 @@ operator-build-installer: ## Generate the operator dist/install.yaml.
 operator-build: ## Build the operator manager binary.
 	$(MAKE) -C $(OPERATOR_DIR) build
 
+.PHONY: operator-build-upgrade
+operator-build-upgrade: ## Build the API upgrade tool, which is not in the operator image.
+	$(MAKE) -C $(OPERATOR_DIR) build-upgrade
+
 operator-test: ## Test operator.
 	$(MAKE) -C $(OPERATOR_DIR) test
 
@@ -126,11 +136,80 @@ operator-fmt: ## Format operator.
 operator-vet: ## Vet operator.
 	$(MAKE) -C $(OPERATOR_DIR) vet
 
+# ─── fleet-manager ──────────────────────────────────────────────────────────
+# The hub half of a multi-cluster installation. It is built and tested with the
+# rest, and it reaches no install path of its own: nothing a standalone
+# deployment installs comes from here.
+fleet: fleet-manifests fleet-build fleet-test ## Manifests, build and test the fleet manager.
+
+fleet-manifests: ## Generate the fleet CRDs.
+	$(MAKE) -C $(FLEET_DIR) manifests
+
+fleet-build: ## Build the fleet manager binary.
+	$(MAKE) -C $(FLEET_DIR) build
+
+fleet-test: ## Test the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) test
+
+fleet-lint: ## Lint the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) lint
+
+fleet-fmt: ## Format the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) fmt
+
+fleet-vet: ## Vet the fleet manager.
+	$(MAKE) -C $(FLEET_DIR) vet
+
+# ─── support-tool ───────────────────────────────────────────────────────────
+# The local web application support agents read support bundles and build
+# ClusterDeploymentConfigs with. It runs on the agent's machine only.
+support-tool: support-tool-build support-tool-test ## Build and test the support tool.
+
+support-tool-build: ## Build the support tool binary.
+	$(MAKE) -C $(SUPPORT_DIR) build
+
+support-tool-run: ## Serve the support tool on 127.0.0.1:8099.
+	$(MAKE) -C $(SUPPORT_DIR) run
+
+support-tool-test: ## Test the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) test
+
+support-tool-lint: ## Lint the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) lint
+
+support-tool-fmt: ## Format the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) fmt
+
+support-tool-vet: ## Vet the support tool.
+	$(MAKE) -C $(SUPPORT_DIR) vet
+
+# ─── gateway ────────────────────────────────────────────────────────────────
+# The S3 gateway: an embedded versitygw (github.com/versity/versitygw/embedgw)
+# over its own posix backend. No manifests step: unlike fleet, this component
+# carries no CRDs of its own.
+gateway: gateway-build gateway-test ## Build and test the gateway.
+
+gateway-build: ## Build the gateway binary.
+	$(MAKE) -C $(GATEWAY_DIR) build
+
+gateway-test: ## Test the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) test
+
+gateway-lint: ## Lint the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) lint
+
+gateway-fmt: ## Format the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) fmt
+
+gateway-vet: ## Vet the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) vet
+
 # ─── helm ─────────────────────────────────────────────────────────────────
 # Sync the operator's generated CRDs and RBAC roles into the Helm chart. Depends
 # on operator-manifests so the copied sources are freshly generated (not stale).
-helm-sync: operator-manifests ## Sync operator CRDs and RBAC into the Helm chart.
+helm-sync: operator-manifests ## Sync operator CRDs and RBAC into the Helm chart, and the chart's values into the support tool.
 	bash $(HELM_DIR)/scripts/sync-from-operator.sh $(OPERATOR_DIR)
+	$(MAKE) -C $(SUPPORT_DIR) chart
 
 # ─── openapi ──────────────────────────────────────────────────────────────
 # shared/openapi.json is the contract atlas-lib's generated client and the
@@ -199,6 +278,50 @@ openapi-sync: openapi-checkout $(OPENAPI_STAMP) ## Re-export the spec from SBCLI
 	  $(OPENAPI_PY) shared/export-openapi.py summarize --old $$old --new $(OPENAPI_SPEC)
 	$(MAKE) -C $(ATLAS_DIR) generate
 	$(MAKE) -C $(INTEGRATION_DIR) generate
+
+# ─── go workspace ─────────────────────────────────────────────────────────
+# The modules go.work lists, read from the workspace itself so a module added to
+# it is covered without touching this file. A module missing from go.work is
+# skipped by both targets below.
+#
+# A shell fragment rather than $(shell ...), because make discards the exit
+# status of $(shell ...): a workspace that cannot be loaded would list nothing,
+# and the target would edit go.work alone and report success. Each recipe runs
+# it before changing anything, and stops when the listing fails or is empty.
+GO_WORK_MODULES_SH = mods=$$(go list -m -f '{{.Dir}}') && test -n "$$mods" || { \
+	  echo "cannot list the modules in go.work; nothing was changed"; \
+	  exit 1; }
+
+.PHONY: go-sync go-version
+go-sync: ## Align the workspace modules' dependency versions, then tidy each module.
+	@$(GO_WORK_MODULES_SH); \
+	go work sync || exit 1; \
+	for mod in $$mods; do \
+	  echo "go mod tidy: $$mod"; \
+	  (cd $$mod && go mod tidy) || exit 1; \
+	done
+
+# The go line is set in each module and in go.work, the toolchain line only in
+# go.work: the workspace picks the toolchain for every module it builds.
+#
+# The toolchain is fetched before anything is edited, so a version that does not
+# exist is refused up front. The edits run with GOTOOLCHAIN=local: once go.work
+# names the new version, any other go command would switch to that toolchain
+# first, and a failed switch would leave the edit half done.
+go-version: ## Set the Go version of go.work and every workspace module (GO_VERSION=X.Y.Z).
+	@echo "$(GO_VERSION)" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$$' || { \
+	  echo "GO_VERSION must be X.Y.Z, got '$(GO_VERSION)': make go-version GO_VERSION=1.26.10"; \
+	  exit 1; }
+	@GOTOOLCHAIN=go$(GO_VERSION) go version >/dev/null || { \
+	  echo "toolchain go$(GO_VERSION) is not available; nothing was changed"; \
+	  exit 1; }
+	@$(GO_WORK_MODULES_SH); \
+	echo "go work edit -go=$(GO_VERSION) -toolchain=go$(GO_VERSION)"; \
+	GOTOOLCHAIN=local go work edit -go=$(GO_VERSION) -toolchain=go$(GO_VERSION) || exit 1; \
+	for mod in $$mods; do \
+	  echo "go mod edit -go=$(GO_VERSION): $$mod"; \
+	  GOTOOLCHAIN=local go mod edit -go=$(GO_VERSION) $$mod/go.mod || exit 1; \
+	done
 
 # ─── help ─────────────────────────────────────────────────────────────────
 help: ## Show this help.

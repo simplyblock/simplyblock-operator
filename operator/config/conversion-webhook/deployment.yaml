@@ -1,0 +1,72 @@
+# The conversion webhook's own workload.
+#
+# It is a separate Deployment from the operator on purpose
+# (design-api-upgrade.md §6.1): a CRD whose conversion strategy is Webhook cannot
+# be read while the webhook is unreachable, and the resources an administrator
+# reads in order to diagnose a failed operator are simplyblock custom resources.
+#
+# These manifests are applied by the upgrade tool rather than by the chart, which
+# is why they live in a directory of their own rather than under config/default.
+# The binary ships in the operator image under a second entry point (§29.3), so
+# the image here is the operator's.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: simplyblock-operator-conversion-webhook
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/component: conversion-webhook
+spec:
+  # Two replicas, because this is in the read path for seven kinds: a single
+  # replica being rescheduled makes them unreadable for the duration.
+  replicas: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: simplyblock-operator
+      app.kubernetes.io/component: conversion-webhook
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: simplyblock-operator
+        app.kubernetes.io/component: conversion-webhook
+    spec:
+      serviceAccountName: simplyblock-operator-conversion-webhook
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: conversion-webhook
+          image: controller:latest
+          command: ["/usr/local/bin/conversion-webhook"]
+          args:
+            - --webhook-bind-port=9443
+            - --health-probe-bind-address=:8081
+          ports:
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop: ["ALL"]
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 10m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
+      terminationGracePeriodSeconds: 10

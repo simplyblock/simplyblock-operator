@@ -14,7 +14,7 @@ import (
 
 	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/autoplacement"
 	"github.com/simplyblock/simplyblock-operator/internal/volumemigration"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -45,7 +45,7 @@ type primaryNodeSelector interface {
 // SimplyblockVolumePlacementInjector is a mutating admission webhook that computes the
 // least-loaded eligible storage node for a new PVC's primary volume — using the same
 // latency-deviation signal the auto-rebalancer (Issue #130) uses — and stamps it onto the
-// PVC as the simplyblock.io/host-id annotation, which spdk-csi already reads and forwards
+// PVC as the simplyblock.io/host-id annotation, which spdk-csi already reads and forward
 // as host_id on CreateVolume. failurePolicy=ignore, and every skip/error path below allows
 // the PVC unmodified, so this can never block volume provisioning: sbcli's own
 // weighted-random pick (_get_next_3_nodes) runs as the fallback exactly as it does today.
@@ -71,7 +71,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 	// controller, drain, and rebalancer recognize, and which the CSI driver reads
 	// as the primary host_id source at CreateVolume — and drop the legacy host-id
 	// forms. The user's choice wins, so we do not run load-based placement.
-	hostID := pvc.Annotations[kube.AnnoHostID]
+	hostID, _ := kube.KeyHostID.Get(pvc.Annotations)
 	if hostID == "" {
 		hostID = pvc.Annotations[kube.DeprecatedAnnoHostID]
 	}
@@ -80,11 +80,12 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 		if patched.Annotations == nil {
 			patched.Annotations = make(map[string]string)
 		}
-		// Do not clobber an existing explicit selected-storage-node pin.
-		if patched.Annotations[kube.AnnoSelectedStorageNode] == "" {
-			patched.Annotations[kube.AnnoSelectedStorageNode] = hostID
+		// Do not clobber an existing explicit selected-storage-node pin, under
+		// whichever prefix the claim carries it.
+		if pinned, _ := kube.KeySelectedStorageNode.Get(patched.Annotations); pinned == "" {
+			patched.Annotations = kube.KeySelectedStorageNode.Set(patched.Annotations, hostID)
 		}
-		delete(patched.Annotations, kube.AnnoHostID)
+		kube.KeyHostID.Delete(patched.Annotations)
 		delete(patched.Annotations, kube.DeprecatedAnnoHostID)
 		log.Info("Exchanged legacy host-id for selected-storage-node", "node", hostID)
 		return patchResponse(pvc, patched)
@@ -92,7 +93,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 
 	// An explicit selected-storage-node pin is honored as-is; never override it
 	// with a load-based pick.
-	if pvc.Annotations[kube.AnnoSelectedStorageNode] != "" {
+	if pinned, _ := kube.KeySelectedStorageNode.Get(pvc.Annotations); pinned != "" {
 		log.V(1).Info("Skipping: selected-storage-node already set")
 		return admission.Allowed("selected-storage-node already set")
 	}
@@ -116,7 +117,7 @@ func (h *SimplyblockVolumePlacementInjector) Handle(
 	if patched.Annotations == nil {
 		patched.Annotations = make(map[string]string)
 	}
-	patched.Annotations[kube.AnnoPlacementHint] = nodeUUID
+	patched.Annotations = kube.KeyPlacementHint.Set(patched.Annotations, nodeUUID)
 	log.Info("Selected primary node for new volume", "nodeUUID", nodeUUID, "clusterUUID", clusterUUID)
 	return patchResponse(pvc, patched)
 }
@@ -170,12 +171,12 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 	clusterUUID string,
 	log logr.Logger,
 ) (nodeUUID string, ok bool) {
-	var list simplyblockv1alpha1.StorageClusterList
+	var list simplyblockv1alpha2.StorageClusterList
 	if err := h.Client.List(ctx, &list); err != nil {
 		log.Error(err, "Failed to list StorageClusters")
 		return "", false
 	}
-	var cr *simplyblockv1alpha1.StorageCluster
+	var cr *simplyblockv1alpha2.StorageCluster
 	for i := range list.Items {
 		if list.Items[i].Status.UUID == clusterUUID {
 			cr = &list.Items[i]
@@ -193,7 +194,7 @@ func (h *SimplyblockVolumePlacementInjector) selectPrimaryNode(
 	// the same latency-deviation signal — so it is gated on LatencyBenchmarkEnabled
 	// (opt-in, default false), not on the rebalancing Enabled flag.
 	spec := autoplacement.GetConfig(cr.Spec.VolumeAutoPlacement)
-	if !ptr.BoolFromOrFalse(spec.LatencyBenchmarkEnabled) {
+	if !ptr.BoolFromOrFalse(spec.EnableLatencyBenchmark) {
 		log.V(1).Info("Skipping: latency benchmarking not enabled (auto-placement requires it)", "cluster", cr.Name)
 		return "", false
 	}

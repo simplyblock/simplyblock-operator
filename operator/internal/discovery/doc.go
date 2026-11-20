@@ -32,9 +32,10 @@
 //     unclaimed storage hangs off each, and picks one. It does not consider
 //     whether the data NIC is on the same node, or whether one node's disks are
 //     faster, or whether two storage nodes should be placed on one worker.
-//   - [SingleNodeSet] puts every group in one node set. A real fleet's node
-//     sets are racks, and nothing in a probe report says which rack a worker is
-//     in.
+//   - [SplitByRole] puts each role tier in a node set of its own, and the size
+//     split then divides a tier into near-equal members of at most 32 storage
+//     nodes, by region, network, and failure domain. Nothing in a probe report
+//     says which rack a worker is in beyond the labels the split reads.
 //   - [WorkerHasDevices] is the only worker rule. Nothing here reads a node's
 //     labels, taints, capacity, or kubelet version to decide whether it should
 //     take part.

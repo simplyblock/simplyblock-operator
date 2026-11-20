@@ -1,0 +1,3 @@
+enableJournalDevice is set because spec.discover.forceJournalDevice asked for it: the smallest disk of every node carries the journal instead of data, the smallest named being 2T (/dev/vdb) on worker-01. This is the line to remove to carve the journal from a partition instead
+stripe is 1+0 as a single-node cluster (clusterMode Single), which protects nothing: the worker hands over 1 device for data, and a redundant scheme places each chunk of a stripe on its own device, so 1+1 needs two. A cluster's stripe cannot be changed afterward
+wrote discovered-discover-dev-14 in Draft: 1 workers with 2 block devices, in 1 group(s) across 1 node set(s); 1 refusal(s)

@@ -1,4 +1,4 @@
-{{- if and .Values.operator.enabled .Values.controlplane.observability.enabled -}}
+{{- if .Values.controlplane.observability.enabled -}}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -46,22 +46,13 @@ spec:
     metadata:
       labels:
         app: simplyblock-fluent-bit
+      annotations:
+        # Restarts fluent-bit when its config changes; it reads the config only at start.
+        checksum/config: {{ include (print $.Template.BasePath "/controlplane_configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: simplyblock-fluent-bit-sa
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            - matchExpressions:
-              - key: io.simplyblock.node-type
-                operator: Exists
-            {{- if .Values.controlplane.nodeSelector.create }}
-            - matchExpressions:
-              - key: {{ .Values.controlplane.nodeSelector.key }}
-                operator: In
-                values:
-                - {{ .Values.controlplane.nodeSelector.value }}
-            {{- end }}
+      # Runs on every node: the control plane, FoundationDB, and the monitoring
+      # pod also log, and the Lua filter already selects the pods to ship.
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
       {{- range .Values.controlplane.tolerations.list }}

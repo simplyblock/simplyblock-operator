@@ -1,0 +1,16 @@
+{
+  "name": "wiped-exfat",
+  "tool": "mkfs.exfat",
+  "tool_version": "exfatprogs version : 1.2.9",
+  "command": "mkfs.exfat, then wipefs -a",
+  "device_size": 67108864,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:15:49Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "39582cbf221fd5f6ae02e5ba07d4895187a91827c22c8ac4d0ac599904144174",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "wipefs -a reported: 8 bytes were erased at offset 0x00000003 (exfat): 45 58 46 41 54 20 20 20;2 bytes were erased at offset 0x000001fe (dos): 55 aa;calling ioctl to re-read partition table: Invalid argument. "
+}

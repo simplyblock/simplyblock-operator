@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -49,7 +50,7 @@ func newTestControllerServer(t *testing.T, mock *mockSBCLI) *Server {
 		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 	})
 
-	cs, err := New(cd, nil)
+	cs, err := New(cd, nil, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -98,6 +99,87 @@ func TestDeleteVolume_ControlPlaneErrorMapping(t *testing.T) {
 			_, err := cs.DeleteVolume(ctx, &csi.DeleteVolumeRequest{VolumeId: volMapID})
 			return err
 		})
+}
+
+// testReplActiveVolumeID stands in for the volume a relocate round trip
+// leaves actually serving the workload -- the SECOND hop's clone, which the
+// FIRST pairing's records know only as active_lvol_id.
+const testReplActiveVolumeID = "88888888-8888-8888-8888-888888888890"
+
+// Regression: 2026-09-24-delete-foreign-handle-leak — Ramen keeps every PV on
+// the ORIGINAL volumeHandle across fail-overs, so the DeleteVolume that
+// cleans up a retired side arrives carrying an identity whose own lvol record
+// is already reaped, while the actual local copy -- the pairing's superseded
+// target clone -- lives on untouched (confirmed live 2026-09-24, relocate
+// M-02 round trip: cluster B kept clone 6102a48e, with the replication policy
+// still attached to it, after its PV was deleted). DeleteVolume must follow
+// the relationship and remove the retired, non-active members.
+func TestDeleteVolumeRemovesTheRetiredReplicaBehindAForeignHandle(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-retired-clone", Size: 1 << 30,
+	}
+	mock.volumes[testReplActiveVolumeID] = &mockVolume{
+		UUID: testReplActiveVolumeID, Name: "repl-vol-active", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplActiveVolumeID,
+	}
+	delete(mock.volumes, testReplVolumeID) // the original's record, reaped after fail-over
+
+	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: testReplVolID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mock.volumes[testReplTargetVolumeID]; ok {
+		t.Error("the retired clone still exists: DeleteVolume never followed the relationship to it")
+	}
+	if _, ok := mock.volumes[testReplActiveVolumeID]; !ok {
+		t.Error("the ACTIVE volume was deleted: the workload was running on it")
+	}
+}
+
+// The safety half of the same contract, pinned so the cleanup above can never
+// be "fixed" into deleting the live side: when the pairing's target IS the
+// active volume (a fail-over whose destination still serves the workload),
+// a DeleteVolume carrying the dead source handle must delete nothing.
+func TestDeleteVolumeNeverDeletesTheActiveReplicaThroughADeadHandle(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+	mock.volumes[testReplTargetVolumeID] = &mockVolume{
+		UUID: testReplTargetVolumeID, Name: "repl-vol-live", Size: 1 << 30,
+	}
+	mock.replicationRelationship[testReplVolumeID] = map[string]any{
+		"replication_id":    "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+		"direction":         "to_target",
+		"mode":              "failover",
+		"state":             "failed_over",
+		"is_source":         true,
+		"source_cluster_id": sanityClusterID, "source_lvol_id": testReplVolumeID,
+		"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": testReplTargetVolumeID,
+		"target_nqn": "nqn.test", "target_ns_id": 1,
+		"active": "target", "active_lvol_id": testReplTargetVolumeID,
+	}
+	delete(mock.volumes, testReplVolumeID)
+
+	_, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: testReplVolID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mock.volumes[testReplTargetVolumeID]; !ok {
+		t.Error("the ACTIVE volume was deleted through the dead source handle")
+	}
 }
 
 // TestControllerExpandVolume_ControlPlaneErrorMapping drives ControllerExpandVolume
@@ -260,5 +342,52 @@ func TestCreateVolume_RetryRecoversFromBrokenVolume(t *testing.T) {
 	}
 	if matches != 1 {
 		t.Errorf("expected exactly one volume named %q after recovery, found %d", pvName, matches)
+	}
+}
+
+// A volume moved ten times keeps its first handle, so its retired copies sit
+// up to ten hops out. The cleanup walk was capped at 8 hops -- the cap the
+// chain walks lost on 2026-10-03 -- and left the ninth retired copy behind.
+func TestDeleteVolumeRemovesEveryRetiredReplicaOfALongChain(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newReplicationTestServer(t, mock)
+
+	const moves = 10
+	member := func(i int) string {
+		if i == 0 {
+			return testReplVolumeID
+		}
+		return fmt.Sprintf("99999999-0000-0000-0000-%012d", i)
+	}
+	active := member(moves)
+	for i := 1; i <= moves; i++ {
+		mock.volumes[member(i)] = &mockVolume{UUID: member(i), Name: fmt.Sprintf("hop-%d", i), Size: 1 << 30}
+	}
+	for i := 0; i < moves; i++ {
+		mock.replicationRelationship[member(i)] = map[string]any{
+			"replication_id":    fmt.Sprintf("aaaaaaaa-bbbb-cccc-dddd-%012d", i),
+			"direction":         "to_target",
+			"mode":              "migration",
+			"state":             "cutover_done",
+			"is_source":         true,
+			"source_cluster_id": sanityClusterID, "source_lvol_id": member(i),
+			"target_cluster_id": sanityClusterID, "target_pool_id": sanityPoolUUID, "target_lvol_id": member(i + 1),
+			"target_nqn": "nqn.test", "target_ns_id": 1,
+			"active": "target", "active_lvol_id": active,
+		}
+	}
+	delete(mock.volumes, testReplVolumeID)
+
+	if _, err := cs.DeleteVolume(context.Background(), &csi.DeleteVolumeRequest{VolumeId: testReplVolID}); err != nil {
+		t.Fatal(err)
+	}
+	for i := 1; i < moves; i++ {
+		if _, ok := mock.volumes[member(i)]; ok {
+			t.Errorf("retired copy %d of %d still exists", i, moves-1)
+		}
+	}
+	if _, ok := mock.volumes[active]; !ok {
+		t.Error("the ACTIVE volume was deleted")
 	}
 }

@@ -21,7 +21,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/simplyblock/atlas/kube"
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
@@ -56,15 +56,15 @@ func makePlacementStorageClass(provisioner string, params map[string]string) *st
 	}
 }
 
-func makePlacementCluster(autoRebalancing *simplyblockv1alpha1.VolumeAutoPlacementSettings) *simplyblockv1alpha1.StorageCluster {
-	return &simplyblockv1alpha1.StorageCluster{
+func makePlacementCluster(autoRebalancing *simplyblockv1alpha2.VolumeAutoPlacementSettings) *simplyblockv1alpha2.StorageCluster {
+	return &simplyblockv1alpha2.StorageCluster{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster1", Namespace: "default"},
-		Spec:       simplyblockv1alpha1.StorageClusterSpec{VolumeAutoPlacement: autoRebalancing},
+		Spec:       simplyblockv1alpha2.StorageClusterSpec{VolumeAutoPlacement: autoRebalancing},
 	}
 }
 
 // applyPVCPatches applies the RFC6902 patch set produced by Handle to the original PVC
-// via a real JSON-patch library, mirroring what the k8s apiserver does — avoids having to
+// via a real JSON-patch library, mirroring what the K8s apiserver does — avoids having to
 // guess the exact path granularity the diff library chose for the annotations map.
 func applyPVCPatches(t *testing.T, pvc *corev1.PersistentVolumeClaim, patches []jsonpatch.JsonPatchOperation) *corev1.PersistentVolumeClaim {
 	t.Helper()
@@ -113,7 +113,8 @@ type promSample struct {
 
 // fakePrometheusServer serves a canned instant-query vector result for any GET request to
 // /api/v1/query, in the exact envelope prometheus/client_golang's API client expects:
-// {"status":"success","data":{"resultType":"vector","result":[...]}}.
+// The body is a Prometheus vector response: a success status carrying a data
+// object whose resultType is vector and whose result list is the samples.
 func fakePrometheusServer(t *testing.T, samples []promSample) *httptest.Server {
 	t.Helper()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -156,16 +157,16 @@ func fakePrometheusServer(t *testing.T, samples []promSample) *httptest.Server {
 func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) {
 	// Auto-placement is gated on LatencyBenchmarkEnabled (its real dependency),
 	// independent of the rebalancing Enabled flag.
-	enabledRebalancing := &simplyblockv1alpha1.VolumeAutoPlacementSettings{
-		LatencyBenchmarkEnabled: ptr.To(true),
-		PrometheusURL:           ptr.To("http://unused:9090"),
+	enabledRebalancing := &simplyblockv1alpha2.VolumeAutoPlacementSettings{
+		EnableLatencyBenchmark: ptr.To(true),
+		PrometheusURL:          ptr.To("http://unused:9090"),
 	}
 
 	cases := []struct {
 		name    string
 		pvc     *corev1.PersistentVolumeClaim
 		sc      *storagev1.StorageClass
-		cluster *simplyblockv1alpha1.StorageCluster
+		cluster *simplyblockv1alpha2.StorageCluster
 	}{
 		{
 			name: "selected-storage-node already set — skipped",
@@ -211,23 +212,22 @@ func TestSimplyblockVolumePlacementInjector_Handle_SkipConditions(t *testing.T) 
 			cluster: makePlacementCluster(nil),
 		},
 		{
-			// Rebalancing enabled but latency benchmarking off → auto-placement is
-			// skipped, proving placement is gated on latency measurement, not on the
-			// rebalancing Enabled flag.
+			// Latency benchmarking off means auto-placement is skipped, which
+			// proves placement is gated on latency measurement rather than on
+			// the cluster's spec.enableVolumeAutoPlacement switch.
 			name: "latency benchmarking disabled — skipped",
 			pvc:  makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:   makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
-				Enabled:                 ptr.To(true),
-				LatencyBenchmarkEnabled: ptr.To(false),
+			cluster: makePlacementCluster(&simplyblockv1alpha2.VolumeAutoPlacementSettings{
+				EnableLatencyBenchmark: ptr.To(false),
 			}),
 		},
 		{
 			name: "invalid config (missing prometheusURL) — skipped",
 			pvc:  makePlacementPVC(ptr.To(placementStorageClassName), nil),
 			sc:   makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID}),
-			cluster: makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
-				LatencyBenchmarkEnabled: ptr.To(true),
+			cluster: makePlacementCluster(&simplyblockv1alpha2.VolumeAutoPlacementSettings{
+				EnableLatencyBenchmark: ptr.To(true),
 			}),
 		},
 	}
@@ -340,40 +340,41 @@ func TestSimplyblockVolumePlacementInjector_Handle_SelectsCoolestEligibleNode(t 
 		{UUID: "atcapacity", Status: "online", Healthy: true, Lvols: 10, LvolsMax: 10},
 	})
 
-	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
-		LatencyBenchmarkEnabled: ptr.To(true),
-		PrometheusURL:           ptr.To(promSrv.URL),
+	cluster := makePlacementCluster(&simplyblockv1alpha2.VolumeAutoPlacementSettings{
+		EnableLatencyBenchmark: ptr.To(true),
+		PrometheusURL:          ptr.To(promSrv.URL),
 		// This case seeds fixed per-node baselines on the CR status and varies only the
 		// current (instant) Prometheus reading to produce known deviations — that is the
-		// "benchmark" baseline model, so pin the strategy to it.
-		BaselineStrategy: ptr.To(simplyblockv1alpha1.BaselineStrategyBenchmark),
+		// "Benchmark" baseline model, so pin the strategy to it.
+		BaselineStrategy: ptr.To(simplyblockv1alpha2.BaselineStrategyBenchmark),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
 	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)
 
-	baseline := func(uuid string) simplyblockv1alpha1.NodeLatencyMetrics {
-		return simplyblockv1alpha1.NodeLatencyMetrics{NodeUUID: uuid, BaselineP50NS: baselineNS}
-	}
-	nodeSet := &simplyblockv1alpha1.StorageNodeSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "nodeset1", Namespace: namespace},
-	}
-	nodeSet.Status.LatencyMetrics = []simplyblockv1alpha1.NodeLatencyMetrics{
-		baseline("hot"), baseline("cool"), baseline("offline"), baseline("atcapacity"),
-	}
-
 	scheme := newScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(sc, cluster, nodeSet).
-		WithStatusSubresource(cluster, nodeSet).
+		WithObjects(sc, cluster).
+		WithStatusSubresource(cluster, &simplyblockv1alpha2.StorageNode{}).
 		Build()
 
 	cluster.Status.UUID = testClusterUUID
 	if err := c.Status().Update(context.Background(), cluster); err != nil {
 		t.Fatalf("set cluster status: %v", err)
 	}
-	if err := c.Status().Update(context.Background(), nodeSet); err != nil {
-		t.Fatalf("set nodeset status: %v", err)
+	for _, uuid := range []string{"hot", "cool", "offline", "atcapacity"} {
+		n := &simplyblockv1alpha2.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-" + uuid, Namespace: namespace},
+			Status: simplyblockv1alpha2.StorageNodeStatus{
+				LatencyMetrics: &simplyblockv1alpha2.NodeLatencyMetrics{NodeUUID: uuid, BaselineP50NS: baselineNS},
+			},
+		}
+		if err := c.Create(context.Background(), n); err != nil {
+			t.Fatalf("create node: %v", err)
+		}
+		if err := c.Status().Update(context.Background(), n); err != nil {
+			t.Fatalf("set node status: %v", err)
+		}
 	}
 
 	h := &SimplyblockVolumePlacementInjector{
@@ -405,9 +406,9 @@ func TestSimplyblockVolumePlacementInjector_Handle_NoEligibleNode(t *testing.T) 
 		{UUID: "unhealthy", Status: "online", Healthy: false, Lvols: 1, LvolsMax: 10},
 	})
 
-	cluster := makePlacementCluster(&simplyblockv1alpha1.VolumeAutoPlacementSettings{
-		LatencyBenchmarkEnabled: ptr.To(true),
-		PrometheusURL:           ptr.To(promSrv.URL),
+	cluster := makePlacementCluster(&simplyblockv1alpha2.VolumeAutoPlacementSettings{
+		EnableLatencyBenchmark: ptr.To(true),
+		PrometheusURL:          ptr.To(promSrv.URL),
 	})
 	sc := makePlacementStorageClass(utils.CSIProvisioner, map[string]string{"cluster_id": testClusterUUID})
 	pvc := makePlacementPVC(ptr.To(placementStorageClassName), nil)

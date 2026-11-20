@@ -1,14 +1,16 @@
 // ---------------------------------------------------------------------------
-// KUBERNETES TRANSPORT (per context), plus the Helm release view
+// KUBERNETES / OPERATOR / HELM TRANSPORT
 //
-// Every read and write of a Kubernetes object goes through here. A call names
-// the context it addresses with `opts.ctx` (contexts.jsx); a call without one
-// addresses the local cluster exactly as before, which is what keeps the DR
-// section and the replication views untouched. The browser never holds a
-// credential: the console pod's nginx injects the right token per context.
+// The console talks to exactly three things and nothing else:
+//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, the DR
+//                            hub's dr.simplyblock.io/v1alpha1 (plus the Ramen
+//                            and OCM objects it derives), and core objects
+//                            (Node, Pod, PVC, StorageClass, Secret, Event)
+//   · the operator API     — what the operator exposes beyond CRDs
+//   · Helm                 — release state for the chart
 //
-// The control plane REST API is a separate client (cp-client.jsx). The
-// operator exposes no HTTP API; what it knows is in CRD status.
+// It does NOT call the control plane REST API. Anything the control plane knows
+// reaches the UI through a CRD status written by a controller.
 // ---------------------------------------------------------------------------
 const SB = window.SB_CONFIG;
 const GROUP = "storage.simplyblock.io";
@@ -31,32 +33,29 @@ class ApiError extends Error {
 // short name from the design (§7.11). `core: true` means it is not our group.
 const RESOURCES = {
   // entities
-  StorageCluster:          {plural: "storageclusters",          namespaced: true},
-  StorageNodeSet:          {plural: "storagenodesets",          namespaced: true},
-  StorageNode:             {plural: "storagenodes",             short: "sn",   namespaced: true},
-  StorageDevice:           {plural: "storagedevices",           short: "sd",   namespaced: true},
-  StoragePool:             {plural: "storagepools",             namespaced: true},
-  StorageBackup:           {plural: "storagebackups",           namespaced: true},
-  BackupPolicy:            {plural: "backuppolicies",           namespaced: true, creatable: true},
-  BackupRestore:           {plural: "backuprestores",           short: "br",   namespaced: true, creatable: true},
-  BackupImport:            {plural: "backupimports",            short: "bi",   namespaced: true, creatable: true},
-  ControlPlane:            {plural: "controlplanes",            namespaced: true},
-  Task:                    {plural: "tasks",                    namespaced: true},
+  StorageCluster:          {plural: "storageclusters",          short: "sbc",  namespaced: true},
+  StorageNode:             {plural: "storagenodes",             short: "sbn",  namespaced: true},
+  StorageDevice:           {plural: "storagedevices",           short: "sbd",  namespaced: true},
+  StoragePool:             {plural: "storagepools",             short: "sbp",  namespaced: true},
+  StorageBackup:           {plural: "storagebackups",           short: "sbbk", namespaced: true},
+  ControlPlane:            {plural: "controlplanes",            short: "sbcp", namespaced: true},
   SimplyblockDriver:       {plural: "simplyblockdrivers",       short: "sbdrv", namespaced: true},
-  ClusterDeploymentConfig: {plural: "clusterdeploymentconfigs", short: "cdc",  namespaced: true, version: "v1alpha2"},
+  ClusterDeploymentConfig: {plural: "clusterdeploymentconfigs", short: "sbcdc", namespaced: true},
   // replication: real kinds in v1alpha1. A slot is created by the operator from
   // a PVC annotation, so it is read-only here; the other three are creatable.
   ReplicationPair:   {plural: "replicationpairs",    short: "relpair", namespaced: true, creatable: true},
   ReplicationPolicy: {plural: "replicationpolicies", short: "repl",    namespaced: true, creatable: true},
   ReplicationSlot:   {plural: "replicationslots",    short: "relslot", namespaced: true},
   ReplicationOps:    {plural: "replicationops",      short: "replops", namespaced: true, creatable: true},
-  // one-shot operations: the kinds that exist, with the entity each acts on.
-  // A migration is the per-volume operation kind of today's API; OperatorOps
-  // acts on the operator itself and names no target.
-  StorageClusterOps:  {plural: "storageclusterops",  short: "scops", namespaced: true, ops: "StorageCluster"},
-  StorageNodeOps:     {plural: "storagenodeops",     short: "snops", namespaced: true, ops: "StorageNode"},
-  VolumeMigration:    {plural: "volumemigrations",   short: "vmig",  namespaced: true, ops: "PersistentVolume"},
-  OperatorOps:        {plural: "operatorops",        short: "oops",  namespaced: true, ops: null, version: "v1alpha2"},
+  // one-shot operations
+  StorageClusterOps:  {plural: "storageclusterops",  short: "sbco",  namespaced: true, ops: "StorageCluster"},
+  StorageNodeOps:     {plural: "storagenodeops",     short: "sbno",  namespaced: true, ops: "StorageNode"},
+  StorageDeviceOps:   {plural: "storagedeviceops",   short: "sbdo",  namespaced: true, ops: "StorageDevice"},
+  StoragePoolOps:     {plural: "storagepoolops",     short: "sbpo",  namespaced: true, ops: "StoragePool"},
+  StorageBackupOps:   {plural: "storagebackupops",   short: "sbbo",  namespaced: true, ops: "StorageBackup"},
+  ControlPlaneOps:    {plural: "controlplaneops",    short: "sbcpo", namespaced: true, ops: "ControlPlane"},
+  PersistentVolumeOps: {plural: "persistentvolumeops", short: "sbpvo", namespaced: true, ops: "PersistentVolume"},
+  OperatorOps:        {plural: "operatorops",        short: "sbop",  namespaced: true, ops: null},
   // ---- DR hub (dr-simplyblock) — dr.simplyblock.io/v1alpha1 ----------------
   // The hub has no REST API: every screen is a CR. Cluster-scoped kinds have
   // no namespace segment; namespaced ones are listed across all namespaces
@@ -73,17 +72,35 @@ const RESOURCES = {
   RestoreAction:        {plural: "restoreactions",        short: "rsa",      core: DR_API_GROUP, namespaced: true, dr: true},
   SiteProfile:          {plural: "siteprofiles",          short: "sprof",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
   DHCPServer:           {plural: "dhcpservers",           short: "dhcps",    core: SITEMAP_API_GROUP, namespaced: false, dr: true},
+  // on-demand probes behind the forms' Test buttons (dr-hub ADR 0021): created,
+  // read until answered, deleted; never listed in a view
+  S3ProbeRequest:       {plural: "s3proberequests",       short: "s3probe",  core: DR_API_GROUP, namespaced: true, dr: true},
+  HealthProbeRequest:   {plural: "healthproberequests",   short: "hprobe",   core: DR_API_GROUP, namespaced: true, dr: true},
+  DHCPProbeRequest:     {plural: "dhcpproberequests",     short: "dhcpprobe", core: DR_API_GROUP, namespaced: true, dr: true},
+  // DR's labels on a site's objects, applied by its dr-agent (labels.jsx)
+  LabelRequest:         {plural: "labelrequests",         short: "labelreq", core: DR_API_GROUP, namespaced: true, dr: true},
+  // AI-assisted discovery (dr-hub ADR 0023): the per-site dependency graph
+  // (its data in compressed ConfigMap shards in dr-hub's namespace), the
+  // proposal bundles and the discovery runs
+  DiscoveryGraph:       {plural: "discoverygraphs",       short: "dgraph",   core: DR_API_GROUP, namespaced: false, dr: true},
+  DRProposal:           {plural: "drproposals",           short: "drprop",   core: DR_API_GROUP, namespaced: true, dr: true},
+  DiscoveryRun:         {plural: "discoveryruns",         short: "drun",     core: DR_API_GROUP, namespaced: true, dr: true},
+  // what each site's dr-agent reports, read through the view dr-hub keeps
+  // of it (<cluster>/dr-agent-status): the forms' discovered choices
+  ManagedClusterView:    {plural: "managedclusterviews",    core: "view.open-cluster-management.io/v1beta1", namespaced: true},
   // Ramen and OCM objects the hub derives — instances only, read-only here
   DRPolicy:              {plural: "drpolicies",             core: RAMEN_API_GROUP, namespaced: false},
   DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},
   DRPlacementControl:    {plural: "drplacementcontrols",    core: RAMEN_API_GROUP, namespaced: true},
   ManagedCluster:        {plural: "managedclusters",        core: OCM_CLUSTER_API_GROUP, namespaced: false},
+  // a managed site's storage deployment, requested from the hub (operator,
+  // storage.simplyblock.io/v1alpha2); the operator carries it to the site
+  StorageSiteDeployment: {plural: "storagesitedeployments", short: "sbsd", core: "storage.simplyblock.io/v1alpha2", namespaced: true},
   // access reviews: the API server answers what the caller may do
   SelfSubjectAccessReview: {plural: "selfsubjectaccessreviews", core: "authorization.k8s.io/v1", namespaced: false},
   SelfSubjectRulesReview:  {plural: "selfsubjectrulesreviews",  core: "authorization.k8s.io/v1", namespaced: false},
   SelfSubjectReview:       {plural: "selfsubjectreviews",       core: "authentication.k8s.io/v1", namespaced: false},
   // core Kubernetes
-  Namespace:             {plural: "namespaces",             core: "v1", namespaced: false},
   Node:                  {plural: "nodes",                  core: "v1", namespaced: false},
   Pod:                   {plural: "pods",                   core: "v1", namespaced: true},
   PersistentVolume:      {plural: "persistentvolumes",      core: "v1", namespaced: false},
@@ -91,12 +108,6 @@ const RESOURCES = {
   Secret:                {plural: "secrets",                core: "v1", namespaced: true},
   Event:                 {plural: "events",                 core: "v1", namespaced: true},
   StorageClass:          {plural: "storageclasses",         core: "storage.k8s.io/v1", namespaced: false},
-  VolumeSnapshot:        {plural: "volumesnapshots",        core: "snapshot.storage.k8s.io/v1", namespaced: true, creatable: true},
-  VolumeSnapshotContent: {plural: "volumesnapshotcontents", core: "snapshot.storage.k8s.io/v1", namespaced: false},
-  VolumeSnapshotClass:   {plural: "volumesnapshotclasses",   core: "snapshot.storage.k8s.io/v1", namespaced: false},
-  Job:                   {plural: "jobs",                   core: "batch/v1", namespaced: true},
-  // the schema of a kind, read for its immutability rules and descriptions
-  CustomResourceDefinition: {plural: "customresourcedefinitions", core: "apiextensions.k8s.io/v1", namespaced: false},
   // application resources read for Ramen recipes
   Deployment:            {plural: "deployments",            core: "apps/v1", namespaced: true},
   StatefulSet:           {plural: "statefulsets",           core: "apps/v1", namespaced: true},
@@ -110,6 +121,8 @@ const RESOURCES = {
 const NS = () => SB.namespace || "simplyblock";
 // Ramen's ops namespace on the hub: where discovered ProtectedApplications live
 const DR_NS = () => SB.drNamespace || "ramen-ops";
+// dr-hub's own namespace on the hub: where it keeps the discovery graph shards
+const DR_HUB_NS = () => SB.drHubNamespace || "dr-simplyblock";
 
 // Build the API server path for a kind. Core group is /api/v1, everything else
 // /apis/<group>/<version>. A namespaced kind is scoped to the console's
@@ -119,7 +132,7 @@ function pathFor(kind, opts) {
   const o = opts || {};
   const r = RESOURCES[kind];
   if (!r) throw new Error("unknown kind " + kind);
-  const prefix = !r.core ? `/apis/${GROUP}/${r.version || VERSION}`
+  const prefix = !r.core ? `/apis/${API_GROUP}`
     : r.core === "v1" ? "/api/v1"
     : `/apis/${r.core}`;
   const ns = r.namespaced && !o.allNamespaces ? `/namespaces/${o.namespace || (r.dr ? DR_NS() : NS())}` : "";
@@ -128,22 +141,13 @@ function pathFor(kind, opts) {
   return `${prefix}${ns}/${r.plural}${name}${sub}`;
 }
 // apiVersion string for a kind, for the objects the console authors
-const apiVersionOf = kind => { const r = RESOURCES[kind]; return !r.core ? `${GROUP}/${r.version || VERSION}` : r.core; };
+const apiVersionOf = kind => { const r = RESOURCES[kind]; return !r.core ? API_GROUP : r.core; };
 
 // ---- transport -------------------------------------------------------------
-// The API server base for a context. A call without a context goes to the
-// local cluster, so every existing call site keeps its meaning.
-const baseFor = ctx => {
-  if (!ctx) return SB.k8sBase;
-  const c = window.ctxByName ? window.ctxByName(ctx) : null;
-  if (!c) throw new ApiError(0, `unknown context ${ctx}`, "", "UnknownContext");
-  return c.k8sBase;
-};
-
 async function call(base, path, init) {
   let res;
   const headers = Object.assign({
-    Accept: init && init.raw ? "text/plain" : "application/json",
+    Accept: "application/json",
     Authorization: `Bearer ${SB.token}`
   }, (init && init.headers) || {});
   try {
@@ -151,11 +155,8 @@ async function call(base, path, init) {
   } catch (e) {
     throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable");
   }
-  // A text subresource (pods/log) is returned as is; a failure still arrives as
-  // a Status object, which is why the body is parsed before it is trusted.
-  const text = await res.text();
   let body = null;
-  try { body = JSON.parse(text); } catch (e) {}
+  try { body = await res.json(); } catch (e) {}
   // A Kubernetes failure is a Status object. Trust the body, not just the code:
   // a Failure Status served with a 2xx is still a failure, and treating it as an
   // empty collection would show "no objects" during an outage.
@@ -164,108 +165,34 @@ async function call(base, path, init) {
     const msg = (body && body.message) || res.statusText || "Request failed";
     throw new ApiError((body && body.code) || res.status, msg, path, (body && body.reason) || null);
   }
-  return init && init.raw ? text : body;
-}
-
-// A namespaced list in a context whose namespaces are known lists each of them
-// rather than the whole cluster, so a context restricted to one tenant never
-// reads another's objects. "all" lists cluster-wide. Without a context the
-// console's own namespace applies, as it always did.
-function listScopes(kind, o) {
-  const r = RESOURCES[kind];
-  if (!r.namespaced || o.allNamespaces || o.namespace || !o.ctx || r.dr) return [o];
-  const nss = window.ctxNamespaces ? window.ctxNamespaces(o.ctx) : null;
-  if (nss === "all") return [Object.assign({}, o, {allNamespaces: true})];
-  if (Array.isArray(nss) && nss.length) return nss.map(ns => Object.assign({}, o, {namespace: ns}));
-  return [o];
+  return body;
 }
 
 const k8s = {
   // list: returns items[], never the List envelope
-  list: (kind, opts) => {
-    const o = opts || {};
-    const scopes = listScopes(kind, o);
-    return Promise.all(scopes.map(s => call(baseFor(s.ctx), pathFor(kind, s) + qs(s))
-      .then(r => (r && r.items) || []))).then(rs => rs.flat());
-  },
-  get: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({name}, opts)) + qs(opts)),
-  create: (kind, obj, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts), {
+  list: (kind, opts) => call(SB.k8sBase, pathFor(kind, opts) + qs(opts))
+    .then(r => (r && r.items) || []),
+  get: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({name}, opts))),
+  create: (kind, obj, opts) => call(SB.k8sBase, pathFor(kind, opts), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(obj)
   }),
-  // spec edits go through a merge patch, which is what kubectl edit does.
-  // `dryRun: "All"` asks the API server (webhooks and CEL rules included) to
-  // validate without persisting, which is how the console checks an edit
-  // before it lands.
-  patch: (kind, name, patch, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({name}, opts)) + qs(opts), {
+  // spec edits go through a merge patch, which is what kubectl edit does
+  patch: (kind, name, patch, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({name}, opts)), {
     method: "PATCH",
     headers: {"Content-Type": "application/merge-patch+json"},
     body: JSON.stringify(patch)
   }),
-  remove: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({name}, opts)) + qs(opts), {method: "DELETE"}),
-  // pod logs are the Kubernetes API, not a side channel; the body is text
-  logs: (pod, opts) => call(baseFor((opts || {}).ctx),
-    pathFor("Pod", Object.assign({name: pod, subresource: "log"}, opts)) + qs(Object.assign({tailLines: 200}, opts)), {raw: true}),
-  // the API server's version, which doubles as the reachability probe of a context
-  version: ctx => call(baseFor(ctx), "/version"),
-  // A watch is the API server's own change stream: newline-delimited events
-  // {type: ADDED|MODIFIED|DELETED|BOOKMARK|ERROR, object}. The caller keeps the
-  // list it seeded from and applies events; `EXPIRED` (410) means the
-  // resourceVersion is too old and the caller lists again. Returns a handle
-  // with cancel() and the last resourceVersion seen.
-  watch: (kind, opts, onEvent) => {
-    const o = Object.assign({}, opts, {watch: true, allowWatchBookmarks: true});
-    const ctrl = new AbortController();
-    let rv = o.resourceVersion || null;
-    (async () => {
-      let res;
-      try {
-        res = await fetch(baseFor(o.ctx) + pathFor(kind, o) + qs(o), {
-          headers: {Accept: "application/json", Authorization: `Bearer ${SB.token}`}, signal: ctrl.signal});
-      } catch (e) {
-        if (!ctrl.signal.aborted) onEvent({type: "ERROR", error: e});
-        return;
-      }
-      if (!res.ok || !res.body) { onEvent({type: res.status === 410 ? "EXPIRED" : "ERROR", status: res.status}); return; }
-      const reader = res.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      try {
-        for (;;) {
-          const {value, done} = await reader.read();
-          if (done) break;
-          buf += dec.decode(value, {stream: true});
-          let i;
-          while ((i = buf.indexOf("\n")) >= 0) {
-            const line = buf.slice(0, i).trim();
-            buf = buf.slice(i + 1);
-            if (!line) continue;
-            let ev;
-            try { ev = JSON.parse(line); } catch (e) { continue; }
-            if (ev.type === "ERROR") {
-              const code = ev.object && ev.object.code;
-              onEvent({type: code === 410 ? "EXPIRED" : "ERROR", object: ev.object});
-              return;
-            }
-            const m = ev.object && ev.object.metadata;
-            if (m && m.resourceVersion) rv = m.resourceVersion;
-            onEvent(ev);
-          }
-        }
-        onEvent({type: "CLOSED"});
-      } catch (e) {
-        if (!ctrl.signal.aborted) onEvent({type: "ERROR", error: e});
-      }
-    })();
-    return {cancel: () => ctrl.abort(), rv: () => rv};
-  }
+  remove: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({name}, opts)), {method: "DELETE"}),
+  // pod logs are the Kubernetes API, not a side channel
+  logs: (pod, opts) => call(SB.k8sBase,
+    pathFor("Pod", {name: pod, subresource: "log"}) + qs(Object.assign({tailLines: 200}, opts)))
 };
 
 function qs(opts) {
   const o = Object.assign({}, opts);
   delete o.namespace; delete o.name; delete o.subresource; delete o.allNamespaces;
-  delete o.ctx; delete o.raw;
   const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "")
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   return parts.length ? "?" + parts.join("&") : "";
@@ -277,18 +204,16 @@ function qs(opts) {
 // SelfSubjectRulesReview returns every rule that applies to the caller in a
 // namespace, including cluster-wide ones; a SelfSubjectReview says who the
 // caller is. All three are POSTs that create nothing.
-// Each takes the context as its last argument; without one it asks the local
-// API server, as before.
 const review = {
-  can: (verb, group, resource, ns, name, ctx) => k8s.create("SelfSubjectAccessReview", {
+  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
     apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectAccessReview",
     spec: {resourceAttributes: Object.assign({verb, group: group || "", resource},
       ns ? {namespace: ns} : {}, name ? {name} : {})}
-  }, {ctx}).then(r => !!(r.status && r.status.allowed)),
-  rules: (ns, ctx) => k8s.create("SelfSubjectRulesReview", {
+  }).then(r => !!(r.status && r.status.allowed)),
+  rules: ns => k8s.create("SelfSubjectRulesReview", {
     apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectRulesReview", spec: {namespace: ns}
-  }, {ctx}).then(r => r.status || {resourceRules: [], incomplete: true}),
-  whoami: ctx => k8s.create("SelfSubjectReview", {apiVersion: "authentication.k8s.io/v1", kind: "SelfSubjectReview"}, {ctx})
+  }).then(r => r.status || {resourceRules: [], incomplete: true}),
+  whoami: () => k8s.create("SelfSubjectReview", {apiVersion: "authentication.k8s.io/v1", kind: "SelfSubjectReview"})
     .then(r => (r.status && r.status.userInfo) || {})
 };
 
@@ -299,12 +224,19 @@ const ownedBy = (kind, name) => ({labelSelector: sel({
 const inCluster = name => ({labelSelector: sel({[`${GROUP}/cluster`]: name})});
 
 // ---- operator API ----------------------------------------------------------
-// The operator serves no HTTP API today. These two reads stay as the one
-// place the console would ask it anything, and fail with the proxy's 503
-// Status until it does.
+// What the operator serves that is not a CRD: the release/compat matrix it
+// mirrors from install.simplyblock.io, and the SSE stream.
 const operator = {
   releases: () => call(SB.operatorBase, "/releases"),
-  health: () => call(SB.operatorBase, "/healthz")
+  health: () => call(SB.operatorBase, "/healthz"),
+  // ?watch=true rows in the design are SSE subscriptions
+  watch: (kind, onEvent) => {
+    const url = SB.operatorBase + "/watch" + pathFor(kind);
+    let es;
+    try { es = new EventSource(url); } catch (e) { return () => {}; }
+    es.onmessage = e => { try { onEvent(JSON.parse(e.data)); } catch (x) {} };
+    return () => es.close();
+  }
 };
 
 // ---- Helm ------------------------------------------------------------------
@@ -316,53 +248,34 @@ const helm = {
 
 // ---- Ops helpers -----------------------------------------------------------
 // An action is not a verb against an entity: it is an <Entity>Ops object whose
-// spec names the target and the action. Each kind spells that differently, and
-// the shapes below are the ones the CRDs validate (operator/api/v1alpha1 and
-// v1alpha2). Aborting is a patch of the one mutable field, on the kinds that
-// have one (OperatorOps and VolumeMigration today).
+// spec.action names it. Aborting is a patch of the one mutable field.
 function opsKindFor(entityKind) {
   const hit = Object.entries(RESOURCES).find(([, r]) => r.ops === entityKind);
   return hit ? hit[0] : null;
 }
 
-// spec builders per Ops kind: (targetName, action, payload) -> spec
-const OPS_SPEC = {
-  StorageClusterOps: (t, a, p) => Object.assign({clusterRef: t, action: a}, p || {}),
-  StorageNodeOps: (t, a, p) => Object.assign({storageNodeRef: t, action: a}, p || {}),
-  // a migration has no action field: moving the volume is the whole kind
-  VolumeMigration: (t, a, p) => Object.assign({pvName: t}, p || {}),
-  OperatorOps: (t, a, p) => Object.assign({action: a}, p ? {[a.charAt(0).toLowerCase() + a.slice(1)]: p} : {})
-};
-
-// submitOps(entityKind, targetName, action, payload, {ctx, namespace})
-// `action` is spelled as the CRD enum spells it (lowercase for the v1alpha1
-// kinds, PascalCase for OperatorOps); `payload` holds the action's own fields.
-function submitOps(entityKind, targetName, action, payload, opts) {
+function submitOps(entityKind, targetName, action, payload) {
   const kind = opsKindFor(entityKind);
   if (!kind) throw new Error("no Ops kind for " + entityKind);
-  const o = opts || {};
   const stamp = Date.now().toString(36);
-  const slug = s => String(s || "").toLowerCase().replace(/[^a-z0-9-]+/g, "-").replace(/^-+|-+$/g, "");
   const body = {
-    apiVersion: apiVersionOf(kind), kind,
+    apiVersion: API_GROUP, kind,
     metadata: {
-      name: [slug(targetName || "operator"), slug(action || kind), stamp].filter(Boolean).join("-").slice(0, 63),
-      namespace: o.namespace || NS(),
-      labels: Object.assign({[`${GROUP}/action`]: slug(action || kind)},
-        targetName ? {[`${GROUP}/target`]: slug(targetName)} : {})
+      name: `${targetName}-${action.toLowerCase()}-${stamp}`.slice(0, 63),
+      namespace: NS(),
+      labels: {[`${GROUP}/target`]: targetName, [`${GROUP}/action`]: action}
     },
-    spec: OPS_SPEC[kind](targetName, action, payload)
+    spec: Object.assign({action}, targetName ? {targetRef: {name: targetName}} : {},
+      payload ? {[lowerFirst(action)]: payload} : {})
   };
-  return k8s.create(kind, body, {ctx: o.ctx, namespace: o.namespace});
+  return k8s.create(kind, body);
 }
-const abortOps = (opsKind, name, opts) => k8s.patch(opsKind, name, {spec: {abort: true}}, opts);
-// the kinds whose spec has an abort field; everything else runs to completion
-const ABORTABLE_KINDS = ["OperatorOps", "VolumeMigration"];
+const abortOps = (opsKind, name) => k8s.patch(opsKind, name, {spec: {abort: true}});
+const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
 
 // Terminal phases, per the design's phase vocabulary (PascalCase).
 const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
 const opsRunning = o => o && o.status && !OPS_TERMINAL.includes(o.status.phase);
 
 Object.assign(window, {k8s, operator, helm, review, ApiError, RESOURCES, API_GROUP, GROUP, VERSION, DR_GROUP, DR_API_GROUP,
-  pathFor, apiVersionOf, baseFor, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL,
-  ABORTABLE_KINDS, NS, DR_NS});
+  pathFor, apiVersionOf, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS, DR_HUB_NS});

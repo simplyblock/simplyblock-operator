@@ -1,0 +1,96 @@
+# VolumeReplicationClass CRD, vendored verbatim from csi-addons/kubernetes-csi-addons
+# v0.15.0 (deploy/controller/crds.yaml), plus the chart's resource-policy
+# annotation. The stock csi-addons controller-manager starts a controller
+# per kind unconditionally, so every CRD it watches must exist for the
+# manager to come up. This file installs one of them unless the cluster
+# already serves the API.
+{{- if and .Values.csiaddons.create (not (.Capabilities.APIVersions.Has "replication.storage.openshift.io/v1alpha1/VolumeReplicationClass")) -}}
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    helm.sh/resource-policy: keep
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: volumereplicationclasses.replication.storage.openshift.io
+spec:
+  group: replication.storage.openshift.io
+  names:
+    kind: VolumeReplicationClass
+    listKind: VolumeReplicationClassList
+    plural: volumereplicationclasses
+    shortNames:
+    - vrc
+    singular: volumereplicationclass
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.provisioner
+      name: provisioner
+      type: string
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: VolumeReplicationClass is the Schema for the volumereplicationclasses
+          API.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: |-
+              VolumeReplicationClassSpec specifies parameters that an underlying storage system uses
+              when creating a volume replica. A specific VolumeReplicationClass is used by specifying
+              its name in a VolumeReplication object.
+            properties:
+              parameters:
+                additionalProperties:
+                  type: string
+                description: |-
+                  Parameters is a key-value map with storage provisioner specific configurations for
+                  creating volume replicas
+                type: object
+                x-kubernetes-validations:
+                - message: parameters are immutable
+                  rule: self == oldSelf
+              provisioner:
+                description: Provisioner is the name of storage provisioner
+                type: string
+                x-kubernetes-validations:
+                - message: provisioner is immutable
+                  rule: self == oldSelf
+            required:
+            - provisioner
+            type: object
+            x-kubernetes-validations:
+            - message: parameters are immutable
+              rule: has(self.parameters) == has(oldSelf.parameters)
+          status:
+            description: VolumeReplicationClassStatus defines the observed state of
+              VolumeReplicationClass.
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
+{{- end -}}

@@ -1,0 +1,3 @@
+vcpuCount is 9, 10% of the 98 logical CPUs of the memory node chosen on worker-01 (the smallest of the fleet) per storage node, at least 5: the control plane assumes this uniform across a cluster's nodes. Raise it for a dedicated storage node or an I/O-heavy workload
+minHugePagesSize is 256G, the huge pages free on the memory node chosen on worker-01, which is the smallest of the fleet
+wrote discovered-discover-numa-14 in Draft: 1 workers with 5 nvme devices, in 1 group(s) across 1 node set(s); 5 refusal(s)

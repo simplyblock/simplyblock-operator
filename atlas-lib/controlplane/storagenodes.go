@@ -19,6 +19,12 @@ type StorageNode struct {
 	MaxLvols        int
 	DeviceCount     int
 	SecondaryNodeID string // empty when the node has no secondary
+	// LvolPort is the NVMe/TCP port the node serves its volumes on, zero when
+	// the control plane reports none.
+	LvolPort int
+	// FailureDomain is the failure domain the control plane places the node
+	// in, zero on a cluster that defines none.
+	FailureDomain int
 }
 
 // NIC is a storage node's data network interface.
@@ -40,6 +46,9 @@ func storageNodeFromDTO(d cpapi.StorageNodeDTO) StorageNode {
 		Lvols:       d.Lvols,
 		MaxLvols:    d.LvolsMax,
 		DeviceCount: d.DeviceCount,
+		LvolPort:    d.LvolSubsysPort,
+
+		FailureDomain: d.FailureDomain,
 	}
 	if d.SecondaryNodeId != nil {
 		n.SecondaryNodeID = d.SecondaryNodeId.String()

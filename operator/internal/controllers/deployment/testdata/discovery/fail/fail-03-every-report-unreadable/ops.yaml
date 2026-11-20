@@ -1,0 +1,14 @@
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: discover-fail-03
+  namespace: simplyblock
+spec:
+  action: Discover
+status:
+  environment: K3s
+  step: {}
+  workers:
+  - worker-01
+  - worker-02
+  - worker-03

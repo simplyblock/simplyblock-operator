@@ -1,0 +1,16 @@
+{
+  "name": "dm-cache-metadata",
+  "tool": "dmsetup create ... cache",
+  "tool_version": "Library version:   1.02.205 (2025-02-27)",
+  "command": "dmsetup create <name> --table '0 <sz> cache <meta> <fast> <origin> 128 1 writeback default 0'",
+  "device_size": 16777216,
+  "logical_block_size": 512,
+  "region_size": 1048576,
+  "captured": "2026-09-30T16:18:37Z",
+  "captured_on": "Debian GNU/Linux 13 (trixie), kernel 6.12.0-142.el10.x86_64",
+  "blkid": "",
+  "head_sha256": "54b7e8b2deba1ac850a739df4cbb4aa8ca1324e3e7694af8a4dc10f67cbb2f9a",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "filled": true,
+  "note": "the metadata device of a raw dm-cache, whose superblock is at offset 0: the origin and the fast device carry no dm-cache signature at all, and all three are logical volumes or mapper nodes in ordinary use"
+}

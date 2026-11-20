@@ -1,0 +1,317 @@
+"""The migration workload: volumes with continuous, verified I/O on them, to migrate.
+
+A migration test needs I/O in flight to be a test at all — a volume nobody is writing to
+migrates cleanly whatever the code does, because nothing is there to lose. So this component
+provisions volumes, drives fio against them for the length of the run, and collects what fio
+saw.
+
+How fio itself is driven, and when its verification can be trusted, is shared with every
+other workload and lives in `fio.py`. What is specific to this one:
+
+**Two StorageClasses, not one.** Batch migration only exists when several volumes share an
+NVMe subsystem, and whether they do is the control plane's decision, not the test's. So the
+namespaced volumes get their own class and the real grouping is *read back* from the backend
+afterwards. If the volumes each ended up in their own subsystem, the batch half of the run is
+vacuous — which is worth knowing at minute one rather than during the analysis.
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any
+
+from ...core import RunContext, component
+from .. import kube
+from ..sbctl import Sbctl, SbctlError
+from . import fio
+from .base import FioWorkload
+
+PARAM_MAX_NS = "max_namespace_per_subsys"
+
+
+@component
+class VolumeMigrationWorkload(FioWorkload):
+    """Volumes for the migration runs: single-namespace and packed, one fio pod each.
+
+    Registered as `workload.fio`, the name every migration suite and archived run config
+    already uses.
+    """
+
+    name = "workload.fio"
+    summary = "provision volumes and drive continuous verified fio I/O against them"
+
+    def workload_defaults(self) -> dict[str, Any]:
+        return {
+            # The operator's own pool SC, cloned rather than hand-written so the run
+            # inherits whatever the pool really uses. Empty is the cluster's only one.
+            "source_storageclass": "",
+            "pods": 0,              # single-namespace volumes
+            "ns_pods": 6,           # namespaced volumes (share subsystems -> batch migration)
+            "ns_per_subsys": 6,
+            "volume_size_gb": 10,
+            "file_size_gb": 1,
+            "fstype": "xfs",
+            "numjobs": 1,           # >1 disables verification; see fio.py
+        }
+
+    def __init__(self, **options: Any) -> None:
+        super().__init__(**options)
+        self._sb = Sbctl()
+        self._pvcs: list[str] = []
+        self._pvc_of: dict[str, str] = {}
+        self._kind_of: dict[str, str] = {}
+        self._pv_of: dict[str, str] = {}       # pod -> pv
+        self._pod_of: dict[str, str] = {}      # pv  -> pod
+        self._volume_of: dict[str, str] = {}   # pv  -> lvol uuid
+        self._nqn_of: dict[str, str] = {}      # pv  -> subsystem nqn
+        self._nsid_of: dict[str, int] = {}
+        self._groups: dict[str, list[str]] = {}  # nqn -> pvs, ns_id ordered
+        self._node_host: dict[str, str] = {}     # storage node uuid -> k8s host
+        self._sc_single = ""
+        self._sc_ns = ""
+
+    # ── setup: classes, volumes, pods, then read back what really happened ─────────
+
+    def documents(self, ctx: RunContext) -> list[dict]:
+        self._node_host = self._storage_node_hosts()
+        self._ensure_storageclasses(ctx)
+        return self._documents(ctx)
+
+    def after_running(self, ctx: RunContext) -> None:
+        self._resolve_pvs(ctx)
+        self._resolve_subsystems(ctx)
+        self._publish(ctx)
+
+    def selector(self, ctx: RunContext) -> str:
+        # Every run's leftovers, not only this run's: a migration run assumes a clean
+        # namespace, and a pod left by an earlier one would be migrated along with it.
+        return "sbtest-run=true"
+
+    def _storage_node_hosts(self) -> dict[str, str]:
+        cp = kube.run(["get", "storagenodes", "-A", "-o", "json"], check=False)
+        try:
+            items = json.loads(cp.stdout).get("items", []) if cp.stdout else []
+        except json.JSONDecodeError:
+            return {}
+        out = {}
+        for it in items:
+            st = it.get("status", {})
+            uuid = st.get("uuid") or ""
+            if uuid:
+                out[uuid] = it.get("spec", {}).get("workerNode", "") or st.get("workerNode", "")
+        return out
+
+    def _ensure_storageclasses(self, ctx: RunContext) -> None:
+        """(Re)create the run's StorageClasses from the live pool SC.
+
+        Always delete-then-create, so a class left behind by a previous run can never be
+        silently reused with different parameters. And `cluster_id` is forced to the live
+        cluster rather than copied: the source SC can still carry a dead one after a
+        reinstall, and every volume from it would target a cluster that no longer exists.
+        """
+        src_name = self.source_storageclass(str(self.opt("source_storageclass") or ""))
+        src = self.get_storageclass(src_name)
+        if src is None:
+            raise RuntimeError(f"source StorageClass {src_name} not found")
+
+        cluster = self._sb.cluster_uuid()
+        base = dict(src.get("parameters", {}))
+        stale = base.get("cluster_id")
+        if stale and stale != cluster:
+            ctx.log.warn(f"{self.name}: source SC {src_name} carries stale cluster_id "
+                         f"{stale}; overriding with the live cluster {cluster}")
+        base["cluster_id"] = cluster
+        base["csi.storage.k8s.io/fstype"] = str(self.opt("fstype"))
+        # A single-namespace class must say so explicitly rather than inherit whatever the
+        # source SC or the CSI default carries — otherwise the "single" half of the run could
+        # quietly be namespaced too, and the comparison would be with itself.
+        base.pop(PARAM_MAX_NS, None)
+
+        self._sc_single = f"sbtest-{ctx.run_id}-single"
+        self.apply_storageclass(src, self._sc_single, dict(base, **{PARAM_MAX_NS: "1"}))
+        ctx.log.info(f"{self.name}: StorageClass {self._sc_single} "
+                     f"(fstype={self.opt('fstype')}, {PARAM_MAX_NS}=1, cluster_id={cluster})")
+        if int(self.opt("ns_pods")) > 0:
+            self._sc_ns = f"sbtest-{ctx.run_id}-ns"
+            self.apply_storageclass(src, self._sc_ns,
+                           dict(base, **{PARAM_MAX_NS: str(self.opt("ns_per_subsys"))}))
+            ctx.log.info(f"{self.name}: StorageClass {self._sc_ns} "
+                         f"({PARAM_MAX_NS}={self.opt('ns_per_subsys')})")
+
+    def _documents(self, ctx: RunContext) -> list[dict]:
+        script = self._fio_script(ctx)
+        affinity = self._affinity(ctx)
+        docs: list[dict] = []
+        # One continuous index across both kinds, so a single name filter matches every pod
+        # this component created.
+        plan = ([("single", self._sc_single)] * int(self.opt("pods"))
+                + [("namespaced", self._sc_ns)] * int(self.opt("ns_pods")))
+        if not plan:
+            raise RuntimeError("workload.fio: both `pods` and `ns_pods` are 0, so the run "
+                               "would have no I/O and could not detect anything")
+        for i, (kind, sc) in enumerate(plan):
+            pvc, pod = f"{ctx.run_id}-pvc-{i}", f"{ctx.run_id}-fio-{i}"
+            self._pvcs.append(pvc)
+            self._pods.append(pod)
+            self._pvc_of[pod] = pvc
+            self._kind_of[pod] = kind
+            inst = fio.FioInstance(pod=pod, container="fio", filename="/data/fiotest",
+                                   logdir="/logs", evidence=pod)
+            self._instances.append(inst)
+            labels = {"sbtest": ctx.run_id, "sbtest-run": "true", "volume-kind": kind}
+            container = self.fio_container(inst, script, "/data")
+            docs.append({
+                "apiVersion": "v1", "kind": "PersistentVolumeClaim",
+                "metadata": {"name": pvc, "labels": labels},
+                "spec": {"accessModes": ["ReadWriteOnce"], "storageClassName": sc,
+                         "resources": {"requests": {
+                             "storage": f"{self.opt('volume_size_gb')}Gi"}}},
+            })
+            docs.append({
+                "apiVersion": "v1", "kind": "Pod",
+                "metadata": {"name": pod, "labels": dict(labels, app="fio")},
+                "spec": {
+                    "restartPolicy": "Never",
+                    "terminationGracePeriodSeconds": 5,
+                    "affinity": affinity,
+                    "containers": [container],
+                    "volumes": self.pod_volumes(pvc),
+                },
+            })
+        ctx.log.info(f"{self.name}: {len(plan)} PVC(s) + fio pod(s): "
+                     f"{self.opt('pods')} single-namespace + {self.opt('ns_pods')} namespaced")
+        return docs
+
+    def _affinity(self, ctx: RunContext) -> dict:
+        """Pin fio pods to the storage worker nodes and off the control plane.
+
+        Off the control plane in particular: a consuming pod there would exercise a path the
+        product does not otherwise have, and a fio pod competing with the API server produces
+        latency findings about the test rather than the system.
+        """
+        workers = sorted({h for h in self._node_host.values() if h})
+        exprs: list[dict] = [{"key": "node-role.kubernetes.io/control-plane",
+                              "operator": "DoesNotExist"}]
+        if workers:
+            exprs.insert(0, {"key": "kubernetes.io/hostname", "operator": "In",
+                             "values": workers})
+            ctx.log.info(f"{self.name}: pods restricted to {', '.join(workers)}")
+        else:
+            ctx.log.warn(f"{self.name}: no storage worker hostnames known; only excluding "
+                         "control-plane nodes")
+        return {"nodeAffinity": {"requiredDuringSchedulingIgnoredDuringExecution": {
+            "nodeSelectorTerms": [{"matchExpressions": exprs}]}}}
+
+    def _fio_script(self, ctx: RunContext) -> str:
+        # fio always lays out a file-backed target before random I/O and cannot be told to
+        # skip it for a filesystem file. A large working set buys nothing here — the point is
+        # continuous I/O, not capacity — so keep the file small and the layout takes seconds.
+        file_gb = max(1, min(int(self.opt("file_size_gb")),
+                             int(self.opt("volume_size_gb")) - 2))
+        numjobs = int(self.opt("numjobs"))
+        if not fio.verifies(numjobs):
+            ctx.log.warn(fio.unverified_warning(self.name, numjobs))
+        args = fio.fio_args(self.options, filename="/data/fiotest", size_gb=file_gb,
+                            logdir="/logs", numjobs=numjobs)
+        return fio.container_script(args, "/logs")
+
+    def _resolve_pvs(self, ctx: RunContext) -> None:
+        ns = self.opt("namespace")
+        for pod in self._pods:
+            pvc = self._pvc_of[pod]
+            cp = kube.run(["-n", ns, "get", "pvc", pvc, "-o", "json"])
+            pv = json.loads(cp.stdout).get("spec", {}).get("volumeName", "")
+            if not pv:
+                raise RuntimeError(f"PVC {pvc} has no bound PV")
+            cp = kube.run(["get", "pv", pv, "-o", "json"])
+            handle = json.loads(cp.stdout).get("spec", {}).get("csi", {}).get(
+                "volumeHandle", "")
+            # "<clusterUUID>:<poolUUID>:<volumeUUID>"
+            parts = handle.split(":")
+            if len(parts) != 3 or not parts[2]:
+                raise RuntimeError(f"PV {pv} has an unexpected CSI volume handle {handle!r}")
+            self._pv_of[pod] = pv
+            self._pod_of[pv] = pod
+            self._volume_of[pv] = parts[2]
+        ctx.log.info(f"{self.name}: resolved PVC -> PV -> lvol:")
+        for pod in self._pods:
+            pv = self._pv_of[pod]
+            ctx.log.info(f"    {pod}  {self._pvc_of[pod]} -> {pv} "
+                         f"(lvol {self._volume_of[pv]}, {self._kind_of[pod]})")
+
+    def _resolve_subsystems(self, ctx: RunContext) -> None:
+        """Read each volume's real NVMe subsystem from the backend and group by it.
+
+        Discovered, never assumed: the control plane decides the packing, and everything
+        downstream — which volumes a migration moves, which nodes must be sampled — follows
+        from the real grouping.
+        """
+        for pv, lvol in self._volume_of.items():
+            nqn, nsid = self._sb.subsystem_of(lvol)
+            if not nqn:
+                ctx.log.warn(f"{self.name}: cannot resolve the subsystem of {pv} "
+                             f"(lvol {lvol}); it will migrate as a group of one")
+                continue
+            self._nqn_of[pv] = nqn
+            self._nsid_of[pv] = nsid
+        groups: dict[str, list[str]] = {}
+        for pv, nqn in self._nqn_of.items():
+            groups.setdefault(nqn, []).append(pv)
+        self._groups = {n: sorted(m, key=lambda p: self._nsid_of.get(p, 0))
+                        for n, m in groups.items()}
+
+        shared = {n: m for n, m in self._groups.items() if len(m) > 1}
+        ctx.log.info(f"{self.name}: {len(self._groups)} subsystem(s), {len(shared)} shared by "
+                     "more than one volume")
+        for nqn, pvs in sorted(self._groups.items(), key=lambda kv: -len(kv[1])):
+            members = ", ".join(f"{self._pod_of.get(p, p)}(ns{self._nsid_of.get(p, '?')})"
+                                for p in pvs)
+            ctx.log.info(f"    {nqn}  [{len(pvs)}]  {members}")
+
+        # Say this at minute one rather than leaving it for the analysis: if the namespaced
+        # volumes each got their own subsystem, no batch migration can be exercised at all,
+        # and the run is only testing the single-namespace path whatever its verdict says.
+        if int(self.opt("ns_pods")) >= 2 and not shared:
+            ctx.log.warn(
+                f"{self.name}: the {self.opt('ns_pods')} namespaced volume(s) each got their "
+                f"OWN subsystem ({PARAM_MAX_NS}={self.opt('ns_per_subsys')}), so no batch "
+                "migration can be exercised. Check that the CSI driver honours "
+                f"{PARAM_MAX_NS} and that the volumes landed on the same storage node — a "
+                "subsystem is shared per node")
+
+    def _publish(self, ctx: RunContext) -> None:
+        """Hand the driver everything it needs to choose targets and attribute observations."""
+        pvs = [self._pv_of[p] for p in self._pods if p in self._pv_of]
+        node_of: dict[str, str] = {}
+        cp = kube.run(["-n", self.opt("namespace"), "get", "pods", "-l",
+                       f"sbtest={ctx.run_id}", "-o", "json"], check=False)
+        if cp.returncode == 0 and cp.stdout:
+            for it in json.loads(cp.stdout).get("items", []):
+                node_of[it["metadata"]["name"]] = it.get("spec", {}).get("nodeName", "") or ""
+
+        ctx.shared.update({
+            "workload.pvs": pvs,
+            "workload.pods": list(self._pods),
+            "workload.pod_of": dict(self._pod_of),
+            "workload.pv_of": dict(self._pv_of),
+            "workload.volume_of": dict(self._volume_of),
+            "workload.node_of": node_of,
+            "workload.nqn_of": dict(self._nqn_of),
+            "workload.subsystem_of": {pv: list(self._groups.get(self._nqn_of.get(pv, ""),
+                                                                [pv]))
+                                      for pv in pvs},
+            "workload.placement": self._placement(),
+            "workload.sbctl": self._sb,
+        })
+
+    def _placement(self) -> dict[str, str]:
+        try:
+            return self._sb.nodes_of(dict(self._volume_of))
+        except SbctlError:
+            return {}
+
+    # ── collection: the base collects every instance ─────────────────────────────
+
+    def _write_timeseries(self, ctx: RunContext, ns: str, pod: str, d: str,
+                          migs: list) -> None:
+        fio.write_timeseries(ctx, ns, pod, d, migs)

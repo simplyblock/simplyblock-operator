@@ -1,0 +1,44 @@
+# Every image the embedded prerequisite manifests and the control-plane install
+# deploy, for mirroring into an air-gapped registry. It is not merged into the
+# CSV's relatedImages, which certification requires to be certified images;
+# images_test.go keeps it in sync with the manifests.
+- name: busybox
+  image: quay.io/simplyblock-io/busybox:1.37.0@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec
+- name: local-path-provisioner
+  image: quay.io/simplyblock-io/local-path-provisioner:v0.0.30@sha256:9b914881170048f80ae9302f36e5b99b4a6b18af73a38adc1c66d12f65d360be
+- name: cert-manager-acmesolver
+  image: quay.io/simplyblock-io/cert-manager-acmesolver:v1.16.2@sha256:6ea8176c5baa6a7f6b1262ac7b51f5888006b4c57ec574b708e3bc11c8fe441c
+- name: cert-manager-cainjector
+  image: quay.io/simplyblock-io/cert-manager-cainjector:v1.16.2@sha256:593abc7bf8b926d6fcb9c63b91504ad85e1379b25056aa5dee90b35505ab3211
+- name: cert-manager-controller
+  image: quay.io/simplyblock-io/cert-manager-controller:v1.16.2@sha256:0eec9c89554011c9aa16eea88ab89a91b32dc8d6eb96307b7fc2dcd6bbbc7fcf
+- name: cert-manager-webhook
+  image: quay.io/simplyblock-io/cert-manager-webhook:v1.16.2@sha256:64c4d5dd55d7d00e5b162e21887f9bffbf1e531ee0668eaf801fae9bd54e536d
+- name: snapshot-controller
+  image: quay.io/simplyblock-io/snapshot-controller:v8.2.0@sha256:9dade8f2f3ab29e3919c41b343f8d77b12178ac51f25574d7ed2d45a3e3ef69d
+- name: fdb-kubernetes-operator
+  image: quay.io/simplyblock-io/fdb-kubernetes-operator:v2.13.0@sha256:880d19f6d15198c54b5b03073768d1f8231430c7bbcb4fcb7247eece8e0b7687
+# Mirror this one with its tag: the FoundationDB operator pulls it by tag, not digest.
+- name: fdb-kubernetes-monitor
+  image: quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63@sha256:348929437e4203dcf38f7788b85b86723c4250c2a5981213a73b8c6fe238fcd2
+- name: minio
+  image: quay.io/simplyblock-io/minio:RELEASE.2024-01-16T16-07-38Z@sha256:4c4a4876193f030c81f57aabb22bcb9a73462010eb61fcab66908e03e5484af8
+- name: minio-client
+  image: quay.io/simplyblock-io/minio-client:RELEASE.2024-01-16T16-06-34Z@sha256:591b097ea2d44edb157b86938d332c749291d01785b20457f31ffef9664b3fdb
+- name: prometheus
+  image: quay.io/simplyblock-io/prometheus:v2.51.0@sha256:5ccad477d0057e62a7cd1981ffcc43785ac10c5a35522dc207466ff7e7ec845f
+- name: thanos
+  image: quay.io/simplyblock-io/thanos:v0.31.0@sha256:e7d337d6ac2aea3f0f9314ec9830291789e16e2b480b9d353be02d05ce7f2a7e
+# Amazon EKS only: the AWS EBS CSI driver the operator installs when the cluster has none.
+- name: ebs-csi-attacher
+  image: public.ecr.aws/csi-components/csi-attacher:v4.13.0-eksbuild.2@sha256:cadd3f0523aa96f1eb829ca2ec50163e6c76df8957fa3b5461a5fa49ea1125d3
+- name: ebs-csi-node-driver-registrar
+  image: public.ecr.aws/csi-components/csi-node-driver-registrar:v2.18.0-eksbuild.2@sha256:18cc159a05a6522323d782ec3fbd9db6a75d39ffcb4862959731dde37b5e7a5c
+- name: ebs-csi-provisioner
+  image: public.ecr.aws/csi-components/csi-provisioner:v6.4.0-eksbuild.2@sha256:f52a6698f1ca5d3f422c3e0f1a242f819a1b2f47e24aaf88c3c7e961b0463522
+- name: ebs-csi-resizer
+  image: public.ecr.aws/csi-components/csi-resizer:v2.3.0-eksbuild.2@sha256:46410bcf1b45a9bc42edb64db7b52b2792edb4582653373d7d04a48cbf1b890a
+- name: ebs-livenessprobe
+  image: public.ecr.aws/csi-components/livenessprobe:v2.20.0-eksbuild.2@sha256:8e6b3565bfce2e20a7e0e19a16f174f3ff270a43cd70386febafac715cc4a703
+- name: ebs-aws-ebs-csi-driver
+  image: public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.67.1@sha256:96f37d60fdd966c319e39ce41e2a13256d67b52ae3e6202b7de713d38ea1085f

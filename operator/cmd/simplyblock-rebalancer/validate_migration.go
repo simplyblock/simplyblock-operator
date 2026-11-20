@@ -36,6 +36,7 @@ type validationRun struct {
 	hostHasSubsystem func(ctx context.Context, sysRoot, nqn string) (bool, error)
 	presentAddresses func(ctx context.Context, sysRoot, nqn string) (map[string]bool, error)
 	ensurePaths      func(ctx context.Context, sysRoot string, conns []volumemigration.Connection) error
+	settlePaths      func(ctx context.Context, sysRoot, nqn string) error
 	verifyPaths      func(ctx context.Context, sysRoot, nqn string, conns []volumemigration.Connection,
 		preExisting map[string]bool) ([]volumemigration.PathState, error)
 	reapDead     func(ctx context.Context, sysRoot, nqn string) ([]volumemigration.Released, error)
@@ -53,6 +54,7 @@ func newValidationRun() validationRun {
 		hostHasSubsystem: volumemigration.HostHasSubsystem,
 		presentAddresses: volumemigration.PresentAddresses,
 		ensurePaths:      volumemigration.EnsureMigrationPaths,
+		settlePaths:      volumemigration.SettleMigrationPaths,
 		verifyPaths:      volumemigration.VerifyMigrationPaths,
 		reapDead:         volumemigration.ReapDeadControllers,
 		releasePaths:     volumemigration.ReleaseMigrationPaths,
@@ -79,7 +81,7 @@ func parseConnections(data string) ([]volumemigration.Connection, error) {
 
 // run establishes and validates the migration's target paths on this host.
 //
-// When nqn is set it first asks whether this host is connected to that subsystem at
+// When the NQN is set it first asks whether this host is connected to that subsystem at
 // all. A migration moves a whole NVMe subsystem, so this job runs on every node that
 // consumes one of its volumes, and a node may no longer hold a connection by the time
 // the job starts (its consumer pod went away). Connecting target paths there would
@@ -126,19 +128,27 @@ func (v validationRun) run(
 		log.Printf("path %s to %s already present before connecting", addr, nqn)
 	}
 
-	// The freshly-connected target path can lag behind: nvme connect may return before
-	// its controller is live and the ANA log page settles. Retry the connect+verify
-	// cycle a few times before giving up so a transient lag is not mistaken for a
-	// missing path. Already connected paths are a no-op in ensurePaths, so re-running
-	// it only re-attempts paths that are genuinely missing.
+	// The freshly connected target path can lag behind: `nvme connect` may return before
+	// its controller is live and the ANA log page settles, and the kernel attaches the
+	// subsystem's namespaces to a live controller one by one afterward. The settle step
+	// waits out the namespace scan before each verification, and the connect+verify
+	// cycle is retried a few times before giving up so a transient lag is not mistaken
+	// for a missing path. Already connected paths are a no-op in ensurePaths, so
+	// re-running it only re-attempts paths that are genuinely missing.
 	var lastErr error
 	for attempt := 1; attempt <= v.attempts; attempt++ {
 		paths, verifyErr := []volumemigration.PathState(nil), error(nil)
-		if err := v.ensurePaths(ctx, sysRoot, conns); err != nil {
-			lastErr = fmt.Errorf("ensure migration paths: %w", err)
-		} else if paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting); verifyErr != nil {
+		connectErr := v.ensurePaths(ctx, sysRoot, conns)
+		if connectErr == nil {
+			v.settle(ctx, sysRoot, conns)
+			paths, verifyErr = v.verifyPaths(ctx, sysRoot, nqn, conns, preExisting)
+		}
+		switch {
+		case connectErr != nil:
+			lastErr = fmt.Errorf("ensure migration paths: %w", connectErr)
+		case verifyErr != nil:
 			lastErr = fmt.Errorf("verification: %w", verifyErr)
-		} else {
+		default:
 			for _, p := range paths {
 				log.Printf("path %s", p)
 			}
@@ -171,7 +181,29 @@ func (v validationRun) run(
 	return outcomeValidated, fmt.Errorf("validation failed after %d attempt(s): %w", v.attempts, lastErr)
 }
 
-// reap clears the dead controllers of nqn, logging what went. Failures are logged and
+// settle waits for the paths of every subsystem in conns to serve all of its
+// namespaces before they are verified. The connect returns once a controller is
+// live, and the kernel attaches the namespaces to it afterward, so a check run
+// straight away sees a path that is only scanning as one that is broken. A wait
+// that runs out is logged and decides nothing: the verification that follows
+// is what reports a path that never settled.
+func (v validationRun) settle(ctx context.Context, sysRoot string, conns []volumemigration.Connection) {
+	if v.settlePaths == nil {
+		return
+	}
+	seen := map[string]bool{}
+	for _, c := range conns {
+		if seen[c.NQN] {
+			continue
+		}
+		seen[c.NQN] = true
+		if err := v.settlePaths(ctx, sysRoot, c.NQN); err != nil {
+			log.Printf("the paths of %s did not settle; the verification decides: %v", c.NQN, err)
+		}
+	}
+}
+
+// reap clears the dead controllers of the NQN, logging what went. Failures are logged and
 // swallowed: this runs to improve the odds of a verification that is about to happen
 // anyway, and refusing to validate because a cleanup failed would turn a recoverable
 // state into the outcome it was meant to prevent.
@@ -191,7 +223,7 @@ func (v validationRun) reap(ctx context.Context, sysRoot, nqn string) {
 
 // release disconnects the migration's target paths, logging what went. Failures are
 // logged and swallowed: the run has already failed and the exit code must report that
-// failure rather than this one, which would only mask why the migration was cancelled.
+// failure rather than this one, which would only mask why the migration was canceled.
 func (v validationRun) release(
 	ctx context.Context,
 	sysRoot, nqn string,
@@ -221,17 +253,33 @@ func validateMigration() {
 		log.Fatal(err)
 	}
 	if outcome == outcomeSkipped {
-		// The operator collects this log per node, so say plainly that this node
-		// needed nothing rather than leaving an empty success.
 		log.Printf("no host connection to %s on this node: nothing to validate", nqn)
 	}
+	// The exit code is zero for a skip as well as for a validation, so the
+	// operator decides from this result rather than from the Job completing.
+	if err := reportOutcome(os.Getenv(volumemigration.ValidationResultPathEnv), outcome, nqn); err != nil {
+		log.Fatal(err)
+	}
+}
+
+// reportOutcome writes what the run concluded as the container's termination
+// message.
+func reportOutcome(path string, outcome validationOutcome, nqn string) error {
+	result := volumemigration.ValidationResult{Outcome: volumemigration.ValidationValidated}
+	if outcome == outcomeSkipped {
+		result = volumemigration.ValidationResult{
+			Outcome: volumemigration.ValidationSkipped,
+			Detail:  "no host connection to " + nqn + " on this node",
+		}
+	}
+	return volumemigration.WriteValidationResult(path, result)
 }
 
 // releaseMigration gives back the migration target paths on this node without
 // validating anything.
 //
 // It is the mode the operator runs on nodes whose own validation passed. Those never
-// learn that the migration was cancelled — another node's Job failed, or the operator
+// learn that the migration was canceled — another node's Job failed, or the operator
 // gave up waiting — so their Job exited successfully with the target paths connected and
 // nothing on the node will ever release them. Every other failure path releases in the
 // Job that failed; this one exists because a success cannot.
@@ -285,7 +333,7 @@ func validateAttempts() int {
 }
 
 // validateRetryDelay returns the delay between attempts, overridable via
-// VMIG_VALIDATE_RETRY_DELAY (a Go duration, e.g. "2s"). Invalid values fall back
+// VMIG_VALIDATE_RETRY_DELAY (a Go duration, e.g., "2s"). Invalid values fall back
 // to the default.
 func validateRetryDelay() time.Duration {
 	if v := os.Getenv("VMIG_VALIDATE_RETRY_DELAY"); v != "" {

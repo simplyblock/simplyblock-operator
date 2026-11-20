@@ -29,6 +29,7 @@ import (
 // Fields here mirror the configurable (non-immutable, non-infrastructure) fields
 // of StorageNodeSetSpec. When a field is set here it takes precedence over the
 // fleet default; when omitted the fleet default applies.
+// +kubebuilder:validation:XValidation:rule="!(((has(self.enableLblk) && self.enableLblk) || (has(self.blkNames) && size(self.blkNames) > 0) || (has(self.blkNamesExclude) && size(self.blkNamesExclude) > 0) || (has(self.blkSerials) && size(self.blkSerials) > 0)) && ((has(self.pcieAllowList) && size(self.pcieAllowList) > 0) || (has(self.pcieDenyList) && size(self.pcieDenyList) > 0) || (has(self.pcieModel) && size(self.pcieModel) > 0) || (has(self.driveSizeRange) && size(self.driveSizeRange) > 0) || (has(self.deviceNames) && size(self.deviceNames) > 0)))",message="lblk selectors (enableLblk/blkNames/blkNamesExclude/blkSerials) are mutually exclusive with NVMe PCIe selectors (pcieAllowList/pcieDenyList/pcieModel/driveSizeRange/deviceNames)"
 type StorageNodeOverrides struct {
 	// SpdkImage overrides the SPDK image for this node (e.g. for phased rollouts).
 	// +optional
@@ -68,6 +69,42 @@ type StorageNodeOverrides struct {
 	// (e.g. ["nvme0n1","nvme1n1"]).
 	// +optional
 	DeviceNames []string `json:"deviceNames,omitempty"`
+
+	// EnableLblk overrides whether this node uses lblk devices instead of NVMe.
+	// Only meaningful when the cluster's spec.deviceMode is "lblk."
+	// +optional
+	EnableLblk *bool `json:"enableLblk,omitempty"`
+
+	// BlkNames overrides the block-device kernel-name selector for this node.
+	// Immutable once set, including unset-to-set (see StorageNodeSetSpec.BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +optional
+	BlkNames []string `json:"blkNames,omitempty"`
+
+	// BlkNamesExclude overrides the kernel-name exclusion selector for this node.
+	// Immutable once set (see BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +optional
+	BlkNamesExclude []string `json:"blkNamesExclude,omitempty"`
+
+	// BlkSerials overrides the block-device serial/WWN selector for this node.
+	// Immutable once set (see BlkNames).
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:XValidation:rule="!oldSelf.hasValue() || self == oldSelf.value()",message="field is immutable",optionalOldSelf=true
+	// +optional
+	BlkSerials []string `json:"blkSerials,omitempty"`
+
+	// LblkJournalPercent overrides the lblk journal-partition capacity percentage for
+	// this node.
+	// +optional
+	LblkJournalPercent *int32 `json:"lblkJournalPercent,omitempty"`
+
+	// BlkForceFormat overrides whether partitioned lblk devices are force-wiped
+	// (wipefs) to become eligible whole-disk devices on this node.
+	// +optional
+	BlkForceFormat *bool `json:"blkForceFormat,omitempty"`
 
 	// EnableCpuTopology overrides topology-aware CPU handling for this node.
 	// +optional

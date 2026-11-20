@@ -1,0 +1,23 @@
+apiVersion: v1
+kind: List
+items:
+- apiVersion: storage.simplyblock.io/v1alpha2
+  kind: StorageCluster
+  metadata: {name: fleet, namespace: simplyblock}
+  spec: {supercluster: {}}
+  status: {phase: Active, role: Supercluster}
+- apiVersion: storage.simplyblock.io/v1alpha2
+  kind: StorageCluster
+  metadata: {name: fleet-rack-a, namespace: simplyblock}
+  spec: {superclusterRef: fleet}
+  status: {phase: Active, role: PlacementGroup}
+- apiVersion: storage.simplyblock.io/v1alpha2
+  kind: StorageCluster
+  metadata: {name: lab, namespace: simplyblock}
+  spec: {}
+  status: {phase: Active}
+- apiVersion: storage.simplyblock.io/v1alpha2
+  kind: StorageNode
+  metadata: {name: fleet-rack-a-worker-01-0, namespace: simplyblock}
+  spec: {workerNode: worker-01, clusterRef: fleet-rack-a}
+  status: {phase: Online}

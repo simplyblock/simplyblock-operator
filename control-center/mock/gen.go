@@ -7,27 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
-	"strings"
 	"time"
 )
 
 // The generator turns a Scenario into a coherent world inside the Store.
 // Coherence is the point: every StorageDevice's nodeRef names a StorageNode
 // that exists, every ReplicationSlot's pvcRef a bound PVC, every DRPC the
-// DRPolicy, every PV handle a cluster and pool UUID the CRDs report, because
-// a UI is tested by following exactly those links.
-//
-// The object formats follow the operator and the CSI driver: PV handles are
-// <clusterUUID>:<poolUUID>:<lvolUUID>, snapshot handles the same triple,
-// StorageClasses are simplyblock-<ns>-<cluster>-<pool>, workers carry
-// simplyblock.io/storage-node-uuid.<clusterUUID>.<socket> labels, the node
-// API runs in the StorageNodeSet DaemonSet pod and SPDK in the backend's
-// snode-spdk-pod-<rpcPort>-<clusterUUID>.
-//
-// A world holds one or several storage clusters (Scenario.Clusters,
-// Scenario.ClusterNamespaces); the world-level objects (namespaces, workers,
-// control plane, tenancy scaffold, RBAC) are built once and the per-cluster
-// objects once per cluster, each cluster from its own sub-context.
+// DRPolicy — because a UI is tested by following exactly those links.
 
 type genCtx struct {
 	st   *Store
@@ -36,59 +22,28 @@ type genCtx struct {
 	now  time.Time
 	site string
 
-	// The hub namespace layout (tenancy.go). ns is the cluster's namespace
-	// (sb-<tenant>, or one of ClusterNamespaces) — the RBAC target most
-	// storage objects live in.
-	ns      string   // the cluster namespace
+	// The hub namespace layout (tenancy.go). ns is the storage-cluster
+	// namespace (sb-sc-<cluster>) — the RBAC target that most storage objects
+	// live in — so the existing generators need no per-call change.
+	ns      string   // sb-<tenant>  (primary tenant namespace = RBAC target)
 	sysNs   string   // simplyblock-system (control plane)
 	mcNs    string   // sb-mc-<managed>   (transport: projected intent + status)
 	mcName  string   // managed cluster name
 	tenant  string   // primary tenant (holds the generated cluster + DR)
 	tenants []string // all tenants (extras are provisioned-but-empty)
 
-	// Per-cluster state; the world context carries the first cluster's after
-	// the cluster loop so the world-level builders can refer to it.
-	clusterIdx   int
-	clusterName  string
-	clusterUUID  string
-	clusterSite  string            // the site label; "" when the scenario sets none
-	zone         string            // the zone the cluster's workers sit in
-	tenantLabel  string            // storage.simplyblock.io/tenant, when set
-	prefix       string            // object-name prefix when clusters share a namespace
-	nodeSetName  string            // the cluster's StorageNodeSet
-	workerNames  []string          // the cluster's workers
-	nodes        []genNode         // the cluster's storage nodes, in order
-	nodeUUIDs    []string          // nodes[i].uuid, kept for the DR builders
-	poolNames    []string          // pool CR names
-	poolUUIDs    map[string]string // pool CR name -> backend uuid
-	pvcRefs      []pvcRef          // every generated PVC, for snapshots/backups/slots
-	drCluster    string
-	allWorkers   []string // every worker of the world, for the control plane objects
-	clusters     []*genCtx
-	workerCounts map[string]int // workers numbered per site
-}
-
-// genNode is what the pods, labels, tasks, and event log need to know about
-// a storage node after nodesAndDevices built it.
-type genNode struct {
-	name, uuid, worker, status string
-	rpcPort                    int
-	devices                    []genDevice
-}
-
-type genDevice struct {
-	name, uuid, status string
+	workerNames []string
+	nodeUUIDs   []string
+	poolNames   []string
+	pvcRefs     []pvcRef // every generated PVC, for snapshots/backups/slots
+	clusterUUID string
+	clusterName string
+	drCluster   string
 }
 
 type pvcRef struct {
-	Namespace, Name, VolumeID, PoolUUID, StorageClass string
-	SizeGi                                            int
-}
-
-// clusterPlan is where one cluster goes before anything is created.
-type clusterPlan struct {
-	name, ns, site, zone, tenant, prefix string
-	workers                              []string
+	Namespace, Name, VolumeID, StorageClass string
+	SizeGi                                  int
 }
 
 func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
@@ -96,13 +51,11 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 		st:  st,
 		rng: rand.New(rand.NewPCG(seed, seed^0xda3e39cb94b95bdb)),
 		sc:  sc, now: time.Now().UTC(),
-		drCluster:    "cluster2",
-		workerCounts: map[string]int{},
+		clusterName: "cluster1",
+		drCluster:   "cluster2",
 	}
 	g.site = dcSites[g.rng.IntN(int(len(dcSites)))]
-	if sc.Site != "" {
-		g.site = sc.Site
-	}
+	g.clusterUUID = g.uuid()
 	g.mcName = fmt.Sprintf("prod-%s-1", g.site)
 	g.sysNs = systemNs
 	g.mcNs = nsManagedCluster(g.mcName)
@@ -113,120 +66,29 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 	g.tenant = g.tenants[0]
 	g.ns = nsTenant(g.tenant)
 
-	plans := g.clusterPlans()
-	// the world builders refer to the first cluster
-	g.clusterName, g.ns, g.clusterUUID = plans[0].name, plans[0].ns, g.uuid()
-
-	g.namespaces(plans)
-	g.k8sNodes(plans)
+	g.namespaces()
+	g.k8sNodes()
 	g.tenancyScaffold() // ManagedCluster, NodePoolAllocation, StorageClusterClass
-
-	for i, plan := range plans {
-		cg := g.forCluster(i, plan)
-		cg.storageCluster()
-		if i == 0 {
-			cg.projectStorageCluster() // transport copy in sb-mc-* (hub→agent, drift)
-		}
-		cg.nodesAndDevices()
-		cg.storageNodePods()
-		cg.poolsAndClasses()
-		cg.volumes()
-		cg.snapshots()
-		cg.backups()
-		cg.tasks()
-		cg.opsHistory()
-		if sc.WithDR && i == 0 {
-			cg.replicationChain()
-			cg.drApplications()
-			cg.ramen()
-		}
-		cg.events()
-		cg.seedEventLog()
-		g.clusters = append(g.clusters, cg)
-		g.allWorkers = append(g.allWorkers, cg.workerNames...)
+	g.storageCluster()
+	g.projectStorageCluster() // transport copy in sb-mc-* (hub→agent, drift)
+	g.nodesAndDevices()
+	g.poolsAndClasses()
+	g.volumes()
+	g.snapshots()
+	g.backups()
+	g.tasks()
+	g.opsHistory()
+	if sc.WithDR {
+		g.replicationChain()
+		g.drApplications()
+		g.ramen()
 	}
-	g.adopt(g.clusters[0])
-
 	g.workloads()
-	g.controlPlanePods()
+	g.platformPods()
 	g.secrets()
 	g.controlPlaneObjects()
 	g.accessControl() // sb:* ClusterRoles, RoleBindings, AccessGrants
-}
-
-// clusterPlans lays the clusters out: one per ClusterNamespaces entry, else
-// Clusters of them in the primary tenant namespace. Clusters sharing a
-// namespace get a name prefix so their nodes, pools, and ops never collide.
-func (g *genCtx) clusterPlans() []clusterPlan {
-	var plans []clusterPlan
-	switch {
-	case len(g.sc.ClusterNamespaces) > 0:
-		for i, ns := range g.sc.ClusterNamespaces {
-			plans = append(plans, g.planCluster(i, ns))
-		}
-	default:
-		for i := 0; i < max(1, g.sc.Clusters); i++ {
-			plans = append(plans, g.planCluster(i, g.ns))
-		}
-	}
-	perNs := map[string]int{}
-	for _, p := range plans {
-		perNs[p.ns]++
-	}
-	for i := range plans {
-		if perNs[plans[i].ns] > 1 {
-			plans[i].prefix = plans[i].name + "-"
-		}
-	}
-	return plans
-}
-
-func (g *genCtx) planCluster(i int, ns string) clusterPlan {
-	p := clusterPlan{name: fmt.Sprintf("cluster%d", i+1), ns: ns, site: g.sc.Site, tenant: g.sc.Tenant}
-	if g.sc.SitePerCluster {
-		p.site = fmt.Sprintf("%s-%02d", g.site, i+1)
-		p.name = p.site
-		p.zone = p.site
-	}
-	if p.tenant == "" && len(g.sc.ClusterNamespaces) > 0 && strings.HasPrefix(ns, "sb-") {
-		p.tenant = strings.TrimPrefix(ns, "sb-")
-	}
-	workerSite := g.site
-	if p.site != "" {
-		workerSite = p.site
-	}
-	for j := 0; j < g.sc.Workers; j++ {
-		g.workerCounts[workerSite]++
-		p.workers = append(p.workers, fmt.Sprintf("worker-%s-%02d", workerSite, g.workerCounts[workerSite]))
-	}
-	return p
-}
-
-// forCluster derives the sub-context one cluster is built from; the rng is
-// shared so the world stays a pure function of the seed.
-func (g *genCtx) forCluster(i int, p clusterPlan) *genCtx {
-	cg := *g
-	cg.clusterIdx = i
-	cg.clusterName, cg.ns = p.name, p.ns
-	cg.clusterUUID = g.clusterUUID
-	if i > 0 {
-		cg.clusterUUID = g.uuid()
-	}
-	cg.clusterSite, cg.zone, cg.tenantLabel, cg.prefix = p.site, p.zone, p.tenant, p.prefix
-	cg.nodeSetName = p.prefix + "sb-primary-nodes"
-	cg.workerNames = p.workers
-	cg.nodes, cg.nodeUUIDs, cg.poolNames, cg.pvcRefs = nil, nil, nil, nil
-	cg.poolUUIDs = map[string]string{}
-	cg.clusters = nil
-	return &cg
-}
-
-// adopt copies a cluster's state back into the world context.
-func (g *genCtx) adopt(c *genCtx) {
-	g.clusterName, g.ns, g.clusterUUID = c.clusterName, c.ns, c.clusterUUID
-	g.clusterSite, g.zone, g.tenantLabel, g.prefix = c.clusterSite, c.zone, c.tenantLabel, c.prefix
-	g.nodeSetName, g.workerNames, g.nodes, g.nodeUUIDs = c.nodeSetName, c.workerNames, c.nodes, c.nodeUUIDs
-	g.poolNames, g.poolUUIDs, g.pvcRefs = c.poolNames, c.poolUUIDs, c.pvcRefs
+	g.events()
 }
 
 // ---- helpers ------------------------------------------------------------------
@@ -234,7 +96,7 @@ func (g *genCtx) adopt(c *genCtx) {
 func (g *genCtx) def(group, resource string) ResourceDef {
 	version := "v1alpha1"
 	switch group {
-	case "", ocmGroup, kvGroup, rbacGroup, apiExtGroup, "apps", "storage.k8s.io", "snapshot.storage.k8s.io", "networking.k8s.io":
+	case "", ocmGroup, kvGroup, rbacGroup, "apps", "storage.k8s.io", "snapshot.storage.k8s.io", "networking.k8s.io":
 		version = "v1"
 	}
 	if resource == "clusterdeploymentconfigs" || resource == "operatorops" {
@@ -340,40 +202,14 @@ func (g *genCtx) recent(maxMinutes int) string {
 
 func gib(n int) string { return fmt.Sprintf("%dGi", n) }
 
-// name prefixes an object name when clusters share a namespace.
-func (g *genCtx) name(s string) string { return g.prefix + s }
-
-// nodeName is the StorageNode name of the cluster's i-th node (1-based).
-func (g *genCtx) nodeName(i int) string { return g.name(fmt.Sprintf("sn-%02d", i)) }
-
-// clusterLabels are the fleet labels a StorageCluster carries when the
-// scenario sets them.
-func (g *genCtx) clusterLabels() map[string]any {
-	labels := map[string]any{}
-	if g.clusterSite != "" {
-		labels["storage.simplyblock.io/site"] = g.clusterSite
-	}
-	if g.sc.Stage != "" {
-		labels["storage.simplyblock.io/stage"] = g.sc.Stage
-	}
-	if g.tenantLabel != "" {
-		labels["storage.simplyblock.io/tenant"] = g.tenantLabel
-	}
-	return labels
-}
-
 // ---- world building -----------------------------------------------------------
 
 // namespaces builds the hub tenancy layout (§2.1) with hierarchy labels
 // (§2.2). Structure is in labels, not names, because namespace names are DNS
 // labels: the scope tree, RoleBinding propagation and admission bindings all
 // select on these labels.
-func (g *genCtx) namespaces(plans []clusterPlan) {
-	nsDef := g.def("", "namespaces")
+func (g *genCtx) namespaces() {
 	mk := func(name string, labels map[string]any) {
-		if _, err := g.st.Get(nsDef, "", name); err == nil {
-			return
-		}
 		labels["kubernetes.io/metadata.name"] = name
 		g.add("", "namespaces", "", name, nil,
 			map[string]any{"phase": "Active"},
@@ -401,33 +237,21 @@ func (g *genCtx) namespaces(plans []clusterPlan) {
 		}
 		mk(nsTenant(t), labels)
 	}
-	// the namespaces ClusterNamespaces names, as tenant namespaces
-	for _, p := range plans {
-		labels := map[string]any{labScopeKind: scopeTenant, labManagedCluster: g.mcName}
-		if p.tenant != "" {
-			labels[labTenant] = p.tenant
-		}
-		mk(p.ns, labels)
-	}
 	// application namespaces (k8s workloads the recipe editor discovers)
 	for _, n := range g.sc.AppNamespaces {
 		mk(n, map[string]any{labScopeKind: scopeApplication})
 	}
 }
 
-// k8sNodes creates the management nodes and every cluster's workers. The
-// storage-node-uuid labels come later, when nodesAndDevices knows the uuids.
-func (g *genCtx) k8sNodes(plans []clusterPlan) {
-	mk := func(name, role, zone string, storage bool, nodeSet string) {
+func (g *genCtx) k8sNodes() {
+	mk := func(name, role string, storage bool) {
 		labels := map[string]any{
 			"kubernetes.io/hostname":          name,
-			"topology.kubernetes.io/zone":     zone,
-			"topology.kubernetes.io/region":   g.site,
+			"topology.kubernetes.io/zone":     g.site + string(rune('a'+g.rng.UintN(3))),
 			"node-role.kubernetes.io/" + role: "",
 		}
 		if storage {
 			labels["io.simplyblock.node-type"] = "simplyblock-storage-plane"
-			labels["io.simplyblock.storagenodeset"] = nodeSet
 		}
 		g.add("", "nodes", "", name, map[string]any{}, map[string]any{
 			"capacity": map[string]any{
@@ -448,16 +272,12 @@ func (g *genCtx) k8sNodes(plans []clusterPlan) {
 		}, map[string]any{"labels": labels})
 	}
 	for i := 1; i <= g.sc.MgmtNodes; i++ {
-		mk(fmt.Sprintf("mgmt-%s-%d", g.site, i), "control-plane", g.site+string(rune('a'+g.rng.UintN(3))), false, "")
+		mk(fmt.Sprintf("mgmt-%s-%d", g.site, i), "control-plane", false)
 	}
-	for _, p := range plans {
-		for _, name := range p.workers {
-			zone := p.zone
-			if zone == "" {
-				zone = g.site + string(rune('a'+g.rng.UintN(3)))
-			}
-			mk(name, "worker", zone, true, p.prefix+"sb-primary-nodes")
-		}
+	for i := 1; i <= g.sc.Workers; i++ {
+		name := fmt.Sprintf("worker-%s-%02d", g.site, i)
+		g.workerNames = append(g.workerNames, name)
+		mk(name, "worker", true)
 	}
 }
 
@@ -467,8 +287,6 @@ func (g *genCtx) storageCluster() {
 			"stripe":               map[string]any{"dataChunks": 2, "parityChunks": 1},
 			"fabricType":           "tcp",
 			"maxSubsystemCount":    500,
-			"rpcBasePort":          8080,
-			"nvmfBasePort":         4420,
 			"warningThreshold":     map[string]any{"capacity": 75, "provisionedCapacity": 180},
 			"criticalThreshold":    map[string]any{"capacity": 90, "provisionedCapacity": 220},
 			"enableFailureDomains": g.sc.Workers >= 6,
@@ -486,30 +304,27 @@ func (g *genCtx) storageCluster() {
 			"nqn":                 "nqn.2023-02.io.simplyblock:" + g.clusterUUID,
 			"created":             g.past(2400),
 			"lastUpdated":         g.recent(10),
-		}, map[string]any{"labels": g.clusterLabels()})
+		}, nil)
 }
 
 func (g *genCtx) nodesAndDevices() {
 	offline := map[int]bool{}
-	for len(offline) < min(g.sc.OfflineNodes, g.sc.Workers) {
+	for len(offline) < g.sc.OfflineNodes {
 		offline[int(g.rng.IntN(int(g.sc.Workers)))] = true
 	}
 	degradedLeft := g.sc.DegradedDevices
-	nodeDef := g.def("", "nodes")
 
 	var setNodes []any
 	for i, worker := range g.workerNames {
 		nodeUUID := g.uuid()
 		g.nodeUUIDs = append(g.nodeUUIDs, nodeUUID)
-		name := g.nodeName(i + 1)
+		name := fmt.Sprintf("sn-%02d", i+1)
 		status := "online"
 		health := true
 		if offline[i] {
 			status, health = "offline", false
 		}
 		total := int64(0)
-		rpcPort := 8080 + i
-		node := genNode{name: name, uuid: nodeUUID, worker: worker, status: status, rpcPort: rpcPort}
 
 		model := nvmeModels[g.rng.IntN(int(len(nvmeModels)))]
 		for d := 0; d < g.sc.DevicesPerNode; d++ {
@@ -529,10 +344,8 @@ func (g *genCtx) nodesAndDevices() {
 				role = "Journal"
 			}
 			serial := fmt.Sprintf("%s%07d", model.SerialPfx, g.rng.UintN(9999999))
-			devUUID := g.uuid()
-			devName := fmt.Sprintf("%s-nvme%d", name, d)
-			g.add(sbGroup, "storagedevices", g.ns, devName,
-				map[string]any{"deviceID": devUUID, "nodeRef": name},
+			g.add(sbGroup, "storagedevices", g.ns, fmt.Sprintf("%s-nvme%d", name, d),
+				map[string]any{"deviceID": serial, "nodeRef": name},
 				map[string]any{
 					"clusterID": g.clusterUUID, "nodeID": nodeUUID,
 					"phase": phase, "deviceStatus": devStatus, "role": role,
@@ -543,7 +356,6 @@ func (g *genCtx) nodesAndDevices() {
 						"nvmeController": fmt.Sprintf("nvme%d", d),
 					},
 				}, nil)
-			node.devices = append(node.devices, genDevice{name: devName, uuid: devUUID, status: devStatus})
 		}
 
 		used := int64(float64(total) * (0.25 + g.rng.Float64()*0.4))
@@ -552,7 +364,7 @@ func (g *genCtx) nodesAndDevices() {
 			"failureDomain": float64(i % 3),
 			"ports": map[string]any{
 				"management": fmt.Sprintf("10.10.%d.%d:5000", i/250, 2+i%250),
-				"nvmeof":     float64(4420), "rpc": float64(rpcPort), "lvol": float64(9110 + i),
+				"nvmeof":     float64(4420), "rpc": float64(8080), "lvol": float64(9110 + i),
 			},
 			"resources": map[string]any{
 				"cpu": float64(8 + 4*g.rng.UintN(3)), "memory": gib(32 + 32*int(g.rng.UintN(3))),
@@ -572,30 +384,19 @@ func (g *genCtx) nodesAndDevices() {
 		}
 		g.add(sbGroup, "storagenodes", g.ns, name,
 			map[string]any{
-				"workerNode": worker, "nodeIndex": float64(i), "socketId": float64(0), "socketIndex": float64(0),
-				"storageNodeSetRef": g.nodeSetName,
-			}, nodeStatus, map[string]any{"labels": map[string]any{
-				"storage.simplyblock.io/storagenodeset": g.nodeSetName,
-				"storage.simplyblock.io/worker":         worker,
-			}})
-		g.nodes = append(g.nodes, node)
-
-		// the per-slot label the CSI driver reads for topology
-		if kn, err := g.st.Get(nodeDef, "", worker); err == nil {
-			labels, _ := getPath(kn, "metadata.labels").(map[string]any)
-			labels["simplyblock.io/storage-node-uuid."+g.clusterUUID+".0"] = nodeUUID
-			g.st.Update(nodeDef, "", kn)
-		}
+				"workerNode": worker, "nodeIndex": float64(i),
+				"storageNodeSetRef": "sb-primary-nodes",
+			}, nodeStatus, nil)
 
 		setNodes = append(setNodes, map[string]any{
 			"uuid": nodeUUID, "hostname": worker, "status": status, "health": health,
 			"failureDomain": float64(i % 3), "devices": fmt.Sprint(g.sc.DevicesPerNode),
-			"nvmfPort": float64(4420), "rpcPort": float64(rpcPort), "lvolPort": float64(9110 + i),
+			"nvmfPort": float64(4420), "rpcPort": float64(8080), "lvolPort": float64(9110 + i),
 			"mgmtIp": fmt.Sprintf("10.10.%d.%d", i/250, 2+i%250),
 		})
 	}
 
-	g.add(sbGroup, "storagenodesets", g.ns, g.nodeSetName,
+	g.add(sbGroup, "storagenodesets", g.ns, "sb-primary-nodes",
 		map[string]any{
 			"clusterName": g.clusterName, "workerNodes": toAny(g.workerNames),
 			"mgmtIfname": "eth0", "dataIfname": []any{"eth1"},
@@ -603,127 +404,43 @@ func (g *genCtx) nodesAndDevices() {
 		},
 		map[string]any{
 			"totalNodes":   float64(g.sc.Workers),
-			"onlineNodes":  float64(g.sc.Workers - len(offline)),
-			"offlineNodes": float64(len(offline)),
+			"onlineNodes":  float64(g.sc.Workers - g.sc.OfflineNodes),
+			"offlineNodes": float64(g.sc.OfflineNodes),
 			"nodes":        setNodes,
 		}, nil)
 }
 
-// storageNodePods creates, per storage node, the StorageNodeSet DaemonSet
-// pod that runs the node API (in the cluster namespace) and the SPDK pod the
-// backend creates (in the control plane namespace, host networked, pinned to
-// the worker by hostname).
-func (g *genCtx) storageNodePods() {
-	for _, n := range g.nodes {
-		ready := n.status != "offline"
-		g.addPodFull(g.ns, fmt.Sprintf("%s-%s", g.nodeSetName, randSuffixLocal(g.rng)), n.worker, ready,
-			map[string]any{
-				"app":                           "storage-node",
-				"simplyblock-cluster":           g.clusterName,
-				"io.simplyblock.storagenodeset": g.nodeSetName,
-				"io.simplyblock.node-type":      "simplyblock-storage-plane",
-			},
-			[]map[string]any{{"name": "s-node-api-container", "image": "quay.io/simplyblock-io/simplyblock:26.3.0"}},
-			map[string]any{"hostNetwork": true})
-		rpc := fmt.Sprint(n.rpcPort)
-		g.addPodFull(g.sysNs, "snode-spdk-pod-"+rpc+"-"+g.clusterUUID, n.worker, ready,
-			map[string]any{
-				"role": "simplyblock-storage-node",
-				"app":  "spdk-app-" + rpc,
-			},
-			[]map[string]any{
-				{"name": "spdk-container", "image": "quay.io/simplyblock-io/spdk:26.3.0"},
-				{"name": "spdk-proxy-container", "image": "quay.io/simplyblock-io/spdk-proxy:26.3.0",
-					"env": []any{map[string]any{"name": "RPC_PORT", "value": rpc}}},
-			},
-			map[string]any{
-				"hostNetwork":  true,
-				"nodeSelector": map[string]any{"kubernetes.io/hostname": n.worker},
-			})
-	}
-}
-
-// addPodFull writes a pod with the given labels, containers, and extra spec,
-// Running and Ready unless ready is false (then Running with the containers
-// restarting, which is what a node whose SPDK is down looks like).
-func (g *genCtx) addPodFull(ns, name, node string, ready bool, labels map[string]any, containers []map[string]any, extraSpec map[string]any) {
-	spec := map[string]any{"nodeName": node, "containers": toAny(containers)}
-	for k, v := range extraSpec {
-		spec[k] = v
-	}
-	var statuses []any
-	for _, c := range containers {
-		restarts := float64(g.rng.UintN(3))
-		if !ready {
-			restarts = float64(12 + g.rng.UintN(40))
-		}
-		statuses = append(statuses, map[string]any{"name": c["name"], "ready": ready, "restartCount": restarts})
-	}
-	g.add("", "pods", ns, name, spec,
-		map[string]any{
-			"phase": "Running",
-			"conditions": []any{map[string]any{
-				"type": "Ready", "status": boolStr(ready),
-			}},
-			"containerStatuses": statuses,
-			"podIP":             fmt.Sprintf("10.244.%d.%d", g.rng.UintN(64), 2+g.rng.UintN(250)),
-		},
-		map[string]any{
-			"labels":      labels,
-			"annotations": map[string]any{"log-collector/enabled": "true"},
-		})
-}
-
 func (g *genCtx) poolsAndClasses() {
 	for i := 0; i < g.sc.Pools; i++ {
-		pool := g.name([]string{"vol-store", "db-tier", "bulk", "scratch"}[i%4])
-		poolUUID := g.uuid()
+		pool := []string{"vol-store", "db-tier", "bulk", "scratch"}[i%4]
 		g.poolNames = append(g.poolNames, pool)
-		g.poolUUIDs[pool] = poolUUID
 		g.add(sbGroup, "storagepools", g.ns, pool,
 			map[string]any{
 				"clusterName":            g.clusterName,
 				"capacityLimit":          gib(4096 * (i + 1)),
-				"logicalVolumeMaxSize":   gib(2048),
 				"qos":                    map[string]any{"iops": float64(200000)},
 				"storageClassParameters": map[string]any{"filesystem": "xfs", "fabric": "tcp"},
 			},
-			map[string]any{"uuid": poolUUID, "status": "active"}, nil)
-		g.add("storage.k8s.io", "storageclasses", "", g.storageClassName(pool), nil, nil, map[string]any{
-			"labels": map[string]any{
-				"storage.simplyblock.io/namespace": g.ns,
-				"storage.simplyblock.io/cluster":   g.clusterName,
-				"storage.simplyblock.io/pool":      pool,
-			},
+			map[string]any{"uuid": g.uuid(), "status": "active"}, nil)
+		g.add("storage.k8s.io", "storageclasses", "", "simplyblock-"+pool, nil, nil, map[string]any{
 			"provisioner":          "csi.simplyblock.io",
 			"reclaimPolicy":        "Delete",
 			"allowVolumeExpansion": true,
 			"volumeBindingMode":    "Immediate",
 			"parameters": map[string]any{
-				"cluster_id": g.clusterUUID, "pool_name": pool,
-				"csi.storage.k8s.io/fstype": "xfs", "distr_ndcs": "2", "distr_npcs": "1",
+				"pool_name": pool, "distr_ndcs": "2", "distr_npcs": "1",
 			},
 		})
 	}
 }
 
-// storageClassName is the operator's per-pool StorageClass name.
-func (g *genCtx) storageClassName(pool string) string {
-	return "simplyblock-" + g.ns + "-" + g.clusterName + "-" + pool
-}
-
-// volumes creates PVC/PV pairs; the PV handle is the CSI driver's
-// <clusterUUID>:<poolUUID>:<lvolUUID>.
 func (g *genCtx) volumes() {
 	for i := 0; i < g.sc.Volumes; i++ {
 		appNs := g.sc.AppNamespaces[i%len(g.sc.AppNamespaces)]
 		app := appWorkloads[int(g.rng.IntN(int(len(appWorkloads))))]
 		pvcName := fmt.Sprintf("%s-%s-%d", g.pick(appVolumeNames), app, i)
-		if g.clusterIdx > 0 {
-			pvcName = fmt.Sprintf("c%d-%s", g.clusterIdx+1, pvcName)
-		}
 		pool := g.poolNames[i%len(g.poolNames)]
-		sc := g.storageClassName(pool)
+		sc := "simplyblock-" + pool
 		size := []int{20, 50, 100, 250, 500}[g.rng.UintN(5)]
 		volID := g.uuid()
 		pvName := "pvc-" + volID
@@ -733,7 +450,7 @@ func (g *genCtx) volumes() {
 			annotations["storage.simplyblock.io/replication-policy"] = "policy-prod"
 		}
 		if g.pct(30) {
-			annotations["storage.simplyblock.io/backup-policy"] = g.name("nightly")
+			annotations["storage.simplyblock.io/backup-policy"] = "nightly"
 		}
 		g.add("", "persistentvolumeclaims", appNs, pvcName,
 			map[string]any{
@@ -756,13 +473,8 @@ func (g *genCtx) volumes() {
 				"capacity":    map[string]any{"storage": gib(size)},
 				"accessModes": []any{"ReadWriteOnce"},
 				"csi": map[string]any{
-					"driver":       "csi.simplyblock.io",
-					"volumeHandle": g.clusterUUID + ":" + g.poolUUIDs[pool] + ":" + volID,
-					"fsType":       "xfs",
-					"volumeAttributes": map[string]any{
-						"cluster_id": g.clusterUUID, "pool_name": pool,
-						"storage.kubernetes.io/csiProvisionerIdentity": "csi.simplyblock.io",
-					},
+					"driver": "csi.simplyblock.io", "volumeHandle": volID,
+					"fsType": "xfs",
 				},
 				"claimRef": map[string]any{
 					"kind": "PersistentVolumeClaim", "namespace": appNs, "name": pvcName,
@@ -771,28 +483,22 @@ func (g *genCtx) volumes() {
 				"persistentVolumeReclaimPolicy": "Delete",
 			},
 			map[string]any{"phase": "Bound"}, nil)
-		g.pvcRefs = append(g.pvcRefs, pvcRef{appNs, pvcName, volID, g.poolUUIDs[pool], sc, size})
+		g.pvcRefs = append(g.pvcRefs, pvcRef{appNs, pvcName, volID, sc, size})
 	}
 }
 
-// snapshots creates VolumeSnapshot/VolumeSnapshotContent pairs; the content's
-// handle is <clusterUUID>:<poolUUID>:<snapshotUUID>.
 func (g *genCtx) snapshots() {
 	if len(g.pvcRefs) == 0 {
 		return
 	}
-	classDef := g.def("snapshot.storage.k8s.io", "volumesnapshotclasses")
-	if _, err := g.st.Get(classDef, "", "simplyblock-snapshots"); err != nil {
-		g.add("snapshot.storage.k8s.io", "volumesnapshotclasses", "", "simplyblock-snapshots", nil, nil, map[string]any{
-			"driver":         "csi.simplyblock.io",
-			"deletionPolicy": "Delete",
-		})
-	}
+	g.add("snapshot.storage.k8s.io", "volumesnapshotclasses", "", "simplyblock-snapshots", nil, nil, map[string]any{
+		"driver":         "csi.simplyblock.io",
+		"deletionPolicy": "Delete",
+	})
 	for i := 0; i < g.sc.Snapshots; i++ {
 		p := g.pvcRefs[g.rng.IntN(int(len(g.pvcRefs)))]
 		name := fmt.Sprintf("snap-%s-%d", p.Name, i)
-		snapUUID := g.uuid()
-		contentName := "snapcontent-" + snapUUID
+		contentName := "snapcontent-" + g.uuid()
 		g.add("snapshot.storage.k8s.io", "volumesnapshots", p.Namespace, name,
 			map[string]any{
 				"volumeSnapshotClassName": "simplyblock-snapshots",
@@ -807,12 +513,11 @@ func (g *genCtx) snapshots() {
 			map[string]any{
 				"driver":         "csi.simplyblock.io",
 				"deletionPolicy": "Delete",
-				"source":         map[string]any{"volumeHandle": g.clusterUUID + ":" + p.PoolUUID + ":" + p.VolumeID},
 				"volumeSnapshotRef": map[string]any{
 					"kind": "VolumeSnapshot", "name": name, "namespace": p.Namespace,
 				},
 			},
-			map[string]any{"readyToUse": true, "snapshotHandle": g.clusterUUID + ":" + p.PoolUUID + ":" + snapUUID}, nil)
+			map[string]any{"readyToUse": true, "snapshotHandle": g.uuid()}, nil)
 	}
 }
 
@@ -827,7 +532,7 @@ func (g *genCtx) backups() {
 			"lvolID": p.VolumeID, "pvcName": p.Name, "pvcNamespace": p.Namespace,
 		})
 	}
-	g.add(sbGroup, "backuppolicies", g.ns, g.name("nightly"),
+	g.add(sbGroup, "backuppolicies", g.ns, "nightly",
 		map[string]any{
 			"clusterName": g.clusterName, "schedule": "0 2 * * *",
 			"maxVersions": float64(7), "maxAge": "168h",
@@ -858,78 +563,26 @@ func (g *genCtx) backups() {
 	}
 }
 
-// tasks seeds the control plane's task list: master tasks (node_restart,
-// device_restart, node_add) with their sub-tasks, each sub-task naming its
-// master in function_params.parent_task_id, plus the Task CR that mirrors
-// the list the operator polls.
 func (g *genCtx) tasks() {
-	if len(g.nodes) == 0 {
-		return
-	}
 	var entries []any
-	mk := func(fn, status, result string, node *genNode, dev *genDevice, parent string, retry int) map[string]any {
-		var nodeID, devID any
-		params := map[string]any{}
-		if node != nil {
-			nodeID = node.uuid
-			params["node_id"] = node.uuid
+	n := 4 + int(g.rng.UintN(6))
+	for i := 0; i < n; i++ {
+		status := "done"
+		result := "success"
+		if g.sc.RunningOps && i == 0 {
+			status, result = "running", ""
 		}
-		if dev != nil {
-			devID = dev.uuid
-			params["device_id"] = dev.uuid
+		if g.sc.FailedOps > 0 && i == 1 {
+			result = "failed: device unreachable"
 		}
-		if parent != "" {
-			params["parent_task_id"] = parent
-		}
-		t := map[string]any{
-			"id": g.uuid(), "cluster_id": g.clusterUUID,
-			"device_id": devID, "storage_node_id": nodeID,
-			"status": status, "canceled": false,
-			"function_name": fn, "function_params": params, "function_result": result,
-			"max_retry": float64(3), "retry": float64(retry),
-		}
-		g.st.AddTask(g.clusterUUID, t)
 		entries = append(entries, map[string]any{
-			"uuid": t["id"], "taskType": fn, "taskStatus": status, "taskResult": result,
-			"startedAt": g.past(24), "retried": float64(retry), "canceled": false,
+			"uuid": g.uuid(), "taskType": g.pick(taskTypes),
+			"taskStatus": status, "taskResult": result,
+			"startedAt": g.past(24), "retried": float64(g.rng.UintN(3)),
+			"canceled": false,
 		})
-		return t
 	}
-	// a master with the given sub-task family over a node's devices
-	master := func(fn, subFn string, node *genNode, status string, failed bool) {
-		result := ""
-		if status == "done" {
-			result = "success"
-		}
-		m := mk(fn, status, result, node, nil, "", 0)
-		for i := range node.devices {
-			subStatus, subResult, retry := "done", "success", 0
-			switch {
-			case status == "new":
-				subStatus, subResult = "new", ""
-			case status == "running" && i == 0:
-				subStatus, subResult = "running", ""
-			case status == "running" && i > 0:
-				subStatus, subResult = "new", ""
-			case status == "done" && failed && i == len(node.devices)-1:
-				subResult, retry = "failed: device unreachable", 3
-			}
-			mk(subFn, subStatus, subResult, node, &node.devices[i], getStr(m, "id"), retry)
-		}
-	}
-	nodeAt := func(i int) *genNode { return &g.nodes[i%len(g.nodes)] }
-
-	// history: every node was added, one restarted
-	for i := range g.nodes {
-		master("node_add", "new_device_migration", nodeAt(i), "done", false)
-	}
-	master("node_restart", "device_restart", nodeAt(1), "done", g.sc.FailedOps > 0)
-	master("device_restart", "failed_device_migration", nodeAt(2), "done", false)
-	if g.sc.RunningOps {
-		master("node_restart", "device_restart", nodeAt(1), "running", false)
-		master("device_restart", "failed_device_migration", nodeAt(0), "new", false)
-	}
-	g.add(sbGroup, "tasks", g.ns, g.name("cluster-tasks"),
+	g.add(sbGroup, "tasks", g.ns, "cluster-tasks",
 		map[string]any{"clusterName": g.clusterName, "subtasks": true},
 		map[string]any{"tasks": entries}, nil)
 }
@@ -952,36 +605,31 @@ func (g *genCtx) opsHistory() {
 		return st
 	}
 
-	g.add(sbGroup, "storageclusterops", g.ns, g.name("activate-initial"),
+	g.add(sbGroup, "storageclusterops", g.ns, "activate-initial",
 		map[string]any{"action": "activate", "clusterRef": g.clusterName},
 		mkStatus("Succeeded", 200), nil)
 
 	failed := g.sc.FailedOps
 	for i := 0; i < failed; i++ {
-		node := g.nodeName(1 + g.rng.IntN(int(g.sc.Workers)))
-		g.add(sbGroup, "storagenodeops", g.ns, fmt.Sprintf("restart-%s-failed-%d", node, i),
-			map[string]any{"action": "restart", "storageNodeRef": node},
+		g.add(sbGroup, "storagenodeops", g.ns, fmt.Sprintf("restart-sn-%02d-failed-%d", 1+int(g.rng.IntN(int(g.sc.Workers))), i),
+			map[string]any{"action": "restart", "storageNodeRef": fmt.Sprintf("sn-%02d", 1+g.rng.IntN(int(g.sc.Workers)))},
 			mkStatus("Failed", 24+i*10), nil)
 	}
 
-	if g.sc.RunningOps && g.sc.Workers >= 2 {
+	if g.sc.RunningOps {
 		st := mkStatus("Running", 1)
 		st["subPhase"] = "Restarting"
-		g.add(sbGroup, "storagenodeops", g.ns, g.name("restart-sn-02"),
-			map[string]any{"action": "restart", "storageNodeRef": g.nodeName(2)}, st, nil)
+		g.add(sbGroup, "storagenodeops", g.ns, "restart-sn-02",
+			map[string]any{"action": "restart", "storageNodeRef": "sn-02"}, st, nil)
 
-		var pending []string
-		for i := 3; i <= g.sc.Workers; i++ {
-			pending = append(pending, g.nodeName(i))
-		}
-		g.add(sbGroup, "storageclusterops", g.ns, g.name("rolling-restart"),
+		g.add(sbGroup, "storageclusterops", g.ns, "rolling-restart",
 			map[string]any{"action": "node-rolling-restart", "clusterRef": g.clusterName},
 			map[string]any{
 				"phase": "Running", "startedAt": g.recent(30),
 				"nodeRollingRestartStatus": map[string]any{
 					"nodePhase":      "Running",
-					"processedNodes": []any{g.nodeName(1)},
-					"pendingNodes":   toAny(pending),
+					"processedNodes": []any{"sn-01"},
+					"pendingNodes":   toAny(nodeNames(3, g.sc.Workers)),
 				},
 			}, nil)
 
@@ -993,19 +641,17 @@ func (g *genCtx) opsHistory() {
 					"phase": "Running", "startedAt": g.recent(10),
 					"clusterUUID": g.clusterUUID, "volumeUUID": p.VolumeID,
 					"sourceNodeUUID": g.nodeUUIDs[0], "migrationUUID": g.uuid(),
-				}, map[string]any{"labels": map[string]any{"storage.simplyblock.io/drain-node": g.nodeUUIDs[0]}})
+				}, nil)
 		}
 	}
 
-	if g.clusterIdx == 0 {
-		g.add(sbGroup, "operatorops", g.ns, "discover-initial",
-			map[string]any{"action": "Discover", "discover": map[string]any{"configName": "sb-primary-config"}},
-			map[string]any{
-				"phase": "Succeeded", "startedAt": g.past(240), "completedAt": g.past(239),
-				"configRef": "sb-primary-config", "environment": "Vanilla",
-				"workers": toAny(g.workerNames),
-			}, nil)
-	}
+	g.add(sbGroup, "operatorops", g.ns, "discover-initial",
+		map[string]any{"action": "Discover", "discover": map[string]any{"configName": "sb-primary-config"}},
+		map[string]any{
+			"phase": "Succeeded", "startedAt": g.past(240), "completedAt": g.past(239),
+			"configRef": "sb-primary-config", "environment": "Vanilla",
+			"workers": toAny(g.workerNames),
+		}, nil)
 }
 
 func nodeNames(from, to int) []string {
@@ -1016,72 +662,6 @@ func nodeNames(from, to int) []string {
 	return out
 }
 
-// seedEventLog writes the cluster's history into the control plane event
-// log: activation, every node and device coming online, the outages the
-// scenario seeds, capacity notices, and journal manager events, oldest
-// first so the newest-first read order matches the control plane's.
-func (g *genCtx) seedEventLog() {
-	base := g.now.Add(-time.Duration(20+g.rng.IntN(60)) * time.Hour)
-	at := base
-	step := func(maxMinutes int) time.Time {
-		at = at.Add(time.Duration(1+g.rng.IntN(int(maxMinutes))) * time.Minute)
-		return at
-	}
-	add := func(t time.Time, nodeID, event, level, msg, storageID, status string) {
-		g.st.AppendLog(g.clusterUUID, LogRecord{
-			Date: logDate(t), NodeID: nodeID, Event: event, Level: level,
-			Message: msg, StorageID: storageID, VUID: "", Status: status,
-		})
-	}
-	add(step(5), "", "STATUS_CHANGE", "Info", "Cluster status changed from: unready to: in_activation", g.clusterUUID, "in_activation")
-	for _, n := range g.nodes {
-		add(step(3), n.uuid, "STATUS_CHANGE", "Info", "Storage node status changed from: in_creation to: online", n.uuid, "online")
-		add(step(1), n.uuid, "node_status", "Info", "Storage node is online", n.uuid, "online")
-		for _, d := range n.devices {
-			add(step(1), n.uuid, "STATUS_CHANGE", "Info", "Device status changed from: unavailable to: online", d.uuid, "online")
-			add(step(1), n.uuid, "device_status", "Info", "Device is online", d.uuid, "online")
-		}
-		add(step(1), n.uuid, "JM_DEVICE_STATUS", "Info", "Journal manager device created on node "+n.uuid, n.uuid, "online")
-	}
-	add(step(5), "", "STATUS_CHANGE", "Info", "Cluster status changed from: in_activation to: active", g.clusterUUID, "active")
-
-	// the outages the scenario seeds, as the transitions that led to them
-	for _, n := range g.nodes {
-		if n.status == "offline" {
-			add(step(60), n.uuid, "STATUS_CHANGE", "Error", "Storage node status changed from: online to: offline", n.uuid, "offline")
-			add(step(1), n.uuid, "node_status", "Error", "Storage node is offline", n.uuid, "offline")
-			for _, d := range n.devices {
-				add(step(1), n.uuid, "STATUS_CHANGE", "Warning", "Device status changed from: online to: "+d.status, d.uuid, d.status)
-			}
-			add(step(1), n.uuid, "JM_RESTART", "Warning", "Journal manager restart requested on node "+n.uuid, n.uuid, "")
-			continue
-		}
-		for _, d := range n.devices {
-			if d.status != "online" {
-				add(step(30), n.uuid, "STATUS_CHANGE", "Warning", "Device status changed from: online to: "+d.status, d.uuid, d.status)
-				add(step(1), n.uuid, "device_status", "Warning", "Device is "+d.status, d.uuid, d.status)
-			}
-		}
-	}
-	if g.sc.OfflineNodes > 0 || g.sc.DegradedDevices > 0 {
-		add(step(5), "", "STATUS_CHANGE", "Warning", "Cluster status changed from: active to: degraded", g.clusterUUID, "degraded")
-		add(step(120), "", "STATUS_CHANGE", "Info", "Cluster status changed from: degraded to: active", g.clusterUUID, "active")
-	}
-	// capacity notices
-	util := 40 + g.rng.IntN(45)
-	level := "Info"
-	if util >= 75 {
-		level = "Warning"
-	}
-	add(step(90), "", "CAPACITY", level, fmt.Sprintf("Cluster capacity utilization reached: %d%%", util), g.clusterUUID, "")
-	if g.sc.EventStorm {
-		for i := 0; i < 150; i++ {
-			n := g.nodes[g.rng.IntN(int(len(g.nodes)))]
-			d := n.devices[g.rng.IntN(int(len(n.devices)))]
-			add(step(2), n.uuid, "device_status", "Warning", "Device reported media errors increasing", d.uuid, d.status)
-		}
-	}
-}
 func (g *genCtx) replicationChain() {
 	cond := func(typ, reason, msg string) []any {
 		return []any{map[string]any{
@@ -1268,7 +848,7 @@ func (g *genCtx) workloads() {
 			map[string]any{"replicas": float64(3), "readyReplicas": float64(3)},
 			map[string]any{"labels": labels})
 		for i := 0; i < 3; i++ {
-			g.addPod(appNs, fmt.Sprintf("%s-%d", app, i), app, g.allWorkers[int(g.rng.IntN(int(len(g.allWorkers))))], "Running")
+			g.addPod(appNs, fmt.Sprintf("%s-%d", app, i), app, g.workerNames[int(g.rng.IntN(int(len(g.workerNames))))], "Running")
 		}
 		g.add("", "services", appNs, app,
 			map[string]any{
@@ -1306,56 +886,16 @@ func (g *genCtx) addPod(ns, name, app, node, phase string) {
 		map[string]any{"labels": map[string]any{"app": app}})
 }
 
-// controlPlaneWorkloads is the control plane as the chart deploys it: one
-// Deployment per component, selected by app=<name>, with the containers the
-// log views pick from.
-var controlPlaneWorkloads = []struct {
-	name       string
-	containers []string
-}{
-	{"simplyblock-admin-control", []string{"simplyblock-control"}},
-	{"simplyblock-webappapi", []string{"webappapi"}},
-	{"simplyblock-monitoring", []string{
-		"cluster-monitor", "storage-node-monitor", "device-monitor", "lvol-monitor", "health-check",
-		"port-stat-collector", "capacity-collector", "lvol-stat-collector", "cap-stat-collector", "main-distr-event-collector",
-	}},
-	{"simplyblock-tasks", []string{
-		"tasks-runner-device-restart", "tasks-runner-node-restart", "tasks-runner-failed-migration",
-		"tasks-runner-new-dev-migration", "tasks-runner-port-restart", "tasks-runner-node-add",
-	}},
-	{"simplyblock-fdb-controller-manager", []string{"manager"}},
-	{"simplyblock-operator", []string{"manager"}},
-}
-
-// controlPlanePods creates the control plane Deployments and their pods, the
-// FoundationDB pods, and the console's own helpers, all on the management
-// nodes and all marked for log collection.
-func (g *genCtx) controlPlanePods() {
-	mgmt := fmt.Sprintf("mgmt-%s-1", g.site)
-	for _, wl := range controlPlaneWorkloads {
-		labels := map[string]any{"app": wl.name}
-		g.add("apps", "deployments", g.sysNs, wl.name,
-			map[string]any{
-				"replicas": float64(1),
-				"selector": map[string]any{"matchLabels": labels},
-			},
-			map[string]any{"replicas": float64(1), "readyReplicas": float64(1), "availableReplicas": float64(1)},
-			map[string]any{"labels": labels})
-		var containers []map[string]any
-		for _, c := range wl.containers {
-			containers = append(containers, map[string]any{"name": c, "image": "quay.io/simplyblock-io/simplyblock:26.3.0"})
+func (g *genCtx) platformPods() {
+	for i, worker := range g.workerNames {
+		phase := "Running"
+		if i < g.sc.OfflineNodes {
+			phase = "Pending"
 		}
-		g.addPodFull(g.sysNs, wl.name+"-"+randSuffixLocal(g.rng)+"-"+randSuffixLocal(g.rng), mgmt, true, labels, containers, nil)
+		g.addPod(g.sysNs, fmt.Sprintf("simplyblock-storage-node-ds-%s", randSuffixLocal(g.rng)), "storage-node", worker, phase)
 	}
-	for i := 1; i <= 3; i++ {
-		g.addPodFull(g.sysNs, fmt.Sprintf("simplyblock-fdb-storage-%d", i), mgmt, true,
-			map[string]any{
-				"foundationdb.org/fdb-cluster-name":  "simplyblock-fdb",
-				"foundationdb.org/fdb-process-class": "storage",
-			},
-			[]map[string]any{{"name": "foundationdb", "image": "foundationdb/foundationdb:7.1.57"}}, nil)
-	}
-	for _, cp := range []string{"simplyblock-prometheus", "simplyblock-control-center", "sb-agent"} {
+	mgmt := fmt.Sprintf("mgmt-%s-1", g.site)
+	for _, cp := range []string{"simplyblock-operator", "simplyblock-webappapi", "simplyblock-prometheus", "simplyblock-control-center", "sb-agent"} {
 		g.addPod(g.sysNs, cp+"-"+randSuffixLocal(g.rng), cp, mgmt, "Running")
 	}
 }
@@ -1447,14 +987,14 @@ func (g *genCtx) events() {
 		if !g.sc.EventStorm && ev.Type == "Warning" && g.pct(50) {
 			ev = eventReasons[0]
 		}
-		node := g.nodeName(1 + int(g.rng.IntN(int(g.sc.Workers))))
+		nodeIdx := int(g.rng.IntN(int(g.sc.Workers)))
 		ts := g.recent(600)
-		g.add("", "events", g.ns, fmt.Sprintf("%s.%s", node, randSuffixLocal(g.rng)),
+		g.add("", "events", g.ns, fmt.Sprintf("sn-%02d.%s", nodeIdx+1, randSuffixLocal(g.rng)),
 			nil, nil, map[string]any{
 				"type": ev.Type, "reason": ev.Reason,
 				"message": ev.Message,
 				"involvedObject": map[string]any{
-					"kind": "StorageNode", "name": node,
+					"kind": "StorageNode", "name": fmt.Sprintf("sn-%02d", nodeIdx+1),
 					"namespace": g.ns, "apiVersion": sbGroup + "/v1alpha1",
 				},
 				"source":         map[string]any{"component": "simplyblock-operator"},

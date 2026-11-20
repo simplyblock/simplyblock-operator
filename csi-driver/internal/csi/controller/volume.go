@@ -11,7 +11,9 @@ import (
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/lvol"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/klog"
@@ -37,9 +39,30 @@ func (cs *Server) CreateVolume(
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
 
-	selection, err := cs.resolveClusterSelection(req)
+	// fsType "pnfs" is served by an export rather than a block device. The
+	// access mode does not decide it.
+	pnfs, err := isPNFSRequest(req.GetVolumeCapabilities())
+	if err != nil {
+		return nil, err
+	}
+	// Refused before the volume is created, not after: the clone returns early
+	// from createVolume and the pNFS branch below would wrap whatever it made.
+	if req.GetVolumeContentSource() != nil {
+		if err := refusePNFSCloneTarget(pnfs); err != nil {
+			return nil, err
+		}
+	}
+
+	if err := cs.refuseWithoutMetadataServer(ctx, pnfs); err != nil {
+		return nil, err
+	}
+
+	selection, err := cs.resolveClusterSelection(ctx, req)
 	if err != nil {
 		klog.Errorf("failed to resolve cluster selection for volume %s: %v", volumeID, err)
+		if _, isStatus := status.FromError(err); isStatus {
+			return nil, err
+		}
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
@@ -49,13 +72,21 @@ func (cs *Server) CreateVolume(
 		return nil, err
 	}
 
-	csiVolume, err := cs.createVolume(ctx, req, sbClient)
+	// A class with a stripe_width of 2 or more makes a striped volume
+	// (striped.go). Any other class takes createVolume, unchanged.
+	csiVolume, err := cs.provisionVolume(ctx, req, sbClient, pnfs)
 	if err != nil {
 		klog.Errorf("failed to create volume, volumeID: %s err: %v", volumeID, err)
 		if _, isStatus := status.FromError(err); isStatus {
 			return nil, err
 		}
 		return nil, classifyCreateVolumeError(err)
+	}
+
+	if pnfs {
+		// The backing volume exists; the export is the operator's from here.
+		// Returns Aborted while it assembles, so the provisioner retries.
+		return cs.createPNFSVolume(ctx, req, csiVolume)
 	}
 
 	volumeInfo, err := cs.publishVolume(ctx, csiVolume.GetVolumeId(), sbClient)
@@ -83,10 +114,32 @@ func (cs *Server) CreateVolume(
 		csiVolume.VolumeContext["targetType"] = volType
 	}
 
+	// The node service cannot read whether a volume is encrypted off the volume
+	// itself: the crypto bdev sits under the namespace it exports, so an empty
+	// encrypted volume arrives as pseudo-random plaintext with no signature of
+	// any kind. Forwarding the parameter is what lets the staging guard tell a
+	// volume that is unreadable by construction from one that carries somebody
+	// else's data.
+	if encrypted, err := kube.BoolParam(
+		req.GetParameters(), csicommon.ParamEncryption, false,
+	); err == nil && encrypted {
+		csiVolume.VolumeContext[csicommon.ParamEncryption] = strconv.FormatBool(true)
+	}
+
 	// Merge in DHCHAP's allowed-node segment so its PV gets nodeAffinity too
 	// (issue #403), since resolveClusterSelection only tracks zone and region.
 	topologySegments := copyTopologySegments(selection.topology)
 	if key, val := dhchapAllowedNodeSegment(req); key != "" {
+		if topologySegments == nil {
+			topologySegments = map[string]string{}
+		}
+		topologySegments[key] = val
+	}
+	// Same mechanism for client-side compression/deduplication (issue #277): the
+	// PV is pinned to a vdo-capable node the same way, and for the same reason
+	// neither this nor DHCHAP's segment above is expressed as StorageClass
+	// allowedTopologies (see vdoCapableSegment's own comment).
+	if key, val := vdoCapableSegment(req); key != "" {
 		if topologySegments == nil {
 			topologySegments = map[string]string{}
 		}
@@ -118,7 +171,8 @@ func (cs *Server) CreateVolume(
 	params := req.GetParameters()
 	pvcName, pvcNamespace := params[csicommon.CSIStorageNameKey], params[csicommon.CSIStorageNamespaceKey]
 	if pvcName != "" && pvcNamespace != "" {
-		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace, kube.AnnoPlacementHint); rerr != nil {
+		if rerr := cs.removePVCAnnotations(ctx, pvcName, pvcNamespace,
+			kube.Spellings(kube.KeyPlacementHint)...); rerr != nil {
 			klog.Warningf("createVolume: could not clear placement-hint on PVC %s/%s: %v", pvcNamespace, pvcName, rerr)
 		}
 	}
@@ -135,6 +189,16 @@ func (cs *Server) DeleteVolume(
 		return nil, status.Error(codes.InvalidArgument, "volume ID is required")
 	}
 
+	// An export, if one serves this volume, goes first: the record is the only
+	// description of a live mount and an exports entry on the host, and
+	// deleting the volume under them pulls the namespace out from beneath a
+	// mounted filesystem. A volume with no export takes the same path and
+	// finds nothing, which is why nothing here has to know in advance which
+	// kind it is holding.
+	if err := deleteExportBefore(ctx, cs.exports, volumeID); err != nil {
+		return nil, err
+	}
+
 	// Invalid format means the volume was never created by this driver - treat as already deleted.
 	if _, err := csicommon.ParseVolumeHandle(volumeID); err != nil {
 		klog.Warningf("invalid volume ID format, treating as already deleted: %s", volumeID)
@@ -143,6 +207,23 @@ func (cs *Server) DeleteVolume(
 
 	unlock := cs.volumeLocks.Lock(volumeID)
 	defer unlock()
+
+	// A striped volume is deleted member by member. It is never relocated or
+	// replicated, so neither of the cleanups below has anything to find.
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		handle, _ := csicommon.ParseVolumeHandle(volumeID)
+		return cs.deleteStripedVolume(ctx, volumeID, handle, width)
+	}
+
+	// A volume a Relocate moved is served by the volume its PV's mark names,
+	// which this handle no longer reaches; it goes with the PV.
+	if mark := cs.relocatedMark(ctx, volumeID); mark != "" {
+		if err := cs.deleteRelocationTarget(ctx, mark); err != nil {
+			klog.Errorf("failed to delete relocation target %s of volume %s: %v", mark, volumeID, err)
+			return nil, classifyDeleteVolumeError(err)
+		}
+	}
+
 	// no harm if volume already unpublished
 	err := cs.unpublishVolume(ctx, volumeID)
 	switch {
@@ -176,7 +257,68 @@ func (cs *Server) DeleteVolume(
 		return nil, classifyDeleteVolumeError(err)
 	}
 
+	if err := cs.deleteRetiredReplicaChain(ctx, volumeID); err != nil {
+		klog.Errorf("failed to delete retired replication copies of volume %s: %v", volumeID, err)
+		return nil, classifyDeleteVolumeError(err)
+	}
+
 	return &csi.DeleteVolumeResponse{}, nil
+}
+
+// maxChainHops bounds deleteRetiredReplicaChain: a guard against a looping
+// relationship record, not a limit on how often a volume may move. Same value
+// as the walks in atlas-lib's controlplane and the node package.
+const maxChainHops = 256
+
+// deleteRetiredReplicaChain removes the RETIRED members of the volume's
+// replication pairing chain. Ramen's S3-restore keeps every PV on the
+// ORIGINAL volumeHandle across fail-overs, so the DeleteVolume that cleans up
+// a retired side arrives carrying an identity whose own lvol record is
+// already reaped, while the actual local copy -- the pairing's superseded
+// target clone -- lives on untouched (confirmed live 2026-09-24, relocate
+// M-02's round trip: cluster B kept clone 6102a48e, policy still attached,
+// after its PV was deleted). Walking source->target and deleting every member
+// that is NOT the pairing's active volume removes exactly those leftovers.
+//
+// The active volume is never deleted through a stale handle: the workload is
+// running on it, and its own deletion arrives through this same path once no
+// pairing supersedes it. A missing ActiveLvolID (backend predating the field)
+// deletes nothing, erring toward leaking a clone over destroying live data.
+func (cs *Server) deleteRetiredReplicaChain(ctx context.Context, volumeID string) error {
+	h, err := csicommon.ParseVolumeHandle(volumeID)
+	if err != nil {
+		return nil // unparsable handles were already tolerated as deleted above
+	}
+	cur := h
+	// One hop per past move, never compacted: the 8-hop cap the chain walks
+	// lost on 2026-10-03 left the ninth retired copy here. A loop ends at the
+	// hop whose target is the active volume, so the bound is a cycle guard.
+	for range maxChainHops {
+		client, err := clusters.ReplicationClient(ctx, cur.ClusterID)
+		if err != nil {
+			return err
+		}
+		rel, err := client.GetVolumeReplicationRelationship(ctx, cur.Handle())
+		if err != nil {
+			if errors.Is(err, errs.ErrNotFound) {
+				return nil // no pairing: an ordinary volume, nothing retired to clean
+			}
+			return err
+		}
+		if rel.ActiveLvolID == "" || rel.TargetLvolID == "" || rel.TargetLvolID == rel.ActiveLvolID {
+			return nil
+		}
+		target := &lvol.Handle{ClusterID: rel.TargetClusterID, PoolRef: rel.TargetPoolID, VolumeID: rel.TargetLvolID}
+		targetClient, err := clusters.ReplicationClient(ctx, target.ClusterID)
+		if err != nil {
+			return err
+		}
+		if err := targetClient.DeleteVolume(ctx, target.Handle()); err != nil {
+			return err
+		}
+		cur = target
+	}
+	return nil
 }
 
 func (cs *Server) prepareCreateVolumeReq(
@@ -191,7 +333,7 @@ func (cs *Server) prepareCreateVolumeReq(
 		return nil, false, err
 	}
 
-	encryption, err := kube.BoolParam(params, "encryption", false)
+	encryption, err := kube.BoolParam(params, csicommon.ParamEncryption, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -204,58 +346,74 @@ func (cs *Server) prepareCreateVolumeReq(
 		pvcFullName = fmt.Sprintf("%s/%s", pvcNamespace, pvcName)
 	}
 
-	var pvcAnns map[string]string
+	var pvcAnns, pvcLabels map[string]string
 	if pvcNameSelected && pvcNamespaceSelected {
-		pvcAnns, err = cs.fetchPVCAnnotations(ctx, pvcName, pvcNamespace)
+		pvcAnns, pvcLabels, err = cs.fetchPVCMeta(ctx, pvcName, pvcNamespace)
 		if err != nil {
 			return nil, false, err
 		}
 	}
 
 	// host_id priority: selected-storage-node (hard pin) → placement-hint (one-shot
-	// hint from the placement webhook) → host-id and its deprecated form (legacy
-	// fallback for pre-existing PVCs).
-	hostID := pvcAnnotation(pvcAnns,
-		kube.AnnoSelectedStorageNode, kube.AnnoPlacementHint, kube.AnnoHostID, kube.DeprecatedAnnoHostID)
+	// hint from the placement webhook) → host-id (legacy fallback for pre-existing
+	// PVCs). Each is expanded into every prefix it has been written under, since a
+	// claim outlives the operator that annotated it (design-crd-model.md §9.4).
+	hostID := pvcAnnotation(pvcAnns, kube.Spellings(
+		kube.KeySelectedStorageNode, kube.KeyPlacementHint, kube.KeyHostID)...)
 	lvolID := pvcAnnotation(pvcAnns, annotationLvolID, deprecatedAnnotationLvolID)
 	podAffinitive, _ := strconv.ParseBool(pvcAnns[annotationPodAffinity])
 
-	// QoS from StorageClass, overridable per-PVC via annotations.
-	maxRWIOPS := params["qos_rw_iops"]
-	maxRWmBytes := params["qos_rw_mbytes"]
-	maxRmBytes := params["qos_r_mbytes"]
-	maxWmBytes := params["qos_w_mbytes"]
+	// QoS from the StorageClass, overridable per claim by an annotation.
+	//
+	// Each ceiling is read through an ordered list of keys rather than one, and
+	// the first key that is set wins. Three generations of names are live at
+	// once and none of them can be retired: a StorageClass's parameters are
+	// immutable in the Kubernetes API, so a class an older operator generated
+	// can never be rewritten into the current vocabulary, and a claim somebody
+	// annotated long ago is still a claim. atlas-lib owns the lists, so the
+	// operator that writes a key and the driver that reads it cannot disagree
+	// about which spellings exist or which of them wins.
+	maxRWIOPS := kube.QoSParam(params, kube.CeilingIOPS)
+	maxRWmBytes := kube.QoSParam(params, kube.CeilingMBytesPerSec)
+	maxRmBytes := kube.QoSParam(params, kube.CeilingReadMBytesPerSec)
+	maxWmBytes := kube.QoSParam(params, kube.CeilingWriteMBytesPerSec)
 	if pvcNameSelected && pvcNamespaceSelected {
-		if v := pvcAnnotation(pvcAnns, annotationQoSRWIOPS, deprecatedAnnotationQoSRWIOPS); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingIOPS); v != "" {
 			maxRWIOPS = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSRWMBps, deprecatedAnnotationQoSRWMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingMBytesPerSec); v != "" {
 			maxRWmBytes = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSRMBps, deprecatedAnnotationQoSRMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingReadMBytesPerSec); v != "" {
 			maxRmBytes = v
 		}
-		if v := pvcAnnotation(pvcAnns, annotationQoSWMBps, deprecatedAnnotationQoSWMBps); v != "" {
+		if v := kube.QoSAnnotation(pvcAnns, kube.CeilingWriteMBytesPerSec); v != "" {
 			maxWmBytes = v
 		}
 	}
 
 	createVolReq := controlplane.CreateLVolData{
-		LvolName:     req.GetName(),
-		Size:         strconv.FormatInt(capacityBytes, 10),
-		LvsName:      params["pool_name"],
-		Fabric:       params["fabric"],
-		MaxRWIOPS:    maxRWIOPS,
-		MaxRWmBytes:  maxRWmBytes,
-		MaxRmBytes:   maxRmBytes,
-		MaxWmBytes:   maxWmBytes,
-		MaxSize:      params["max_size"],
-		MaxNamespace: maxNamespace,
-		Encryption:   encryption,
-		HostID:       hostID,
-		LvolID:       lvolID,
-		Namespaced:   maxNamespace > 1,
-		PvcName:      pvcFullName,
+		LvolName:    req.GetName(),
+		Size:        strconv.FormatInt(capacityBytes, 10),
+		LvsName:     params["pool_name"],
+		Fabric:      params["fabric"],
+		MaxRWIOPS:   maxRWIOPS,
+		MaxRWmBytes: maxRWmBytes,
+		MaxRmBytes:  maxRmBytes,
+		MaxWmBytes:  maxWmBytes,
+		MaxSize:     params["max_size"],
+		// The service class the pool's volumeDefaults.priorityClass names.
+		PriorityClass: params[kube.ParamPriorityClass],
+		MaxNamespace:  maxNamespace,
+		Encryption:    encryption,
+		HostID:        hostID,
+		LvolID:        lvolID,
+		Namespaced:    maxNamespace > 1,
+		PvcName:       pvcFullName,
+		// Join the volume to its consistency group at creation (design §4.1):
+		// the PVC's storage.simplyblock.io/consistency-group label, forwarded so
+		// the control plane pins placement and opens the member's epoch.
+		ConsistencyGroup: pvcLabels[consistencyGroupLabel],
 	}
 	return &createVolReq, podAffinitive, nil
 }
@@ -265,11 +423,17 @@ func (cs *Server) prepareCreateVolumeReq(
 // check). A non-online leftover from a failed earlier attempt is deleted so the
 // caller can recreate. It returns the existing volume's UUID to reuse, "" to
 // recreate, or an error (a size conflict, or a list/delete failure).
+//
+// lvolBytes is the size this create makes the volume at, which is larger than
+// the request for one under an LVM stack (lvmBackedBytes). The request's own
+// size is accepted as well, for a create a driver from before that padding
+// started and this one retries; zero accepts only the request's.
 func reconcileExistingVolume(
 	ctx context.Context,
 	sbclient controlplane.ClusterAPI,
 	name string,
-	requiredBytes int64,
+	requiredBytes, lvolBytes int64,
+	sync bool,
 ) (string, error) {
 	volumes, err := sbclient.ListVolumes(ctx)
 	if err != nil {
@@ -282,7 +446,7 @@ func reconcileExistingVolume(
 		if strings.EqualFold(v.Status, "online") {
 			if requiredBytes > 0 {
 				aligned := alignToGiBBytes(requiredBytes)
-				if v.LvolSize != aligned {
+				if v.LvolSize != aligned && (lvolBytes == 0 || v.LvolSize != lvolBytes) {
 					return "", status.Errorf(
 						codes.AlreadyExists,
 						"volume %q exists with size %d but requested %d",
@@ -294,6 +458,16 @@ func reconcileExistingVolume(
 			}
 			klog.Infof("reconcile: reusing online existing volume %q id=%s", name, v.UUID)
 			return v.UUID, nil
+		}
+		// On a sync cluster a volume that is not online is also what a volume
+		// whose site is down looks like, and a claim recreated on the surviving
+		// site inherits it (design-stretched-sync-replication-ramen.md §9.6).
+		// The create holds until it is online again or an administrator
+		// removes it; it never deletes it.
+		if sync {
+			return "", status.Errorf(codes.Aborted,
+				"volume %q exists with status %s on a sync cluster; waiting for it rather than replacing it",
+				name, v.Status)
 		}
 		// Non-online leftover from a failed attempt: it will never come online.
 		klog.Warningf("reconcile: deleting non-online leftover volume %q id=%s status=%s", name, v.UUID, v.Status)
@@ -334,10 +508,22 @@ func (cs *Server) createVolume(
 		}
 	}
 
-	createVolReq, podAffinitive, err := cs.prepareCreateVolumeReq(ctx, req, capacityBytes)
+	// A client-side compressed or deduplicated volume is staged under LVM and
+	// VDO, which keep part of the device for themselves, so it is created that
+	// much larger than it reports, and the node makes the VDO volume exactly
+	// what it reports.
+	lvolBytes := capacityBytes
+	if key, _ := vdoCapableSegment(req); key != "" {
+		lvolBytes = vdoBackedBytes(capacityBytes)
+		vol.VolumeContext[csicommon.CtxVDOLogicalBytes] = strconv.FormatInt(capacityBytes, 10)
+	}
+	createVolReq, podAffinitive, err := cs.prepareCreateVolumeReq(ctx, req, lvolBytes)
 	if err != nil {
 		return nil, err
 	}
+	// A volume of a stretched cluster is born led from this driver's site
+	// (design-stretched-sync-replication-ramen.md §9.5).
+	createVolReq.Site = birthSite(sbclient.ClusterID())
 
 	// Co-locate the volume's primary with the consuming Pod's scheduled worker
 	// (node-affinity placement) when no explicit host_id was already set from a
@@ -362,6 +548,9 @@ func (cs *Server) createVolume(
 
 	volumeID, err := sbclient.CreateVolume(ctx, createVolReq)
 	if err != nil {
+		if errors.Is(err, controlplane.ErrSiteConflict) {
+			return nil, status.Errorf(codes.FailedPrecondition, "createVolume %s: %v", req.GetName(), err)
+		}
 		if errors.Is(err, controlplane.ErrVolumeExists) {
 			klog.Infof("createVolume: volume %q already exists, reconciling", req.GetName())
 			existingUUID, rerr := reconcileExistingVolume(
@@ -369,6 +558,8 @@ func (cs *Server) createVolume(
 				sbclient,
 				req.GetName(),
 				req.GetCapacityRange().GetRequiredBytes(),
+				lvolBytes,
+				syncCluster(sbclient.ClusterID()),
 			)
 			if rerr != nil {
 				return nil, rerr
@@ -442,4 +633,23 @@ func (cs *Server) unpublishVolume(ctx context.Context, volumeID string) error {
 		return err
 	}
 	return sbclient.UnpublishVolume(ctx, spdkVol.VolumeID)
+}
+
+// syncCluster reports whether the driver's secret marks clusterID as one site of
+// a stretched, sync-replicated cluster. A secret that cannot be read is not one:
+// the create then behaves as it always has.
+func syncCluster(clusterID string) bool {
+	_, sync, err := clusters.SyncSite(clusterID)
+	return err == nil && sync
+}
+
+// birthSite is the site a new volume of clusterID is born led from: this
+// driver's, when the secret marks the cluster sync-replicated, and none
+// otherwise.
+func birthSite(clusterID string) string {
+	site, sync, err := clusters.SyncSite(clusterID)
+	if err != nil || !sync {
+		return ""
+	}
+	return site
 }

@@ -1,0 +1,387 @@
+// The StorageBackupOps guard: a validating webhook that resolves every
+// reference a restore names before the object is admitted, and refuses a DELETE
+// from a step the action's graph declares no way out of.
+//
+// Every reference it checks is immutable, which is what makes admission the
+// right place: a reference that is wrong at creation is wrong for the object's
+// whole life, and the only remedy is to delete the object and write it again,
+// which is what a rejected create asks for at no cost
+// (design-storagebackup.md §7).
+//
+// The claim-name check is the one row where admission narrows a race it cannot
+// close. A claim can be created between this and the operation's Validating
+// step, so the step keeps its own check. Both are needed, and the destructive
+// case is the reason: replacing a running workload's data with a backup's is the
+// worst outcome this band can produce, so it is guarded twice rather than once.
+
+package webhook
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+
+	admissionv1 "k8s.io/api/admission/v1"
+	authenticationv1 "k8s.io/api/authentication/v1"
+	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+// +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagebackupops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storagebackupops,verbs=create;delete,versions=v1alpha2,name=vstoragebackupops.simplyblock.io,admissionReviewVersions=v1
+
+// undeletableSteps are the steps from which a running operation's record may not
+// be withdrawn.
+//
+// This is the one guard in the group that refuses more than the graph does, and
+// Restoring below is the step it adds. Everywhere else the two channels agree
+// exactly and a test holds them equal; here the delete is strictly the more
+// dangerous of the two, because an abort leaves an Aborted object behind for the
+// controller to clean up from and a delete leaves nothing at all. Binding an
+// agreement test to this set would therefore force the weaker answer onto the
+// stronger channel.
+//
+// The webhook is also the stronger of the two guards in the other sense, because
+// it catches the `--force --grace-period=0` that a finalizer alone does not.
+var undeletableSteps = map[simplyblockv1alpha2.StorageBackupOpsStep]string{
+	// Restoring is here although the design's §6 names only the two below, and
+	// the reason is a window the design does not model: the step asks the control
+	// plane for a volume before the identifier it answers with can be written
+	// down. An operation sitting at Restoring may therefore already have a volume
+	// whose id nothing recorded, and the object is the only thing that can find
+	// it again — by the deterministic name it was asked for. Admitting the delete
+	// would discard exactly that.
+	//
+	// The operation's own finalizer discards the volume before letting the object
+	// go, so this is not the only guard. It is the stronger one, because it also
+	// catches the --force --grace-period=0 that skips the finalizer entirely.
+	simplyblockv1alpha2.StorageBackupOpsStepRestoring: "the control plane may already have " +
+		"accepted the restore, and this object is the only record of the volume it produced",
+	simplyblockv1alpha2.StorageBackupOpsStepAwaitingVolume: "the control plane is still filling the " +
+		"restored volume",
+	simplyblockv1alpha2.StorageBackupOpsStepBinding: "the restored volume is being bound to its claim",
+}
+
+// StorageBackupOpsValidator resolves a restore's references at creation and
+// guards its record against being withdrawn mid-flight.
+//
+// failurePolicy=Fail, because the webhook server runs inside the operator pod:
+// its availability tracks the operator's, and while the operator is down nothing
+// advances a restore anyway.
+type StorageBackupOpsValidator struct {
+	Client client.Client
+
+	// Access checks the requester's rights on what leaves the operation's
+	// namespace. Nil asks the API server.
+	Access AccessChecker
+}
+
+func (v *StorageBackupOpsValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
+	switch req.Operation {
+	case admissionv1.Create:
+		return v.admitCreate(ctx, req)
+	case admissionv1.Delete:
+		return v.admitDelete(req)
+	default:
+		return admission.Allowed("")
+	}
+}
+
+// admitCreate resolves every reference the operation names.
+func (v *StorageBackupOpsValidator) admitCreate(
+	ctx context.Context, req admission.Request,
+) admission.Response {
+	var ops simplyblockv1alpha2.StorageBackupOps
+	if err := json.Unmarshal(req.Object.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// A record of work already done is not checked against the present. Its
+	// claim exists because the restore it records produced it, and the backup it
+	// names may have been pruned long ago, so every check below would reject the
+	// objects the upgrade's absorption exists to preserve. The controller never
+	// runs one, which is what makes admitting it safe.
+	if simplyblockv1alpha2.IsHistoricalRecord(&ops) {
+		return admission.Allowed("a record of work already done")
+	}
+
+	if denied := v.requesterMayReach(ctx, req.UserInfo, &ops); denied != nil {
+		return *denied
+	}
+
+	if denied := clusterMustExist(ctx, v.Client, clusterKey(&ops).Namespace, ops.Spec.ClusterRef.Name); denied != nil {
+		return *denied
+	}
+
+	// A group restore names a group backup by the StorageGroupBackup that
+	// produced it, or by id, rather than one StorageBackup. The CEL rule on the spec guarantees
+	// exactly one of the three targets is set.
+	switch {
+	case ops.Spec.GroupBackupRef.Name != "":
+		if denied := v.groupBackupMustBeRestorableByRef(ctx, &ops); denied != nil {
+			return *denied
+		}
+	case ops.Spec.GroupBackupID != "":
+		if denied := v.groupBackupMustBeRestorable(ctx, &ops); denied != nil {
+			return *denied
+		}
+	default:
+		var backup simplyblockv1alpha2.StorageBackup
+		err := v.Client.Get(ctx,
+			backupKey(&ops), &backup)
+		if apierrors.IsNotFound(err) {
+			return admission.Denied(fmt.Sprintf(
+				"spec.backupRef %q does not name a StorageBackup in namespace %q",
+				ops.Spec.BackupRef.Name, backupKey(&ops).Namespace))
+		}
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		// Refusing a Failed backup is a reference check rather than a state check. A
+		// backup whose phase is Failed has no copy behind it, so a restore naming it
+		// is naming a record of something that does not exist, and that is decided
+		// once and stays decided: a backup does not recover from Failed, it is
+		// replaced by another backup.
+		if backup.Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
+			return admission.Denied(fmt.Sprintf(
+				"StorageBackup %q failed and has no copy to restore", ops.Spec.BackupRef.Name))
+		}
+	}
+
+	if ops.Spec.Restore == nil {
+		// Required is a marker the type carries, so this only fires where an
+		// action was admitted without the block it is parameterized by.
+		return admission.Denied(fmt.Sprintf(
+			"spec.restore is required for action %s", ops.Spec.Action))
+	}
+
+	if denied := v.poolMustExist(ctx, &ops); denied != nil {
+		return *denied
+	}
+	return v.claimMustNotExist(ctx, &ops)
+}
+
+// clusterKey is where the operation's cluster, and so its pool, is read from.
+func clusterKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
+	return ops.Spec.ClusterRef.In(ops.Namespace)
+}
+
+// backupKey is the StorageBackup the operation acts on.
+func backupKey(ops *simplyblockv1alpha2.StorageBackupOps) types.NamespacedName {
+	return ops.Spec.BackupRef.In(ops.Namespace)
+}
+
+// groupBackupMustBeRestorable resolves a group restore's spec.groupBackupID to
+// its member StorageBackups and refuses one that names no member, or whose group
+// has a failed member. The members are the StorageBackups carrying the
+// group-backup-id label in the CLUSTER's namespace, where the mirror records
+// them, the same selector a group restore addresses. The id is immutable, so this is decided once at creation.
+func (v *StorageBackupOpsValidator) groupBackupMustBeRestorable(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	var members simplyblockv1alpha2.StorageBackupList
+	if err := v.Client.List(ctx, &members,
+		client.InNamespace(ops.BackupsNamespace()),
+		client.MatchingLabels{simplyblockv1alpha2.BackupLabelGroupBackupID: simplyblockv1alpha2.GroupBackupLabelValue(ops.Spec.GroupBackupID)},
+	); err != nil {
+		errored := admission.Errored(http.StatusInternalServerError, err)
+		return &errored
+	}
+	if len(members.Items) == 0 {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupID %q names no StorageBackup in namespace %q (the cluster's)",
+			ops.Spec.GroupBackupID, ops.BackupsNamespace()))
+		return &denied
+	}
+	for i := range members.Items {
+		if members.Items[i].Status.Phase == simplyblockv1alpha2.StorageBackupPhaseFailed {
+			denied := admission.Denied(fmt.Sprintf(
+				"group backup %q has a failed member %q and cannot be restored as a unit",
+				ops.Spec.GroupBackupID, members.Items[i].Name))
+			return &denied
+		}
+	}
+	return nil
+}
+
+// groupBackupMustBeRestorableByRef resolves spec.groupBackupRef to a
+// StorageGroupBackup and refuses one that is missing or failed: neither will
+// ever name a group backup. One still being taken is admitted, and the restore
+// waits for it. The members are not listed here: a group backup in progress has
+// none yet, and the restore's Validating step checks them once it is Available.
+func (v *StorageBackupOpsValidator) groupBackupMustBeRestorableByRef(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	key := ops.GroupBackupKey()
+	var sgb simplyblockv1alpha2.StorageGroupBackup
+	err := v.Client.Get(ctx, key, &sgb)
+	if apierrors.IsNotFound(err) {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupRef %q does not name a StorageGroupBackup in namespace %q", key.Name, key.Namespace))
+		return &denied
+	}
+	if err != nil {
+		errored := admission.Errored(http.StatusInternalServerError, err)
+		return &errored
+	}
+	if sgb.Status.Phase == simplyblockv1alpha2.StorageGroupBackupPhaseFailed {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.groupBackupRef %q failed and has no group backup to restore", key.Name))
+		return &denied
+	}
+	return nil
+}
+
+// requesterMayReach refuses a restore whose references leave its namespace unless
+// the requester may do there what the restore will do for them: read the backup,
+// the cluster, and its pool. It runs before anything is resolved, so a
+// refusal reveals nothing about a namespace the requester cannot see.
+func (v *StorageBackupOpsValidator) requesterMayReach(
+	ctx context.Context, user authenticationv1.UserInfo, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	type need struct{ verb, resource, namespace, name string }
+	var needs []need
+	if ops.Spec.BackupRef.Name != "" {
+		if ns := backupKey(ops).Namespace; ns != ops.Namespace {
+			needs = append(needs, need{"get", "storagebackups", ns, ops.Spec.BackupRef.Name})
+		}
+	}
+	if ops.Spec.GroupBackupRef.Name != "" {
+		// The StorageGroupBackup names the group backup, and its members are
+		// recorded beside it, so reading it is the whole of what the requester
+		// needs.
+		if key := ops.GroupBackupKey(); key.Namespace != ops.Namespace {
+			needs = append(needs, need{"get", "storagegroupbackups", key.Namespace, key.Name})
+		}
+	}
+	if ns := clusterKey(ops).Namespace; ns != ops.Namespace {
+		needs = append(needs, need{"get", "storageclusters", ns, ops.Spec.ClusterRef.Name})
+		if ops.Spec.Restore != nil {
+			needs = append(needs, need{"get", "storagepools", ns, ops.Spec.Restore.TargetPool})
+		}
+		if ops.Spec.GroupBackupID != "" {
+			// A group restore resolves its members by label beside the cluster,
+			// which is a list there, not a get of one named backup.
+			needs = append(needs, need{"list", "storagebackups", ns, ""})
+		}
+	}
+
+	access := v.Access
+	if access == nil {
+		access = reviewer{client: v.Client}
+	}
+	for _, n := range needs {
+		ok, err := access.Allowed(ctx, user, authorizationv1.ResourceAttributes{
+			Verb: n.verb, Group: simplyblockv1alpha2.GroupVersion.Group, Resource: n.resource,
+			Namespace: n.namespace, Name: n.name,
+		})
+		if err != nil {
+			errored := admission.Errored(http.StatusInternalServerError, err)
+			return &errored
+		}
+		if !ok {
+			denied := admission.Denied(fmt.Sprintf(
+				"%s may not %s %s in namespace %q, which this restore needs because it reaches there",
+				user.Username, n.verb, n.resource, n.namespace))
+			return &denied
+		}
+	}
+	return nil
+}
+
+// poolMustExist resolves spec.restore.targetPool.
+//
+// The pool is named rather than defaulted because a backup discovered from a
+// shared store may have been written by another cluster, so the pool it came
+// from is not one this cluster is obliged to have.
+func (v *StorageBackupOpsValidator) poolMustExist(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) *admission.Response {
+	// v1alpha2 is the stored version. Reading the pool at v1alpha1 would be
+	// answered only by the conversion webhook, which a fresh install does not
+	// deploy, and this guard would then deny every restore for naming a pool the
+	// cluster has.
+	var pool simplyblockv1alpha2.StoragePool
+	err := v.Client.Get(ctx,
+		client.ObjectKey{Name: ops.Spec.Restore.TargetPool, Namespace: clusterKey(ops).Namespace}, &pool)
+	if apierrors.IsNotFound(err) {
+		denied := admission.Denied(fmt.Sprintf(
+			"spec.restore.targetPool %q does not name a StoragePool in namespace %q",
+			ops.Spec.Restore.TargetPool, clusterKey(ops).Namespace))
+		return &denied
+	}
+	if err != nil {
+		errored := admission.Errored(http.StatusInternalServerError, err)
+		return &errored
+	}
+	return nil
+}
+
+// claimMustNotExist refuses a restore onto a claim name that is already taken.
+//
+// This is a refusal rather than an adoption, and it is the check standing
+// between a restore and overwriting a running workload's data.
+func (v *StorageBackupOpsValidator) claimMustNotExist(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageBackupOps,
+) admission.Response {
+	var claim corev1.PersistentVolumeClaim
+	err := v.Client.Get(ctx,
+		client.ObjectKey{Name: ops.Spec.Restore.ClaimName, Namespace: ops.Namespace}, &claim)
+	if apierrors.IsNotFound(err) {
+		return admission.Allowed("")
+	}
+	if err != nil {
+		return admission.Errored(http.StatusInternalServerError, err)
+	}
+	return admission.Denied(fmt.Sprintf(
+		"a PersistentVolumeClaim named %q already exists in namespace %q. A restore creates its claim "+
+			"and never adopts one, because adopting it would replace that workload's data with the "+
+			"backup's; name a claim that does not exist yet.",
+		ops.Spec.Restore.ClaimName, ops.Namespace))
+}
+
+// admitDelete refuses to withdraw the record of an operation that has produced
+// something the graph cannot take back.
+//
+// The object is read from req.OldObject, which is what the API server sends on a
+// DELETE: there is no new object to inspect, and the step the operation is on is
+// in the status of the one being removed.
+func (v *StorageBackupOpsValidator) admitDelete(req admission.Request) admission.Response {
+	if len(req.OldObject.Raw) == 0 {
+		// Nothing to read means nothing to refuse on. Admitting is the only
+		// answer that does not block a delete on the basis of no information.
+		return admission.Allowed("")
+	}
+
+	var ops simplyblockv1alpha2.StorageBackupOps
+	if err := json.Unmarshal(req.OldObject.Raw, &ops); err != nil {
+		return admission.Errored(http.StatusBadRequest, err)
+	}
+
+	// A terminal operation is a record of work that has finished, and withdrawing
+	// it stops nothing.
+	switch ops.Status.Phase {
+	case simplyblockv1alpha2.StorageBackupOpsPhaseSucceeded,
+		simplyblockv1alpha2.StorageBackupOpsPhaseFailed,
+		simplyblockv1alpha2.StorageBackupOpsPhaseAborted:
+		return admission.Allowed("the operation is terminal")
+	}
+
+	step := simplyblockv1alpha2.StorageBackupOpsStep(ops.Status.Step.State)
+	waiting, undeletable := undeletableSteps[step]
+	if !undeletable {
+		return admission.Allowed("")
+	}
+
+	return admission.Denied(fmt.Sprintf(
+		"StorageBackupOps %s/%s is at step %s, where %s. Deleting the record would not stop that work, "+
+			"it would remove the only account of it. Set spec.abort to stop an operation that can still "+
+			"be stopped, and delete the record once it is terminal.",
+		ops.Namespace, ops.Name, step, waiting))
+}

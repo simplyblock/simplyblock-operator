@@ -1,0 +1,2 @@
+vcpuCount is the API's minimum of 4, and the smallest placement (worker-01) has only 0 CPUs to spare for SPDK, so this cluster asks for more than that worker has
+wrote discovered-discover-size-02 in Draft: 1 workers with 4 nvme devices, in 1 group(s) across 1 node set(s); 0 refusal(s)

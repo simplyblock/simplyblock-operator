@@ -1,42 +1,18 @@
 // ---------------------------------------------------------------------------
-// API CLIENT — the view models the UI renders, and how each is read
-//
-// Storage objects come from k8s-sources.jsx: records assembled from the CRDs,
-// the core objects, and, where a context has a control plane, the v2 DTOs.
-// The normalizers below turn those records into view models; `REG` keeps
-// every view model by id so breadcrumbs and cross-links resolve without a
-// fetch. Actions are Ops objects (k8s-client.jsx submitOps) or edits of the
-// core object that owns the thing (a PVC for a volume, a VolumeSnapshot for a
-// snapshot).
-//
-// What is left of the `/proposed` operator surface serves only the views no
-// API exists for yet (zones, buckets, consistency groups, migration paths,
-// the legacy DR layer, access roles). Each is behind a feature flag and
-// answers "not part of this deployment" unless the flag is on, which it is
-// in the design preview with the fixture backend.
+// API CLIENT — the only place that knows about control plane API v2 wire
+// format. Everything below `normalize*` is the view model the UI renders,
+// so re-pointing at a changed schema is a single-file edit.
 // ---------------------------------------------------------------------------
+// The console reads the Kubernetes API for CRDs and core objects, and the
+// operator API for collections that have no CRD in v1alpha1 yet. It does not
+// call the control plane REST API.
 const API = window.SB_CONFIG.k8sBase;
 
-// first path segment of a /proposed collection -> the feature that gates it
-const PROPOSED_FEATURE = {
-  zones: "zones", buckets: "buckets", "consistency-groups": "cgroups", "cg-snapshots": "cgroups",
-  "migration-paths": "migrationPaths", "app-groups": "migrationPaths", migrations: "migrationPaths",
-  "access-roles": "accessRoles", "access-grants": "accessRoles", access: "accessRoles",
-  "protection-plans": "drLegacy", "dr-sites": "drLegacy", "dr-clusters": "drLegacy", "protected-apps": "drLegacy",
-  "dr-arbitration": "drLegacy", "replication-policies": "drLegacy", "cluster-pairs": "drLegacy"
-};
-const proposedFeature = path => {
-  const seg = path.split("?")[0].split("/").filter(Boolean);
-  return PROPOSED_FEATURE[seg[0]] || (seg[2] && PROPOSED_FEATURE[seg[2]]) || "proposed";
-};
-function guardProposed(path) {
-  const f = proposedFeature(path);
-  if (window.SB_CONFIG.mock || feature(f)) return;
-  throw new ApiError(503, `${f} is not part of this deployment: no API serves it`, path, REASON_FEATURE_DISABLED);
-}
-// proposed: the fixture-only surface, gated per feature
+// proposed: served by the operator until the kinds exist as CRDs
 async function preq(path) {
-  guardProposed(path);
+  // A pod that does not proxy the operator API says so up front: the screen
+  // renders "not available in this deployment" instead of an error.
+  if (!upstreamOn("operator")) throw notInDeployment("The operator API", "that serves this view is not part of this deployment", path);
   let res;
   try {
     res = await fetch(window.SB_CONFIG.operatorBase + "/proposed" + path,
@@ -48,25 +24,138 @@ async function preq(path) {
     (body && (body.message || body.error)) || "Request failed", path, (body && body.reason) || null);
   return body && body.results !== undefined ? body.results : body;
 }
+const scoped = (path, clusterId) => clusterId ? `${path}?cluster=${clusterId}` : path;
 
-// req(path): a GET on a proposed collection, always answered as an array; any
-// other method goes to mutate()
+// ---- request router --------------------------------------------------------
+// The endpoint table below speaks one path grammar:
+//   /coll                     list
+//   /coll/id                  one (returned as a one-element array)
+//   /parent/id/child          child list scoped to that parent
+//   /coll/id/verb   (POST)    an action
+// This resolves each onto the surface that serves it: a CRD on the Kubernetes
+// API, or an operator /proposed collection for kinds v1alpha1 does not model
+// yet. Nothing here reaches the control plane REST API.
+
+// collection -> CRD kind, for the five kinds that exist today
+const CRD_COLL = {
+  clusters: "StorageCluster", "storage-nodes": "StorageNode",
+  devices: "StorageDevice", pools: "StoragePool", backups: "StorageBackup"
+};
+// how a child record points back at each kind of parent
+const SCOPE_FIELD = {
+  clusters: "cluster_id", pools: "pool_id", lvols: "lvol_id",
+  "storage-nodes": "node_id", hosts: "host_id", devices: "device_id",
+  "backup-policies": "policy_id", "replication-policies": "policy_id",
+  tasks: "parent_id", pairs: "pair_id",
+  "kubernetes-clusters": "k8s_cluster_id", "k8s-clusters": "k8s_cluster_id",
+  zones: "zone_id", "storage-classes": "storage_class_id",
+  "consistency-groups": "cg_id", "dr-clusters": "dr_cluster_id", snapshots: "snapshot_id"
+};
+
+// CRD reads carry their Kubernetes identity as __k8s so a view model can show
+// activeOpsRef and conditions alongside the record.
+const withK8s = o => Object.assign({}, (o.status && o.status.extras) || {}, {__k8s: {
+  name: o.metadata.name, kind: o.kind, uid: o.metadata.uid,
+  labels: o.metadata.labels || {}, generation: o.metadata.generation,
+  observedGeneration: o.status.observedGeneration,
+  phase: o.status.phase, conditions: o.status.conditions || [],
+  activeOpsRef: o.status.activeOpsRef || null
+}});
+const crdList = kind => k8s.list(kind).then(r => r.map(withK8s));
+
 async function req(path, opts) {
   const method = ((opts || {}).method || "GET").toUpperCase();
+  const seg = path.split("?")[0].split("/").filter(Boolean);
   if (method !== "GET") return mutate(method, path, opts && opts.body ? JSON.parse(opts.body) : {});
-  const r = await preq(path);
-  return Array.isArray(r) ? r : (r === null || r === undefined ? [] : [r]);
+
+  // Storage clusters managed by this pod's control plane but not CRDs here (a
+  // hub managing sites): the control plane API is the source (cpapi.jsx).
+  if (cp.on()) {
+    const r = cp.route(path);
+    if (r) return r;
+  }
+
+  // /coll
+  if (seg.length === 1) {
+    return CRD_COLL[seg[0]] ? crdList(CRD_COLL[seg[0]]) : preq("/" + seg[0]);
+  }
+  // /coll/id  -> always an array, which is what the normalizers expect
+  if (seg.length === 2) {
+    const [coll, id] = seg;
+    if (CRD_COLL[coll]) {
+      const items = await crdList(CRD_COLL[coll]);
+      const hit = items.find(x => x.uuid === id);
+      if (!hit) throw new ApiError(404, `${coll}/${id} not found`, path, "NotFound");
+      return [hit];
+    }
+    const r = await preq(`/${coll}/${id}`);
+    return Array.isArray(r) ? r : [r];
+  }
+  // /parent/id/child
+  if (seg.length === 3) {
+    const [pColl, pid, child] = seg;
+    const field = SCOPE_FIELD[pColl];
+    if (CRD_COLL[child]) {
+      const items = await crdList(CRD_COLL[child]);
+      // a CRD child filtered by whichever parent asked for it
+      return items.filter(x => x[field] === pid);
+    }
+    return preq(`/${child}?scope=${pColl}&scopeId=${pid}`);
+  }
+  return preq(path);
 }
 const send = (method, path, payload) => req(path, {method, body: JSON.stringify(payload || {})});
 
-// the context and namespace an entity lives in, from the registry
-const whereIs = id => { const vm = REG[id] || {}; return {ctx: vm.ctx || LOCAL_CTX, namespace: vm.ns || undefined}; };
-// after a write, the kind's collections in that context are stale
-const touched = (ctx, kind) => r => { store.invalidate(ctx, kind); return r; };
+// ---- mutations -------------------------------------------------------------
+// An action is not a verb against an entity: it creates an <Entity>Ops object
+// whose spec.action names it. spec.abort is the only stop, so a cancel is a
+// patch, never a DELETE.
+const cap = s => s.charAt(0).toUpperCase() + s.slice(1).replace(/-(\w)/g, (_, c) => c.toUpperCase());
+const OPS_VERBS = {
+  clusters: {kind: "StorageCluster", verbs: {suspend: "Suspend", activate: "Activate",
+    restart: "Activate", rebalance: "Rebalance", "storage-nodes": "Expand"}},
+  "storage-nodes": {kind: "StorageNode", verbs: {restart: "Restart", shutdown: "Shutdown",
+    migrate: "Migrate", devices: "AddDevice"}},
+  devices: {kind: "StorageDevice", verbs: {restart: "Restart", fail: "Fail",
+    "health-check": "HealthCheck", remove: "Remove"}},
+  pools: {kind: "StoragePool", verbs: {enable: "Enable", disable: "Disable"}},
+  lvols: {kind: "PersistentVolume", verbs: {resize: "Resize", snapshot: "Snapshot",
+    clone: "Clone", migrate: "Migrate", backup: "Backup"}},
+  backups: {kind: "StorageBackup", verbs: {merge: "Merge", restore: "Restore", export: "Export"}}
+};
+// DELETE on an entity is also an operation, not a raw delete
+const DELETE_VERB = {"storage-nodes": ["StorageNode", "Remove"], devices: ["StorageDevice", "Remove"],
+  backups: ["StorageBackup", "Delete"]};
+
+// entities are addressed by uuid inside the console and by name on the API
+async function k8sNameOf(kind, id) {
+  const items = await k8s.list(kind);
+  const hit = items.find(o => {
+    const s = o.status || {};
+    return [s.clusterId, s.nodeId, s.deviceId, s.poolId, s.backupId,
+      s.simplyblock && s.simplyblock.volumeId, o.metadata.uid].includes(id);
+  });
+  // Read from the control plane but not a CRD here: the object belongs to a
+  // site, and its operations are that site's Ops objects.
+  if (!hit && cp.on()) throw notInDeployment(`Actions on this ${OPS_TARGET_LABEL[kind] || kind}`,
+    "run on the site that hosts it — its object is on that site's Kubernetes API, not on this hub", "/" + id);
+  if (!hit) throw new ApiError(404, `${kind} ${id} not found`, "/" + id, "NotFound");
+  return hit.metadata.name;
+}
 
 async function mutate(method, path, payload) {
-  // a proposed collection: fixture-only, gated
-  guardProposed(path);
+  const seg = path.split("?")[0].split("/").filter(Boolean);
+  if (seg.length === 3 && (method === "POST" || method === "PUT")) {
+    const m = OPS_VERBS[seg[0]];
+    const action = m && m.verbs[seg[2]];
+    if (action) return submitOps(m.kind, await k8sNameOf(m.kind, seg[1]), action, payload);
+  }
+  if (seg.length === 2 && method === "DELETE" && DELETE_VERB[seg[0]]) {
+    const [kind, action] = DELETE_VERB[seg[0]];
+    return submitOps(kind, await k8sNameOf(kind, seg[1]), action, null);
+  }
+  // Not an operation: a proposed collection the operator owns until it is a CRD.
+  if (!upstreamOn("operator")) throw notInDeployment("This change", "goes through the operator API, which is not part of this deployment", path);
   const res = await fetch(window.SB_CONFIG.operatorBase + "/proposed" + path, {
     method, headers: {"Content-Type": "application/json",
       Authorization: `Bearer ${window.SB_CONFIG.token}`},
@@ -137,6 +226,9 @@ const STATUS_META = {
   Scheduling: {c: "var(--info)", rank: 1, label: "scheduling pod", blink: true}, Joining: {c: "var(--info)", rank: 1, label: "joining cluster", blink: true},
   "Starting SPDK": {c: "var(--info)", rank: 1, label: "starting SPDK", blink: true},
   Failed: {c: "var(--bad)", rank: 4, label: "failed"},
+  // a finished test's outcome (TestBubble status.report.outcome, DRPath lastActions[].outcome)
+  Passed: {c: "var(--ok)", rank: 0, label: "passed"}, FailedInvariant: {c: "var(--bad)", rank: 4, label: "failed an invariant"},
+  Unsupported: {c: "var(--warn)", rank: 3, label: "unsupported"},
   complete: {c: "var(--ok)", rank: 0, label: "complete"},
   Validated: {c: "var(--ok)", rank: 0, label: "Validated"},
   Validating: {c: "var(--info)", rank: 1, label: "Validating", blink: true},
@@ -175,12 +267,6 @@ const histOf = h => ({iops: (h || {}).iops || [], bw: (h || {}).bytes || []});
 
 const normCluster = c => reg({
   kind: "cluster", id: c.uuid, name: c.name,
-  ctx: c.ctx || LOCAL_CTX, ns: c.ns || null, k8s: c.__k8s || null, labels: c.labels || {},
-  sites: c.sites || [], stage: c.stage || null, tenant: c.tenant || null, stretched: !!c.stretched,
-  phase: c.phase || null, subPhase: c.sub_phase || null, configured: c.configured !== false,
-  activeOpsRef: c.active_ops_ref || null, activeOps: c.active_ops || [],
-  thresholds: c.thresholds || null, capacityApprox: !!c.capacity_approx, provisioned: c.size_prov || null,
-  workerNames: c.worker_names || [], nodeUuids: c.node_uuids || [], nqn: c.nqn || null, live: c.live || null,
   mode: c.device_class === "nvme" ? "nvme" : "blockdev",
   siting: c.location_type === "edge" ? "edge" : "datacenter",
   status: c.status, rebalancing: !!c.rebalancing,
@@ -220,27 +306,30 @@ const normCluster = c => reg({
 });
 const normHost = h => reg({
   kind: "host", id: h.uuid, clusterId: h.cluster_id, hostname: h.hostname, mgmtIp: h.mgmt_ip,
-  ctx: h.ctx || LOCAL_CTX, ns: null, k8s: h.__k8s || null, clusterIds: h.cluster_ids || [],
-  kubeletVersion: h.kubelet_version || null, osImage: h.os_image || null,
   zoneId: h.zone_id || null, zone: h.zone || null, region: h.region || null,
   rack: h.rack_id || null, cabinet: h.cabinet_id || null, k8sCluster: h.k8s_cluster || null,
   migrationTaint: h.migration_taint || null,
   hostClass: h.host_class || null,
-  status: h.status, source: h.source || "manual", sockets: h.numa_sockets, controlPlane: !!h.control_plane,
+  status: h.status, source: h.source || "manual", sockets: h.numa_sockets || null, controlPlane: !!h.control_plane,
+  // which source reported each field (control plane API, dr-agent inventory, a draft)
+  sources: h.sources || {},
   kubelet: h.kubelet_version, roles: h.roles || [], k8sLabels: h.k8s_labels || {},
   inspection: h.inspection || null,
-  vcpu: h.vcpu_count, memory: h.memory_total,
+  vcpu: h.vcpu_count || null, memory: h.memory_total || null,
   memoryPerPod: h.memory_per_pod || null, socketsUsed: h.numa_sockets_used || null,
   mgmtNic: h.mgmt_nic || null, dataNics: h.data_nics || [],
   nics: (h.nics || []).map(n => ({name: n.name, mac: n.mac, speed: n.speed_gbps, address: n.address, socket: n.numa_socket, state: n.state})),
-  hugepages: {reserved: h.hugepages_reserved, allocated: h.hugepages_allocated},
+  hugepages: {reserved: h.hugepages_reserved || null, allocated: h.hugepages_allocated || null},
   devices: (h.devices || []).map(d => ({id: d.id, kind: d.kind, socket: d.numa_socket, pcie: d.pcie_address,
     blockdev: d.device_name, serial: d.serial_number, model: d.model_number, size: d.size,
-    assignedNodeId: d.assigned_node_id, reserved: !!d.reserved, reservedFor: d.reserved_for_node_id})),
+    assignedNodeId: d.assigned_node_id, reserved: !!d.reserved, reservedFor: d.reserved_for_node_id, selected: !!d.selected})),
   nodeIds: h.storage_node_ids || [],
-  counts: {devices: (h.devices || []).length, assigned: h.devices_assigned, free: h.devices_free,
-    nvme: h.nvme_count, blockFree: h.block_free_count, nodes: (h.storage_node_ids || []).length},
-  capacity: {total: h.size_total, used: h.size_assigned},
+  // counts never render as "undefined": derived from the devices when a source left them out
+  counts: {devices: (h.devices || []).length,
+    assigned: h.devices_assigned !== undefined ? h.devices_assigned : (h.devices || []).filter(d => d.assigned_node_id).length,
+    free: h.devices_free !== undefined ? h.devices_free : (h.devices || []).filter(d => !d.assigned_node_id).length,
+    nvme: h.nvme_count || 0, blockFree: h.block_free_count || 0, nodes: (h.storage_node_ids || []).length},
+  capacity: {total: h.size_total || 0, used: h.size_assigned || 0},
   preparedAt: h.prepared_at, labels: h.labels || {}
 });
 // A discovery run: the inventory pass, and the filter it ran with. The filter
@@ -278,11 +367,10 @@ const normDeployConfig = o => {
   const cl = sp.cluster || {};
   return reg({
     kind: "deployconfig", id: o.metadata.uid, name: o.metadata.name,
-    ctx: o.__ctx || LOCAL_CTX, ns: o.metadata.namespace, k8s: {name: o.metadata.name, namespace: o.metadata.namespace, kind: o.kind, uid: o.metadata.uid},
     createdAt: o.metadata.creationTimestamp,
     approved: !!sp.approved, status: st.phase || "Draft", message: st.message || null,
     environment: sp.environment || null,
-    k8sClusterId: o.__ctx || st.kubernetesClusterId || LOCAL_CTX, k8sClusterName: sp.kubernetesClusterRef || o.__ctx || null,
+    k8sClusterId: st.kubernetesClusterId || null, k8sClusterName: sp.kubernetesClusterRef || null,
     clusterId: st.clusterId || null, discoveryId: st.discoveryRef || null,
     hostIds: st.hostIds || [],
     nodeSelector: (sp.nodeSelector || {}).matchLabels || {},
@@ -300,21 +388,20 @@ const normDeployConfig = o => {
 };
 const normNode = n => reg({
   kind: "node", id: n.uuid, clusterId: n.cluster_id, hostId: n.host_id, zoneId: n.zone_id || null, hostname: n.hostname,
-  ctx: n.ctx || LOCAL_CTX, ns: n.ns || null, k8s: n.__k8s || null, name: n.name || null, clusterName: n.cluster_name || null,
-  worker: n.worker_node || null, setName: n.set_name || null, socket: n.socket, nodeIndex: n.node_index,
-  zone: n.zone || null, rpcPort: n.rpc_port || null, nvmfPort: n.nvmf_port || null, lvolPort: n.lvol_port || null,
-  activeOpsRef: n.active_ops_ref || null, health: n.health_check, uptime: n.uptime || null, latency: n.latency || null,
-  postedAt: n.posted_at || null, live: n.live || null,
   ip: (n.data_nics && n.data_nics[0] ? n.data_nics[0].ip : null), port: (n.data_nics && n.data_nics[0] ? n.data_nics[0].port : 4420),
-  dataNics: (n.data_nics || []).map(x => ({name: x.name, ip: x.ip, port: x.port, socket: x.numa_socket, state: x.state})),
-  multipath: (n.data_nics || []).length > 1,
+  // null: the source did not report the node's NICs (not "none")
+  dataNics: n.data_nics ? n.data_nics.map(x => ({name: x.name, ip: x.ip, port: x.port, socket: x.numa_socket, state: x.state, trtype: x.trtype})) : null,
+  // simplyblock multipathing is ANA: this node plus its secondary (and
+  // tertiary) serve the same volumes; extra data NICs add paths per node
+  anaPaths: n.ana_paths || null, secondaryId: n.secondary_node_id || null, tertiaryId: n.tertiary_node_id || null,
+  multipath: (n.ana_paths || 0) > 1 || (n.data_nics || []).length > 1,
   op: n.op ? {kind: n.op.kind, phase: n.op.phase, phaseIndex: n.op.phase_index || 0, phases: n.op.phases || [],
     volumesMoved: n.op.volumes_moved || 0, targetHostname: n.op.target_hostname || null, sourceHostname: n.op.source_hostname || null,
     startedAt: n.op.started_at, taskId: n.op.task_id} : null,
   mgmtIp: n.mgmt_ip, failureDomain: n.failure_domain, physicalLabel: n.physical_label, status: n.status,
   capacity: {total: n.size_total, used: n.size_util},
   iops: ioOf(n.io_stats), bw: bwOf(n.io_stats), hist: histOf(n.io_history),
-  counts: {devices: n.devices_count, devicesOnline: n.devices_online},
+  counts: {devices: n.devices_count || 0, devicesOnline: n.devices_online || 0},
   cpuCount: n.cpu_count, cpuReserved: n.vcpu_reserved, maxSubsystems: n.max_subsystem_count || null,
   memory: {total: n.memory_total, reserved: n.memory_reserved, used: n.memory_used},
   hugepages: {total: n.hugepages_total, used: n.hugepages_used},
@@ -322,9 +409,6 @@ const normNode = n => reg({
 });
 const normDevice = d => reg({
   kind: "device", id: d.uuid, nodeId: d.node_id, clusterId: d.cluster_id, hostId: d.host_id,
-  ctx: d.ctx || LOCAL_CTX, ns: d.ns || null, k8s: d.__k8s || null, name: d.name || null, nodeName: d.node_name || null,
-  role: d.role || null, phase: d.phase || null, message: d.message || null, ioError: d.io_error, retriesExhausted: d.retries_exhausted,
-  live: d.live || null,
   mode: d.cluster_device_class === "nvme" ? "nvme" : "blockdev", socket: d.numa_socket,
   serial: d.serial_number, pcie: d.pcie_address, blockdev: d.device_name,
   model: d.model_number, firmware: d.firmware_revision,
@@ -335,9 +419,6 @@ const normDevice = d => reg({
 });
 const normPool = p => reg({
   kind: "pool", id: p.uuid, clusterId: p.cluster_id, name: p.pool_name, dhchap: !!p.dhchap_bidirectional,
-  ctx: p.ctx || LOCAL_CTX, ns: p.ns || null, k8s: p.__k8s || null, clusterName: p.cluster_name || null,
-  allowedNodes: p.allowed_nodes || [], storageClassParameters: p.storage_class_parameters || {},
-  lvolMaxSize: p.lvol_max_size || null, live: p.live || null,
   // a pool is never offline: it is enabled or disabled. Disabled keeps serving I/O
   // but refuses new volume provisioning.
   status: p.enabled === false ? "disabled" : "enabled", enabled: p.enabled !== false, qos: p.qos,
@@ -349,9 +430,6 @@ const normPool = p => reg({
 });
 const normVolume = v => reg({
   kind: "volume", id: v.uuid, poolId: v.pool_id, poolName: v.pool_name, clusterId: v.cluster_id,
-  ctx: v.ctx || LOCAL_CTX, ns: v.ns || null, k8s: v.__k8s || null, pvName: v.pv_name || null, handle: v.handle || null,
-  clusterName: v.cluster_name || null, storageClass: v.storage_class || null, storageClassId: v.storage_class_id || null,
-  fsType: v.fs_type || null, replicationPolicy: v.replication_policy || null, migrating: !!v.migrating, live: v.live || null,
   name: v.lvol_name, status: v.status, nodes: v.nodes || {},
   capacity: {total: v.size_prov, used: v.size_util},
   iops: ioOf(v.io_stats), bw: bwOf(v.io_stats), hist: histOf(v.io_history),
@@ -378,16 +456,12 @@ const normVolume = v => reg({
 });
 const normSnapshot = s => reg({
   kind: "snapshot", id: s.uuid, clusterId: s.cluster_id, poolId: s.pool_id, poolName: s.pool_name,
-  ctx: s.ctx || LOCAL_CTX, ns: s.ns || null, k8s: s.__k8s || null, pvcName: s.pvc_name || null,
-  contentName: s.content_name || null, handle: s.handle || null, snapshotClass: s.snapshot_class || null, error: s.error || null,
   volumeId: s.lvol_id, volumeName: s.lvol_name, name: s.snapshot_name, status: s.status || "online",
   seq: s.seq, parentId: s.parent_id || null, backupVersionId: s.backup_version_id || null,
   createdAt: s.created_at, capacity: {total: s.size, used: s.size}
 });
 const normBackup = b => reg({
   kind: "backup", id: b.uuid, clusterId: b.cluster_id, poolId: b.pool_id, poolName: b.pool_name,
-  ctx: b.ctx || LOCAL_CTX, ns: b.ns || null, k8s: b.__k8s || null, crName: b.name || null, phase: b.phase || null,
-  message: b.message || null, pvc: b.pvc || null, prevBackupId: b.prev_backup_id || null, clusterName: b.cluster_name || null,
   volumeId: b.lvol_id, volumeName: b.lvol_name, name: b.lvol_name, chainId: b.chain_id,
   policyId: b.policy_id || null, policyName: b.policy_name || null,
   status: b.status || "online", bucket: b.bucket,
@@ -402,9 +476,7 @@ const normBackup = b => reg({
   capacity: {total: b.size || 0, used: b.size || 0}
 });
 const normPolicy = p => reg({
-  kind: "policy", id: p.uuid, clusterId: p.cluster_id, name: p.policy_name, status: p.status || "active", consistencyGroup: !!p.consistency_group,
-  ctx: p.ctx || LOCAL_CTX, ns: p.ns || null, k8s: p.__k8s || null, clusterName: p.cluster_name || null, phase: p.phase || null,
-  message: p.message || null, maxVersions: p.max_versions, maxAge: p.max_age || null, attached: p.attached || [],
+  kind: "policy", id: p.uuid, clusterId: p.cluster_id, name: p.policy_name, status: "active", consistencyGroup: !!p.consistency_group,
   schedule: (p.schedule || []).map(r => ({interval: r.interval, versions: r.versions, online: r.online || 0})),
   counts: {volumes: p.lvols_count || 0, chains: p.chains_count || 0,
     versions: p.versions_total || 0, online: p.online_snapshots || 0},
@@ -584,7 +656,6 @@ const normMigration = m => reg({
 });
 const normK8s = k => reg({
   kind: "k8sc", id: k.uuid, name: k.name, version: k.version, status: k.status,
-  ctx: k.ctx || k.uuid, labels: k.labels || {}, local: !!k.local, controlPlane: k.control_plane || null,
   discovered: !!k.discovered, discoveredAt: k.discovered_at || null,
   endpoint: k.api_endpoint, environment: k.environment,
   csi: {version: k.csi_version, status: k.csi_status}, operatorNamespace: k.operator_namespace || null,
@@ -599,7 +670,6 @@ const normK8s = k => reg({
 });
 const normSc = s => reg({
   kind: "storageclass", id: s.uuid, k8sClusterId: s.k8s_cluster_id, name: s.name,
-  ctx: s.ctx || LOCAL_CTX, ns: null, k8s: s.__k8s || null, clusterName: s.cluster_name || null,
   provisioner: s.provisioner, clusterId: s.cluster_id, poolId: s.pool_id, poolName: s.pool_name,
   operatorNamespace: s.operator_namespace || null, storagePoolRef: s.storage_pool_ref || null,
   variant: s.variant || "default",
@@ -647,9 +717,6 @@ const normAppGroup = g => reg({
 });
 const normPvc = p => reg({
   kind: "pvc", id: p.uuid, k8sClusterId: p.k8s_cluster_id,
-  ctx: p.ctx || LOCAL_CTX, ns: p.namespace, k8s: p.__k8s || null, pvName: p.pv_name || null,
-  clusterId: p.cluster_id || null, poolId: p.pool_id || null, dataSource: p.data_source || null,
-  backupPolicy: p.backup_policy || null, replicationPolicy: p.replication_policy || null,
   namespace: p.namespace, name: p.pvc_name,
   storageClassId: p.storage_class_id, storageClass: p.storage_class,
   volumeId: p.lvol_id || null,
@@ -785,21 +852,18 @@ const normZone = s => reg({
     nodes: s.nodes_count || 0, clusters: (s.cluster_ids || []).length},
   capacity: {total: s.size_total || 0, used: 0}
 });
-// a backend task, from the v2 client's normalized form; the index remembers
-// which cluster and context a task id belongs to so sub-task reads resolve
-const TASK_INDEX = {};
-const normTask = (t, all) => {
-  TASK_INDEX[t.id] = {ctx: t.ctx, clusterId: t.clusterId};
-  return {
-    kind: "task", id: t.id, ctx: t.ctx, clusterId: t.clusterId, parentId: t.parentId || null, derived: !!t.derived,
-    fn: t.fn, target: t.deviceId || t.nodeId || null, nodeId: t.nodeId || null, deviceId: t.deviceId || null, distrib: null,
-    params: t.params || {}, retry: t.retry, maxRetry: t.maxRetry, status: t.status, result: t.result,
-    canceled: !!t.canceled, subtaskTotal: (all || []).filter(x => x.parentId === t.id).length,
-    createdAt: t.createdAt, updatedAt: t.updatedAt, raw: t.raw
-  };
-};
-// the event log arrives normalized from cp-client.jsx
-const normLog = l => l;
+const normTask = t => ({
+  kind: "task", id: t.uuid, clusterId: t.cluster_id, parentId: t.parent_id,
+  fn: t.function_name, target: t.target_id, nodeId: t.node_id, distrib: t.distrib,
+  retry: t.retry, maxRetry: t.max_retry, status: t.status, result: t.result,
+  canceled: !!t.canceled, subtaskTotal: t.subtask_total || 0,
+  createdAt: t.created_at, updatedAt: t.updated_at
+});
+const normLog = l => ({
+  id: l.uuid, ts: l.ts, level: l.level, event: l.event, message: l.message,
+  nodeId: l.node_id, storageId: l.storage_id, vuid: l.vuid, recordStatus: l.record_status,
+  objectKind: l.object_kind, objectId: l.object_id, objectName: l.object_name
+});
 // An alert is an indicator, not an event: it exists while its condition holds
 // and vanishes when the condition clears. There is no acknowledged/closed
 // lifecycle — only a silence, which dies with the condition.
@@ -814,42 +878,27 @@ const normAlert = a => ({
   since: a.since, silenced: !!a.silenced, silencedBy: a.silenced_by || null
 });
 
-// An operation is an Ops CRD: a named action on one object that lands in
-// Succeeded, Failed or Aborted. Each kind reports progress its own way (a
-// sub-phase, a per-node walk, a step state machine), so the step list here is
-// read from the kind rather than invented.
-const OPS_KINDS = ["StorageClusterOps", "StorageNodeOps", "VolumeMigration", "OperatorOps"];
+// An operation is an Ops CRD: a named action on one object that walks a fixed
+// list of phases and lands in Succeeded, Failed or Aborted. The phase list is
+// the state machine — the console reads it rather than inventing its own.
+const OPS_KINDS = ["StorageClusterOps", "StorageNodeOps", "StorageDeviceOps", "StoragePoolOps",
+  "PersistentVolumeOps", "StorageBackupOps", "ControlPlaneOps", "OperatorOps"];
 const OPS_TARGET_LABEL = {StorageCluster: "cluster", StorageNode: "node", StorageDevice: "device",
   StoragePool: "pool", PersistentVolume: "volume", StorageBackup: "backup", ControlPlane: "control plane", Operator: "operator"};
-const OPS_STEPS = {
-  StorageNodeOps: {remove: ["Validating", "Suspending", "Migrating", "Verifying", "Removing"], migrate: ["Preparing", "Restarting", "Promoting"]},
-  StorageClusterOps: {"node-rolling-restart": ["snode-refresh", "snode-refresh-wait", "shutting-down", "restarting", "rebalancing"]},
-  OperatorOps: {Discover: ["Inspecting", "Probing", "Writing"]},
-  VolumeMigration: {migrate: ["Pending", "Validating", "Running", "Completed"]},
-  ClusterDeploymentConfig: {deploy: ["Validating", "CreatingCluster", "AwaitingCluster", "CreatingNodes"]}
-};
-const normOperation = (o, ctx) => {
-  const sp = o.spec || {}, st = o.status || {}, kind = o.kind;
-  const action = sp.action || (kind === "VolumeMigration" ? "migrate" : kind === "ClusterDeploymentConfig" ? "deploy" : null);
-  const targetName = sp.clusterRef || sp.storageNodeRef || sp.pvName || null;
-  const targetKind = sp.clusterRef ? "StorageCluster" : sp.storageNodeRef ? "StorageNode" : sp.pvName ? "PersistentVolume" : (window.RESOURCES[kind] || {}).ops || null;
-  const rr = st.nodeRollingRestartStatus || null;
-  const stepKey = (st.step && st.step.state) || st.subPhase || (rr && rr.nodePhase) || null;
-  const steps = (OPS_STEPS[kind] || {})[action] || [];
-  const phase = st.phase || "Pending";
-  // the cluster an op belongs to, through the registry when the target is known
-  const target = Object.values(REG).find(v => v.ctx === (ctx || LOCAL_CTX) && v.k8s && v.k8s.kind === targetKind && v.k8s.name === targetName) || null;
-  const clusterId = st.clusterUUID || (target ? (target.kind === "cluster" ? target.id : target.clusterId) : null);
-  const progress = rr ? {done: (rr.processedNodes || []).length, total: (rr.processedNodes || []).length + (rr.pendingNodes || []).length, unit: "nodes"}
-    : st.volumesMigrated !== undefined || st.volumesPending !== undefined ? {done: st.volumesMigrated || 0, total: (st.volumesMigrated || 0) + (st.volumesPending || 0), unit: "volumes"} : null;
+const normOperation = o => {
+  const st = o.status || {}, step = st.step || {};
   return {
-    id: o.metadata.uid, name: o.metadata.name, kind, ctx: ctx || LOCAL_CTX, ns: o.metadata.namespace,
-    action, clusterId, targetKind, targetName, targetId: target ? target.id : null,
-    phase, message: st.message || st.errorMessage || "",
-    step: stepKey, stepKey, steps, stepIndex: Math.max(0, steps.indexOf(stepKey)),
-    abortable: ABORTABLE_KINDS.includes(kind) && !["Succeeded", "Failed", "Aborted"].includes(phase), aborting: !!sp.abort,
-    progress, startedAt: st.startedAt || o.metadata.creationTimestamp, completedAt: st.completedAt || null,
-    events: st.events || [], running: !["Succeeded", "Failed", "Aborted"].includes(phase), raw: o
+    id: o.metadata.uid, name: o.metadata.name, kind: o.kind,
+    action: (o.spec || {}).action, clusterId: st.clusterId || null,
+    targetKind: st.targetKind || (window.RESOURCES[o.kind] || {}).ops || null,
+    targetName: ((o.spec || {}).targetRef || {}).name || null,
+    phase: st.phase, message: st.message || "",
+    step: step.label || step.state, stepKey: step.state,
+    steps: step.labels || step.steps || [], stepIndex: step.index || 0,
+    abortable: !!step.abortable, aborting: !!(o.spec || {}).abort,
+    startedAt: st.startedAt, completedAt: st.completedAt || null,
+    events: st.events || [],
+    running: !["Succeeded", "Failed", "Aborted"].includes(st.phase)
   };
 };
 
@@ -857,45 +906,27 @@ const normRole = r => ({kind: "role", id: r.uuid || r.name, name: r.name, boundA
   parts: r.parts || [], rules: r.rules || (r.parts || []).flatMap(p => p.rules)});
 
 // ---- endpoints -------------------------------------------------------------
-// ---- reading storage objects -------------------------------------------------
-// The registry says which context an id lives in. When it does not know yet
-// (a cold deep link), every context is asked and the first answer wins.
-const ctxOfId = id => (REG[id] || {}).ctx || LOCAL_CTX;
-const nsOfCtx = ctx => { const n = ctxNamespaces(ctx); return Array.isArray(n) ? n[0] : NS(); };
-const one = (fn, id, norm, label) => {
-  const known = REG[id];
-  const ctxs = known ? [known.ctx] : CONTEXTS.map(c => c.name);
-  return Promise.all(ctxs.map(ctx => fn(ctx, id).catch(() => null))).then(rs => {
-    const hit = rs.find(Boolean);
-    if (!hit) throw new ApiError(404, `${label} ${id} not found`, "/" + id, "NotFound");
-    return norm(hit);
-  });
-};
-const everywhere = (fn, norm) => Promise.all(CONTEXTS.map(c => fn(c.name).catch(() => []))).then(rs => rs.flat().map(norm));
-const SNAP_SCOPE = {clusters: "clusterId", pools: "poolId", lvols: "volumeId", volumes: "volumeId"};
-
 const api = {
-  clusters: () => everywhere(sources.clusters, normCluster),
-  cluster: id => one(sources.cluster, id, normCluster, "cluster"),
-  hosts: cid => sources.hosts(ctxOfId(cid), cid).then(r => r.map(normHost)),
-  host: id => one(sources.host, id, normHost, "host"),
-  nodes: cid => sources.nodes(ctxOfId(cid), cid).then(r => r.map(normNode)),
-  node: id => one(sources.node, id, normNode, "storage node"),
-  devices: nid => sources.devices(ctxOfId(nid), nid).then(r => r.map(normDevice)),
-  device: id => one(sources.device, id, normDevice, "device"),
-  pools: cid => sources.pools(ctxOfId(cid), cid).then(r => r.map(normPool)),
-  pool: id => one(sources.pool, id, normPool, "pool"),
-  poolVolumes: pid => sources.volumes(ctxOfId(pid), {poolId: pid}).then(r => r.map(normVolume)),
-  poolStorageClasses: pid => sources.storageClasses(ctxOfId(pid), pid).then(r => r.map(normSc)),
-  clusterVolumes: cid => sources.volumes(ctxOfId(cid), {clusterId: cid}).then(r => r.map(normVolume)),
-  nodeVolumes: nid => sources.volumes(ctxOfId(nid), {nodeId: nid}).then(r => r.map(normVolume)),
-  volume: id => one(sources.volume, id, normVolume, "volume"),
-  snapshots: (scope, id) => sources.snapshots(ctxOfId(id), {[SNAP_SCOPE[scope] || "clusterId"]: id}).then(r => r.map(normSnapshot)),
-  snapshot: id => one(sources.snapshot, id, normSnapshot, "snapshot"),
-  backups: (scope, id) => sources.backups(ctxOfId(id), {[SNAP_SCOPE[scope] || "clusterId"]: id}).then(r => r.map(normBackup)),
-  backup: id => one(sources.backup, id, normBackup, "backup"),
-  policies: cid => sources.policies(ctxOfId(cid), cid).then(r => r.map(normPolicy)),
-  policy: id => one(sources.policy, id, normPolicy, "backup policy"),
+  clusters: () => req("/clusters").then(r => r.map(normCluster)),
+  cluster: id => req(`/clusters/${id}`).then(r => normCluster(r[0])),
+  hosts: cid => req(`/clusters/${cid}/hosts`).then(r => r.map(normHost)),
+  host: id => req(`/hosts/${id}`).then(r => normHost(r[0])),
+  nodes: cid => req(`/clusters/${cid}/storage-nodes`).then(r => r.map(normNode)),
+  node: id => req(`/storage-nodes/${id}`).then(r => normNode(r[0])),
+  devices: nid => req(`/storage-nodes/${nid}/devices`).then(r => r.map(normDevice)),
+  device: id => req(`/devices/${id}`).then(r => normDevice(r[0])),
+  pools: cid => req(`/clusters/${cid}/pools`).then(r => r.map(normPool)),
+  pool: id => req(`/pools/${id}`).then(r => normPool(r[0])),
+  poolVolumes: pid => req(`/pools/${pid}/lvols`).then(r => r.map(normVolume)),
+  poolStorageClasses: pid => req(`/pools/${pid}/storage-classes`).then(r => r.map(normSc)),
+  clusterVolumes: cid => req(`/clusters/${cid}/lvols`).then(r => r.map(normVolume)),
+  volume: id => req(`/lvols/${id}`).then(r => normVolume(r[0])),
+  snapshots: (scope, id) => req(`/${scope}/${id}/snapshots`).then(r => r.map(normSnapshot)),
+  snapshot: id => req(`/snapshots/${id}`).then(r => normSnapshot(r[0])),
+  backups: (scope, id) => req(`/${scope}/${id}/backups`).then(r => r.map(normBackup)),
+  backup: id => req(`/backups/${id}`).then(r => normBackup(r[0])),
+  policies: cid => req(`/clusters/${cid}/backup-policies`).then(r => r.map(normPolicy)),
+  policy: id => req(`/backup-policies/${id}`).then(r => normPolicy(r[0])),
   cgroups: cid => req(`/clusters/${cid}/consistency-groups`).then(r => r.map(normCg)),
   cgroup: id => req(`/consistency-groups/${id}`).then(r => normCg(r[0])),
   cgroupVolumes: id => req(`/consistency-groups/${id}/lvols`).then(r => r.map(normVolume)),
@@ -916,29 +947,22 @@ const api = {
   snapshotRestore: (id, p) => send("POST", `/snapshots/${id}/restore`, p),
   clusterSetKms: (cid, p) => send("PUT", `/clusters/${cid}/kms`, p),
   clusterTestKms: cid => send("POST", `/clusters/${cid}/kms/test`),
-  // ---- tasks, the event log, operations: the control plane and the Ops kinds ----
-  tasks: cid => cp.tasks(ctxOfId(cid), cid).then(ts => ts.map(t => normTask(t, ts))),
-  subtasks: tid => {
-    const ix = TASK_INDEX[tid];
-    if (!ix) return Promise.resolve([]);
-    return cp.tasks(ix.ctx, ix.clusterId).then(ts => ts.filter(t => t.parentId === tid).map(t => normTask(t, ts)));
-  },
-  // the control plane exposes no route to cancel a task (backend gap)
-  taskCancel: () => Promise.reject(new ApiError(501, "the control plane exposes no route to cancel a task", "/tasks", "NotImplemented")),
-  clusterLogs: (cid, limit) => cp.logs(ctxOfId(cid), cid, limit || 400),
-  // alerts are derived in alerts.jsx; until it loads these answer empty
-  alerts: cid => Promise.resolve(window.alerts.ready ? window.alerts.forCluster(cid) : []),
-  allAlerts: () => Promise.resolve(window.alerts.ready ? window.alerts.all() : []),
-  cpAlerts: () => Promise.resolve(window.alerts.ready ? window.alerts.all().filter(a => a.scope === "cp") : []),
-  operations: cid => Promise.all(CONTEXTS.map(c => Promise.all(OPS_KINDS.map(k2 => store.read(c.name, k2).catch(() => [])))
-      .then(rs => rs.flat().map(o => normOperation(o, c.name)))))
-    .then(rs => rs.flat().filter(o => !cid || o.clusterId === cid)
+  tasks: cid => req(`/clusters/${cid}/tasks`).then(r => r.map(normTask)),
+  subtasks: tid => req(`/tasks/${tid}/subtasks`).then(r => r.map(normTask)),
+  taskCancel: tid => send("POST", `/tasks/${tid}/cancel`),
+  clusterLogs: cid => req(`/clusters/${cid}/logs`).then(r => r.map(normLog)),
+  alerts: cid => req(`/clusters/${cid}/alerts`).then(r => r.map(normAlert)),
+  allAlerts: () => req("/alerts").then(r => r.map(normAlert)),
+  cpAlerts: () => req("/control-plane/alerts").then(r => r.map(normAlert)),
+  operations: cid => Promise.all(OPS_KINDS.map(k2 => k8s.list(k2).catch(() => [])))
+    .then(rs => rs.flat().map(normOperation)
+      .filter(o => !cid || o.clusterId === cid)
       .sort((x, y) => (y.running - x.running) || Date.parse(y.startedAt) - Date.parse(x.startedAt))),
-  operationAbort: (kind, name, opts) => abortOps(kind, name, opts).then(touched((opts || {}).ctx, kind)),
-  alertRuleCount: () => null,
-  alertSilence: id => Promise.resolve(window.alerts.ready ? window.alerts.silence({fingerprint: id}) : null),
-  alertUnsilence: id => Promise.resolve(window.alerts.ready ? window.alerts.unsilence(id) : null),
-  unassignedHosts: () => everywhere(sources.unassignedHosts, normHost),
+  operationAbort: (kind, name) => abortOps(kind, name),
+  alertRuleCount: scope => ((window.X && window.X.alertRuleCounts) || {})[scope] || null,
+  alertSilence: id => send("POST", `/alerts/${encodeURIComponent(id)}/silence`),
+  alertUnsilence: id => send("POST", `/alerts/${encodeURIComponent(id)}/unsilence`),
+  unassignedHosts: () => req("/hosts/unassigned").then(r => r.map(normHost)),
   // ---- replication: the real v1alpha1 kinds, on the Kubernetes API ----
   // Pairs, policies and slots are three lists that have to be joined, because
   // the CRDs reference each other by name and carry no rollups.
@@ -1090,28 +1114,8 @@ const api = {
   // access control — RBAC-DESIGN.md. Kubernetes RBAC is the store; the operator
   // serves the aggregated view: one SelfSubjectRulesReview per namespace (/self),
   // the permitted scope tree (/scopes), AccessGrants, and SubjectAccessReview.
-  // Who the caller is and what they may do, from the Kubernetes API itself:
-  // identity and rules from the access reviews, and the namespace each
-  // cluster and pool lives in so a rule can be judged in the right place.
-  // Rules are read in the local context; a remote context enforces its own
-  // RBAC on every call regardless.
-  accessSelf: async () => {
-    const [who, rules, clusters, pools] = await Promise.all([
-      review.whoami().catch(() => ({})), review.rules(NS()).catch(() => ({resourceRules: [], incomplete: true})),
-      api.clusters().catch(() => []), everywhere(sources.pools, normPool).catch(() => [])]);
-    const norm = (rules.resourceRules || []).map(r => ({apiGroups: r.apiGroups || [""], resources: r.resources || [], verbs: r.verbs || [], resourceNames: r.resourceNames}));
-    const ns = {clusters: {}, pools: {}, managed: {}, apps: {}, dr: DR_NS()};
-    clusters.forEach(c => { ns.clusters[c.id] = c.ns; });
-    pools.forEach(p => { ns.pools[p.id] = p.ns; });
-    CONTEXTS.forEach(c => { ns.managed[c.name] = nsOfCtx(c.name); });
-    const user = who.username || null;
-    const initials = String(user || "?").replace(/^system:serviceaccount:[^:]+:/, "").split(/[^a-z0-9]+/i).filter(Boolean).slice(0, 2).map(w => w[0].toUpperCase()).join("") || "??";
-    return {user, groups: who.groups || [], initials, label: user, rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete,
-      // no server-side visibility verdicts: the rules decide what is readable
-      grants: [], scopes: {ns, clusters: [], managed: [], pools: [], apps: [],
-        contexts: CONTEXTS.map(c => ({name: c.name, labels: c.labels, namespaces: c.namespaces}))}, demo_users: []};
-  },
-  accessScopes: () => api.accessSelf().then(r => r.scopes),
+  accessSelf: () => req("/access/self").then(r => r[0]),
+  accessScopes: () => req("/access/scopes").then(r => r[0]),
   accessRoles: () => req("/access-roles").then(r => r.map(normRole)),
   accessGrants: () => req("/access-grants"),
   accessGrantCreate: b => send("POST", "/access-grants", b),
@@ -1120,19 +1124,21 @@ const api = {
   accessEffective: subject => req("/access/effective?subject=" + encodeURIComponent(subject)).then(r => r[0]),
   accessReview: b => send("POST", "/access/review", b),
   accessInvariants: () => req("/access/invariants"),
-  // a "Kubernetes cluster" is a configured context
-  k8sClusters: () => sources.k8sClusters().then(r => r.map(normK8s)),
-  k8sCluster: id => sources.k8sCluster(id).then(normK8s),
-  k8sStorageClasses: id => sources.storageClasses(id).then(r => r.map(normSc)),
-  k8sPvcs: id => sources.pvcs(id).then(r => r.map(normPvc)),
-  k8sHosts: id => sources.hosts(id).then(r => r.map(normHost)),
-  k8sZones: id => req(`/kubernetes-clusters/${id}/zones`).then(r => r.map(normZone)),
-  k8sStorageClusters: id => sources.clusters(id).then(r => r.map(normCluster)),
-  clusterK8s: id => sources.k8sCluster(ctxOfId(id)).then(k => [normK8s(k)]),
-  storageClass: id => one(sources.storageClass, id, normSc, "StorageClass"),
-  storageClassPvcs: id => sources.pvcs(ctxOfId(id), {storageClassId: id}).then(r => r.map(normPvc)),
-  pvcs: () => everywhere(sources.pvcs, normPvc),
-  pvcResize: (id, size) => pvcGrow(id, size),
+  // Without the operator API the Kubernetes clusters are the hub's OCM
+  // ManagedClusters with their dr-agents' inventory (cpapi.jsx, hubK8s).
+  k8sClusters: () => (upstreamOn("operator") ? req("/kubernetes-clusters") : hubK8s.clusters()).then(r => r.map(normK8s)),
+  k8sCluster: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}`).then(r => r[0]) : hubK8s.cluster(id)).then(normK8s),
+  k8sStorageClasses: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/storage-classes`) : hubK8s.storageClasses(id)).then(r => r.map(normSc)),
+  k8sPvcs: id => upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/pvcs`).then(r => r.map(normPvc))
+    : Promise.reject(notInDeployment("A managed cluster's PVCs", "are not readable from the hub: no agent reports them", `/kubernetes-clusters/${id}/pvcs`)),
+  k8sHosts: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/hosts`) : hubK8s.hosts(id)).then(r => r.map(normHost)),
+  k8sZones: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/zones`) : hubK8s.zones(id)).then(r => r.map(normZone)),
+  k8sStorageClusters: id => (upstreamOn("operator") ? req(`/kubernetes-clusters/${id}/storage-clusters`) : hubK8s.storageClusters(id)).then(r => r.map(normCluster)),
+  clusterK8s: id => req(`/clusters/${id}/kubernetes-clusters`).then(r => r.map(normK8s)),
+  storageClass: id => req(`/storage-classes/${id}`).then(r => normSc(r[0])),
+  storageClassPvcs: id => req(`/storage-classes/${id}/pvcs`).then(r => r.map(normPvc)),
+  pvcs: () => req("/pvcs").then(r => r.map(normPvc)),
+  pvcResize: (id, size) => send("POST", `/pvcs/${id}/resize`, {size}),
   buckets: cid => req(`/clusters/${cid}/buckets`).then(r => r.map(normBucket)),
   bucket: id => req(`/buckets/${id}`).then(r => normBucket(r[0])),
   bucketCreate: (cid, p) => send("POST", `/clusters/${cid}/buckets`, p),
@@ -1146,13 +1152,21 @@ const api = {
   clusterSetFileStorage: (cid, p) => send("PUT", `/clusters/${cid}/file-storage`, p),
   clusterFailoverMds: cid => send("POST", `/clusters/${cid}/file-storage/failover`),
   clusterSetObjectStorage: (cid, p) => send("PUT", `/clusters/${cid}/object-storage`, p),
-  pvc: id => one(sources.pvc, id, normPvc, "PVC"),
-  zoneK8sClusters: id => req(`/zones/${id}/kubernetes-clusters`).then(r => r.map(normK8s)),
-  zones: () => req("/zones").then(r => r.map(normZone)),
-  zone: id => req(`/zones/${id}`).then(r => normZone(r[0])),
-  zoneHosts: id => req(`/zones/${id}/hosts`).then(r => r.map(normHost)),
-  zoneClusters: id => req(`/zones/${id}/clusters`).then(r => r.map(normCluster)),
-  clusterZones: cid => req(`/clusters/${cid}/zones`).then(r => r.map(normZone)),
+  pvc: id => req(`/pvcs/${id}`).then(r => normPvc(r[0])),
+  // Without the operator API a zone is a managed cluster's node zone, as its
+  // dr-agent reports it (topology.kubernetes.io/zone); hubZones in cpapi.jsx.
+  zoneK8sClusters: id => upstreamOn("operator") ? req(`/zones/${id}/kubernetes-clusters`).then(r => r.map(normK8s))
+    : hubSites().then(ss => ss.filter(s => s.wire.zone_ids.includes(id)).map(s => normK8s(s.wire))),
+  zones: () => (upstreamOn("operator") ? req("/zones") : hubK8s.zones()).then(r => r.map(normZone)),
+  zone: id => upstreamOn("operator") ? req(`/zones/${id}`).then(r => normZone(r[0]))
+    : hubK8s.zones().then(zs => { const z = zs.find(x => x.uuid === id); if (!z) throw new ApiError(404, `zone ${id} not found`, `/zones/${id}`, "NotFound"); return normZone(z); }),
+  zoneHosts: id => upstreamOn("operator") ? req(`/zones/${id}/hosts`).then(r => r.map(normHost))
+    : hubSites().then(ss => Promise.all(ss.filter(s => s.wire.zone_ids.includes(id)).map(s => hubK8s.hosts(s.name))))
+      .then(ls => ls.flat().filter(h => h.zone_id === id).map(normHost)),
+  zoneClusters: id => upstreamOn("operator") ? req(`/zones/${id}/clusters`).then(r => r.map(normCluster))
+    : hubSites().then(ss => ss.filter(s => s.wire.zone_ids.includes(id)).flatMap(s => s.storage).map(normCluster)),
+  clusterZones: cid => upstreamOn("operator") ? req(`/clusters/${cid}/zones`).then(r => r.map(normZone))
+    : hubK8s.zones().then(zs => zs.filter(z => z.cluster_ids.includes(cid)).map(normZone)),
 
   pairCreate: p => send("POST", "/cluster-pairs", p),
   pairTest: id => send("POST", `/cluster-pairs/${id}/test`),
@@ -1172,194 +1186,82 @@ const api = {
   // A cluster is not created by POSTing a cluster: discovery writes an
   // inventory, a ClusterDeploymentConfig is drafted against it, and approving
   // that document is what deploys.
-  // a discovery is an OperatorOps of action Discover in that context
-  discoveries: kid => store.read(kid, "OperatorOps")
-    .then(r => r.filter(o => (o.spec || {}).action === "Discover").map(o => normDiscovery(discoveryRecord(o, kid)))),
+  discoveries: kid => preq(`/discoveries?scope=kubernetes-clusters&scopeId=${kid}`)
+    .then(r => r.map(normDiscovery)),
   discoveryRun: (kid, name, filter, nodeSelector) => k8s.create("OperatorOps", {
-    apiVersion: apiVersionOf("OperatorOps"), kind: "OperatorOps",
-    metadata: {name: `discover-${(name || "cluster").slice(0, 30)}-${Date.now().toString(36)}`, namespace: nsOfCtx(kid)},
-    spec: {action: "Discover", discover: Object.assign({},
-      filter && Object.keys(filter).length ? {deviceFilter: filter} : {},
-      nodeSelector && Object.keys((nodeSelector.matchLabels || nodeSelector) || {}).length ? {nodeSelector: nodeSelector.matchLabels || nodeSelector} : {},
-      name ? {configName: name} : {})}
-  }, {ctx: kid, namespace: nsOfCtx(kid)}).then(touched(kid, "OperatorOps")),
-  deployConfigs: () => Promise.all(CONTEXTS.map(c => store.read(c.name, "ClusterDeploymentConfig").catch(() => [])
-    .then(r => r.map(o => normDeployConfig(Object.assign({}, o, {__ctx: c.name})))))).then(rs => rs.flat()),
-  k8sDeployConfigs: kid => store.read(kid, "ClusterDeploymentConfig").then(r => r.map(o => normDeployConfig(Object.assign({}, o, {__ctx: kid})))),
-  deployConfig: id => api.deployConfigs().then(r => {
-    const hit = r.find(c => c.id === id || c.name === id);
+    apiVersion: window.API_GROUP, kind: "OperatorOps",
+    metadata: {name: `discover-${(name || "cluster").slice(0, 30)}-${Date.now().toString(36)}`,
+      namespace: window.SB_CONFIG.namespace},
+    spec: {action: "Discover", kubernetesClusterRef: name,
+      target: {kubernetesClusterId: kid},
+      discover: {deviceFilter: filter, nodeSelector: nodeSelector || {matchLabels: {}}}}
+  }),
+  deployConfigs: () => k8s.list("ClusterDeploymentConfig").then(r => r.map(normDeployConfig)),
+  k8sDeployConfigs: kid => k8s.list("ClusterDeploymentConfig")
+    .then(r => r.map(normDeployConfig).filter(c => c.k8sClusterId === kid)),
+  deployConfig: id => k8s.list("ClusterDeploymentConfig").then(r => {
+    const hit = r.map(normDeployConfig).find(c => c.id === id || c.name === id);
     if (!hit) throw new ApiError(404, "deployment config not found", "/" + id, "NotFound");
     return hit;
   }),
-  deployConfigCreate: (name, spec, ctx) => k8s.create("ClusterDeploymentConfig", {
-    apiVersion: apiVersionOf("ClusterDeploymentConfig"), kind: "ClusterDeploymentConfig",
-    metadata: {name, namespace: nsOfCtx(ctx)},
+  deployConfigCreate: (name, spec) => k8s.create("ClusterDeploymentConfig", {
+    apiVersion: window.API_GROUP, kind: "ClusterDeploymentConfig",
+    metadata: {name, namespace: window.SB_CONFIG.namespace},
     spec: Object.assign({approved: false}, spec)
-  }, {ctx, namespace: nsOfCtx(ctx)}).then(touched(ctx, "ClusterDeploymentConfig")),
+  }),
   // approval is the only mutable field, and it is one-way
-  deployConfigApprove: (name, ctx) => k8s.patch("ClusterDeploymentConfig", name, {spec: {approved: true}}, {ctx, namespace: nsOfCtx(ctx)}).then(touched(ctx, "ClusterDeploymentConfig")),
-  // step / node logs: the probe Job pods a discovery run labels with its name
-  deployLog: (id, name) => deployLogRead(id, name),
-  deployConfigDelete: (name, ctx) => k8s.remove("ClusterDeploymentConfig", name, {ctx, namespace: nsOfCtx(ctx)}).then(touched(ctx, "ClusterDeploymentConfig")),
+  deployConfigApprove: name => k8s.patch("ClusterDeploymentConfig", name, {spec: {approved: true}}),
+  // step / node logs: the operator's job pod logs, keyed by step[/host]
+  deployLog: (id, name) => preq(`/deployments/${id}/logs?name=${encodeURIComponent(name)}`),
+  deployConfigDelete: name => k8s.remove("ClusterDeploymentConfig", name),
   clusterCreate: payload => send("POST", "/clusters", payload),
 
   // ---- mutations ----
-  // Every action is an object: an Ops CR for a cluster or node, an edit of
-  // the Kubernetes object that owns a volume or a policy. What no API models
-  // yet answers "no API action exists" and is listed as a backend gap.
-  clusterSuspend: noAction("suspend a cluster"),
-  clusterActivate: id => clusterOps(id, "activate"),
-  clusterShutdown: id => clusterOps(id, "shutdown"),
-  clusterStart: id => clusterOps(id, "start"),
-  clusterRestart: id => clusterOps(id, "restart"),
-  clusterRollingRestart: (id, refresh) => clusterOps(id, "node-rolling-restart", refresh ? {nodeRollingRestart: {refreshSNodeAPI: true}} : null),
-  clusterExpand: id => clusterOps(id, "expand"),
-  // a node joins by being listed on the cluster's node set
-  clusterAddNode: (id, hostId, failureDomain) => nodeSetAddWorker(id, hostId, failureDomain),
-  nodeShutdown: (id, force) => nodeOps(id, "shutdown", force ? {force: true} : null),
-  nodeRestart: id => nodeOps(id, "restart"),
-  nodeSuspend: id => nodeOps(id, "suspend"),
-  nodeResume: id => nodeOps(id, "resume"),
-  nodeRemove: id => nodeOps(id, "remove"),
-  nodeMigrate: (id, hostId) => nodeOps(id, "migrate", {targetWorkerNode: (REG[hostId] || {}).hostname || hostId}),
-  nodeAddDevice: noAction("add a device to a node"),
-  deviceRestart: noAction("restart a device"),
-  deviceFail: noAction("fail a device"),
-  deviceHealthCheck: noAction("run a device health check"),
-  deviceRemove: noAction("remove a device"),
-  hostReserveDevice: noAction("reserve a device"),
-  hostsPrepare: noAction("prepare a host"),
-  hostConfigure: noAction("configure a host"),
-  // a volume is its claim: deleting the PVC releases the volume
-  volumeDelete: id => withVolume(id, v => k8s.remove("PersistentVolumeClaim", v.pvc.name, {ctx: v.ctx, namespace: v.pvc.namespace})
-    .then(touched(v.ctx, "PersistentVolumeClaim"))),
-  volumeResize: (id, size) => withVolume(id, v => pvcGrow(v.pvc.uuid, size, v)),
-  volumeSnapshot: (id, name) => withVolume(id, v => snapshotCreate(v, name)),
-  volumeClone: (id, name) => withVolume(id, v => pvcClone(v, name, {kind: "PersistentVolumeClaim", name: v.pvc.name})),
-  // a migration moves the volume's backing logical volume to another node
-  volumeMigrate: (id, p) => withVolume(id, v => submitOps("PersistentVolume", v.pvName, "migrate",
-    {targetNodeUUID: p.targetNodeUUID || p.target_node_id || p.node_id || p.host_id}, {ctx: v.ctx, namespace: v.k8s && REG[v.clusterId] ? REG[v.clusterId].ns : undefined})
-    .then(touched(v.ctx, "VolumeMigration"))),
-  volumeRebalance: noAction("rebalance a volume"),
-  migrationTasks: cid => api.tasks(cid).then(ts => ts.filter(t => t.fn === "lvol_migration")),
-  volumeSetAffinity: noAction("set volume affinity"),
-  clusterRebalance: noAction("trigger a cluster rebalance"),
-  clusterSetRebalance: (id, enabled) => withCluster(id, c => k8s.patch("StorageCluster", c.k8s.name, {spec: {volumeAutoPlacement: {enabled: !!enabled}}}, {ctx: c.ctx, namespace: c.ns})
-    .then(touched(c.ctx, "StorageCluster"))),
-  volumeBackup: (id, payload) => withVolume(id, v => backupCreate(v, payload)),
-  snapshotBackup: noAction("back up a snapshot"),
-  backupMerge: noAction("merge a backup"),
-  backupMergeVersion: noAction("merge a backup version"),
-  policyCreate: (cid, p) => withCluster(cid, c => policyCreate(c, p)),
-  policyUpdate: noAction("change a backup policy (its fields are immutable; create a new one)"),
-  policyDelete: id => withVm(id, p => k8s.remove("BackupPolicy", p.k8s.name, {ctx: p.ctx, namespace: p.ns}).then(touched(p.ctx, "BackupPolicy"))),
-  // membership is a PVC annotation
-  volumeSetPolicy: (id, policyId) => withVolume(id, v => k8s.patch("PersistentVolumeClaim", v.pvc.name,
-    {metadata: {annotations: {[LABELS.backupPolicy]: policyId ? ((REG[policyId] || {}).name || policyId) : null}}}, {ctx: v.ctx, namespace: v.pvc.namespace})
-    .then(touched(v.ctx, "PersistentVolumeClaim"))),
-  volumeSetQos: noAction("change a volume's QoS"),
-  volumeSetDataReduction: noAction("change data reduction"),
-  poolSetQos: (id, qos) => withVm(id, p => k8s.patch("StoragePool", p.k8s.name, {spec: {qos: poolQosSpec(qos)}}, {ctx: p.ctx, namespace: p.ns}).then(touched(p.ctx, "StoragePool"))),
-  poolCreate: (cid, p) => withCluster(cid, c => poolCreate(c, p)),
-  poolEnable: noAction("enable a pool"),
-  poolDisable: noAction("disable a pool"),
-  snapshotDelete: id => withVm(id, s => k8s.remove("VolumeSnapshot", s.k8s.name, {ctx: s.ctx, namespace: s.ns}).then(touched(s.ctx, "VolumeSnapshot"))),
-  snapshotClone: (id, name) => withVm(id, s => api.volume(s.volumeId).then(v => pvcClone(v, name, {kind: "VolumeSnapshot", apiGroup: "snapshot.storage.k8s.io", name: s.k8s.name}))),
-  backupRestore: (id, name) => withVm(id, b => restoreCreate(b, name)),
-  backupExport: noAction("export a backup"),
-  backupDelete: id => withVm(id, b => k8s.remove("StorageBackup", b.k8s.name, {ctx: b.ctx, namespace: b.ns}).then(touched(b.ctx, "StorageBackup")))
-};
-
-// ---- action helpers ----------------------------------------------------------
-// a function declaration, because the api object calls it while it is built
-function noAction(what) { return () => Promise.reject(new ApiError(501, `${what}: no API action exists for this yet`, "", "NotImplemented")); }
-const notFound = (what, id) => new ApiError(404, `${what} ${id} is not known to the console`, "/" + id, "NotFound");
-const withVm = (id, fn) => { const vm = REG[id]; return vm && vm.k8s ? Promise.resolve(fn(vm)) : Promise.reject(notFound("object", id)); };
-const withCluster = (id, fn) => (REG[id] && REG[id].k8s ? Promise.resolve(REG[id]) : api.cluster(id)).then(fn);
-const withVolume = (id, fn) => (REG[id] && REG[id].k8s ? Promise.resolve(REG[id]) : api.volume(id)).then(v => {
-  if (!v.pvc) throw new ApiError(409, "this volume has no claim; manage it where it was created", "/" + id, "Conflict");
-  return fn(v);
-});
-const clusterOps = (id, action, payload) => withCluster(id, c => submitOps("StorageCluster", c.k8s.name, action, payload, {ctx: c.ctx, namespace: c.ns})
-  .then(touched(c.ctx, "StorageClusterOps")));
-const nodeOps = (id, action, payload) => (REG[id] && REG[id].k8s ? Promise.resolve(REG[id]) : api.node(id))
-  .then(n => submitOps("StorageNode", n.k8s.name, action, payload, {ctx: n.ctx, namespace: n.ns}).then(touched(n.ctx, "StorageNodeOps")));
-const pvcGrow = (pvcId, size, vol) => {
-  const pvc = REG[pvcId] || null;
-  const ns = pvc ? pvc.namespace : vol.pvc.namespace, name = pvc ? pvc.name : vol.pvc.name, ctx = pvc ? pvc.ctx : vol.ctx;
-  return k8s.patch("PersistentVolumeClaim", name, {spec: {resources: {requests: {storage: String(Math.round(Number(size)))}}}}, {ctx, namespace: ns})
-    .then(touched(ctx, "PersistentVolumeClaim"));
-};
-const snapshotClassFor = ctx => store.read(ctx, "VolumeSnapshotClass").catch(() => [])
-  .then(cs => (cs.find(c => c.driver === "csi.simplyblock.io") || {}).metadata).then(m => (m ? m.name : null));
-const snapshotCreate = (v, name) => snapshotClassFor(v.ctx).then(cls => k8s.create("VolumeSnapshot", {
-  apiVersion: "snapshot.storage.k8s.io/v1", kind: "VolumeSnapshot",
-  metadata: {name: name || `${v.pvc.name}-${Date.now().toString(36)}`, namespace: v.pvc.namespace},
-  spec: Object.assign({source: {persistentVolumeClaimName: v.pvc.name}}, cls ? {volumeSnapshotClassName: cls} : {})
-}, {ctx: v.ctx, namespace: v.pvc.namespace})).then(touched(v.ctx, "VolumeSnapshot"));
-const pvcClone = (v, name, dataSource) => k8s.create("PersistentVolumeClaim", {
-  apiVersion: "v1", kind: "PersistentVolumeClaim",
-  metadata: {name: name || `${v.pvc.name}-clone-${Date.now().toString(36)}`, namespace: v.pvc.namespace},
-  spec: {storageClassName: v.storageClass, accessModes: ["ReadWriteOnce"], resources: {requests: {storage: String(v.capacity.total)}}, dataSource}
-}, {ctx: v.ctx, namespace: v.pvc.namespace}).then(touched(v.ctx, "PersistentVolumeClaim"));
-const backupCreate = (v, payload) => k8s.create("StorageBackup", {
-  apiVersion: apiVersionOf("StorageBackup"), kind: "StorageBackup",
-  metadata: {name: `${v.pvc.name}-${Date.now().toString(36)}`.slice(0, 63), namespace: v.pvc.namespace},
-  spec: Object.assign({clusterName: v.clusterName || (REG[v.clusterId] || {}).name, pvcRef: {name: v.pvc.name, namespace: v.pvc.namespace}},
-    payload && payload.snapshot_name ? {snapshotName: payload.snapshot_name} : {})
-}, {ctx: v.ctx, namespace: v.pvc.namespace}).then(touched(v.ctx, "StorageBackup"));
-const restoreCreate = (b, name) => k8s.create("BackupRestore", {
-  apiVersion: apiVersionOf("BackupRestore"), kind: "BackupRestore",
-  metadata: {name: `restore-${(name || b.crName).slice(0, 40)}-${Date.now().toString(36)}`.slice(0, 63), namespace: b.ns},
-  spec: {clusterName: b.clusterName, backupRef: {name: b.crName},
-    pvcTemplate: {metadata: {name: name || `${b.pvc.name}-restored`}, spec: {accessModes: ["ReadWriteOnce"], resources: {requests: {storage: String(b.capacity.total || b.size || 0)}}}}}
-}, {ctx: b.ctx, namespace: b.ns}).then(touched(b.ctx, "BackupRestore"));
-const scheduleString = s => Array.isArray(s) ? s.map(r => `${r.interval},${r.versions}`).join(" ") : String(s || "");
-const policyCreate = (c, p) => k8s.create("BackupPolicy", {
-  apiVersion: apiVersionOf("BackupPolicy"), kind: "BackupPolicy",
-  metadata: {name: p.name || p.policy_name, namespace: c.ns},
-  spec: Object.assign({clusterName: c.k8s.name, schedule: scheduleString(p.schedule)},
-    p.max_versions || p.maxVersions ? {maxVersions: Number(p.max_versions || p.maxVersions)} : {},
-    p.max_age || p.maxAge ? {maxAge: p.max_age || p.maxAge} : {})
-}, {ctx: c.ctx, namespace: c.ns}).then(touched(c.ctx, "BackupPolicy"));
-const poolQosSpec = q => Object.assign({}, q.rw_iops || q.iops ? {iops: Number(q.rw_iops || q.iops)} : {},
-  {throughput: Object.assign({}, q.rw_mbytes ? {readWrite: Number(q.rw_mbytes)} : {}, q.r_mbytes ? {read: Number(q.r_mbytes)} : {}, q.w_mbytes ? {write: Number(q.w_mbytes)} : {})});
-const poolCreate = (c, p) => k8s.create("StoragePool", {
-  apiVersion: apiVersionOf("StoragePool"), kind: "StoragePool",
-  metadata: {name: p.name || p.pool_name, namespace: c.ns},
-  spec: Object.assign({clusterName: c.k8s.name},
-    p.size_prov || p.capacity_limit ? {capacityLimit: String(p.size_prov || p.capacity_limit)} : {},
-    p.qos ? {qos: poolQosSpec(p.qos)} : {},
-    p.storage_class_parameters ? {storageClassParameters: p.storage_class_parameters} : {})
-}, {ctx: c.ctx, namespace: c.ns}).then(touched(c.ctx, "StoragePool"));
-// adding a worker to the cluster's first node set is how a node is added
-const nodeSetAddWorker = (clusterId, hostId, failureDomain) => withCluster(clusterId, async c => {
-  const sets = (await store.read(c.ctx, "StorageNodeSet")).filter(s => (s.spec || {}).clusterName === c.k8s.name);
-  if (!sets.length) throw new ApiError(409, "the cluster has no StorageNodeSet to add the worker to", "/" + clusterId, "Conflict");
-  const set = sets[0], worker = (REG[hostId] || {}).hostname || hostId;
-  const workers = Array.from(new Set(((set.spec || {}).workerNodes || []).concat([worker])));
-  const patch = {spec: Object.assign({workerNodes: workers}, failureDomain !== undefined && failureDomain !== null && failureDomain !== ""
-    ? {nodeFailureDomains: Object.assign({}, (set.spec || {}).nodeFailureDomains || {}, {[worker]: Number(failureDomain)})} : {})};
-  return k8s.patch("StorageNodeSet", set.metadata.name, patch, {ctx: c.ctx, namespace: set.metadata.namespace}).then(touched(c.ctx, "StorageNodeSet"));
-});
-// a discovery run, in the record shape normDiscovery reads
-const discoveryRecord = (o, ctx) => {
-  const sp = (o.spec || {}).discover || {}, st = o.status || {}, step = st.step || {};
-  return {uuid: o.metadata.uid, k8s_cluster_id: ctx, status: String(st.phase || "Pending").toLowerCase(), step: step.state || null, op_name: o.metadata.name,
-    started_at: st.startedAt || o.metadata.creationTimestamp, finished_at: st.completedAt || null,
-    node_selector: {matchLabels: sp.nodeSelector || {}}, device_filter: sp.deviceFilter || {}, host_ids: st.workers || [],
-    node_count: (st.workers || []).length, device_count: null, filtered_count: null, config_ref: st.configRef || null, message: st.message || null};
-};
-// the probe Job pods a discovery run labels with its name, read as one log
-const deployLogRead = async (id, name) => {
-  const d = REG[id] || {};
-  const ctx = d.ctx || LOCAL_CTX, ns = d.ns || nsOfCtx(ctx);
-  const pods = await k8s.list("Pod", {ctx, namespace: ns, labelSelector: `storage.simplyblock.io/nodeprobe-run=${name}`}).catch(() => []);
-  const logs = await Promise.all(pods.map(p => k8s.logs(p.metadata.name, {ctx, namespace: ns, tailLines: 500, timestamps: true}).catch(() => "")));
-  return logs.flatMap((text, i) => String(text || "").split("\n").filter(Boolean).map(line => {
-    const sp = line.indexOf(" ");
-    return {ts: sp > 0 ? line.slice(0, sp) : null, level: /error|fail/i.test(line) ? "error" : "info", node: pods[i].spec.nodeName || null, msg: sp > 0 ? line.slice(sp + 1) : line};
-  }));
+  clusterSuspend: id => send("POST", `/clusters/${id}/suspend`),
+  clusterActivate: id => send("POST", `/clusters/${id}/activate`),
+  clusterAddNode: (id, hostId, failureDomain) => send("POST", `/clusters/${id}/storage-nodes`, {host_id: hostId, failure_domain: failureDomain || null}),
+  nodeShutdown: (id, force) => send("POST", `/storage-nodes/${id}/shutdown`, {force: !!force}),
+  nodeRestart: id => send("POST", `/storage-nodes/${id}/restart`),
+  nodeRemove: id => send("DELETE", `/storage-nodes/${id}`),
+  nodeMigrate: (id, hostId) => send("POST", `/storage-nodes/${id}/migrate`, {host_id: hostId}),
+  nodeAddDevice: (id, payload) => send("POST", `/storage-nodes/${id}/devices`, payload),
+  deviceRestart: id => send("POST", `/devices/${id}/restart`),
+  deviceFail: id => send("POST", `/devices/${id}/fail`),
+  deviceHealthCheck: id => send("POST", `/devices/${id}/health-check`),
+  deviceRemove: id => send("DELETE", `/devices/${id}`),
+  hostReserveDevice: (hid, did, nodeId) => send("POST", `/hosts/${hid}/devices/${did}/reserve`, {node_id: nodeId}),
+  hostsPrepare: (cid, ids) => send("POST", `/clusters/${cid}/hosts/prepare`, {host_ids: ids}),
+  hostConfigure: (id, p) => send("POST", `/hosts/${id}/configure`, p),
+  volumeDelete: id => send("DELETE", `/lvols/${id}`),
+  volumeResize: (id, size) => send("POST", `/lvols/${id}/resize`, {size}),
+  volumeSnapshot: (id, name) => send("POST", `/lvols/${id}/snapshot`, {name}),
+  volumeClone: (id, name) => send("POST", `/lvols/${id}/clone`, {name}),
+  // instant migration: the primary moves without copying data
+  volumeMigrate: (id, p) => send("POST", `/lvols/${id}/migrate`, p),
+  volumeRebalance: id => send("POST", `/lvols/${id}/rebalance`),
+  migrationTasks: cid => req(`/clusters/${cid}/tasks?function_name=lvol_migration`).then(r => r.map(normTask)),
+  volumeSetAffinity: (id, p) => send("PUT", `/lvols/${id}/affinity`, p),
+  clusterRebalance: id => send("POST", `/clusters/${id}/rebalance`),
+  clusterSetRebalance: (id, enabled) => send("PUT", `/clusters/${id}/auto-rebalance`, {enabled}),
+  volumeBackup: (id, payload) => send("POST", `/lvols/${id}/backup`, payload),
+  snapshotBackup: (id, bucket) => send("POST", `/snapshots/${id}/backup`, {bucket}),
+  backupMerge: id => send("POST", `/backups/${id}/merge`),
+  backupMergeVersion: (id, vid) => send("POST", `/backups/${id}/versions/${vid}/merge`),
+  policyCreate: (cid, p) => send("POST", `/clusters/${cid}/backup-policies`, p),
+  policyUpdate: (id, p) => send("PUT", `/backup-policies/${id}`, p),
+  policyDelete: id => send("DELETE", `/backup-policies/${id}`),
+  volumeSetPolicy: (id, policyId) => send("PUT", `/lvols/${id}/backup-policy`, {policy_id: policyId}),
+  volumeSetQos: (id, qos) => send("PUT", `/lvols/${id}/qos`, qos),
+  volumeSetDataReduction: (id, p) => send("PUT", `/lvols/${id}/data-reduction`, p),
+  poolSetQos: (id, qos) => send("PUT", `/pools/${id}/qos`, qos),
+  poolCreate: (cid, p) => send("POST", `/clusters/${cid}/pools`, p),
+  poolEnable: id => send("POST", `/pools/${id}/enable`),
+  poolDisable: id => send("POST", `/pools/${id}/disable`),
+  snapshotDelete: id => send("DELETE", `/snapshots/${id}`),
+  snapshotClone: (id, name) => send("POST", `/snapshots/${id}/clone`, {name}),
+  backupRestore: (id, name, versionId) => send("POST", `/backups/${id}/restore`, {name, version_id: versionId}),
+  backupExport: (id, destination, versionId) => send("POST", `/backups/${id}/export`, {destination, version_id: versionId}),
+  backupDelete: id => send("DELETE", `/backups/${id}`)
 };
 const GETTER = {plan: api.plan, site: api.site, cluster: api.cluster, host: api.host, node: api.node, device: api.device, pool: api.pool,
   volume: api.volume, snapshot: api.snapshot, backup: api.backup, policy: api.policy,
@@ -1368,8 +1270,6 @@ const GETTER = {plan: api.plan, site: api.site, cluster: api.cluster, host: api.
   drcluster: api.drCluster, protectedapp: api.protectedApp,
   bucket: api.bucket, deployconfig: api.deployConfig, mpath: api.mpath, appgroup: api.appGroup};
 const resolve = (kind, id) => REG[id] ? Promise.resolve(REG[id]) : (GETTER[kind] ? GETTER[kind](id).catch(() => null) : Promise.resolve(null));
-// the state of every context's reads, for the "context unreachable" banners
-const contextErrors = () => CTX_ERRORS;
 
 // ---- data hooks ------------------------------------------------------------
 function useResource(key, loader, pollMs) {
@@ -1389,7 +1289,7 @@ function useResource(key, loader, pollMs) {
   return {...s, reload: () => load(false)};
 }
 
-Object.assign(window, {api, API, ApiError, STATUS_META, REG, GETTER, resolve, useResource, contextErrors, ctxOfId, nsOfCtx, OPS_KINDS, OPS_STEPS, TASK_INDEX,
+Object.assign(window, {api, API, ApiError, STATUS_META, REG, GETTER, resolve, useResource,
   normCluster, normHost, normNode, normDevice, normPool, normVolume, normSnapshot, normBackup, normPolicy,
   normTask, normLog, normAlert, normOperation, OPS_TARGET_LABEL, normPlan, normSite, normMethod, normLeg, normGeneration,
   normReplPair, normReplPolicy, normReplSlot, normReplOps, ivMinutes, normPair, normDrPolicy, normZone, normCg, normCgSnap, normMigration, normK8s, normSc, normPvc, normBucket, normDrCluster, normApp});

@@ -8,7 +8,12 @@
 // kubectl by whoever is trying to work out why their disk was not a candidate.
 //
 // The name is derived rather than looked up so that a probe pod restarted by
-// its Job writes over its own report instead of leaving two.
+// its Job writes over its own report instead of leaving two. It is derived by
+// atlas-lib's kube.Formula, which this call site is the reference for:
+// design-api-upgrade.md §19.6 names the truncate-and-hash rule here as the
+// pattern the shared helper was extracted from, and a formula that lived in two
+// places would let the probe and the operator disagree about what an object is
+// called.
 //
 // Neither the name nor the labels can be read back as the values that produced
 // them. Both are sanitized, and both are truncated to the 63 characters a label
@@ -22,14 +27,14 @@
 package nodeprobe
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/simplyblock/atlas/kube"
 )
 
 const (
@@ -52,15 +57,7 @@ const (
 	// namePrefix opens every object name the probe generates.
 	namePrefix = "sb-nodeprobe-"
 
-	// nameHashLength is how much of the digest a generated name carries. Eight
-	// hex characters is 32 bits, which is not a cryptographic claim: the digest
-	// is there to keep two truncated node names apart, and the pair it
-	// disambiguates is always within one namespace and one run.
-	nameHashLength = 8
-
-	// maxNameLength is the budget every generated name is held to, and
-	// maxStemLength leaves room for the prefix, the digest, and the dash
-	// between them.
+	// maxNameLength is the budget every generated name is held to.
 	//
 	// It is 63 and not the 253 a ConfigMap's name may be, because the Job that
 	// writes the report is named the same way and a Job's name is copied into
@@ -70,14 +67,20 @@ const (
 	// the run then stalls on the first worker whose name is long, which is any
 	// worker a cloud named after its fully qualified domain name.
 	maxNameLength = 63
-	maxStemLength = maxNameLength - len(namePrefix) - nameHashLength - 1
 )
 
-// unsafeForName matches everything a DNS subdomain may not carry. A node is
-// named ip-10-0-1-23.eu-central-1.compute.internal on one cloud and
-// worker_3 on somebody's laboratory, and only the first of those is already a
-// legal object name.
-var unsafeForName = regexp.MustCompile(`[^a-z0-9.-]+`)
+// nameFormula is how every object the probe generates is named.
+//
+// It carries its digest unconditionally. The run and the node join on a
+// separator both of them may contain, so run oops-1 on worker-3 and run oops on
+// 1-worker-3 reach one stem without either being long enough to truncate, and
+// the digest is taken over the parts rather than over the stem.
+var nameFormula = kube.Formula{
+	Kind:         kube.ObjectName,
+	Prefix:       namePrefix,
+	Limit:        maxNameLength,
+	AlwaysDigest: true,
+}
 
 // ObjectName is the ConfigMap a run's report for one node goes into.
 //
@@ -86,14 +89,7 @@ var unsafeForName = regexp.MustCompile(`[^a-z0-9.-]+`)
 // name writes new objects rather than overwriting reports somebody may have
 // already read.
 func ObjectName(run, node string) string {
-	stem := unsafeForName.ReplaceAllString(strings.ToLower(run+"-"+node), "-")
-	stem = strings.Trim(stem, ".-")
-	if len(stem) > maxStemLength {
-		stem = strings.TrimRight(stem[:maxStemLength], ".-")
-	}
-
-	digest := sha256.Sum256([]byte(run + "\x00" + node))
-	return namePrefix + stem + "-" + hex.EncodeToString(digest[:])[:nameHashLength]
+	return nameFormula.Derive(run, node).Value
 }
 
 // ConfigMap renders a report as the object the probe writes.
@@ -174,6 +170,11 @@ func ReportSelector(run string) map[string]string {
 	}
 }
 
+// unsafeForLabel matches everything these label values may not carry. A node is
+// named ip-10-0-1-23.eu-central-1.compute.internal on one cloud and worker_3 in
+// somebody's laboratory, and the second needs rewriting.
+var unsafeForLabel = regexp.MustCompile(`[^a-z0-9.-]+`)
+
 // maxLabelValueLength is the length a label value may have.
 const maxLabelValueLength = 63
 
@@ -184,8 +185,14 @@ const maxLabelValueLength = 63
 // selecting a run's reports and the ConfigMap's own data is what says which
 // node a report is about: the label may have lost the end of the name, and the
 // report has not.
+//
+// It is deliberately not a kube.Formula, which is the other half of the same
+// question the name above answers with one. A formula keeps two inputs apart
+// and this value is allowed to collide: two workers of one rack whose names
+// differ past the sixty-third character select together, which is what a
+// selector is for. Giving it a digest would make it unique and useless.
 func labelValue(v string) string {
-	v = unsafeForName.ReplaceAllString(strings.ToLower(v), "-")
+	v = unsafeForLabel.ReplaceAllString(strings.ToLower(v), "-")
 	v = strings.Trim(v, ".-_")
 	if len(v) > maxLabelValueLength {
 		v = strings.Trim(v[:maxLabelValueLength], ".-_")

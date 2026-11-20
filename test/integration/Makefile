@@ -38,6 +38,12 @@ TEST_FLAGS ?= -v -count=1
 CLUSTER_NAME ?=
 CLUSTER_ENV := $(if $(CLUSTER_NAME),SB_CLUSTER_NAME=$(CLUSTER_NAME),)
 
+# The repository root, resolved from this Makefile's own path so the pinned tools
+# in .bin are found wherever make is run from. This component does not include
+# scripts/tools.mk, because the only pinned tool it uses is clusteradm and the
+# suite resolves that itself.
+REPO_ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))../..)
+
 .DEFAULT_GOAL := help
 .PHONY: help build vet fmt lint test test-defects test-short preflight clean-clusters \
 	generate generate-check
@@ -109,9 +115,34 @@ preflight: ## Check the tools and privileges a run needs.
 	  fi; \
 	fi
 
-test: preflight ## Boot a cluster and run the suite.
+# Scoped to ./suites/ rather than ./... on purpose. The fleet suite boots a
+# cluster of its own and has nothing to do with storage, so it runs under its own
+# target and must not be swept into this one.
+test: preflight ## Boot a cluster and run the storage suite.
 	SB_INTEGRATION=1 $(CLUSTER_ENV) \
-	  $(GO) test $(TEST_FLAGS) -timeout $(TIMEOUT) ./...
+	  $(GO) test $(TEST_FLAGS) -timeout $(TIMEOUT) ./suites/
+
+# The fleet suite is separate all the way down: its own cluster, its own target,
+# and no storage in it. It boots one cluster, brings up Open Cluster Management,
+# lets the cluster manage itself, and checks that the fleet's add-on delivers the
+# admission guard and that the guard then refuses what it should.
+#
+# Its own timeout, because registering a cluster with Open Cluster Management and
+# waiting for an add-on to render is minutes on top of the boot.
+FLEET_TIMEOUT ?= 40m
+
+test-fleet: preflight preflight-fleet ## Boot a cluster and run the fleet suite.
+	SB_INTEGRATION=1 $(CLUSTER_ENV) \
+	  $(GO) test $(TEST_FLAGS) -timeout $(FLEET_TIMEOUT) ./fleet/
+
+# Checked separately from preflight so that the storage suite does not require a
+# tool only the fleet suite uses.
+preflight-fleet: ## Check the tools the fleet suite needs.
+	@if [ ! -x "$(REPO_ROOT)/.bin/clusteradm" ]; then \
+	  echo "clusteradm is not installed; run: scripts/tools.sh install clusteradm"; \
+	  exit 1; \
+	fi; \
+	echo "clusteradm: $$("$(REPO_ROOT)/.bin/clusteradm" version 2>/dev/null | head -1)"
 
 test-defects: preflight ## Force the NVMe-oF defects and check atlas names them.
 	SB_INTEGRATION=1 $(CLUSTER_ENV) \

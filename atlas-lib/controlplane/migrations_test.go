@@ -216,6 +216,86 @@ func TestClientRefusesAMigrationOfNoKnownKind(t *testing.T) {
 	}
 }
 
+// connectStringsJSON is what the control plane publishes alongside a created
+// migration: the NVMe-oF paths the target now answers on, in the same shape
+// /connect returns, with the hyphenated keys of the `nvme connect` options.
+const connectStringsJSON = `,"connect_strings":[` +
+	`{"transport":"tcp","ip":"10.10.10.1","port":4420,"nqn":"nqn.target",` +
+	`"reconnect-delay":2,"ctrl-loss-tmo":60,"fast-io-fail-tmo":0,"nr-io-queues":8,` +
+	`"keep-alive-tmo":5,"connect":"nvme connect ..."},` +
+	`{"transport":"tcp","ip":"10.10.10.2","port":4420,"nqn":"nqn.target",` +
+	`"reconnect-delay":2,"ctrl-loss-tmo":60,"fast-io-fail-tmo":0,"nr-io-queues":8,` +
+	`"keep-alive-tmo":5,"connect":"nvme connect ..."}]`
+
+// TestClientCreateMigrationReturnsTheTargetPaths. A migration is created
+// before it copies anything, and the window between the two is what the paths
+// are for: the target answers on them, every host consuming the subsystem has
+// to be able to reach it there, and a caller checks that before it lets the
+// copy start. They arrive only in the create's answer, so a client that read
+// the migration and dropped them would leave its caller nothing to check and
+// no way to ask again.
+func TestClientCreateMigrationReturnsTheTargetPaths(t *testing.T) {
+	const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	body := strings.TrimSuffix(batchMigration, "}") + connectStringsJSON + "}"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(body))
+	})
+
+	m, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(m.Paths) != 2 {
+		t.Fatalf("paths = %d, want both of them: %+v", len(m.Paths), m.Paths)
+	}
+	// Order is the control plane's priority order and is preserved, for the
+	// reason lvol.Connection.Endpoints gives: the primary path is attached
+	// first.
+	if m.Paths[0].Address != "10.10.10.1" || m.Paths[1].Address != "10.10.10.2" {
+		t.Errorf("paths = %+v, want them in the order they arrived", m.Paths)
+	}
+	e := m.Paths[0]
+	if e.Transport != "tcp" || e.Port != 4420 || e.NrIOQueues != 8 ||
+		e.ReconnectDelaySec != 2 || e.KeepAliveTMOSec != 5 {
+		t.Errorf("path = %+v, want the connect parameters the control plane chose", e)
+	}
+	// Zero means "fail I/O immediately," which is a choice rather than a
+	// missing value, so both timeouts are pointers and both must survive.
+	if e.CtrlLossTMOSec == nil || *e.CtrlLossTMOSec != 60 {
+		t.Errorf("ctrl-loss-tmo = %v, want 60", e.CtrlLossTMOSec)
+	}
+	if e.FastIOFailTMOSec == nil || *e.FastIOFailTMOSec != 0 {
+		t.Errorf("fast-io-fail-tmo = %v, want 0", e.FastIOFailTMOSec)
+	}
+}
+
+// TestClientCreateMigrationNamesTheSubsystemThePathsLeadTo. A volume's
+// migration carries no target_nqn of its own, and the NQN is what a host
+// connects to, so without the one on the paths a caller would have the
+// addresses and nothing to ask for at them.
+func TestClientCreateMigrationNamesTheSubsystemThePathsLeadTo(t *testing.T) {
+	const target = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	body := strings.TrimSuffix(singleMigration, "}") + connectStringsJSON + "}"
+	c := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(body))
+	})
+
+	m, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Kind != MigrationOfVolume {
+		t.Fatalf("kind = %q, want a volume's migration", m.Kind)
+	}
+	if m.TargetNQN != "nqn.target" {
+		t.Errorf("target NQN = %q, want the one the paths lead to", m.TargetNQN)
+	}
+}
+
 // TestMigrationJSONShapesAreDistinguishable is the assumption the two above
 // rest on, asserted directly: the discriminating fields are present in one
 // shape and absent from the other, so neither decodes as the other by accident.
@@ -238,5 +318,101 @@ func TestMigrationJSONShapesAreDistinguishable(t *testing.T) {
 	}
 	if _, ok := single["member_count"]; ok {
 		t.Error("a volume's migration carries member_count, so the two cannot be told apart")
+	}
+}
+
+// answering is a control plane that answers every request with status and a
+// FastAPI-shaped body carrying detail.
+func answering(t *testing.T, status int, detail string) *Client {
+	t.Helper()
+	return newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		body, _ := json.Marshal(map[string]string{"detail": detail})
+		_, _ = w.Write(body)
+	})
+}
+
+// TestClientCreateMigrationNamesTheRefusal. Release 26.3 answers every refused
+// create with a 400 and leaves the reason in the wording, while later releases
+// answer the refusals that clear by themselves with a 409. A caller acts on
+// which refusal it was, so the client names it the same way for both, and still
+// hands back the control plane's answer for the words.
+func TestClientCreateMigrationNamesTheRefusal(t *testing.T) {
+	const target = "55555555-5555-5555-5555-555555555555"
+	cases := []struct {
+		name   string
+		status int
+		detail string
+		want   error
+	}{
+		{"a 409 is not yet", http.StatusConflict,
+			"An active migration for x already exists targeting a different node (y). Cancel it first.",
+			ErrMigrationBlocked},
+		{"a rebalancing cluster on 26.3 is not yet", http.StatusBadRequest,
+			"Cluster c is rebalancing; wait for it to finish before migrating", ErrMigrationBlocked},
+		{"a busy node on 26.3 is not yet", http.StatusBadRequest,
+			"Node n has a data migration in progress; wait for it to finish", ErrMigrationBlocked},
+		{"an active migration on 26.3 is not yet", http.StatusBadRequest,
+			"An active migration for x already exists targeting a different node (y). Cancel it first.",
+			ErrMigrationBlocked},
+		{"a volume on the target is already there", http.StatusBadRequest,
+			"LVol x is already on node " + target + "; cannot migrate to the same node",
+			ErrMigrationAlreadyOnTarget},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := answering(t, tc.status, tc.detail)
+			_, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want it to be %v", err, tc.want)
+			}
+			var answer *StatusError
+			if !errors.As(err, &answer) || !strings.Contains(answer.Body, tc.detail[:20]) {
+				t.Errorf("err = %v, want the control plane's answer kept", err)
+			}
+		})
+	}
+}
+
+// TestClientCreateMigrationLeavesOtherRefusalsUnnamed. A refusal no retry
+// changes must not read as one that clears by itself, or the caller waits on
+// it until a deadline instead of reporting it. The already-there wording
+// counts only for the node that was asked for.
+func TestClientCreateMigrationLeavesOtherRefusalsUnnamed(t *testing.T) {
+	const target = "55555555-5555-5555-5555-555555555555"
+	for _, detail := range []string{
+		"Cannot migrate to node " + target + ": it serves as the fallback source",
+		"LVol x is already on node 66666666-6666-6666-6666-666666666666; cannot migrate to the same node",
+	} {
+		c := answering(t, http.StatusBadRequest, detail)
+		_, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+		if err == nil || errors.Is(err, ErrMigrationBlocked) || errors.Is(err, ErrMigrationAlreadyOnTarget) {
+			t.Errorf("%q: err = %v, want a refusal named neither not-yet nor already-there", detail, err)
+		}
+	}
+}
+
+// Regression: SFAM-2824 — a cancel of a migration that had already failed was
+// answered with a 400 saying it is not active, and the operator read that as
+// the cancel having failed: it stopped unwinding the migration and left the
+// target paths connected on every consuming host. Both wordings are the control
+// plane's, one for a volume's migration and one for a subsystem's group.
+func TestClientCancelOfAnEndedMigrationIsNotActive(t *testing.T) {
+	for _, detail := range []string{
+		"Migration is not active (status=failed)",
+		"Group " + testMigration + " is not active (status=done)",
+	} {
+		c := answering(t, http.StatusBadRequest, detail)
+		err := c.CancelMigration(context.Background(), testCluster, testNQN, testMigration)
+		if !errors.Is(err, ErrMigrationNotActive) {
+			t.Errorf("%q: err = %v, want ErrMigrationNotActive", detail, err)
+		}
+	}
+
+	c := answering(t, http.StatusBadRequest, "LVolMigrationGroup g not found")
+	err := c.CancelMigration(context.Background(), testCluster, testNQN, testMigration)
+	if err == nil || errors.Is(err, ErrMigrationNotActive) {
+		t.Errorf("err = %v, want any other refusal reported as one", err)
 	}
 }

@@ -30,9 +30,15 @@ rules:
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshotcontents/status"]
     verbs: ["patch"]
+  # rbac-justified: createSnapshotsForGroupSnapshotContent materializes one
+  # member VolumeSnapshot per group member when a VolumeGroupSnapshot is taken
+  # (upstream external-snapshotter v8.2.0 grants the same); without "create"
+  # the group snapshot binds but never goes ReadyToUse. Cluster-scoped because
+  # a VolumeGroupSnapshot can live in any namespace and member names are
+  # generated hashes, so neither a namespaced Role nor resourceNames can hold.
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]
-    verbs: ["get", "list", "watch", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "update", "patch", "create", "delete"]
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots/status"]
     verbs: ["update", "patch"]

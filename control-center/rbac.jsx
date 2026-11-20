@@ -27,7 +27,7 @@ const ENTITY_OPS = {
   replicationpolicy: ["create", "read", "update", "delete"], backuppolicy: ["create", "read", "update", "delete"],
   drpolicy: ["create", "read", "update", "delete"], application: ["create", "read", "update", "delete", "failover", "failback", "fence"],
   role: ["read"], binding: ["create", "read", "delete"],
-  drhub: ["create", "read", "update", "delete", "failover", "relocate", "restart", "test", "override", "drrestore"]
+  drhub: ["create", "read", "update", "delete", "failover", "relocate", "restart", "test", "override", "drrestore", "approve", "rollback"]
 };
 // UI kind -> the main entity whose namespace governs it
 const KIND_ENTITY = {
@@ -41,7 +41,9 @@ const KIND_ENTITY = {
   // the DR hub's kinds (dr.simplyblock.io) — one entity, authorised by the
   // hub chart's dr-viewer / dr-operator / dr-admin roles
   pplan: "drhub", drpath: "drhub", papp: "drhub", rplan: "drhub", raction: "drhub", tbubble: "drhub", tsched: "drhub",
-  restore: "drhub", drconfig: "drhub", siteprofile: "drhub", dhcpserver: "drhub"
+  restore: "drhub", drconfig: "drhub", siteprofile: "drhub", dhcpserver: "drhub", sitedeploy: "drhub",
+  // AI-assisted discovery (ADR 0023)
+  dgraph: "drhub", drprop: "drhub", drun: "drhub"
 };
 // UI kind -> the CRD resource the API server checks (§3.5, the console's column)
 const KIND_RESOURCE = {
@@ -53,18 +55,26 @@ const KIND_RESOURCE = {
   plan: "protectionplans", method: "protectionplans", site: "drclusters", mpath: "protectionplans", appgroup: "protectionplans",
   protectedapp: "protectedapplications", role: "clusterroles", binding: "accessgrants", grant: "accessgrants",
   pplan: "protectionplans", drpath: "drpaths", papp: "protectedapplications", rplan: "recoveryplans", raction: "recoveryactions",
-  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles", dhcpserver: "dhcpservers"
+  tbubble: "testbubbles", tsched: "testschedules", restore: "restoreactions", drconfig: "drconfigs", siteprofile: "siteprofiles", dhcpserver: "dhcpservers", sitedeploy: "storagesitedeployments",
+  dgraph: "discoverygraphs", drprop: "drproposals", drun: "discoveryruns"
 };
 // UI kind -> API group, where it is not the default simplyblock group
 const KIND_GROUP = {pplan: "dr.simplyblock.io", drpath: "dr.simplyblock.io", papp: "dr.simplyblock.io", rplan: "dr.simplyblock.io",
   raction: "dr.simplyblock.io", tbubble: "dr.simplyblock.io", tsched: "dr.simplyblock.io", restore: "dr.simplyblock.io",
-  drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io", dhcpserver: "sitemap.simplyblock.io"};
-const ENTITY_GROUP = {drhub: "dr.simplyblock.io"};
+  drconfig: "dr.simplyblock.io", siteprofile: "sitemap.simplyblock.io", dhcpserver: "sitemap.simplyblock.io",
+  sitedeploy: "storage.simplyblock.io", dgraph: "dr.simplyblock.io", drprop: "dr.simplyblock.io", drun: "dr.simplyblock.io"};
+const ENTITY_GROUP = {drhub: "dr.simplyblock.io", labelrequest: "dr.simplyblock.io"};
+// Without the operator API the Kubernetes clusters are the hub's OCM
+// ManagedClusters (cpapi.jsx hubK8s), so reading them is a question about
+// that group, not the operator's proposed one.
+if (!upstreamOn("operator")) ENTITY_GROUP.k8scluster = "cluster.open-cluster-management.io";
 const ENTITY_RESOURCE = {k8scluster: "managedclusters", storagecluster: "storageclusters", storagepool: "storagepools", backupop: "backups",
   replicationpolicy: "replicationpolicies", backuppolicy: "backuppolicies", drpolicy: "drpolicies", application: "protectedapplications", role: "clusterroles", binding: "accessgrants",
-  drhub: "protectedapplications"};
+  drhub: "protectedapplications", labelrequest: "labelrequests"};
 const VERB_OF = {read: "get", create: "create", update: "update", delete: "delete", backup: "create", restoresource: "get",
-  failover: "create", relocate: "create", restart: "create", test: "create", drrestore: "create", override: "override"};
+  failover: "create", relocate: "create", restart: "create", test: "create", drrestore: "create", override: "override",
+  // a bundle's fallback approval and rollback: custom verbs dr-hub's webhook checks
+  approve: "approve", rollback: "rollback"};
 
 // ---- the store ---------------------------------------------------------------
 const AC_STATE = {ready: false, user: null, groups: [], initials: "??", label: "", rules: {cluster: [], ns: {}}, incomplete: false,
@@ -85,7 +95,7 @@ async function loadAccessK8s() {
   const norm = (rules.resourceRules || []).map(r => ({apiGroups: r.apiGroups || [""], resources: r.resources || [], verbs: r.verbs || [], resourceNames: r.resourceNames}));
   const user = who.username || null;
   Object.assign(AC_STATE, {ready: true, error: null, user, groups: who.groups || [], initials: initialsOf(user), label: user,
-    rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: []});
+    rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: [], k8sRules: true});
 }
 
 async function loadAccess() {
@@ -94,7 +104,7 @@ async function loadAccess() {
     const r = await api.accessSelf();
     Object.assign(AC_STATE, {ready: true, error: null, user: r.user, groups: r.groups || [], initials: r.initials || "??", label: r.label || r.user,
       rules: r.rules || {cluster: [], ns: {}}, incomplete: !!r.incomplete, grants: r.grants || [], scopes: r.scopes || null,
-      ns: (r.scopes && r.scopes.ns) || AC_STATE.ns, demoUsers: r.demo_users || []});
+      ns: (r.scopes && r.scopes.ns) || AC_STATE.ns, demoUsers: r.demo_users || [], k8sRules: false});
   } catch (e) {
     // no operator API (or it has no access view): the Kubernetes API is the truth
     try { await loadAccessK8s(); }
@@ -120,6 +130,8 @@ function nsOf(entity, o, op) {
   }
   if (entity === "storagecluster" || entity === "backuppolicy") return clusterIdsOf(o).map(id => N.clusters[id]).filter(Boolean);
   if (entity === "replicationpolicy" || entity === "drpolicy") return [N.dr];
+  // a LabelRequest is created in the DR ops namespace
+  if (entity === "labelrequest") return [N.dr];
   // DR hub kinds: namespaced ones are judged in their own namespace, cluster-scoped ones at cluster scope
   if (entity === "drhub") return o.namespace ? [o.namespace] : ["*"];
   if (entity === "application") {
@@ -137,10 +149,7 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-// the storage kinds live in storage.simplyblock.io; the bare simplyblock.io
-// group is accepted for fixtures written against the earlier design
-const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || window.GROUP || "storage.simplyblock.io")
-    || (!group && (r.apiGroups || []).includes("simplyblock.io")) || (r.apiGroups || []).includes("*"))
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*"))
   && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*"))
   && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {
@@ -151,7 +160,15 @@ function allowedIn(ns, verb, resource, group, name) {
 const anyNs = (verb, resource, group, name) => allowedIn("*", verb, resource, group, name) || Object.keys(AC_STATE.rules.ns).some(n => allowedIn(n, verb, resource, group, name));
 
 // what (verb, resource) does (op, entity) become?
+// Storage entities the operator's access model splits into proposed resources
+// (volumes, snapshots, devices, ...). With the API server's own rules there is
+// no such split: the console reads storage through CRDs or the control plane
+// with its own identity, so reading any of it is "get storageclusters" in the
+// real group — the rule the console role grants.
+const K8S_STORAGE_READ = new Set(["storagecluster", "storagepool", "backupop", "backuppolicy"]);
 function target(op, entity, obj) {
+  if (AC_STATE.k8sRules && op === "read" && K8S_STORAGE_READ.has(entity))
+    return {verb: "get", resource: "storageclusters", group: "storage.simplyblock.io"};
   if (entity === "drhub") {
     const group = "dr.simplyblock.io";
     if (op === "failover" || op === "relocate" || op === "restart") return {verb: "create", resource: "recoveryactions", group};

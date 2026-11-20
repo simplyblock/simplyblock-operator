@@ -1,0 +1,1 @@
+wrote discovered-discover-pci-10 in Draft: 5 workers with 16 nvme devices, in 3 group(s) across 1 node set(s); 0 refusal(s)

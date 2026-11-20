@@ -1,0 +1,1781 @@
+"""Driver and workload tests.
+
+These cover the decisions the driver makes on its own — which node to migrate to, which
+volumes move together, what a non-terminal poll means — because those are the parts that
+silently produce a *valid-looking* run when they are wrong. A driver that always picks the
+same target still completes migrations and still reports PASS; the run just never exercised
+the case it claimed to.
+
+Everything here fakes kubectl at the module boundary. That is the whole point of routing
+cluster access through one `kube.run`: the logic above it stays testable without a cluster.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import unittest
+from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from unittest import mock
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import sbtest  # noqa: E402,F401
+from sbtest.components import (  # noqa: E402
+    chaos,
+    kube,
+    logs,
+    migration,
+    nfs,
+    nvme,
+    reservations,
+    versions,  # noqa: E402
+)
+from sbtest.components.workloads import fio, pnfs_rwx, volumemigration  # noqa: E402
+from sbtest.core import Logger, Migration, RunContext  # noqa: E402
+
+
+def _cp(stdout: str = "", rc: int = 0) -> subprocess.CompletedProcess[str]:
+    return subprocess.CompletedProcess(args=["kubectl"], returncode=rc, stdout=stdout,
+                                       stderr="")
+
+
+def _nodes_json(*specs: tuple[str, str, str]) -> str:
+    """specs: (UUID, Kubernetes host, status). Each node is named after its host, in namespace sb."""
+    return json.dumps({"items": [
+        {"metadata": {"namespace": "sb", "name": f"node-{host}"},
+         "spec": {"workerNode": host}, "status": {"uuid": uuid, "status": status}}
+        for uuid, host, status in specs]})
+
+
+class _FakeKube:
+    """Records every kubectl invocation and answers from a scripted table."""
+
+    def __init__(self, answers: dict[str, str] | None = None) -> None:
+        self.calls: list[list[str]] = []
+        self.stdins: list[str | None] = []
+        self.answers = answers or {}
+
+    def run(self, args: list[str], timeout: int = 60, check: bool = True,
+            stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+        self.calls.append(list(args))
+        self.stdins.append(stdin)
+        for key, out in self.answers.items():
+            if key in " ".join(args):
+                return _cp(out)
+        return _cp("")
+
+
+class _Ctx:
+    """A RunContext with a real temp dir, for components that write artifacts."""
+
+    def __enter__(self) -> RunContext:
+        self._d = tempfile.TemporaryDirectory()
+        self.ctx = RunContext(run_id="run1", outdir=self._d.__enter__(), log=Logger(None))
+        return self.ctx
+
+    def __exit__(self, *exc: object) -> None:
+        self._d.__exit__(*exc)  # type: ignore[arg-type]
+
+
+class TargetPolicy(unittest.TestCase):
+    """The policy decides whether the target also hosts a consumer — the harder case."""
+
+    def _driver(self, ctx: RunContext, policy: str,
+                consumers: dict[str, list[str]]) -> migration.MigrationDriver:
+        d = migration.MigrationDriver(target_policy=policy)
+        d._nodes = ["uuid-a", "uuid-b", "uuid-c"]
+        d._node_host = {"uuid-a": "vm02", "uuid-b": "vm03", "uuid-c": "vm04"}
+        # pv -> pod -> node, which is how the driver learns where consumers run.
+        ctx.shared["workload.pod_of"] = {"pv1": "fio-0"}
+        ctx.shared["workload.node_of"] = {"fio-0": next(iter(consumers), "")}
+        return d
+
+    def test_consumer_policy_picks_a_node_running_a_consumer(self):
+        with _Ctx() as ctx:
+            d = self._driver(ctx, "consumer", {"vm03": ["fio-0"]})
+            target, policy, named = d._pick_target(ctx, ["pv1"], idx=1, source="uuid-a")
+            self.assertEqual(target, "uuid-b")     # vm03, where fio-0 runs
+            self.assertEqual(policy, "consumer")
+            self.assertEqual(named, ["fio-0"])
+
+    def test_no_consumer_policy_avoids_it(self):
+        with _Ctx() as ctx:
+            d = self._driver(ctx, "no-consumer", {"vm03": ["fio-0"]})
+            target, policy, named = d._pick_target(ctx, ["pv1"], idx=1, source="uuid-a")
+            self.assertEqual(target, "uuid-c")     # vm04: the only other non-consumer
+            self.assertEqual(policy, "no-consumer")
+            self.assertEqual(named, [])
+
+    def test_alternate_starts_with_the_harder_case(self):
+        """Odd migrations get `consumer`, so a run cut short still exercised it."""
+        with _Ctx() as ctx:
+            d = self._driver(ctx, "alternate", {"vm03": ["fio-0"]})
+            _, first, _ = d._pick_target(ctx, ["pv1"], idx=1, source="uuid-a")
+            _, second, _ = d._pick_target(ctx, ["pv1"], idx=2, source="uuid-a")
+            self.assertEqual(first, "consumer")
+            self.assertEqual(second, "no-consumer")
+
+    def test_unmet_policy_falls_back_and_says_so(self):
+        """A migration under the other condition is still evidence; skipping it is not.
+
+        The recorded policy has to show it was unmet, or the run's own record claims a case
+        it never exercised.
+        """
+        with _Ctx() as ctx:
+            d = self._driver(ctx, "consumer", {})   # no consumer anywhere
+            target, policy, _ = d._pick_target(ctx, ["pv1"], idx=1, source="uuid-a")
+            self.assertIn(target, ("uuid-b", "uuid-c"))
+            self.assertEqual(policy, "consumer(unmet)")
+
+    def test_the_source_is_never_the_target(self):
+        with _Ctx() as ctx:
+            d = self._driver(ctx, "random", {})
+            for _ in range(20):
+                target, _, _ = d._pick_target(ctx, ["pv1"], idx=1, source="uuid-a")
+                self.assertNotEqual(target, "uuid-a")
+
+    def test_consumers_are_counted_across_the_whole_subsystem(self):
+        """Every pod holding any namespace of the subsystem has its paths moved."""
+        with _Ctx() as ctx:
+            d = migration.MigrationDriver(target_policy="consumer")
+            d._nodes = ["uuid-a", "uuid-b"]
+            d._node_host = {"uuid-a": "vm02", "uuid-b": "vm03"}
+            ctx.shared["workload.pod_of"] = {"pv1": "fio-0", "pv2": "fio-1"}
+            ctx.shared["workload.node_of"] = {"fio-0": "vm02", "fio-1": "vm03"}
+            _, _, named = d._pick_target(ctx, ["pv1", "pv2"], idx=1, source="uuid-a")
+            self.assertEqual(named, ["fio-1"])   # the sibling on the target counts
+
+
+class Grouping(unittest.TestCase):
+    """A migration moves the whole subsystem, so the group is what must be tracked."""
+
+    def test_group_is_the_shared_subsystem(self):
+        d = migration.MigrationDriver()
+        d._nqn_of = {"pv1": "nqn.a", "pv2": "nqn.a", "pv3": "nqn.b"}
+        d._groups = d._regroup()
+        self.assertEqual(d._group_of("pv1"), ["pv1", "pv2"])
+        self.assertEqual(d._group_of("pv3"), ["pv3"])
+
+    def test_an_unknown_subsystem_migrates_alone(self):
+        d = migration.MigrationDriver()
+        self.assertEqual(d._group_of("pv9"), ["pv9"])
+
+    def test_a_changed_subsystem_regroups(self):
+        """A previous migration can repack the subsystems; a stale group samples the wrong
+        nodes and verifies the wrong volumes."""
+        class FakeSb:
+            def subsystem_of(self, lvol: str) -> tuple[str, int]:
+                return "nqn.new", 1
+
+        with _Ctx() as ctx:
+            d = migration.MigrationDriver()
+            d._sb = FakeSb()  # type: ignore[assignment]
+            d._volume_of = {"pv1": "lvol-1"}
+            d._nqn_of = {"pv1": "nqn.old", "pv2": "nqn.old"}
+            d._groups = d._regroup()
+            self.assertEqual(d._group_of("pv1"), ["pv1", "pv2"])
+            d._reread_subsystem(ctx, "pv1")
+            self.assertEqual(d._nqn_of["pv1"], "nqn.new")
+            self.assertEqual(d._group_of("pv1"), ["pv1"])   # no longer with pv2
+
+
+class PollLoop(unittest.TestCase):
+    def test_terminal_phase_ends_the_wait(self):
+        fake = _FakeKube({"get persistentvolumeops": json.dumps(
+            {"status": {"phase": "Succeeded",
+                        "migration": {"sourceNodeUUID": "uuid-real"}}})})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run):
+            d = migration.MigrationDriver(poll_s=0.01, timeout_s=2.0)
+            rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1", source="uuid-guess")
+            d._await_terminal(ctx, rec, "m1", sampler=None)
+        self.assertEqual(rec.phase, "Succeeded")
+        self.assertEqual(rec.error, "")
+        self.assertIsNotNone(rec.end)
+        # The operator's resolved source overrides the driver's guess.
+        self.assertEqual(rec.source, "uuid-real")
+        # Cluster-scoped: the get carries no namespace.
+        self.assertNotIn("-n", fake.calls[0])
+
+    def test_a_failed_operation_records_its_message(self):
+        fake = _FakeKube({"get persistentvolumeops": json.dumps(
+            {"status": {"phase": "Failed", "message": "target node is offline"}})})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run):
+            d = migration.MigrationDriver(poll_s=0.01, timeout_s=2.0)
+            rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
+            d._await_terminal(ctx, rec, "m1", sampler=None)
+        self.assertEqual(rec.phase, "Failed")
+        self.assertEqual(rec.error, "target node is offline")
+
+    def test_never_reaching_a_terminal_phase_is_a_timeout_not_a_failure(self):
+        """A rejected migration and one that never finished are different defects, and only
+        one of them has an error to read."""
+        fake = _FakeKube({"get persistentvolumeops": json.dumps(
+            {"status": {"phase": "Running", "step": {"state": "Migrating"}}})})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run):
+            d = migration.MigrationDriver(poll_s=0.01, timeout_s=0.05)
+            rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
+            d._await_terminal(ctx, rec, "m1", sampler=None)
+        self.assertEqual(rec.phase, "TIMEOUT")
+        self.assertEqual(rec.error, "")
+
+    def test_steps_and_phases_reach_the_sampler_and_the_timeline(self):
+        """A running operation is reported by its step, which is what says where it is."""
+        class Sampler:
+            def __init__(self) -> None:
+                self.phases: list[str] = []
+
+            def set_phase(self, p: str) -> None:
+                self.phases.append(p)
+
+        seq = [json.dumps({"status": st}) for st in (
+            {"phase": "Pending"},
+            {"phase": "Running", "step": {"state": "Validating"}},
+            {"phase": "Running", "step": {"state": "Validating"}},
+            {"phase": "Running", "step": {"state": "Migrating"}},
+            {"phase": "Succeeded", "step": {"state": "Verifying"}})]
+
+        def run(args: list[str], timeout: int = 60, check: bool = True,
+                stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+            return _cp(seq.pop(0) if seq else "")
+
+        s = Sampler()
+        with _Ctx() as ctx, _patch(kube, "run", run):
+            d = migration.MigrationDriver(poll_s=0.01, timeout_s=2.0)
+            rec = Migration(name="m1", start=datetime.now(UTC), pv="pv1")
+            d._await_terminal(ctx, rec, "m1", sampler=s)
+        # Deduplicated: only transitions, not every poll.
+        want = ["Pending", "Validating", "Migrating", "Succeeded"]
+        self.assertEqual(s.phases, want)
+        self.assertEqual([e.data["phase"] for e in ctx.timeline.of_kind("migration.phase")],
+                         want)
+        self.assertEqual(rec.phase, "Succeeded")
+
+
+class Manifest(unittest.TestCase):
+    def test_the_cr_is_a_migrate_pvops_naming_the_target_node_object(self):
+        d = migration.MigrationDriver()
+        d._node_ref = {"uuid-b": {"namespace": "sb", "name": "node-vm03"}}
+        m = json.loads(d._manifest("run1", "run1-mig-3", "pvc-abc", "uuid-b"))
+        self.assertEqual(m["apiVersion"], "storage.simplyblock.io/v1alpha2")
+        self.assertEqual(m["kind"], "PersistentVolumeOps")
+        self.assertNotIn("namespace", m["metadata"])
+        self.assertEqual(m["spec"], {
+            "persistentVolumeName": "pvc-abc", "action": "Migrate",
+            "migrate": {"targetNodeRef": {"namespace": "sb", "name": "node-vm03"}}})
+
+    def test_the_cr_carries_the_run_labels_so_teardown_can_find_it(self):
+        d = migration.MigrationDriver()
+        d._node_ref = {"uuid-b": {"namespace": "sb", "name": "node-vm03"}}
+        m = json.loads(d._manifest("run1", "run1-mig-3", "pvc-abc", "uuid-b"))
+        self.assertEqual(m["metadata"]["labels"]["sbtest-run"], "true")
+        self.assertEqual(m["metadata"]["labels"]["sbtest-run-id"], "run1")
+
+    def test_teardown_deletes_only_this_runs_operations(self):
+        """The kind is cluster-scoped, so a run label alone would reach other runs' CRs."""
+        fake = _FakeKube()
+        with _Ctx() as ctx, _patch(kube, "run", fake.run):
+            migration.MigrationDriver().teardown(ctx)
+        self.assertEqual(len(fake.calls), 1)
+        call = fake.calls[0]
+        self.assertEqual(call[:2], ["delete", "persistentvolumeops"])
+        self.assertIn("sbtest-run=true,sbtest-run-id=run1", call)
+        self.assertNotIn("-n", call)
+
+    def test_online_nodes_only(self):
+        """Migrating to an offline node is a rejected request, not a test."""
+        fake = _FakeKube({"get storagenodes": _nodes_json(
+            ("uuid-a", "vm02", "online"), ("uuid-b", "vm03", "offline"),
+            ("uuid-c", "vm04", "online"))})
+        with _patch(kube, "run", fake.run):
+            uuids, hosts, refs = migration.MigrationDriver()._storage_nodes()
+        self.assertEqual(uuids, ["uuid-a", "uuid-c"])
+        self.assertEqual(hosts["uuid-c"], "vm04")
+        self.assertEqual(refs["uuid-c"], {"namespace": "sb", "name": "node-vm04"})
+
+
+class SetupGuards(unittest.TestCase):
+    def test_one_node_cannot_be_migrated_between(self):
+        fake = _FakeKube({"get storagenodes": _nodes_json(("uuid-a", "vm02", "online"))})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run), \
+                self.assertRaises(RuntimeError) as e:
+            migration.MigrationDriver().setup(ctx)
+        self.assertIn("at least two", str(e.exception))
+
+    def test_no_volumes_is_an_explicit_error_not_an_empty_run(self):
+        """Silently migrating nothing would report PASS for a test that never ran."""
+        fake = _FakeKube({"get storagenodes": _nodes_json(
+            ("uuid-a", "vm02", "online"), ("uuid-b", "vm03", "online"))})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run), \
+                self.assertRaises(RuntimeError) as e:
+            migration.MigrationDriver().setup(ctx)
+        self.assertIn("no volumes to migrate", str(e.exception))
+
+
+class Persistence(unittest.TestCase):
+    def test_migrations_round_trip_through_the_file(self):
+        """What the driver writes is what the analyser reads — the seam that lets a run be
+        re-judged later against a detector that did not exist when it ran."""
+        with _Ctx() as ctx:
+            d = migration.MigrationDriver()
+            start = datetime.now(UTC).replace(microsecond=0)
+            d._records = [Migration(name="run1-mig-1", start=start,
+                                    end=start + timedelta(seconds=42), phase="Completed",
+                                    source="uuid-a", target="uuid-b", pv="pv1", pod="fio-0",
+                                    members=["pv1", "pv2"]),
+                          Migration(name="run1-mig-2", start=start + timedelta(minutes=1),
+                                    phase="TIMEOUT", pv="pv3")]
+            d._nqn_of = {"pv1": "nqn.a"}
+            d.collect(ctx)
+            back = migration.migrations_from_file(os.path.join(ctx.outdir,
+                                                               "migrations.json"))
+        self.assertEqual([m.name for m in back], ["run1-mig-1", "run1-mig-2"])
+        self.assertEqual(back[0].members, ["pv1", "pv2"])
+        self.assertTrue(back[0].batch)
+        self.assertEqual(back[0].phase, "Completed")
+        self.assertIsNotNone(back[0].end)
+        assert back[0].end is not None
+        self.assertEqual((back[0].end - back[0].start).total_seconds(), 42)
+        self.assertIsNone(back[1].end)
+
+    def test_a_record_without_a_start_is_dropped_rather_than_guessed(self):
+        with _Ctx() as ctx:
+            p = os.path.join(ctx.outdir, "migrations.json")
+            with open(p, "w") as fh:
+                json.dump([{"name": "broken", "phase": "Completed"}], fh)
+            self.assertEqual(migration.migrations_from_file(p), [])
+
+
+class WorkloadFio(unittest.TestCase):
+    def test_verification_is_off_when_it_cannot_be_trusted(self):
+        """numjobs>1 cannot serialize overlapping writes, so verify would report corruption
+        that never happened. A throughput run must not look like an integrity run."""
+        with _Ctx() as ctx:
+            single = volumemigration.VolumeMigrationWorkload(numjobs=1, iodepth=8)._fio_script(ctx)
+            multi = volumemigration.VolumeMigrationWorkload(numjobs=4, iodepth=8)._fio_script(ctx)
+        self.assertIn("--verify=md5", single)
+        self.assertIn("--serialize_overlap=1", single)
+        self.assertNotIn("--verify=md5", multi)
+
+    def test_verify_is_not_fatal_by_default_so_every_bad_block_is_counted(self):
+        with _Ctx() as ctx:
+            s = volumemigration.VolumeMigrationWorkload(numjobs=1)._fio_script(ctx)
+        self.assertIn("--verify_fatal=0", s)
+
+    def test_the_file_stays_inside_the_volume(self):
+        with _Ctx() as ctx:
+            s = volumemigration.VolumeMigrationWorkload(volume_size_gb=10, file_size_gb=50)._fio_script(ctx)
+        self.assertIn("--size=8G", s)   # 10 - 2 of filesystem headroom
+
+    def test_logs_live_off_the_volume_under_test(self):
+        """Collecting the evidence must not depend on the health of what it is about."""
+        with _Ctx() as ctx:
+            s = volumemigration.VolumeMigrationWorkload()._fio_script(ctx)
+        self.assertIn("--output=/logs/result.json", s)
+        self.assertIn("--filename=/data/fiotest", s)
+
+    def test_timeseries_is_written_where_the_analyser_reads_it(self):
+        raw = "\n".join([
+            "1000, 500, 0, 4096",     # 1s: 500 read
+            "1000, 100, 1, 4096",     # 1s: 100 write
+            "2000, 400, 0, 4096",
+        ])
+        start = datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC)
+        migs = [Migration(name="mig-1", start=start + timedelta(seconds=1),
+                          end=start + timedelta(seconds=1), pv="pv1")]
+        with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
+            ctx.mark_window(start=start)
+            w = volumemigration.VolumeMigrationWorkload()
+            d = ctx.dir("fio-0")
+            w._write_timeseries(ctx, "default", "fio-0", d, migs)
+            with open(os.path.join(d, "timeseries.csv")) as fh:
+                rows = list(__import__("csv").DictReader(fh))
+        self.assertEqual(rows[0]["second"], "1")
+        self.assertEqual(float(rows[0]["total_iops"]), 600.0)
+        self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:00:01Z")
+        # The migration column is the point: it makes a dip attributable.
+        self.assertEqual(rows[0]["active_migration"], "mig-1")
+        self.assertEqual(rows[1]["active_migration"], "")
+
+    def test_the_analyser_reads_back_what_the_workload_wrote(self):
+        """Guards the column-name seam. Reading only fio's own names silently placed every
+        sample at offset 0 — the series stayed the right length with the whole run collapsed
+        onto one instant, so nothing looked like a parse failure."""
+        from sbtest.adapters import ArchiveEvidence
+        raw = "1000, 500, 0, 4096\n2000, 400, 0, 4096"
+        with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
+            ctx.mark_window(start=datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC))
+            volumemigration.VolumeMigrationWorkload()._write_timeseries(
+                ctx, "default", "run1-fio-0", ctx.dir("run1-fio-0"), [])
+            series = ArchiveEvidence(ctx.outdir).fio_timeseries("run1-fio-0")
+        self.assertEqual([s.offset_s for s in series], [1, 2])
+        self.assertEqual([s.total_iops for s in series], [500.0, 400.0])
+        self.assertIsNotNone(series[0].wall)
+
+    def test_the_clock_comes_from_fio_not_from_the_run(self):
+        """fio counts from its own launch, which is minutes after the run's start: the PVCs,
+        the pods and the fio processes all have to exist first. Basing the wall clock on the
+        run shifts every sample by that gap and hands an outage to the wrong migration."""
+        raw = "1000, 500, 0, 4096"
+        run_start = datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC)
+        fio_start = run_start + timedelta(seconds=180)
+        # The migration ran while fio was running, i.e. nowhere near the run's own start.
+        migs = [Migration(name="mig-1", start=fio_start, end=fio_start + timedelta(seconds=30))]
+        with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
+            ctx.mark_window(start=run_start)
+            d = ctx.dir("fio-0")
+            with open(os.path.join(d, "result.json"), "w") as fh:
+                json.dump({"jobs": [{"job_start": int(fio_start.timestamp() * 1000)}]}, fh)
+            volumemigration.VolumeMigrationWorkload()._write_timeseries(ctx, "default", "fio-0", d, migs)
+            with open(os.path.join(d, "timeseries.csv")) as fh:
+                rows = list(__import__("csv").DictReader(fh))
+        self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:03:01Z")
+        self.assertEqual(rows[0]["active_migration"], "mig-1")
+
+    def test_a_result_without_job_start_falls_back_to_the_run(self):
+        """A wrong base still beats an empty wall_clock column — but it is reported."""
+        raw = "1000, 500, 0, 4096"
+        with _Ctx() as ctx, _patch(kube, "exec_sh", lambda *a, **k: raw):
+            ctx.mark_window(start=datetime(2026, 8, 20, 9, 0, 0, tzinfo=UTC))
+            d = ctx.dir("fio-0")
+            with open(os.path.join(d, "result.json"), "w") as fh:
+                json.dump({"jobs": [{}]}, fh)
+            volumemigration.VolumeMigrationWorkload()._write_timeseries(ctx, "default", "fio-0", d, [])
+            with open(os.path.join(d, "timeseries.csv")) as fh:
+                rows = list(__import__("csv").DictReader(fh))
+        self.assertEqual(rows[0]["wall_clock"], "2026-08-20T09:00:01Z")
+
+    def test_the_analyser_re_derives_the_base_from_fio(self):
+        """Replay has to correct archives written before the base was fixed: the wall_clock
+        column is only as right as whatever wrote it, and job_start is right by
+        construction."""
+        from sbtest.adapters import ArchiveEvidence
+        fio_start = datetime(2026, 8, 20, 9, 3, 0, tzinfo=UTC)
+        with _Ctx() as ctx:
+            d = ctx.dir("run1-fio-0")
+            with open(os.path.join(d, "result.json"), "w") as fh:
+                json.dump({"jobs": [{"job_start": int(fio_start.timestamp() * 1000)}]}, fh)
+            with open(os.path.join(d, "timeseries.csv"), "w") as fh:
+                fh.write("second,wall_clock,total_iops\n"
+                         "1,2026-08-20T09:00:01Z,500.0\n")   # the pre-fix, run-based clock
+            series = ArchiveEvidence(ctx.outdir).fio_timeseries("run1-fio-0")
+        self.assertEqual(series[0].wall, fio_start + timedelta(seconds=1))
+
+    def test_the_wall_clock_column_is_used_when_fio_says_nothing(self):
+        from sbtest.adapters import ArchiveEvidence
+        with _Ctx() as ctx:
+            d = ctx.dir("run1-fio-0")
+            with open(os.path.join(d, "timeseries.csv"), "w") as fh:
+                fh.write("second,wall_clock,total_iops\n1,2026-08-20T09:00:01Z,500.0\n")
+            series = ArchiveEvidence(ctx.outdir).fio_timeseries("run1-fio-0")
+        self.assertEqual(series[0].wall, datetime(2026, 8, 20, 9, 0, 1, tzinfo=UTC))
+
+    def test_a_workload_with_no_pods_is_refused(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            volumemigration.VolumeMigrationWorkload(pods=0, ns_pods=0)._documents(ctx)
+        self.assertIn("no I/O", str(e.exception))
+
+
+MOUNTSTATS = """device rootfs mounted on / with fstype rootfs
+device 10.5.0.9:/other mounted on /other with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tper-op statistics
+\t       WRITE: 900 900 0 1 2 3 4 5 0
+\t   LAYOUTGET: 0 0 0 0 0 0 0 0 0
+device 10.5.0.2:/ mounted on /data with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tper-op statistics
+\t        READ: 2 2 0 1 2 3 4 5 0
+\t       WRITE: 0 0 0 0 0 0 0 0 0
+\t   LAYOUTGET: 3 3 0 600 400 1 2 3 0
+\tLAYOUTCOMMIT: 1 1 0 300 200 1 1 2 0
+"""
+
+
+class NfsMountstats(unittest.TestCase):
+    def test_counts_come_from_the_named_mount_only(self):
+        """A node can carry several NFS mounts; counts belong to the header above them."""
+        ops = nfs.mount_ops(MOUNTSTATS, "/data")
+        self.assertEqual(ops, {"READ": 2, "WRITE": 0, "LAYOUTGET": 3, "LAYOUTCOMMIT": 1})
+
+    def test_a_mountpoint_that_prefixes_another_does_not_match(self):
+        self.assertIsNone(nfs.mount_ops(MOUNTSTATS, "/dat"))
+
+    def test_a_missing_mount_is_none_not_zero_counts(self):
+        """Zero counts would read as "pNFS did no I/O" rather than "not measured"."""
+        self.assertIsNone(nfs.mount_ops(MOUNTSTATS, "/absent"))
+
+
+class NvmeIostat(unittest.TestCase):
+    """The client side of a pNFS write: the NVMe-oF namespace on the client worker itself."""
+
+    def test_head_devices_are_read_and_per_path_devices_skipped(self):
+        """nvmeXcYnZ is one path of a multipath namespace; the head nvmeXnY carries the
+        namespace's total, so counting both would double every byte."""
+        out = ("nvme0n1|0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90|"
+               "  100 0 800 5 40 0 320 9 0 0 0 0 0 0 0 0 0\n"
+               "nvme0c0n1|0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90|"
+               "  100 0 800 5 40 0 320 9 0 0 0 0 0 0 0 0 0\n"
+               "nvme1n1||  1 0 8 0 1 0 8 0 0 0 0 0 0 0 0 0 0\n")
+        ts = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        got = nvme.parse_iostat("worker-1", ts, out)
+        self.assertEqual(len(got), 1)
+        s = got[0]
+        self.assertEqual((s.node, s.device, s.uuid), ("worker-1", "nvme0n1",
+                                                       "0f2ac1d3-9b7e-4c21-8a55-6d4e3f1b2c90"))
+        self.assertEqual((s.read_ios, s.read_sectors, s.write_ios, s.write_sectors),
+                         (100, 800, 40, 320))
+
+    def test_samples_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        ts = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        samples = nvme.parse_iostat("worker-1", ts, "nvme0n1|u1|1 0 8 0 2 0 16 0 0 0 0\n")
+        with _Ctx() as ctx:
+            nvme.write_iostat(ctx.path("iostat.csv"), samples)
+            back = ArchiveEvidence(ctx.outdir).block_samples()
+        self.assertEqual(back, samples)
+
+
+class NvmeIostatAcrossARestart(unittest.TestCase):
+    """chaos.restart replaces the node plugin the sampler reads a host through. A sampler that
+    kept the old pod's name would read nothing for the rest of the run, and the node it
+    stopped measuring would look idle exactly when its recovery is being judged."""
+
+    OUT = "nvme0n1|u1|1 0 8 0 2 0 16 0 0 0 0\nsbtest-iostat-ok\n"
+
+    def test_a_replaced_node_plugin_is_found_and_read_again(self):
+        live = {"csi-node-new"}
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return self.OUT if pod in live else ""
+
+        pods = [kube.Pod(name="csi-node-new", namespace="simplyblock", node="worker-1",
+                         containers=("csi-node",), phase="Running")]
+        sampler = nvme.IostatSampler()
+        sampler._pods = {"worker-1": "csi-node-old"}
+        with mock.patch.object(kube, "exec_sh", exec_sh), \
+                mock.patch.object(kube, "list_pods", lambda *a, **k: pods):
+            sampler._sample()
+        self.assertEqual(sampler._pods, {"worker-1": "csi-node-new"})
+        self.assertEqual(len(sampler._samples), 1)
+        self.assertEqual(calls, ["csi-node-old", "csi-node-new"])
+
+
+class RestartLogs(unittest.TestCase):
+    """A restarted pod's log is evidence of the moment that matters, and kubelet deletes it
+    with the pod. logs.collect only finds what still exists at the end of the run."""
+
+    def test_the_metadata_server_log_is_collected(self):
+        targets = logs.LogCollect().opt("targets")
+        self.assertTrue(any(any("pnfs-mds" in p for p in t["pods"]) for t in targets),
+                        targets)
+
+    def test_a_restart_follows_the_victims_log_before_deleting_it(self):
+        order: list[str] = []
+
+        class Proc:
+            def __init__(self, args: list[str], **kw: object) -> None:
+                order.append("follow " + " ".join(args))
+
+            def wait(self, timeout: float | None = None) -> int:
+                return 0
+
+            def poll(self) -> int:
+                return 0
+
+            def kill(self) -> None: ...
+
+        def run(args: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            order.append("kubectl " + " ".join(args))
+            return subprocess.CompletedProcess(args, 0, "", "")
+
+        victim = kube.Pod(name="simplyblock-pnfs-mds-x-0", namespace="simplyblock",
+                          node="worker-1", containers=("mds-runner",), phase="Running")
+        r = chaos.Restarter(ready_timeout_s=5)
+        with _Ctx() as ctx, mock.patch.object(chaos.Restarter, "_victim", lambda *a: victim), \
+                mock.patch.object(chaos.Restarter, "_replacement",
+                                  lambda *a: ("simplyblock-pnfs-mds-x-0", "")), \
+                mock.patch.object(kube, "run", run), \
+                mock.patch.object(chaos.subprocess, "Popen", Proc):
+            r.bind_namespaces(ctx)
+            r._restart(ctx, "mds")
+            r.collect(ctx)
+            with open(ctx.path("restarts.json")) as fh:
+                record = json.load(fh)["restarts"][0]
+        follow = next(i for i, o in enumerate(order) if o.startswith("follow "))
+        delete = next(i for i, o in enumerate(order) if " delete pod " in o)
+        self.assertLess(follow, delete, order)
+        self.assertIn("logs -f simplyblock-pnfs-mds-x-0 --all-containers", order[follow])
+        self.assertEqual(record["log"], "restart-1-mds-simplyblock-pnfs-mds-x-0.txt")
+
+
+class ChurnPodSpec(unittest.TestCase):
+    """A churn pod is found by its own label, never by workload.pnfs's, and leaves its
+    evidence where the fio detectors read it."""
+
+    def test_a_churn_pod_is_labeled_for_churn_and_not_as_a_pnfs_fio_pod(self):
+        from sbtest.components.workloads import churn
+        w = churn.ChurnWorkload()
+        inst = fio.FioInstance(pod="run1-churn-1", container="fio-0",
+                               filename="/data/run1-churn-1.fio", logdir="/logs/c0",
+                               evidence="run1-fio-churn-1")
+        with _Ctx() as ctx:
+            doc = w._pod(ctx, inst, "run1-pnfs-shared-0", 90.0)
+        labels = doc["metadata"]["labels"]
+        self.assertNotIn("app", labels)
+        self.assertEqual(labels[churn.CHURN_LABEL], "run1")
+        self.assertEqual(labels["sbtest"], "run1")
+        script = doc["spec"]["containers"][0]["command"][-1]
+        self.assertIn("--runtime=90", script)
+        self.assertIn("--verify=md5", script)
+        self.assertIn("-fio-", inst.evidence)
+
+
+class ChurnGoneTiming(unittest.TestCase):
+    """How long a deleted own volume took to go is measured while the run goes on, not at
+    collection. Checked only at the end, every volume read as about as old as the run:
+    pnfs-1791662135 reported 3653s for a volume the provisioner deleted within minutes."""
+
+    def test_a_volume_gone_early_keeps_the_time_it_went(self):
+        """Regression: 2026-10-11-churn-gone-measured-at-collect (pnfs-1791662135)."""
+        from sbtest.components.workloads import churn
+        w = churn.ChurnWorkload(namespace="default")
+        deleted = datetime.now(UTC) - timedelta(seconds=30)
+        r = churn._Record(pod="run1-churn-1", claim="run1-churn-1", own_volume=True,
+                          node="worker-1", created=deleted)
+        r.pvc_deleted, r.pv, r.lvol = deleted, "pvc-1", "lv-1"
+        w._records.append(r)
+        with _Ctx() as ctx, mock.patch.object(churn, "_exists", lambda *a: False):
+            w._watch_once(ctx)                   # the watcher sees it gone now, ~30s in
+            later = datetime.now(UTC) + timedelta(seconds=3600)
+            with mock.patch.object(churn, "datetime") as dt:
+                dt.now.return_value = later      # collection an hour later
+                w._check_gone(ctx, [r])
+        self.assertTrue(r.pv_gone and r.export_gone)
+        self.assertIsNotNone(r.gone_s)
+        assert r.gone_s is not None
+        self.assertLess(r.gone_s, 60, f"gone_s = {r.gone_s}: measured at collection")
+
+    def test_a_volume_still_there_is_left_for_the_next_look(self):
+        from sbtest.components.workloads import churn
+        w = churn.ChurnWorkload(namespace="default")
+        r = churn._Record(pod="run1-churn-2", claim="run1-churn-2", own_volume=True,
+                          node="worker-1", created=datetime.now(UTC))
+        r.pvc_deleted, r.pv, r.lvol = datetime.now(UTC), "pvc-2", "lv-2"
+        w._records.append(r)
+        with _Ctx() as ctx, mock.patch.object(churn, "_exists", lambda *a: True):
+            w._watch_once(ctx)
+        self.assertIsNone(r.gone_s)
+
+
+class ChurnSharedVolumeSpace(unittest.TestCase):
+    """A churn pod that joins a shared volume writes a file of its own there. Left behind,
+    an hour of churn filled the main pods' volumes, and later joiners could not lay out
+    their files (pnfs-1791662135, churn-84 and churn-105)."""
+
+    def _workload(self):  # noqa: ANN202
+        from sbtest.components.workloads import churn
+        return churn, churn.ChurnWorkload(namespace="default")
+
+    def test_a_pod_that_joined_a_shared_volume_removes_its_file_before_it_goes(self):
+        """Regression: 2026-10-11-churn-files-fill-shared-volumes (pnfs-1791662135)."""
+        churn, w = self._workload()
+        inst = fio.FioInstance(pod="run1-churn-7", container="fio-0",
+                               filename="/data/run1-churn-7.fio", logdir="/logs/c0",
+                               evidence="run1-fio-churn-7")
+        r = churn._Record(pod=inst.pod, claim="run1-pnfs-shared-0", own_volume=False,
+                          created=datetime.now(UTC))
+        calls: list[str] = []
+        fake = _FakeKube()
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            calls.append(f"exec {pod} {script}")
+            return ""
+
+        def run(args: list[str], **kw: object) -> subprocess.CompletedProcess[str]:
+            calls.append(" ".join(args))
+            return fake.run(args, **kw)  # type: ignore[arg-type]
+
+        with _Ctx() as ctx, mock.patch.object(kube, "exec_sh", exec_sh), \
+                mock.patch.object(kube, "run", run):
+            w._leave(ctx, "default", inst, r)
+        removes = [i for i, c in enumerate(calls) if "rm -f /data/run1-churn-7.fio" in c]
+        deletes = [i for i, c in enumerate(calls) if c.startswith("-n default delete pod")]
+        self.assertTrue(removes, f"the file was not removed: {calls}")
+        self.assertTrue(deletes and removes[0] < deletes[0], f"removed after the pod: {calls}")
+
+    def test_a_join_without_room_for_the_file_is_refused_with_a_reason(self):
+        churn, w = self._workload()
+        with mock.patch.object(kube, "pod_mounting", lambda ns, claim: ("run1-pnfs-0", "fio-0")), \
+                mock.patch.object(kube, "exec_sh", lambda *a, **k: str(512 * 1024)):  # KiB free
+            reason = w._no_room(None, "default", "run1-pnfs-shared-0")
+        self.assertIn("run1-pnfs-shared-0", reason)
+
+    def test_a_join_with_room_is_let_through(self):
+        churn, w = self._workload()
+        with mock.patch.object(kube, "pod_mounting", lambda ns, claim: ("run1-pnfs-0", "fio-0")), \
+                mock.patch.object(kube, "exec_sh", lambda *a, **k: str(4 * 1024 * 1024)):
+            self.assertEqual(w._no_room(None, "default", "run1-pnfs-shared-0"), "")
+
+
+#: What the reservation script prints on a pNFS client, captured on lab-talos: a namespace
+#: under the MDS's reservation with one client registered, the MDS's own state disk, which
+#: carries no reservation at all, and a device whose report produced nothing.
+RESV_REPORT = """### nvme3n1|62a413e3-d36b-413f-b172-f6f2f943af02
+{
+  "gen":4,
+  "rtype":4,
+  "regctl":2,
+  "ptpls":1,
+  "regctlext":[
+    {
+      "cntlid":65535,
+      "rcsts":1,
+      "rkey":72057594037927936,
+      "hostid":"8d2a561eeafe4d92a29c2a1cf66fa2c0"
+    },
+    {
+      "cntlid":65535,
+      "rcsts":0,
+      "rkey":7694384339219550510,
+      "hostid":"913d3d9f8a854ec185036f2a83039d59"
+    }
+  ]
+}
+### nvme0n1|e500a6c4-a0dc-4413-b0a4-8db8df45c070
+{
+  "gen":0,
+  "rtype":0,
+  "regctl":0,
+  "ptpls":0,
+  "regctlext":[]
+}
+### nvme9n1|0d631002-c19a-49e5-b9bd-a63102827f14
+### end
+"""
+
+
+class NvmeReservations(unittest.TestCase):
+    def test_every_namespace_and_registrant_is_read(self):
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        self.assertEqual([(n.device, n.uuid, n.rtype, n.generation) for n in got], [
+            ("nvme3n1", "62a413e3-d36b-413f-b172-f6f2f943af02", 4, 4),
+            ("nvme0n1", "e500a6c4-a0dc-4413-b0a4-8db8df45c070", 0, 0)])
+        regs = got[0].registrants
+        self.assertEqual([(r.hostid, r.rkey, r.holder) for r in regs], [
+            ("8d2a561eeafe4d92a29c2a1cf66fa2c0", 72057594037927936, True),
+            ("913d3d9f8a854ec185036f2a83039d59", 7694384339219550510, False)])
+        self.assertEqual(got[1].registrants, ())
+        self.assertEqual({n.node for n in got}, {"worker-1"})
+
+    def test_a_device_whose_report_failed_is_left_out_rather_than_read_as_empty(self):
+        """No JSON is not "no reservation": an empty registrant list would read as a
+        namespace nobody may write to, which it is not known to be."""
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        self.assertNotIn("nvme9n1", [n.device for n in got])
+
+    def test_a_per_path_device_is_left_to_its_head(self):
+        """The reservation is the namespace's, so each path would report it again."""
+        out = RESV_REPORT.replace("### end", "### nvme3c3n1|62a413e3-d36b-413f-b172-f6f2f943af02\n"
+                                  '{"gen":4,"rtype":4,"regctlext":[]}\n### end')
+        got = reservations.parse_report("worker-1", out)
+        self.assertEqual([n.device for n in got], ["nvme3n1", "nvme0n1"])
+
+    def test_snapshots_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        got = reservations.parse_report("worker-1", RESV_REPORT)
+        with _Ctx() as ctx:
+            reservations.write_snapshot(ctx, "post", got)
+            back = ArchiveEvidence(ctx.outdir).reservations_post()
+        self.assertEqual(back, got)
+
+
+class RunVersions(unittest.TestCase):
+    """What the run recorded as deployed, from the shapes kubectl prints."""
+
+    PODS = {"items": [{
+        "metadata": {"name": "simplyblock-pnfs-mds-06075ebb-0", "namespace": "simplyblock"},
+        "status": {"containerStatuses": [{
+            "name": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "imageID": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}]}}]}
+    NODES = {"items": [{"metadata": {"name": "worker-1"}, "status": {"nodeInfo": {
+        "kernelVersion": "6.18.5-talos", "osImage": "Talos (v1.12.7)",
+        "containerRuntimeVersion": "containerd://2.1.4", "kubeletVersion": "v1.34.1"}}}]}
+    SERVER = {"serverVersion": {"gitVersion": "v1.34.1"}}
+
+    def test_images_nodes_and_the_server_are_recorded(self):
+        doc = versions.parse_versions([self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(doc["server"], "v1.34.1")
+        self.assertEqual(doc["images"], [{
+            "namespace": "simplyblock", "pod": "simplyblock-pnfs-mds-06075ebb-0",
+            "container": "mds-runner", "image": "public.ecr.aws/simply-block/spdkcsi:pnfs-mds",
+            "image_id": "public.ecr.aws/simply-block/spdkcsi@sha256:07d8"}])
+        self.assertEqual(doc["nodes"], [{
+            "node": "worker-1", "kernel": "6.18.5-talos", "os_image": "Talos (v1.12.7)",
+            "runtime": "containerd://2.1.4", "kubelet": "v1.34.1"}])
+
+    def test_one_namespace_listed_twice_is_recorded_once(self):
+        """The operator and the cluster share a namespace today."""
+        doc = versions.parse_versions([self.PODS, self.PODS], self.NODES, self.SERVER)
+        self.assertEqual(len(doc["images"]), 1)
+
+
+MOUNT_STATS = """device rootfs mounted on / with fstype rootfs
+device 10.111.155.124:/default-shared-1 mounted on /data with fstype nfs4 statvers=1.1
+\topts:\trw,vers=4.1
+\tnfsv4:\tbm0=0xfdffafff,sessions,pnfs=LAYOUT_SCSI,lease_time=90
+\txprt:\ttcp 1 2 6 3 29 169588 169584 4 4885578 5 31 7116 4400333
+\tper-op statistics
+\tREAD: 30802 30801 1 5 6 2 1 2
+\tWRITE: 9994 9993 1 7 8 3 1 2
+\tLAYOUTGET: 18 17 1 464 336 2 1 3
+device tmpfs mounted on /run with fstype tmpfs
+"""
+
+
+class NfsTimeline(unittest.TestCase):
+    """The NFS client's own counters over the run, per fio instance."""
+
+    def test_a_sample_carries_the_ops_and_the_connect_count(self):
+        self.assertEqual(nfs.mount_sample(MOUNT_STATS, "/data"),
+                         {"LAYOUTGET": 18, "READ": 30802, "WRITE": 9994, "connects": 6})
+
+    def test_a_missing_mount_is_no_sample(self):
+        self.assertIsNone(nfs.mount_sample(MOUNT_STATS, "/elsewhere"))
+
+    def test_each_pod_is_read_once_and_sampled_for_every_instance(self):
+        calls: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, **kw: object) -> str:
+            calls.append(pod)
+            return MOUNT_STATS
+
+        s = nfs.MountstatsSampler()
+        with _Ctx() as ctx, mock.patch.object(kube, "exec_sh", exec_sh):
+            ctx.shared["pnfs.instances"] = [
+                {"evidence": "r-fio-0-c0", "pod": "r-pnfs-0", "container": "fio-0"},
+                {"evidence": "r-fio-0-c1", "pod": "r-pnfs-0", "container": "fio-1"}]
+            s.bind_namespaces(ctx)
+            s._sample(ctx)
+        self.assertEqual(calls, ["r-pnfs-0"])
+        self.assertEqual(sorted(x.instance for x in s._samples), ["r-fio-0-c0", "r-fio-0-c1"])
+        self.assertEqual({(x.read, x.write, x.layoutget, x.connects) for x in s._samples},
+                         {(30802, 9994, 18, 6)})
+
+    def test_samples_round_trip_through_the_archive(self):
+        from sbtest.adapters import ArchiveEvidence
+        from sbtest.core import NfsSample
+        t = datetime(2026, 10, 8, 9, 0, 0, tzinfo=UTC)
+        samples = [NfsSample(ts=t, instance="r-fio-0-c0", pod="r-pnfs-0", container="fio-0",
+                             layoutget=18, read=30802, write=9994, connects=6)]
+        with _Ctx() as ctx:
+            nfs.write_timeline(ctx.path("nfs-timeline.csv"), samples)
+            back = ArchiveEvidence(ctx.outdir).nfs_timeline()
+        self.assertEqual(back, samples)
+
+
+class WorkloadPnfs(unittest.TestCase):
+    """pNFS volumes, some shared by several pods and some private, every container running
+    its own fio. Multi-reader and multi-writer on one filesystem, without the writers
+    corrupting each other's verification."""
+
+    def _plan(self, **opts: object) -> tuple[pnfs_rwx.PnfsRwxWorkload, list[dict]]:
+        w = pnfs_rwx.PnfsRwxWorkload(**opts)
+        with _Ctx() as ctx:
+            docs = w._documents(ctx, "sc-pnfs")
+        return w, docs
+
+    @staticmethod
+    def _of(docs: list[dict], kind: str) -> list[dict]:
+        return [d for d in docs if d["kind"] == kind]
+
+    def test_every_fio_instance_writes_and_verifies_its_own_file(self):
+        """fio's md5 verify trusts that nothing else writes its blocks. Two instances on one
+        file would report each other's writes as corruption, so every instance, across
+        every pod sharing a volume, gets a file of its own and verifies only that."""
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=3, solo_pods=2,
+                             containers_per_pod=2)
+        self.assertEqual(len(w._instances), (2 * 3 + 2) * 2)
+        files = [i.filename for i in w._instances]
+        self.assertEqual(len(set(files)), len(files), files)
+        for pod in self._of(docs, "Pod"):
+            for c in pod["spec"]["containers"]:
+                script = c["command"][-1]
+                mine = [i for i in w._instances
+                        if i.pod == pod["metadata"]["name"] and i.container == c["name"]]
+                self.assertEqual(len(mine), 1)
+                self.assertIn(f"--filename={mine[0].filename}", script)
+                self.assertEqual(script.count("--filename="), 1)
+                self.assertIn("--verify=md5", script)
+                self.assertIn("--serialize_overlap=1", script)
+
+    def test_pods_of_a_shared_volume_mount_one_rwx_claim(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=3, solo_pods=2,
+                             containers_per_pod=1)
+        claims = self._of(docs, "PersistentVolumeClaim")
+        self.assertEqual(len(claims), 2 + 2)
+        for c in claims:
+            self.assertEqual(c["spec"]["accessModes"], ["ReadWriteMany"])
+            self.assertEqual(c["spec"]["storageClassName"], "sc-pnfs")
+        users: dict[str, set[str]] = {}
+        for pod in self._of(docs, "Pod"):
+            for v in pod["spec"]["volumes"]:
+                if "persistentVolumeClaim" in v:
+                    users.setdefault(v["persistentVolumeClaim"]["claimName"], set()).add(
+                        pod["metadata"]["name"])
+        self.assertEqual(sorted(len(p) for p in users.values()), [1, 1, 3, 3])
+
+    def test_pods_sharing_a_volume_are_spread_across_nodes(self):
+        """Two writers on one node share one NFS client, so the multi-writer case is the
+        multi-node one."""
+        _, docs = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=1)
+        shared = [p for p in self._of(docs, "Pod") if "pnfs-shared" in p["metadata"]["labels"]]
+        self.assertEqual(len(shared), 2)
+        for p in shared:
+            terms = p["spec"]["affinity"]["podAntiAffinity"][
+                "preferredDuringSchedulingIgnoredDuringExecution"]
+            self.assertEqual(terms[0]["podAffinityTerm"]["topologyKey"], "kubernetes.io/hostname")
+            self.assertEqual(terms[0]["podAffinityTerm"]["labelSelector"]["matchLabels"],
+                             {"pnfs-shared": p["metadata"]["labels"]["pnfs-shared"]})
+        _, docs = self._plan(shared_volumes=1, pods_per_shared=2, spread=False)
+        for p in self._of(docs, "Pod"):
+            self.assertNotIn("podAntiAffinity", p["spec"].get("affinity", {}))
+
+    def test_the_files_must_fit_the_volume(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=3, containers_per_pod=2,
+                              file_size_gb=4, volume_size_gb=20)._documents(ctx, "sc")
+        self.assertIn("6 fio file(s) of 4G", str(e.exception))
+
+    def test_a_workload_with_no_pods_is_refused(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=0)._documents(ctx, "sc")
+        self.assertIn("no I/O", str(e.exception))
+
+    def test_every_instance_has_evidence_the_analyser_finds(self):
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=1,
+                          containers_per_pod=2)
+        names = [i.evidence for i in w._instances]
+        self.assertEqual(len(set(names)), len(names))
+        with _Ctx() as ctx:
+            for n in names:
+                ctx.dir(n)
+            self.assertEqual(sorted(ArchiveEvidence(ctx.outdir).pods()), sorted(names))
+
+    def test_a_named_class_that_is_not_pnfs_is_refused(self):
+        """A block class would hand every pod its own ext4 or xfs device; the shared claims
+        would never bind ReadWriteMany, and a solo-only run would pass without pNFS."""
+        fake = _FakeKube({"get sc block": json.dumps({
+            "provisioner": "csi.simplyblock.io",
+            "parameters": {"csi.storage.k8s.io/fstype": "xfs"}})})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run), \
+                self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(storageclass="block")._storageclass(ctx)
+        self.assertIn("fstype", str(e.exception))
+
+    def test_a_source_class_is_cloned_as_pnfs(self):
+        src = {"provisioner": "csi.simplyblock.io", "reclaimPolicy": "Delete",
+               "parameters": {"cluster_id": "c1", "pool_name": "p1",
+                              "csi.storage.k8s.io/fstype": "xfs"}}
+        fake = _FakeKube({"get sc pool-class": json.dumps(src)})
+        with _Ctx() as ctx, _patch(kube, "run", fake.run):
+            name = pnfs_rwx.PnfsRwxWorkload(source_storageclass="pool-class")._storageclass(ctx)
+        applied = [json.loads(s) for s in fake.stdins if s]
+        self.assertEqual(len(applied), 1)
+        self.assertEqual(applied[0]["metadata"]["name"], name)
+        self.assertEqual(applied[0]["parameters"]["csi.storage.k8s.io/fstype"], "pnfs")
+        self.assertEqual(applied[0]["parameters"]["pool_name"], "p1")
+        self.assertEqual(applied[0]["volumeBindingMode"], "Immediate")
+
+    # Review on #704: chaos.volume-ops promised the shared multi-client volume and picked
+    # from pnfs.claims, which holds the solo claims too.
+    def test_the_shared_claims_are_published_on_their_own(self):
+        w, _ = self._plan(shared_volumes=2, pods_per_shared=2, solo_pods=2,
+                          containers_per_pod=1)
+        with _Ctx() as ctx, \
+                mock.patch.object(w, "_resolve_lvols", return_value=({}, {})), \
+                mock.patch.object(w, "_nodes", return_value={}), \
+                mock.patch.object(w, "_write_volume_map"), \
+                mock.patch.object(w, "_report_spread"):
+            w.after_running(ctx)
+            shared = ctx.shared["pnfs.shared_claims"]
+            everything = ctx.shared["pnfs.claims"]
+        self.assertEqual(shared, sorted(w._shared))
+        self.assertEqual(len(shared), 2)
+        self.assertEqual(len(everything), 4)
+
+    def test_the_volume_map_names_every_consumer_node(self):
+        """The device check needs to know, per volume, which client nodes should be writing
+        to its namespace; the scheduler decides the nodes, so they are read back."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=1,
+                          containers_per_pod=1)
+        claims = sorted(set(w._claim_of.values()))
+        w._lvol_of = {c: f"lvol-{c}" for c in claims}
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vols = ArchiveEvidence(ctx.outdir).pnfs_volumes()
+        self.assertEqual(len(vols), 2)
+        shared = next(v for v in vols if v.shared)
+        self.assertEqual(len(shared.nodes), 2)
+        self.assertEqual(shared.lvol, f"lvol-{shared.claim}")
+
+    def test_the_volume_map_names_every_instance_and_its_node(self):
+        """The device check judges a node only while that node's fio instances ran, so it
+        needs which instances ran where."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                          containers_per_pod=2)
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vol = ArchiveEvidence(ctx.outdir).pnfs_volumes()[0]
+        want = {i.evidence: nodes[i.pod] for i in w._instances}
+        self.assertEqual(vol.instances, want)
+
+    def test_the_volume_map_names_the_pod_whose_mount_each_instance_used(self):
+        """Every instance of a pod carries a copy of the pod's one mount's counters, so a
+        check that adds them up has to know which instances share a mount."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                          containers_per_pod=2)
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vol = ArchiveEvidence(ctx.outdir).pnfs_volumes()[0]
+        self.assertEqual(vol.mounts, {i.evidence: i.pod for i in w._instances})
+
+    def test_collect_records_the_mounts_nfs_ops_for_every_instance(self):
+        """One mount per pod, so every instance in the pod carries that mount's counts."""
+        from sbtest.adapters import ArchiveEvidence
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            return MOUNTSTATS if "mountstats" in script else ""
+
+        w, _ = self._plan(shared_volumes=0, solo_pods=1, containers_per_pod=2)
+        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh), \
+                _patch(kube, "run", _FakeKube().run):
+            w.collect(ctx)
+            ev = ArchiveEvidence(ctx.outdir)
+            for inst in w._instances:
+                self.assertEqual(ev.nfs_ops(inst.evidence)["LAYOUTGET"], 3)
+
+
+class CrossReadLayout(unittest.TestCase):
+    """cross_readers adds, per shared volume, a writer that publishes its file in rounds and
+    readers that verify each round from other nodes. A reader on its writer's node would
+    read through the same NFS client, which proves nothing about another client."""
+
+    def _plan(self, **opts: object) -> tuple[pnfs_rwx.PnfsRwxWorkload, list[dict]]:
+        w = pnfs_rwx.PnfsRwxWorkload(**opts)
+        with _Ctx() as ctx:
+            docs = w._documents(ctx, "sc-pnfs")
+        return w, docs
+
+    @staticmethod
+    def _pods(docs: list[dict]) -> list[dict]:
+        return [d for d in docs if d["kind"] == "Pod"]
+
+    @staticmethod
+    def _claim(pod: dict) -> str:
+        return str(next(v["persistentVolumeClaim"]["claimName"] for v in pod["spec"]["volumes"]
+                        if "persistentVolumeClaim" in v))
+
+    def test_off_by_default_so_the_layout_is_unchanged(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=3, solo_pods=1)
+        self.assertEqual(len(self._pods(docs)), 2 * 3 + 1)
+        self.assertFalse([p for p in self._pods(docs)
+                          if "pnfs-xwriter" in p["metadata"]["labels"]])
+        self.assertFalse([i for i in w._instances if "-fio-x" in i.evidence])
+
+    def test_every_shared_volume_gets_a_writer_and_its_readers(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=2, solo_pods=1,
+                             cross_readers=2)
+        shared = sorted(w._shared)
+        self.assertEqual(len(shared), 2)
+        writers = [p for p in self._pods(docs) if "pnfs-xwriter" in p["metadata"]["labels"]]
+        self.assertEqual(sorted(self._claim(p) for p in writers), shared)
+        for claim in shared:
+            readers = [p for p in self._pods(docs) if self._claim(p) == claim
+                       and p["metadata"]["labels"].get("pnfs-xreader") == claim]
+            self.assertEqual(len(readers), 2, claim)
+        solo = [c for c in set(w._claim_of.values()) if c not in w._shared]
+        for p in self._pods(docs):
+            if self._claim(p) in solo:
+                self.assertNotIn("pnfs-xreader", p["metadata"]["labels"])
+
+    def test_no_reader_runs_on_its_writers_node(self):
+        """Required, not preferred: a reader that shared its writer's NFS client would pass
+        through that client's cache and prove nothing about cross-client reads."""
+        _, docs = self._plan(shared_volumes=2, pods_per_shared=2, cross_readers=2)
+        readers = [p for p in self._pods(docs) if "pnfs-xreader" in p["metadata"]["labels"]]
+        self.assertEqual(len(readers), 4)
+        for p in readers:
+            terms = p["spec"]["affinity"]["podAntiAffinity"][
+                "requiredDuringSchedulingIgnoredDuringExecution"]
+            self.assertIn({"labelSelector": {"matchLabels": {"pnfs-xwriter": self._claim(p)}},
+                           "topologyKey": "kubernetes.io/hostname"}, terms)
+
+    def test_readers_read_the_rounds_their_own_writer_publishes(self):
+        w, docs = self._plan(shared_volumes=2, pods_per_shared=1, cross_readers=1)
+        writer_base = {}
+        for p in self._pods(docs):
+            if "pnfs-xwriter" in p["metadata"]["labels"]:
+                inst = next(i for i in w._instances if i.pod == p["metadata"]["name"])
+                writer_base[self._claim(p)] = inst.filename
+        for p in self._pods(docs):
+            if "pnfs-xreader" in p["metadata"]["labels"]:
+                inst = next(i for i in w._instances if i.pod == p["metadata"]["name"])
+                self.assertEqual(inst.filename, writer_base[self._claim(p)])
+                self.assertIn(fio.round_marker(inst.filename),
+                              p["spec"]["containers"][0]["command"][-1])
+
+    def test_round_instances_leave_evidence_the_analyser_finds(self):
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=1, cross_readers=2)
+        names = [i.evidence for i in w._instances]
+        self.assertEqual(len(set(names)), len(names))
+        self.assertEqual(len([n for n in names if "-fio-xw-" in n]), 1)
+        self.assertEqual(len([n for n in names if "-fio-xr-" in n]), 2)
+        with _Ctx() as ctx:
+            for n in names:
+                ctx.dir(n)
+            self.assertEqual(sorted(ArchiveEvidence(ctx.outdir).pods()), sorted(names))
+
+    def test_the_kept_rounds_count_against_the_volume(self):
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=2, containers_per_pod=2,
+                                     file_size_gb=4, volume_size_gb=20, cross_readers=1,
+                                     round_size_mb=1024)._documents(ctx, "sc")
+        self.assertIn("round", str(e.exception))
+
+    def _fits(self, volume_gb: int) -> bool:
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=1, solo_pods=0,
+                                     containers_per_pod=1, file_size_gb=1,
+                                     volume_size_gb=volume_gb, cross_readers=2,
+                                     round_size_mb=1024)
+        with _Ctx() as ctx:
+            try:
+                w._documents(ctx, "sc")
+            except RuntimeError:
+                return False
+        return True
+
+    def test_the_round_being_written_and_those_readers_hold_count_too(self):
+        """Round n is written while the ROUND_KEEP before it are still there, and each
+        reader can hold one more open after the writer removed it."""
+        peak_gb = 1 + (fio.ROUND_KEEP + 1 + 2) + pnfs_rwx.HEADROOM_GB
+        self.assertFalse(self._fits(peak_gb - 1))
+        self.assertTrue(self._fits(peak_gb))
+
+    def test_a_reader_wait_longer_than_the_stop_grace_is_refused(self):
+        """stop() interrupts only fio, so a reader still waiting for a round when the grace
+        ends would never write its exit code."""
+        with _Ctx() as ctx, self.assertRaises(RuntimeError) as e:
+            pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, cross_readers=1, round_wait_s=300,
+                                     stop_timeout_s=180)._documents(ctx, "sc")
+        self.assertIn("round_wait_s", str(e.exception))
+
+    def test_round_instances_do_not_hold_up_the_timed_run_wait(self):
+        """A reader prints no fio status until a round is published, and a round writer
+        writes sequentially, so neither ever looks like the timed run of a randrw job."""
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=2, solo_pods=0, cross_readers=1)
+        timed = w.timed_instances()
+        self.assertEqual(len(timed), 2 * 2)
+        self.assertFalse([i for i in timed if "-fio-x" in i.evidence])
+
+    def test_round_pods_wait_for_the_timed_run_for_as_long_as_setup_can_take(self):
+        w, docs = self._plan(shared_volumes=1, pods_per_shared=1, cross_readers=1,
+                             ready_timeout_s=100, io_timeout_s=50)
+        for p in self._pods(docs):
+            labels, script = p["metadata"]["labels"], p["spec"]["containers"][0]["command"][-1]
+            if "pnfs-xwriter" in labels:
+                self.assertIn("/logs/xw/start", script)
+            elif "pnfs-xreader" in labels:
+                self.assertIn("/logs/xr/start", script)
+            else:
+                self.assertNotIn("/start", script)
+                continue
+            bound = int(re.search(r'-lt (\d+) \]; do sleep 1', script).group(1))  # type: ignore[union-attr]
+            self.assertGreaterEqual(bound, 100 + 50)
+
+    def test_setup_releases_the_round_pods_once_the_timed_run_starts(self):
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=1, solo_pods=0,
+                                     cross_readers=2)
+        events: list[tuple[str, ...]] = []
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            events.append(("exec", pod, str(container), script))
+            return "released\n"
+
+        with _Ctx() as ctx, _patch(kube, "run", lambda *a, **k: _cp("")), \
+                _patch(kube, "exec_sh", exec_sh), \
+                _patch(fio, "wait_running", lambda *a, **k: None), \
+                _patch(fio, "wait_io_flowing", lambda *a, **k: events.append(("timed",))), \
+                _patch(w, "documents", lambda c: w._documents(c, "sc")), \
+                _patch(w, "after_running", lambda c: None):
+            w.setup(ctx)
+        self.assertEqual(events[0], ("timed",), "a round pod was released before the timed run")
+        touched = {(e[1], e[2]) for e in events[1:] if "touch" in e[3]}
+        rounds = {(i.pod, i.container) for i in w._instances if i.pod in w._round_names}
+        self.assertEqual(len(rounds), 3)
+        self.assertEqual(touched, rounds)
+        for inst in w._instances:
+            if inst.pod in w._round_names:
+                self.assertTrue(any(f"{inst.logdir}/start" in e[3] for e in events[1:]
+                                    if e[1] == inst.pod), inst.pod)
+
+    def test_the_volume_map_keeps_round_pods_out_of_the_device_check(self):
+        """A reader-only node writes nothing to the namespace, and pnfs.device-io would call
+        that a client whose I/O bypassed the namespace."""
+        from sbtest.adapters import ArchiveEvidence
+        w, _ = self._plan(shared_volumes=1, pods_per_shared=1, solo_pods=0,
+                          containers_per_pod=1, cross_readers=2)
+        nodes = {p: f"node-{i}" for i, p in enumerate(sorted(w._claim_of))}
+        randrw = [i for i in w._instances if "-fio-x" not in i.evidence]
+        with _Ctx() as ctx:
+            w._write_volume_map(ctx, nodes)
+            vol = ArchiveEvidence(ctx.outdir).pnfs_volumes()[0]
+            with open(ctx.path("pnfs.json")) as fh:
+                raw = json.load(fh)["volumes"][0]
+        self.assertEqual(vol.nodes, sorted({nodes[i.pod] for i in randrw}))
+        self.assertEqual(set(vol.instances), {i.evidence for i in randrw})
+        self.assertEqual(len(raw["cross_read"]), 3)
+
+
+class CrossReadScripts(unittest.TestCase):
+    """The round writer and reader scripts. The pure checks hold everywhere. The end-to-end
+    ones run the scripts with a real fio against a local directory, where one is installed."""
+
+    def setUp(self) -> None:
+        self.ROUNDS = fio.Rounds(base="/data/run1-xw-0", size_mb=4, round_s=1, wait_s=2,
+                                 runtime_s=3)
+
+    @staticmethod
+    def _fio_line(script: str) -> list[str]:
+        line = next(ln for ln in script.splitlines() if ln.lstrip().startswith("fio "))
+        return line.split()
+
+    def test_a_round_is_published_only_after_fio_has_closed_it(self):
+        s = fio.round_writer_script(fio.FIO_DEFAULTS, self.ROUNDS, "/logs/xw")
+        for flag in ("--rw=write", "--verify=md5", "--do_verify=0", "--end_fsync=1",
+                     "--verify_state_save=0"):
+            self.assertIn(flag, self._fio_line(s))
+        marker = fio.round_marker(self.ROUNDS.base)
+        lines = s.splitlines()
+        ran = next(n for n, ln in enumerate(lines) if ln.lstrip().startswith("fio "))
+        published = next(n for n, ln in enumerate(lines) if "mv -f" in ln and marker in ln)
+        self.assertLess(ran, published)
+        self.assertIn("/logs/xw/fio.rc", s)
+
+    def test_readers_verify_with_the_writers_parameters(self):
+        writer = self._fio_line(fio.round_writer_script(fio.FIO_DEFAULTS, self.ROUNDS, "/l"))
+        reader = self._fio_line(fio.round_reader_script(fio.FIO_DEFAULTS, self.ROUNDS, "/l"))
+        self.assertIn("--verify_only", reader)
+        only_writer = {"--do_verify=0", "--end_fsync=1", "--fsync_on_close=1"}
+        self.assertEqual([a for a in writer if a not in only_writer],
+                         [a for a in reader if a != "--verify_only"])
+
+    def test_reader_waits_are_bounded(self):
+        s = fio.round_reader_script(fio.FIO_DEFAULTS, self.ROUNDS, "/logs/xr")
+        self.assertIn("timed out", s)
+        self.assertIn("/logs/xr/fio.rc", s)
+        self.assertIn(f"{self.ROUNDS.runtime_s} + {self.ROUNDS.wait_s}", s)
+
+    # ── end to end, with a real fio ────────────────────────────────────────────────
+
+    def _run(self, d: str, script: str, name: str) -> subprocess.Popen[str]:
+        # A stub stands in for Alpine's apk, and fio comes from the host.
+        os.makedirs(os.path.join(d, "bin"), exist_ok=True)
+        with open(os.path.join(d, "bin", "apk"), "w") as fh:
+            fh.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(d, "bin", "apk"), 0o755)
+        env = dict(os.environ, PATH=os.path.join(d, "bin") + os.pathsep + os.environ["PATH"])
+        out = open(os.path.join(d, f"{name}.out"), "w")  # noqa: SIM115
+        self.addCleanup(out.close)
+        # cwd in the temp dir, so nothing fio writes beside its files lands in the checkout.
+        p = subprocess.Popen(["sh", "-c", script], stdout=out, stderr=subprocess.STDOUT,
+                             env=env, cwd=d, text=True)
+        self.addCleanup(p.wait)
+        self.addCleanup(p.kill)
+        return p
+
+    @staticmethod
+    def _rc(logdir: str, timeout_s: float) -> str:
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            try:
+                with open(os.path.join(logdir, "fio.rc")) as fh:
+                    rc = fh.read().strip()
+                if rc:
+                    return rc
+            except OSError:
+                pass
+            time.sleep(0.2)
+        raise AssertionError(f"no fio.rc in {logdir} after {timeout_s}s")
+
+    def _local(self, d: str, **kw: int) -> tuple[dict, fio.Rounds]:
+        opts = dict(fio.FIO_DEFAULTS, ioengine="psync", iodepth=1)
+        fields = {"size_mb": 2, "round_s": 1, "wait_s": 3, "runtime_s": 3} | kw
+        return opts, fio.Rounds(base=os.path.join(d, "data", "xw"), **fields)
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_reader_verifies_the_rounds_its_writer_publishes(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d)
+            w = self._run(d, fio.round_writer_script(opts, r, f"{d}/xw", direct=False), "xw")
+            rd = self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertEqual(self._rc(f"{d}/xw", 30), "0")
+            self.assertEqual(self._rc(f"{d}/xr", 30), "0")
+            w.kill()
+            rd.kill()
+            with open(os.path.join(d, "xr.out")) as fh:
+                log = fh.read()
+            self.assertRegex(log, r"\[xread\] \S+ round \d+ verified")
+            self.assertNotRegex(log, r"round \d+ failed")
+            self.assertTrue(os.path.exists(f"{d}/xr/result.json"))
+            # Old rounds are removed, so a long run does not fill the volume.
+            kept = [f for f in os.listdir(os.path.join(d, "data")) if ".r" in f]
+            self.assertLessEqual(len(kept), fio.ROUND_KEEP, kept)
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_round_that_reads_back_wrong_fails_its_reader(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=2)
+            self._run(d, fio.round_writer_script(opts, r, f"{d}/xw", direct=False), "xw")
+            self.assertEqual(self._rc(f"{d}/xw", 30), "0")
+            # The writer is done, so its marker names the last round, the one a reader reads.
+            with open(fio.round_marker(r.base)) as fh:
+                last = fh.read().split()[0]
+            with open(f"{r.base}.r{last}", "r+b") as fh:
+                fh.seek(8192)
+                fh.write(b"\0" * 4096)   # a lost write reads back as zeros
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertNotEqual(self._rc(f"{d}/xr", 30), "0")
+            with open(os.path.join(d, "xr.out")) as fh:
+                log = fh.read()
+            self.assertRegex(log, rf"\[xread\] \S+ round {last} failed")
+            self.assertIn("verify: bad magic header", log)
+            with open(f"{d}/xr/result.json") as fh:
+                self.assertNotEqual(json.load(fh)["jobs"][0]["error"], 0)
+
+    @staticmethod
+    def _log(d: str, name: str) -> str:
+        with open(os.path.join(d, f"{name}.out")) as fh:
+            return fh.read()
+
+    def _rounds_written(self, d: str, r: fio.Rounds, opts: dict) -> int:
+        """Run a writer to the end, and return its last round."""
+        self._run(d, fio.round_writer_script(opts, r, f"{d}/xw", direct=False), "xw")
+        self.assertEqual(self._rc(f"{d}/xw", 30), "0")
+        with open(fio.round_marker(r.base)) as fh:
+            return int(fh.read().split()[0])
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_writer_starts_its_rounds_only_once_the_timed_run_has(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=1, start_wait_s=60)
+            self._run(d, fio.round_writer_script(opts, r, f"{d}/xw", direct=False), "xw")
+            time.sleep(3)
+            self.assertFalse(os.path.exists(fio.round_marker(r.base)),
+                             "a round was written before the timed run started")
+            self.assertFalse(os.path.exists(f"{d}/xw/fio.rc"))
+            open(f"{d}/xw/start", "w").close()  # noqa: SIM115
+            self.assertEqual(self._rc(f"{d}/xw", 30), "0")
+            self.assertTrue(os.path.exists(fio.round_marker(r.base)))
+
+    def test_a_reader_starts_its_clock_only_once_the_timed_run_has(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=1, wait_s=1, start_wait_s=60)
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            time.sleep(4)
+            self.assertFalse(os.path.exists(f"{d}/xr/fio.rc"),
+                             "the reader's deadline ran out before the timed run started")
+            open(f"{d}/xr/start", "w").close()  # noqa: SIM115
+            self.assertEqual(self._rc(f"{d}/xr", 15), "0")
+
+    def test_a_round_pod_never_released_starts_after_its_bound(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=1, wait_s=1, start_wait_s=1)
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertEqual(self._rc(f"{d}/xr", 15), "0")
+            self.assertIn("no start after 1s", self._log(d, "xr"))
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_late_reader_verifies_every_kept_round_in_order(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=5)
+            last = self._rounds_written(d, r, opts)
+            self.assertGreater(last, fio.ROUND_KEEP, "too few rounds to show a removed one")
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertEqual(self._rc(f"{d}/xr", 30), "0")
+            log = self._log(d, "xr")
+            kept = range(last - fio.ROUND_KEEP + 1, last + 1)
+            self.assertEqual([int(n) for n in re.findall(r"round (\d+) verified", log)],
+                             list(kept))
+            self.assertEqual([int(n) for n in re.findall(r"round (\d+) lapsed", log)],
+                             list(range(1, kept[0])))
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_kept_round_that_is_gone_is_missing_and_fails_the_reader(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=3)
+            last = self._rounds_written(d, r, opts)
+            self.assertGreaterEqual(last, 2)
+            os.remove(f"{r.base}.r{last - 1}")
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertNotEqual(self._rc(f"{d}/xr", 30), "0")
+            log = self._log(d, "xr")
+            self.assertRegex(log, rf"\[xread\] \S+ round {last - 1} missing")
+            self.assertRegex(log, rf"\[xread\] \S+ round {last} verified")
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_reader_marks_a_round_it_failed_to_be_kept(self):
+        """A round that read back wrong is the evidence: the writer must not remove it before
+        the run asks the server what its bad ranges are made of (pnfs-1791632580)."""
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=2)
+            last = self._rounds_written(d, r, opts)
+            with open(f"{r.base}.r{last}", "r+b") as fh:
+                fh.seek(8192)
+                fh.write(b"\0" * 4096)
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertNotEqual(self._rc(f"{d}/xr", 30), "0")
+            self.assertTrue(os.path.exists(f"{r.base}.r{last}.keep"),
+                            "the reader did not mark the round it failed")
+
+    @unittest.skipUnless(shutil.which("fio"), "needs fio")
+    def test_a_writer_never_removes_a_round_marked_to_be_kept(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=6)
+            open(f"{r.base}.r1.keep", "w").close()  # noqa: SIM115
+            last = self._rounds_written(d, r, opts)
+            self.assertGreater(last, fio.ROUND_KEEP + 1, "too few rounds to show a removal")
+            self.assertTrue(os.path.exists(f"{r.base}.r1"), "a round marked to be kept was removed")
+            self.assertFalse(os.path.exists(f"{r.base}.r2"), "an unmarked old round was kept")
+
+    def test_a_reader_with_no_writer_times_out_and_exits(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, "data"))
+            opts, r = self._local(d, runtime_s=1, wait_s=1)
+            self._run(d, fio.round_reader_script(opts, r, f"{d}/xr", direct=False), "xr")
+            self.assertEqual(self._rc(f"{d}/xr", 15), "0")
+            with open(os.path.join(d, "xr.out")) as fh:
+                log = fh.read()
+            self.assertIn("timed out", log)
+            self.assertRegex(log, r"verified=0\b")
+
+
+class BadRangeExtents(unittest.TestCase):
+    """A round a reader failed is followed up on the server: the reader's bad blocks become
+    ranges, and the metadata server says what each range is made of (pnfs-1791632580)."""
+
+    LOG = [
+        "[xread] 2026-10-10T11:45:03Z the timed run started\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 1048576, "
+        "length 4096 (requested block: offset=1048576, length=4096)\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 1052672, "
+        "length 4096 (requested block: offset=1052672, length=4096)\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 1048576, "
+        "length 4096 (requested block: offset=1048576, length=4096)\n",
+        "verify: bad magic header 0, wanted acca at file /data/run1-xw-0.r1 offset 9437184, "
+        "length 4096 (requested block: offset=9437184, length=4096)\n",
+        "[xread] 2026-10-10T11:50:35Z round 1 failed rc=1\n",
+    ]
+
+    def test_bad_blocks_become_ranges_per_file(self):
+        self.assertEqual(fio.bad_ranges(self.LOG),
+                         {"run1-xw-0.r1": [(1048576, 8192), (9437184, 4096)]})
+
+    def test_a_log_without_bad_blocks_has_no_ranges(self):
+        self.assertEqual(fio.bad_ranges(["[xread] round 1 verified\n"]), {})
+
+    def test_each_bad_range_is_asked_of_the_metadata_server(self):
+        report = {"export": "/var/lib/simplyblock/exports/default-c-6a32", "file": "run1-xw-0.r1",
+                  "offset": 1048576, "length": 8192, "size": 268435456,
+                  "pieces": [{"offset": 1048576, "length": 8192, "kind": "hole"}]}
+        fake = _FakeKube({
+            "get pvc": json.dumps({"spec": {"volumeName": "pv-1"}}),
+            "get pv": json.dumps({"spec": {"csi": {"volumeHandle": "c:p:6a32bdd8"}}}),
+            "get nfsexport": json.dumps({"spec": {"exportPath": report["export"]},
+                                         "status": {"mdsPodName": "mds-0"}}),
+            "mds-runner extents": json.dumps(report),
+        })
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, solo_pods=0, cross_readers=1,
+                                     namespace="default")
+        with _Ctx() as ctx, mock.patch.object(kube, "run", fake.run):
+            w._documents(ctx, "sc")
+            reader = next(i for i in w._instances if "-xr-" in i.pod)
+            with open(ctx.path(reader.evidence, "fio.log"), "w") as fh:
+                fh.writelines(self.LOG)
+            w.explain_bad_rounds(ctx)
+            with open(ctx.path(reader.evidence, "extents.json")) as fh:
+                saved = json.load(fh)
+        asks = [c for c in fake.calls if "exec" in c]
+        self.assertEqual(len(asks), 2, asks)
+        first = " ".join(asks[0])
+        self.assertIn("-n simplyblock exec mds-0 -c mds-runner", first)
+        self.assertIn("-export /var/lib/simplyblock/exports/default-c-6a32 -file run1-xw-0.r1 "
+                      "-offset 1048576 -length 8192", first)
+        self.assertEqual(saved[0]["pieces"][0]["kind"], "hole")
+
+
+class WorkloadStop(unittest.TestCase):
+    """fio writes its summary, its exit code and its time series when it exits, and verifies
+    what is outstanding when its runtime ends. So a run waits for fio to finish on its own,
+    as operator/test/fio_migration_test.py did, and interrupts only an instance still going
+    long after its runtime, so a stuck fio cannot hang the run."""
+
+    def _workload(self, **opts: object) -> pnfs_rwx.PnfsRwxWorkload:
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=1, containers_per_pod=2,
+                                     **opts)
+        with _Ctx() as ctx:
+            w._documents(ctx, "sc")
+        return w
+
+    @staticmethod
+    def _exec(calls: list[tuple[str, str | None, str]],
+              rc: str) -> Callable[..., str]:
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            calls.append((pod, container, script))
+            return rc if "fio.rc" in script else ""
+        return exec_sh
+
+    def test_fio_that_finishes_on_its_own_is_not_interrupted(self):
+        calls: list[tuple[str, str | None, str]] = []
+        w = self._workload(runtime_s=0, stop_timeout_s=5)
+        w._io_started = time.time()
+        with _Ctx() as ctx, _patch(kube, "exec_sh", self._exec(calls, "0")):
+            w.stop(ctx)
+        self.assertFalse([s for _p, _c, s in calls if "pkill" in s],
+                         "a fio that exited on its own was interrupted")
+        for inst in w._instances:
+            self.assertTrue(any(p == inst.pod and c == inst.container and
+                                f"{inst.logdir}/fio.rc" in s for p, c, s in calls),
+                            f"{inst.container} was not waited for")
+
+    def test_only_fio_still_running_past_its_runtime_and_grace_is_interrupted(self):
+        calls: list[tuple[str, str | None, str]] = []
+        w = self._workload(runtime_s=0, stop_timeout_s=0)
+        w._io_started = time.time() - 10
+        with _Ctx() as ctx, _patch(kube, "exec_sh", self._exec(calls, "")), \
+                _patch(pnfs_rwx.FioWorkload, "INTERRUPT_GRACE_S", 0):
+            w.stop(ctx)   # returns rather than waiting forever
+        for inst in w._instances:
+            self.assertTrue(any(p == inst.pod and c == inst.container and "pkill -INT" in s
+                                for p, c, s in calls), f"{inst.container} was not interrupted")
+
+
+class FioIopsLog(unittest.TestCase):
+    def test_the_time_series_reads_the_file_fio_writes(self):
+        """fio names its IOPS log <prefix>_iops.<job>.log. Reading <prefix>.*log matched
+        nothing, so no live run ever had a time series and fio.outage always skipped."""
+        import fnmatch
+        scripts: list[str] = []
+
+        def exec_sh(ns: str, pod: str, script: str, container: str | None = None,
+                    timeout: int = 300) -> str:
+            scripts.append(script)
+            return ""
+
+        with _Ctx() as ctx, _patch(kube, "exec_sh", exec_sh):
+            fio.write_timeseries(ctx, "default", "p", ctx.dir("p"), [], logdir="/logs/c0",
+                                 container="fio-0")
+        globs = [w for s in scripts for w in s.split() if "iops" in w]
+        self.assertTrue(globs, scripts)
+        self.assertTrue(fnmatch.fnmatch("/logs/c0/iops_iops.1.log", globs[0]), globs)
+
+
+class FioRuntime(unittest.TestCase):
+    """A run waits for fio to finish its runtime, so fio's runtime is the run's length. The
+    CLI's duration is therefore what sets it, and a suite overrides it only on purpose."""
+
+    def _resolved(self, duration: float | None, **opts: object) -> object:
+        w = pnfs_rwx.PnfsRwxWorkload(**opts)
+        with _Ctx() as ctx:
+            if duration is not None:
+                ctx.shared["run.duration_s"] = duration
+            w._resolve_runtime(ctx)
+        return w.opt("runtime_s")
+
+    def test_the_run_duration_sets_fios_runtime(self):
+        self.assertEqual(self._resolved(1800.0), 1800)
+
+    def test_a_suite_that_sets_it_wins(self):
+        self.assertEqual(self._resolved(1800.0, runtime_s=900), 900)
+
+    def test_neither_falls_back_to_an_hour(self):
+        self.assertEqual(self._resolved(None), 3600)
+
+
+class WaitIOFlowing(unittest.TestCase):
+    """fio's runtime counts the timed run, not the file layout before it, so the run's clock
+    starts when every instance is in the timed run, as operator/test/fio_migration_test.py
+    did. Counting from pods Running would end the wait early by however long layout took."""
+
+    def test_the_timed_run_is_told_apart_from_layout(self):
+        self.assertFalse(fio.in_timed_run("[pod] installing fio\nfiotest: Laying out IO file (1 file / 1024MiB)\n"))
+        self.assertFalse(fio.in_timed_run("Jobs: 1 (f=1): [f(1)][100.0%][eta 00m:00s]\n"))
+        self.assertTrue(fio.in_timed_run(
+            "Jobs: 1 (f=1): [m(1)][0.2%][r=508KiB/s,w=196KiB/s][r=127,w=49 IOPS][eta 34m:57s]\n"))
+
+    def test_every_instance_is_waited_for_in_its_own_container(self):
+        asked: list[tuple[str, str]] = []
+
+        def run(args: list[str], timeout: int = 60, check: bool = True,
+                stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+            if "logs" in args:
+                pod, container = args[args.index("logs") + 1], args[args.index("-c") + 1]
+                asked.append((pod, container))
+                return _cp("Jobs: 1 (f=1): [m(1)][1.0%][r=1,w=1 IOPS][eta 30m:00s]\n")
+            return _cp("")
+
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                                     containers_per_pod=2)
+        with _Ctx() as ctx:
+            w._documents(ctx, "sc")
+            with _patch(kube, "run", run):
+                pending = fio.wait_io_flowing(ctx, "w", "default", w._instances, 5)
+        self.assertEqual(pending, [])
+        self.assertEqual(sorted(asked), sorted((i.pod, i.container) for i in w._instances))
+
+    def test_an_instance_still_laying_out_is_named_rather_than_waited_for_forever(self):
+        def run(args: list[str], timeout: int = 60, check: bool = True,
+                stdin: str | None = None) -> subprocess.CompletedProcess[str]:
+            return _cp("fiotest: Laying out IO file (1 file / 1024MiB)\n")
+
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=0, solo_pods=1, containers_per_pod=1)
+        with _Ctx() as ctx:
+            w._documents(ctx, "sc")
+            with _patch(kube, "run", run):
+                pending = fio.wait_io_flowing(ctx, "w", "default", w._instances, 0)
+        self.assertEqual(pending, w._instances)
+
+
+class HostDmesg(unittest.TestCase):
+    def test_no_matching_pod_is_said_rather_than_collecting_nothing(self):
+        from sbtest.components.logs import Dmesg
+        with tempfile.TemporaryDirectory() as d:
+            ctx = RunContext(run_id="run1", outdir=d, log=Logger(os.path.join(d, "test.log")))
+            with _patch(kube, "list_pods", lambda ns, matching: []):
+                Dmesg(namespace="simplyblock", pods_matching=["absent"]).collect(ctx)
+            with open(os.path.join(d, "test.log")) as fh:
+                log = fh.read()
+        self.assertIn("no pods", log)
+        self.assertIn("absent", log)
+
+
+class _patch:
+    """Minimal attribute patcher — the stdlib one needs a dotted target string."""
+
+    def __init__(self, obj: object, attr: str, value: object) -> None:
+        self.obj, self.attr, self.value = obj, attr, value
+
+    def __enter__(self) -> object:
+        self.old = getattr(self.obj, self.attr)
+        setattr(self.obj, self.attr, self.value)
+        return self.value
+
+    def __exit__(self, *exc: object) -> None:
+        setattr(self.obj, self.attr, self.old)
+
+
+if __name__ == "__main__":
+    unittest.main()
+
+
+class WorkloadIdleNodes(unittest.TestCase):
+    """chaos.fence cuts a node off from the MDS, and nfsd fences that node's NFS client for
+    the volume, so every workload pod on it would be fenced with the probe. With every
+    node busy it found no victim (pnfs-1791743002). idle_nodes keeps the pNFS workloads,
+    churn included, off that many nodes, so the fence always has a clean victim."""
+
+    NODES = ["control-plane", "worker-1", "worker-2", "worker-3", "worker-4"]
+
+    def _plugins(self, *_: object, **__: object) -> list[kube.Pod]:
+        return [kube.Pod(name=f"simplyblock-csi-node-{i}", namespace="simplyblock", node=n,
+                         containers=("csi-node",), phase="Running")
+                for i, n in enumerate(self.NODES)]
+
+    @staticmethod
+    def _excluded(doc: dict) -> list[str]:
+        terms = (doc["spec"].get("affinity", {}).get("nodeAffinity", {})
+                 .get("requiredDuringSchedulingIgnoredDuringExecution", {})
+                 .get("nodeSelectorTerms", []))
+        return sorted(v for t in terms for e in t.get("matchExpressions", [])
+                      if e.get("key") == "kubernetes.io/hostname" and e.get("operator") == "NotIn"
+                      for v in e.get("values", []))
+
+    def test_every_pod_avoids_the_idle_nodes_and_they_are_published(self):
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=3, solo_pods=1,
+                                     cross_readers=1, idle_nodes=1)
+        with _Ctx() as ctx, mock.patch.object(kube, "list_pods", self._plugins):
+            docs = w._documents(ctx, "sc-pnfs")
+            idle = ctx.shared.get("pnfs.idle_nodes")
+        self.assertEqual(idle, ["worker-4"])
+        pods = [d for d in docs if d["kind"] == "Pod"]
+        self.assertTrue(pods)
+        for pod in pods:
+            self.assertEqual(self._excluded(pod), ["worker-4"], pod["metadata"]["name"])
+
+    def test_the_spread_anti_affinity_is_kept(self):
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=3, solo_pods=0,
+                                     idle_nodes=1)
+        with _Ctx() as ctx, mock.patch.object(kube, "list_pods", self._plugins):
+            docs = w._documents(ctx, "sc-pnfs")
+        pod = next(d for d in docs if d["kind"] == "Pod")
+        self.assertIn("podAntiAffinity", pod["spec"]["affinity"])
+
+    def test_no_idle_nodes_by_default_and_no_lookup(self):
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=2, solo_pods=1)
+        with _Ctx() as ctx, mock.patch.object(kube, "list_pods",
+                                               side_effect=AssertionError("listed nodes")):
+            docs = w._documents(ctx, "sc-pnfs")
+            self.assertEqual(ctx.shared.get("pnfs.idle_nodes", []), [])
+        for pod in [d for d in docs if d["kind"] == "Pod"]:
+            self.assertEqual(self._excluded(pod), [])
+
+    def test_too_few_nodes_keeps_none_idle(self):
+        """A pNFS volume needs a client node and the fence a second one to recall from."""
+        w = pnfs_rwx.PnfsRwxWorkload(shared_volumes=1, pods_per_shared=2, solo_pods=0,
+                                     idle_nodes=4)
+        with _Ctx() as ctx, mock.patch.object(kube, "list_pods", self._plugins):
+            docs = w._documents(ctx, "sc-pnfs")
+            self.assertEqual(ctx.shared.get("pnfs.idle_nodes", []), [])
+        for pod in [d for d in docs if d["kind"] == "Pod"]:
+            self.assertEqual(self._excluded(pod), [])
+
+    def test_churn_pods_avoid_the_idle_nodes(self):
+        from sbtest.components.workloads import churn
+        w = churn.ChurnWorkload()
+        inst = fio.FioInstance(pod="run1-churn-1", container="fio-0",
+                               filename="/data/run1-churn-1.fio", logdir="/logs/c0",
+                               evidence="run1-fio-churn-1")
+        with _Ctx() as ctx:
+            ctx.shared["pnfs.idle_nodes"] = ["worker-4"]
+            doc = w._pod(ctx, inst, "run1-pnfs-shared-0", 90.0)
+        self.assertEqual(self._excluded(doc), ["worker-4"])

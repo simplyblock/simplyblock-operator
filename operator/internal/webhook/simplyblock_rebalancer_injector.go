@@ -16,7 +16,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -30,9 +30,10 @@ const (
 // +kubebuilder:webhook:path=/mutate-v1-pod-simplyblock-rebalancer,mutating=true,failurePolicy=ignore,sideEffects=None,groups="",resources=pods,verbs=create,versions=v1,name=simplyblock-rebalancer-injector.simplyblock.io,admissionReviewVersions=v1
 
 // SimplyblockRebalancerInjector is a mutating admission webhook that injects the simplyblock-rebalancer
-// sidecar into any pod labelled role=simplyblock-storage-node, provided the associated
+// sidecar into any pod labeled role=simplyblock-storage-node, provided the associated
 // StorageCluster has latency benchmarking enabled. failurePolicy=ignore ensures that
-// webhook unavailability never blocks storage node pod creation.
+// webhook unavailability never blocks storage node pod creation. The object selector in
+// config/webhook/objectselector_patch.yaml limits the API server to sending only those pods.
 type SimplyblockRebalancerInjector struct {
 	Client client.Client
 }
@@ -104,7 +105,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 ) (image, configMapName string, ok bool) {
 	uuidPrefix := clusterUUIDFromPodName(podName)
 
-	var list simplyblockv1alpha1.StorageClusterList
+	var list simplyblockv1alpha2.StorageClusterList
 	if err := h.Client.List(ctx, &list); err != nil {
 		log.Error(err, "Failed to list StorageClusters")
 		return "", "", false
@@ -115,7 +116,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 			continue
 		}
 		rb := autoplacement.GetConfig(cr.Spec.VolumeAutoPlacement)
-		if !ptr.BoolFromOrFalse(rb.LatencyBenchmarkEnabled) {
+		if !ptr.BoolFromOrFalse(rb.EnableLatencyBenchmark) {
 			log.Info("Skipping: latency benchmark not enabled", "cluster", cr.Name)
 			return "", "", false
 		}
@@ -132,7 +133,7 @@ func (h *SimplyblockRebalancerInjector) resolveConfig(
 }
 
 // clusterUUIDFromPodName extracts the cluster UUID prefix from the snode-spdk pod
-// name pattern "snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>".
+// name, whose pattern is snode-spdk-pod-<RPC_PORT>-<UUID_PREFIX>.
 func clusterUUIDFromPodName(
 	podName string,
 ) string {
@@ -175,7 +176,7 @@ skipVolume:
 			"--config=/etc/simplyblock/simplyblock-rebalancer/$(HOSTNAME)",
 			"--metrics-addr=:9199",
 		},
-		SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true)},
+		SecurityContext: volumemigration.PrivilegedAsRoot(),
 		Resources: corev1.ResourceRequirements{
 			Requests: corev1.ResourceList{
 				corev1.ResourceCPU:    resource.MustParse("100m"),

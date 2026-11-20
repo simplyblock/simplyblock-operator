@@ -10,6 +10,7 @@ package blockdev
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func readSynth(t *testing.T, s *synth, opts ...Option) (Reading, error) {
 }
 
 // U-15: an all-zero device is the only reading that permits a format.
-func TestBlankRequiresBothRegionsZero(t *testing.T) {
+func TestBlankRequiresTheHeadRegionZero(t *testing.T) {
 	s := newSynth(8<<20, MinRegionSize)
 	got, err := readSynth(t, s)
 	if err != nil {
@@ -98,9 +99,16 @@ func TestBlankRequiresBothRegionsZero(t *testing.T) {
 	}
 }
 
-// U-16, U-17, U-18, U-19: one byte anywhere in either region defeats blank, and
-// the two ends of each region are where an off-by-one would hide.
-func TestOneNonZeroByteDefeatsBlank(t *testing.T) {
+// U-16: one byte anywhere in the block the blank rule reads defeats blank, and
+// both ends of that block are where an off-by-one would hide.
+//
+// U-18 used to sit here and asked the same of the last byte of the whole head
+// region. The rule does not read that far any more: a disk is released by
+// erasing the signature, which is what wipefs does, or by zeroing the front of
+// it, and neither reaches the end of a megabyte. What lives past the block is
+// still read and still offered to every detector, so a format there is still
+// named; it is only the zero test that stops at the block.
+func TestOneNonZeroByteInTheHeadDefeatsBlank(t *testing.T) {
 	const size = 8 << 20
 	region := int64(MinRegionSize)
 
@@ -108,12 +116,9 @@ func TestOneNonZeroByteDefeatsBlank(t *testing.T) {
 		name string
 		off  int64
 	}{
-		{"U-16: first byte of the head region", 0},
-		{"U-16: inside the head region", 1234},
-		{"U-18: last byte of the head region", region - 1},
-		{"U-19: first byte of the tail region", size - region},
-		{"U-17: inside the tail region", size - 1234},
-		{"U-17: last byte of the device", size - 1},
+		{"U-16: first byte of the block", 0},
+		{"U-16: inside the block", 1234},
+		{"U-16: last byte of the block", BlankHeadSize - 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,6 +136,64 @@ func TestOneNonZeroByteDefeatsBlank(t *testing.T) {
 				t.Errorf("Content = %s, want Foreign", got.Content)
 			}
 		})
+	}
+}
+
+// U-17, U-19: a byte in the tail region does not defeat blank.
+//
+// The tail is still read, and every detector still sees it, so a format the
+// catalog knows is still named from bytes that live only there: md metadata 1.0
+// writes its superblock at the end of the device and nowhere else. What the tail
+// no longer does is decide the zero test. A device whose head is zero and whose
+// signature nothing matches is blank, whatever the tail holds, because zeroing
+// the head is how a device is released for reuse.
+//
+// The cost is stated rather than hidden: a device carrying unrecognized data
+// behind a zeroed head is offered for a format that destroys it. That is the
+// same reach the rule has always had past the probed regions, moved forward to
+// the end of the head.
+func TestATailByteDoesNotDefeatBlank(t *testing.T) {
+	const size = 8 << 20
+	region := int64(MinRegionSize)
+
+	cases := []struct {
+		name string
+		off  int64
+	}{
+		{"U-19: first byte of the tail region", size - region},
+		{"U-17: inside the tail region", size - 1234},
+		{"U-17: last byte of the device", size - 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newSynth(size, region)
+			s.bytes[tc.off] = 0x01
+
+			got, err := readSynth(t, s)
+			if err != nil {
+				t.Fatalf("Read: %v", err)
+			}
+			if got.Content != ContentBlank {
+				t.Fatalf("a byte at %d left the device reading %s, want Blank: "+
+					"the zero test is over the head region alone", tc.off, got.Content)
+			}
+		})
+	}
+
+	// The tail is still read, or a detector that needs it could not run.
+	s := newSynth(size, region)
+	if _, err := readSynth(t, s); err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	var sawTail bool
+	for _, r := range s.reads {
+		if r.off >= size-region {
+			sawTail = true
+		}
+	}
+	if !sawTail {
+		t.Errorf("the tail region was not read at all: %+v\n"+
+			"md metadata 1.0 lives only there, and dropping the read would stop naming it", s.reads)
 	}
 }
 
@@ -345,5 +408,41 @@ func TestReaderCannotWrite(t *testing.T) {
 		WriteAt([]byte, int64) (int, error)
 	}); isWriter {
 		t.Fatal("the Reader a prober is handed can write to the device")
+	}
+}
+
+// U-21: the sentence a blank reading carries says how many bytes were actually
+// read, which on a device smaller than two regions is the whole device rather
+// than a region.
+//
+// A device of 64 KiB probed with a 128 KiB region was reported as having had its
+// first 131072 bytes read and found zero, which claims twice the device. The
+// number is the evidence for an irreversible write, so it says what was read.
+func TestTheBlankSentenceCountsWhatWasRead(t *testing.T) {
+	region := int64(MinRegionSize)
+
+	for _, size := range []int64{region / 2, region, region + 1024, 8 << 20} {
+		s := newSynth(size, region)
+		got, err := readSynth(t, s)
+		if err != nil {
+			t.Fatalf("Read(%d): %v", size, err)
+		}
+		if got.Content != ContentBlank {
+			t.Fatalf("Read(%d).Content = %s, want Blank", size, got.Content)
+		}
+
+		// A device of two regions or less is read whole, and every byte of it
+		// is then examined. Above that the rule reads one block of the head,
+		// and the sentence has to say the block rather than the region: it is
+		// the evidence a format rests on, so it states what was looked at.
+		read := size
+		if read > 2*region {
+			read = BlankHeadSize
+		}
+		want := fmt.Sprintf("the first %d bytes", read)
+		if !strings.Contains(got.Detail, want) {
+			t.Errorf("a %d-byte device probed with a %d-byte region says %q,\nwant it to contain %q",
+				size, region, got.Detail, want)
+		}
 	}
 }

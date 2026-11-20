@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Node
+metadata:
+  name: worker-01
+spec: {}
+status:
+  addresses:
+  - address: 10.10.10.1
+    type: InternalIP
+  allocatable:
+    cpu: "28"
+    hugepages-1Gi: 64Gi
+    memory: 180Gi
+  capacity:
+    cpu: "32"
+    hugepages-1Gi: 64Gi
+    memory: 256Gi
+  daemonEndpoints:
+    kubeletEndpoint:
+      Port: 0
+  nodeInfo:
+    architecture: ""
+    bootID: ""
+    containerRuntimeVersion: ""
+    kernelVersion: ""
+    kubeProxyVersion: ""
+    kubeletVersion: ""
+    machineID: ""
+    operatingSystem: ""
+    osImage: ""
+    systemUUID: ""

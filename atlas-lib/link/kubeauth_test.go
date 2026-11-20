@@ -200,6 +200,39 @@ func TestKubeAuthenticatorNamesAControllerByItsPod(t *testing.T) {
 	}
 }
 
+// The pNFS metadata server pod links as its own kind, named by its pod: the
+// StatefulSet's pod name is stable, which is what lets the operator address the
+// same peer across restarts.
+func TestKubeAuthenticatorNamesAnMDSByItsPod(t *testing.T) {
+	auth := &KubeAuthenticator{Client: kubeClient(authenticated(boundToPod("pnfs-mds-0", "pod-uid-9")))}
+
+	identity, err := auth.Authenticate(context.Background(), "token", Claim{ID: MDSPeer("pnfs-mds-0")})
+	if err != nil {
+		t.Fatalf("Authenticate: %v", err)
+	}
+	if identity.ID != MDSPeer("pnfs-mds-0") || identity.ID.String() != "mds/pnfs-mds-0" {
+		t.Errorf("identity = %s, want mds/pnfs-mds-0", identity.ID)
+	}
+}
+
+// A node plugin's token must not buy it the metadata server's place in the
+// registry, or export calls would be relayed to a node that never assembled
+// them. The node plugin's ServiceAccount is the one this token carries.
+func TestKubeAuthenticatorKeepsTheMDSKindToItsServiceAccount(t *testing.T) {
+	auth := &KubeAuthenticator{
+		Client: kubeClient(authenticated(boundToPod("csi-node-abc", "pod-uid-1"))),
+		ServiceAccounts: map[PeerKind][]string{
+			PeerKindNode: {"simplyblock/csi-node"},
+			PeerKindMDS:  {"simplyblock/pnfs-mds"},
+		},
+	}
+
+	_, err := auth.Authenticate(context.Background(), "token", Claim{ID: MDSPeer("csi-node-abc")})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("err = %v, want PermissionDenied", err)
+	}
+}
+
 // An API server that cannot be reached says nothing about the token, so the
 // peer must be told to come back rather than that it was rejected.
 func TestKubeAuthenticatorTreatsReviewFailureAsRetryable(t *testing.T) {

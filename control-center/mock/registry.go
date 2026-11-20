@@ -9,15 +9,12 @@ package main
 // empty list beats a 404 for a UI.
 
 const (
-	sbGroup     = "storage.simplyblock.io"
-	ramenGroup  = "ramendr.openshift.io"
-	ocmGroup    = "cluster.open-cluster-management.io"
-	kvGroup     = "kubevirt.io"
-	rbacGroup   = "rbac.authorization.k8s.io"
-	authzGroup  = "authorization.k8s.io"
-	apiExtGroup = "apiextensions.k8s.io"
-	// mockGroup holds the mock's internal types (see ResourceDef.Internal).
-	mockGroup = "mock.simplyblock.io"
+	sbGroup    = "storage.simplyblock.io"
+	ramenGroup = "ramendr.openshift.io"
+	ocmGroup   = "cluster.open-cluster-management.io"
+	kvGroup    = "kubevirt.io"
+	rbacGroup  = "rbac.authorization.k8s.io"
+	authzGroup = "authorization.k8s.io"
 )
 
 func def(group, version, resource, kind string, namespaced bool) ResourceDef {
@@ -44,17 +41,13 @@ func allResourceDefs() []ResourceDef {
 		def("apps", "v1", "replicasets", "ReplicaSet", true),
 		def("networking.k8s.io", "v1", "ingresses", "Ingress", true),
 
-		// ---- CRDs: the simplyblock ones are served from operator/config/crd/bases
-		// so the console can read x-kubernetes-validations (see crds.go) ----
-		def(apiExtGroup, "v1", "customresourcedefinitions", "CustomResourceDefinition", false),
-
 		// ---- storage ----
 		def("storage.k8s.io", "v1", "storageclasses", "StorageClass", false),
 		def("snapshot.storage.k8s.io", "v1", "volumesnapshots", "VolumeSnapshot", true),
 		def("snapshot.storage.k8s.io", "v1", "volumesnapshotcontents", "VolumeSnapshotContent", false),
 		def("snapshot.storage.k8s.io", "v1", "volumesnapshotclasses", "VolumeSnapshotClass", false),
 
-		// ---- simplyblock: CRDs that exist in `helm-charts/.../crds` ----
+		// ---- simplyblock: CRDs that exist in helm-charts/.../crds ----
 		def(sbGroup, "v1alpha1", "storageclusters", "StorageCluster", true),
 		def(sbGroup, "v1alpha1", "storagenodes", "StorageNode", true),
 		def(sbGroup, "v1alpha1", "storagenodesets", "StorageNodeSet", true),
@@ -86,7 +79,7 @@ func allResourceDefs() []ResourceDef {
 
 		// ---- multi-cluster / multi-tenant paradigm (design-only; see PARADIGM.md) ----
 		// Hub tenancy + RBAC surface from the multi-cluster RBAC design. None of
-		// these exist on main. They are modeled here so the console's access,
+		// these exist on main; they are modelled here so the console's access,
 		// hub/agent and drift views can be exercised.
 		def(sbGroup, "v1alpha1", "managedclusters", "ManagedCluster", false),         // hub registration (cluster-scoped)
 		def(sbGroup, "v1alpha1", "nodepoolallocations", "NodePoolAllocation", false), // privileged-op envelope (cluster-scoped)
@@ -114,8 +107,5 @@ func allResourceDefs() []ResourceDef {
 		def(ocmGroup, "v1", "managedclusters", "ManagedCluster", false),
 		def(kvGroup, "v1", "virtualmachines", "VirtualMachine", true),
 		def(kvGroup, "v1", "virtualmachineinstances", "VirtualMachineInstance", true),
-
-		// ---- internal: control plane tasks, projected by the v2 API ----
-		cpTaskDef(),
 	}
 }

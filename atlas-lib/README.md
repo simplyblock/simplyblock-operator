@@ -30,15 +30,23 @@ atlas/
 │   ├── sysfs_scan.go       sysfs tree walk + attribute parsing
 │   ├── siblings.go         Siblings (same volume, other paths) + CoTenants (other volumes, same subsystem)
 │   ├── multinamespace.go   IsMultiNamespace / Controller.MaxNamespaces (MNAN)
-│   └── identify*.go        Identify Controller ioctl (Linux) + field decoding
+│   ├── identify*.go        Identify Controller and Identify Namespace ioctls (Linux) + MNAN and AWUPF decoding
+│   ├── atomicity.go        PowerFailAtomicity (NSFEAT, NAWUPF, NABSPF, NABO, AWUPF), AtomicAt
+│   ├── disclaimed.go       AtomicityDisclaimed: controllers whose atomicity statement is not believed
+│   └── lbaformat.go        LBAFormat, ReadNamespaceFormats, ControllerNamespaceIDs, NSIDAll
 ├── nvmeof/                 NVMe-oF fabric connect/disconnect (TCP)
 │   ├── connector.go        Connector iface; Target, Targets + TargetOptions
 │   ├── fabrics.go          local impl: NewFabricsConnector (/dev/nvme-fabrics)
-│   ├── wait.go             ConnectMultipathDevice: attach all paths -> nvme.Device (start here)
+│   ├── wait.go             ConnectMultipathDevice: attach all paths -> nvme.Device (start here);
+│   │                       WaitForPathsToServe: wait out a new path's namespace scan
 │   ├── reconcile.go        ReconcilePaths: make attached paths match the control plane + PathState
 │   ├── detach.go           DetachDevice: disconnect unless the subsystem is shared
 │   └── multipath.go        the halves: ConnectPaths (ordered per-path connect) + PathResult
 ├── nqn/                    Build & parse simplyblock lvol NQNs
+│   └── default_host.go     DefaultHost: the node's nvme-cli default host NQN; NVMeHost
+├── fiemap/                 What a byte range of a file is made of: data, unwritten, delalloc, or hole
+├── nfsclient/              The kernel NFS client's own view of its mounts
+│   └── mountstats.go       Mount, ParseMountstats, ReadMountstats: op counts, layout types, reconnects
 ├── blockdev/               What a Linux block device is, and what it carries
 │   ├── device.go           Device: path, kernel name, device numbers, block sizes, size, read-only
 │   ├── content.go          Content, Reading, Reader/Opener seam, Prober.Read
@@ -62,20 +70,23 @@ atlas/
 │   ├── hugepages.go        HugePages: per size and per NUMA node, allocated and free
 │   ├── netiface.go         Interface: link speed, state, driver, PCI slot, NUMA node
 │   │                       (Inventory.NVMeControllers comes from pci/, see below)
-│   └── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   ├── nvmeformats.go      ReadNVMeFormats: the LBA formats of every kernel-driven NVMe controller
+│   ├── hostos.go           ReadHostOS: the worker's distro, family, version, and architecture
+│   ├── environment.go      DetectEnvironment: OpenShift / Talos / K3s / Rancher / Vanilla, with the evidence
+│   └── netattach.go        CollectNetworkAttachments: whether Multus's kind is served, a namespace's
+│                           definitions, and the host interface each CNI configuration builds on
 ├── lvm/                    Linux LVM commands + content-based identity
 │   ├── doc.go              Why identity is read from content, and how scoping is decided
 │   ├── lvm.go              Manager, Run (the escape hatch)
 │   ├── identity.go         VolumeGroup, HasLogicalVolume, ListLogicalVolumes, Rescan
 │   ├── volume.go           Create/Activate/Deactivate/Remove a PV, VG, or LV
-│   ├── clone.go            ResolveClonedVolumeGroup (rescan + import + rename)
+│   ├── clone.go            ResolveClonedVolumeGroup(Set) (rescan + import + rename)
 │   ├── grow.go             Expand a PV, VG, or LV, read an LV's current size
-│   ├── dm.go               RemoveOrphanedDMNodes
-│   └── vdo/                VDO provisioning handler + the whole per-volume stack lifecycle
-│       ├── volume.go       Registers itself with lvm, UpdateVolume
-│       └── stack.go        CreateOrAttach, ResolveClone, Deactivate, Remove, Grow, SetFeatures
+│   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
+│   ├── devices.go          ForgetDevice: prune the node's LVM devices file
+│   └── vdo.go              The VDO VolumeProvisioning handler, registered by this package's init
 ├── volstack/               A volume's node-side stack, as ordered layers
-│   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Grower, NodeRequirements, Recorder), Plan
+│   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Yielder, Grower, NodeRequirements, Recorder), Plan
 │   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in
 │   ├── record.go           Store: what was planned for a volume and how far bring-up got
 │   ├── layers/             The layer implementations
@@ -87,19 +98,26 @@ atlas/
 │   │   ├── filesystem.go   filesystem: format if blank, mount, refuse anything else
 │   │   └── filesystem_strategy.go  FilesystemLayerStrategy: what each fs type formats, mounts, and resizes with
 │   └── plans/              The plan shapes: one constructor per row of the design's plan table
-│       ├── plans.go        RawBlock / Plain / LVM / Striped + the LVM naming rule
+│       ├── plans.go        RawBlock / Plain / LVM / LVMRawBlock / Striped / StripedRawBlock + the LVM naming rule
 │       └── node.go         NodeConfig: the seams every plan on this host is built over
 ├── lvol/                   Logical-volume identity, control-plane + device resolution
 │   ├── volume.go           VolumeHandle, Volume
+│   ├── handle.go           Handle: a volume handle taken apart; ParseHandle, IsCanonicalUUID
+│   ├── stripe.go           The striped-volume marker: ParseStripedHandle, SplitStripeMarker, WithStripeMarker
+│   ├── normalized.go       NormalizeHandle: the annotated handle over the field's, §16.4's rule
+│   ├── groupsnapshot.go    GroupSnapshotHandle: a consistency-group generation's CSI id
 │   ├── resolver.go         Resolver: control-plane lookup (info + Connection)
 │   └── mapping.go          Mapper: attached lvol → local nvme.Device
 ├── kube/                   lvol ↔ PV / PVC / VolumeAttachment mapping
 │   ├── names.go            driver name, param/context/label/annotation/finalizer keys, pool label key
+│   ├── derived.go          Formula: bounded, deterministic derived names and labels
 │   ├── identity.go         VolumeHandle↔PV, VolumeContext, pin annotations
+│   ├── normalized.go       NormalizedHandle / NormalizedVolumeHandleFromPV: §16.4's rule on an object
 │   ├── binding.go          Binding: resolved PV+PVC+Node view of an lvol
 │   ├── resolver.go         Resolver iface + ResolveBinding aggregation
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params
 │   ├── params.go           String/Int/Float/BoolParam map helpers
+│   ├── stripe.go           ParseStripe: stripe_width / stripe_size, read the same by the driver and the operator
 │   ├── index.go            shared index names + pure key funcs
 │   ├── informer.go         InformerResolver: client-go informer-backed Resolver
 │   ├── live.go             LiveResolver: uncached clientset-backed Resolver
@@ -109,7 +127,12 @@ atlas/
 │   ├── volumes.go          create / clone / list / resize / delete / connection
 │   ├── pools.go            storage pools (incl. by-name lookup)
 │   ├── storagenodes.go     storage nodes + their data NICs
-│   └── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── consistencygroups.go consistency groups: by members, by name, member handles
+│   ├── subsystemmoves.go   late joins and leaves: join plan, join, detach, and the subsystem move a member joins or leaves through
+│   ├── migrations.go       subsystem migrations: create / get / list / continue / cancel, of a volume or a whole subsystem
+│   ├── volumemove.go       moving a volume to another cluster: start / stop / commit / release the cutover
+│   ├── chain.go            WalkChain: from a handle to the volume serving it, across relationships
+│   └── tasks.go            control-plane tasks: read one, as a caller waiting on queued work
 ├── link/                   gRPC operator ↔ CSI, over connections the CSI driver opens
 │   ├── doc.go              why the connection runs backwards, and how gRPC still works on it
 │   ├── session.go          Session: yamux-multiplexed link, gRPC server + client on both ends
@@ -117,10 +140,15 @@ atlas/
 │   ├── agent.go            Agent: the CSI side; dials, identifies, serves, reconnects
 │   ├── registry.go         Registry: who is linked right now (ErrNoSession when not)
 │   ├── peer.go             PeerKind/PeerID/Claim/Identity/Peer
+│   ├── peercontext.go      hub services: refused before Hello, PeerFromContext names the caller
 │   ├── auth.go             Authenticator iface, bearer-token plumbing, TokenSource
 │   ├── kubeauth.go         KubeAuthenticator: TokenReview → the pod's node, not the peer's word
-│   ├── dial.go             TLSDialer / InsecureDialer
-│   └── linkv1/             the Hello handshake protocol (buf-generated, committed)
+│   ├── dial.go             TLSFileDialer / TLSDialer / InsecureDialer
+│   ├── peercontext.go      PeerFromContext; the hub refuses calls before Hello
+│   ├── remote.go           RemotePeer ("site/<site>/<kind>[/<name>]"), SitePeer
+│   ├── relay.go            the site link: Relay (hub), Forwarder (a site), Acceptor + OpenRemote/RemoteConn (a peer)
+│   ├── linkv1/             the Hello handshake protocol (buf-generated, committed)
+│   └── sitev1/             RelayService: the site link's one stream (buf-generated, committed)
 ├── storage/                one node's storage as one value, with no gRPC in here
 │   ├── accessor.go         Accessor: every lookup flat, plus the questions that re-scan
 │   │                       Local(sysfs) fills one in; storagerpc.Remote fills the same struct
@@ -129,23 +157,61 @@ atlas/
 │       ├── client.go       Remote(conn) + the nvme resolver interfaces, remoted
 │       ├── convert.go      nvme snapshot types ↔ wire form (total, both directions)
 │       └── storagev1/      SubsystemService + DeviceService (buf-generated, committed)
+├── conntrack/              Forget the host's conntrack entries translated to one dead backend
+│   ├── conntrack.go        Selector (protocol, port, reply source), Tuple, Matches, Forget
+│   ├── forget_linux.go     netlink delete, filtered by Selector.Matches (non-Linux: ErrUnsupported)
+│   └── conntrackrpc/       FlowService: served by the CSI node plugin, called by the operator
+│       ├── conntrackrpc.go NewServer(conntrack.Forget), Remote(conn).Forget
+│       └── conntrackv1/    the FlowService protocol (buf-generated, committed)
+├── netcheck/               Ask the host's namespace about its network: a NIC's addresses, a TCP connect
+│   ├── netcheck.go         Selector (name or PCI address), Report, Lookup, Interface, Connect
+│   └── netcheckrpc/        CheckService: served by the CSI node plugin, called by the operator
+│       ├── netcheckrpc.go  NewServer(read, connect), Remote(conn).InterfaceAddresses/.Connect, ErrUnavailable
+│       └── netcheckv1/     the CheckService protocol (buf-generated, committed)
+├── placement/
+│   └── placementrpc/       PlacementService: served by the operator, called by the CSI controller
+│       ├── placementrpc.go NewServer(Placer), Remote(conn).Place; controllers only
+│       └── placementv1/    the PlacementService protocol (buf-generated, committed)
+├── freeze/                 Hold a device-mapper device suspended under a token, with a deadline
+│   ├── freeze.go           Holds: Freeze/Thaw/Recover, records on disk; a striped volume's snapshot freeze
+│   └── freezerpc/          FreezeService: served by the CSI node plugin, relayed by the operator
+│       ├── freezerpc.go    NewServer(Freezer), NewRelay(conn), Remote(conn).Freeze/.Thaw
+│       └── freezev1/       the FreezeService protocol (buf-generated, committed)
+├── bucketdelivery/         Deliver an S3 bucket's mount to its gateway's node set
+│   ├── paths.go            GatewayMountRoot: the one hostPath both the CSI node plugin (bind-mounts a
+│   │                       bucket there) and the operator's ObjectStoreReconciler (mounts every gateway
+│   │                       pod's hostPath there, HostToContainer) have to agree on without calling
+│   │                       each other
+│   └── bucketdeliveryrpc/  BucketDeliveryService: served by the CSI node plugin, called by the operator.
+│       │                   No sibling local-action package: Deliver/Withdraw wrap the node plugin's
+│       │                   own NodeStageVolume/NodePublishVolume, already written for kubelet.
+│       ├── bucketdeliveryrpc.go  Bucket, Deliverer, NewServer(deliverer), Remote(conn)
+│       └── bucketdeliveryv1/     the BucketDeliveryService protocol (buf-generated, committed)
 ├── prometheus/             The telemetry simplyblock exports about itself (PromQL)
 │   ├── doc.go              Why this is not part of controlplane, and how fresh a value is
 │   ├── client.go           Provider, New, NewWithAPI (the test seam), query helpers
-│   ├── capacity.go         Capacity + VolumeCapacity / DeviceCapacity (size + sample date)
+│   ├── capacity.go         Capacity + Cluster/Volume/Device/Node/PoolCapacity (size + sample date)
 │   ├── volumeio.go         VolumeIO: per-volume IOPS + throughput
 │   └── latency.go          ClusterLatencies / ClusterLatencySamples (p50/p99), ErrLatencyDataNotReady
 ├── statemachine/           Deterministic state machine declared as data
 │   ├── statemachine.go     Config, StateDef, Machine, Snapshot, deadlines
 │   ├── multiconfig.go      MultiConfig: one graph per action over one state type
-│   └── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   ├── abort.go            StateDef.Abortable read three ways: CanAbort + the two graph queries
+│   ├── kubernetes.go       KubeSnapshot + ToKube/FromKube: the CRD form of a Snapshot
+│   └── claim.go            KubeClaim + WithClaim: fire a state's side effect once, under a leased claim
 ├── net/                    Outbound URL validation (SSRF guard)
 ├── ptr/                    Pointer/optional-field helpers for generated + K8s types
+├── crdtypes/               Validated value types CRD fields share; the markers sit on the type
+│   └── image.go            ImageReference: any registry, a tag, a digest, or both
+├── bounded/                Hard deadlines for calls no context reaches
+│   ├── bounded.go          Call/Do: a sysfs read, ioctl, or open under a deadline + the stuck-key guard
+│   └── command.go          CombinedOutput/Output: a child process that returns even when it cannot be reaped
 ├── errs/                   Sentinel errors (errors.Is across packages)
-│   └── deferrers/          defer-friendly Close/Run that log instead of dropping errors
+│   └── deferrers/          defer-friendly Close/Run (and CloseFn/RunFn) that log instead of dropping errors
 │
 ├── internal/               Private — not importable by consumers
 │   ├── cpapi/              oapi-codegen client for the control-plane v2 API (generated)
+│   ├── recordfile/         Path: the file a per-volume record is kept in (volstack, freeze)
 │   ├── sysfs/              low-level sysfs primitives (paths, attr reads)
 │   └── version/            build metadata (stamped via -ldflags)
 │
@@ -260,6 +326,22 @@ if err := client.ContinueMigration(ctx, clusterID, nqn, migration.ID); err != ni
 }
 ```
 
+A refused create or cancel says which refusal it was, so a caller never matches
+the control plane's wording itself. `controlplane.ErrMigrationBlocked` is a create
+that clears by itself and is asked again; `ErrMigrationAlreadyOnTarget` is a create
+for a volume already on the target. A cancel refused with `ErrMigrationNotActive`
+or `errs.ErrNotFound` found a migration that has already ended, which is what the
+cancel asked for, so the caller goes on to release what it built.
+
+`validateTargetPaths` connects the new paths on each consuming host and checks
+them. Between the two, `nvmeof.WaitForPathsToServe` waits, under a deadline, for
+every live path to serve every namespace of the subsystem: the connect returns
+once a controller is live, and the kernel attaches the namespaces to it one by
+one afterward, so a check run straight away sees a scanning path as a broken
+one. *Today:* the validation Job's settle step,
+`operator/cmd/simplyblock-rebalancer/validate_migration.go` through
+`volumemigration.SettleMigrationPaths`.
+
 `ListMigrations` returns everything one subsystem has in flight, of both kinds,
 because the control plane returns them in one list. `Kind` is decided on a field
 the other shape does not carry rather than on whether a decode succeeds: both
@@ -330,12 +412,17 @@ for _, handle := range handles {
 Every value is a scrape, so it is at most one scrape interval old, and
 Prometheus offers no push or watch for samples, so a caller reads at the moment
 it needs a number. A cache adds staleness on top of the scrape interval and has
-no event to invalidate it. `DeviceCapacity` is the same call keyed by device UUID.
+no event to invalidate it. `DeviceCapacity`, `NodeCapacity`, and `PoolCapacity`
+are the same call keyed by device, node, and pool UUID. `ClusterCapacity` is the
+odd one out and hands back a single sample rather than a map: the cluster is the
+scope every one of these queries is already narrowed to, so grouping by it
+yields the one entry the caller asked for.
 
 _Today:_ `operator/internal/metricsapi/storage.go` reads `VolumeCapacity` once
 per cluster per request to serve the measured half of a `LogicalVolumeMetrics`
 reading, and takes the provisioned size from the volume itself.
-`DeviceCapacity` has no caller:
+`operator/internal/metricsapi/poolstorage.go` and `clusterstorage.go` do the
+same with `PoolCapacity` and `ClusterCapacity`. `DeviceCapacity` has no caller:
 `operator/internal/controller/storagedevice_controller.go` still publishes the
 device capacity its subscription cached, which the device stream never updates.
 
@@ -599,10 +686,10 @@ store.SubsystemResolver  // nvme.SubsystemResolver
 #### Inspect a worker before it is given to a cluster
 
 What a discovery run asks before it writes a document: which disks are free,
-what the machine has to run a storage node with, and which distribution
-installed the kubelet. One call, because a run wants all of it about one worker
-and every caller would otherwise repeat the same five reads and the same
-partial-failure handling.
+what the machine has to run a storage node with, which operating system it
+boots, and which distribution installed the kubelet. One call, because a run
+wants all of it about one worker and every caller would otherwise repeat the
+same reads and the same partial-failure handling.
 
 ```go
 inv, err := inventory.Collect(ctx, inventory.Config{
@@ -610,12 +697,20 @@ inv, err := inventory.Collect(ctx, inventory.Config{
     // the mount table is the one that matters: see the warning below.
     SysfsRoot:     "/host/sys",
     ProcRoot:      "/host/proc",
+    HostRoot:      "/host",
     MountinfoPath: "/host/proc/1/mountinfo",
 
     // Omit these and the machine is read without a cluster around it.
     Kubernetes: inventory.KubernetesSources{
         Discovery: clientset.Discovery(),
         Nodes:     nodes.Items,
+        // The Multus definitions one namespace holds. Independent of the two
+        // above: giving it does not conclude the environment.
+        NetworkAttachments: inventory.NetworkAttachmentSource{
+            Discovery: clientset.Discovery(),
+            Dynamic:   dynamicClient,
+            Namespace: "simplyblock",
+        },
     },
 })
 if err != nil {
@@ -628,8 +723,13 @@ inv.CPU.HyperThreading          // the kernel's own answer where it gives one
 inv.Memory.AvailableBytes       // what a process could get; not the same as FreeBytes
 inv.HugePages.AllocatedBytes()  // what is already set aside, across every size
 inv.Interfaces                  // .SpeedMbps, .Virtual, .PCIAddress, .NUMANode
+inv.HostOS.Distro               // ubuntu / rocky / rhel / talos, as os-release names it
+inv.HostOS.Family               // Debian / RedHat / SUSE / Alpine / Arch; which packaging
+inv.HostOS.Architecture         // uname's machine: x86_64, aarch64
 inv.Environment.Distribution    // OpenShift / Talos / K3s / Rancher / Vanilla
 inv.Environment.Evidence        // what it rested on, for the reviewer who corrects it
+inv.NetworkAttachments.State    // Served / NotServed (no Multus) / Unread; empty when not asked
+inv.NetworkAttachments.Definitions // .Name, .Config.Type, .Config.HostInterface, .ResourceName
 
 // Every block device is returned, refused ones included, so that an
 // administrator can be told why the disk they expected is not a candidate.
@@ -665,6 +765,13 @@ bridge, loopback, a disk behind a controller whose bus reports no node — and i
 is absent when everything was. Dropping the unplaceable would make the rollup
 read as the whole inventory while missing part of it.
 
+**Reading a host from inside a pod: name its root filesystem too.** Every
+container image carries an `/etc/os-release` of its own, so a collection that
+leaves `HostRoot` at its default reads the probe image's distribution and
+reports it as the worker's, with nothing about the answer looking wrong. The
+architecture is the exception and needs no mount: `uname` answers for the
+kernel, which is the host's.
+
 **Reading a host from inside a pod: name its mount table.** A pod has its own
 mount namespace, so `/proc/self/mountinfo` lists none of the host's mounts. A
 collection that leaves `MountinfoPath` at its default therefore finds nothing
@@ -673,22 +780,35 @@ one mistake in this whole flow that loses data. The host's table is PID 1's.
 Everything else defaults sensibly; this one does not, and it is a field rather
 than a guess because only the caller knows where it mounted `/proc`.
 
-**A worker's NVMe disks may be invisible to the disk reading entirely.** SPDK
-takes a controller by rebinding it from the kernel's `nvme` driver to
+**A worker's NVMe disks may be invisible to the disk reading entirely.** A
+controller is taken by rebinding it from the kernel's `nvme` driver to
 `uio_pci_generic` or `vfio-pci`, and from that moment the kernel presents no
-block device for it. On the fleet this was developed against, three of four
-workers had four NVMe controllers each on `uio_pci_generic` and not one NVMe
-block device between them — so a `class/block` scan reports "no NVMe disks"
-about a machine with four. `inv.NVMeControllers` is the second half of the
-answer, and `inv.ControllersTakenByUserspace()` is the question worth asking
-whenever a draft came back empty:
+block device for it. SPDK does this, and so does a hypervisor passing a disk
+through to a guest, a DPDK application, and anything else driving hardware from
+userspace. On the fleet this was developed against, three of four workers had
+four NVMe controllers each on `uio_pci_generic` and not one NVMe block device
+between them — so a `class/block` scan reports "no NVMe disks" about a machine
+with four. `inv.NVMeControllers` is the second half of the answer, and
+`inv.ControllersBoundToUserspace()` is the question worth asking whenever a
+draft came back empty.
+
+Which driver is bound comes from sysfs; whether anything is still driving it
+does not, and sysfs exports nothing that changes while a process holds the
+character device — that was measured rather than assumed. `Collect` therefore
+runs `pci.CheckHolders` and reports the answer per controller as `InUse`, and a
+controller it could not check leaves `InUse` false and records why in the error
+it returns. Dropping that error turns unknown into free, which is the one
+mistake here that takes a running guest's disk away:
 
 ```go
 if len(inv.AvailableDevices()) == 0 {
-    if taken := inv.ControllersTakenByUserspace(); len(taken) > 0 {
+    if bound := inv.ControllersBoundToUserspace(); len(bound) > 0 {
         // Not a machine without storage: a machine whose storage something
-        // else is already driving. pci.HeldBy says which process, and
-        // pci.BindTo gives a controller back — refusing while anything holds it.
+        // else has. Which of the two answers applies is per controller —
+        // InUse false is a leftover that pci.BindTo can reclaim, and InUse
+        // true is a disk in service, which may belong to something this
+        // product knows nothing about. pci.HeldBy names the process, and
+        // pci.BindTo refuses while anything holds it either way.
     }
 }
 ```
@@ -729,13 +849,17 @@ switch {
 case err != nil:
     // The device could not be read. Never treat this as an empty device.
 case reading.Content == blockdev.ContentBlank:
-    // Positively all zeros in the first and last mebibyte. The only reading
-    // that permits a format.
+    // Positively all zeros in the first mebibyte, with no signature matched
+    // anywhere. The only reading that permits a format.
 case reading.Content == blockdev.ContentFilesystem:
     // reading.Type names it. Mount it; never re-probe and never hand it to a
     // helper that formats on its own probe.
 case reading.Content == blockdev.ContentStackLayer:
     // An LVM physical-volume label. Activate the stack; do not pvcreate.
+case reading.Content == blockdev.ContentSimplyblock:
+    // This product's own storage superblock, from a deployment that is gone: a
+    // device a storage node is driving is bound to a userspace driver and is
+    // not a block device at all, so one readable here is held by nobody.
 default:
     // ContentForeign: somebody else's data. Refuse, and say what was found
     // through reading.Detail.
@@ -747,7 +871,9 @@ which is the path a node service takes rather than resolving one from `/dev`.
 
 _Today:_ the reading is built and covered by images captured from devices real
 tools formatted (`atlas-lib/blockdev/testdata/images`, regenerated by
-`hack/blockdev/capture-image.sh`). Its consumers are still on the blkid probe:
+`hack/blockdev/capture-image.sh`). The `alceml` image is the exception that has
+to be captured off a device a storage node wrote, since no formatting tool
+produces that superblock and neither blkid nor wipefs knows it. Its consumers are still on the blkid probe:
 the CSI driver's `NodeStageVolume` calls `BlkidProber` through `probeDiskFormat`
 in `csi-driver/internal/csi/node`, and moving it onto `Read` is Phase 1 of
 [`design-device-content-detection.md`](../operator/docs/designs/design-device-content-detection.md).
@@ -1005,6 +1131,10 @@ A host NQN is the same story from the other end. `nqn.Host(nodeUID)` composes
 the identity an access-controlled pool authorizes, and `nqn.HostUUID` reads it
 back out — which is what a `--hostid` has to be derived from, since the kernel
 pairs hostid with hostnqn by comparison.
+`nqn.DefaultHost` reads the node's other host identity, the one nvme-cli
+presents on a connect that names none: `/etc/nvme/hostnqn`, or the persisted
+hostid in `/var/lib/nvme/hostid` composed with `nqn.NVMeHost` while that file
+is not written yet.
 
 _Today:_ the CSI driver builds every host NQN with `nqn.Host` (its node service
 and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
@@ -1012,6 +1142,9 @@ and its reconnect loop), derives the DHCHAP `--hostid` with `nqn.HostUUID`
 subsystem NQN with `nqn.Parse` (`internal/controlplane`, `internal/initiator`,
 `internal/reconnect`). It kept its own copies of the last two until the
 `internal/csi/common` split, when they were adopted and deleted.
+The CSI node plugin publishes `nqn.DefaultHost` on its Node
+(`internal/csi/node/host_nqn.go`), so the operator can name both identities
+when a two-node fence revokes them.
 
 #### Assemble an LVM stack on a device
 
@@ -1109,8 +1242,11 @@ make on any device before staging it:
 // Refresh, probe the device's own identity, and if it is somebody else's
 // volume group, re-stamp it and rename the logical volume inside. Returns the
 // foreign VolumeGroup it found, or the zero value when there was nothing to
-// resolve.
-previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName, poolName)
+// resolve. A group without the ownership tag is re-stamped only when the
+// recognizer knows its layout as the driver's from before the tag existed;
+// plans.RecognizeStack is the one the driver uses.
+previous, err := mgr.ResolveClonedVolumeGroup(ctx, pv, volumeGroup, logicalVolumeName,
+    plans.RecognizeStack(poolName), poolName)
 if err != nil {
     handleError(err)
 }
@@ -1131,40 +1267,45 @@ identically in every volume, such as VDO's pool. `ImportClonedVolumeGroup` and
 `RenameLogicalVolume` remain available for a recovery path that needs one step
 alone.
 
-VDO lives in the `lvm/vdo` subpackage rather than in `lvm` itself. It registers
-a provisioning handler at init, and `CreateLogicalVolume` consults the registry
-for the extra `lvcreate` flags a `LogicalVolumeDefinition` implies, so a caller
-asks for compression or deduplication instead of knowing how dm-vdo spells it.
-Importing the subpackage is what makes those flags reachable, and
-`vdo.UpdateVolume` toggles them on a pool that already exists.
+A group spanning several devices, such as a striped volume's members, is
+resolved with `ResolveClonedVolumeGroupSet`, which takes every device of the
+group and imports them in one `vgimportclone`. LVM refuses to re-stamp a group
+from one of its devices while the command is scoped away from the rest, so
+calling `ResolveClonedVolumeGroup` once per member fails on the first. Devices
+that disagree about their group are `ErrSplitClone`, and nothing is changed.
+The physical-volume layer (`volstack/layers/lvmphysicalvolume.go`) is the one
+caller today.
+
+VDO is a built-in `VolumeProvisioning` handler in `lvm` itself (`vdo.go`),
+registered by this package's own `init` rather than requiring a caller to
+import a separate subpackage for the side effect: `CreateLogicalVolume`
+consults the registry for the extra `lvcreate` flags a `LogicalVolumeDefinition`
+asking for compression or deduplication implies, so a caller spells neither
+`--type vdo` nor `y`/`n` itself. A forgotten import used to be how this
+degenerated silently to a plain linear volume; making the registration
+unconditional is what closed that gap.
 
 `RemoveOrphanedDMNodes` is the fallback when the backing device is already gone
 and `RemoveVolumeGroup`/`DeactivateVolumeGroup` can no longer read the metadata
 they need: it clears the live dm nodes directly, retrying across a few passes so
-removing a dependent unblocks what it was blocking.
+removing a dependent unblocks what it was blocking. `HasOrphanedDMNodes` answers
+the same listing without removing anything, for a caller — `volstack`'s own
+`lvmVolumeGroup` layer — that has to tell "the group is gone" from "the group's
+members are gone but it is still mapped" with no member device left to read.
 
-`lvm/vdo` also holds the whole per-volume stack lifecycle a caller actually
-drives, not only the provisioning handler: `CreateOrAttach` (idempotent
-create-or-reactivate), `ResolveClone` (a thin wrapper over
-`ResolveClonedVolumeGroup`, naming VDO's own volume group/pool convention),
-`Deactivate`/`Remove` (each with its own rule for when an unreachable backing
-device falls back to `RemoveOrphanedDMNodes`: `Deactivate` only on that specific
-failure, `Remove` unconditionally, since one is trying to preserve the volume
-and the other is already destroying it), `Grow`, and `SetFeatures` (a
-lvolID-keyed wrapper over `UpdateVolume`). Every one of them is keyed by
-lvolID alone. The volume group/pool naming convention stays internal to this
-package rather than leaking to a caller. None of it references a Kubernetes
-type: it is node-level orchestration that happens to live in a CSI driver
-today, not CSI-shaped logic, and `Logger` (a package-level `*slog.Logger`,
-nil-safe) is how a caller gets its own log format without this package taking
-on a Kubernetes-specific logging dependency.
+`ForgetDevice` runs `lvmdevices --deldev` against one device, which is the only
+thing that prunes an entry from `/etc/lvm/devices/system.devices`. Nothing else
+does, so a node otherwise accumulates one stale entry per device that went away
+without a clean teardown. It is hygiene rather than correctness, and the one
+caller is the release that already had to fall back to the dm-node cleanup
+above, which is the release whose device is gone for good.
 
-_Today:_ `lvm/vdo` is the only in-tree consumer. The CSI driver's client-side
-VDO support (`csi-driver/internal/mount/vdo.go`) is the code this package was
-extracted from, and now just wires `vdo.CreateOrAttach`/`ResolveClone`/
-`Deactivate`/`Remove`/`Grow` into `NodeStageVolume`/`NodeUnstageVolume`/
-`NodeExpandVolume`. A striped LVM volume group across several members would use
-`CreateVolumeGroup`'s variadic device-path list the same way.
+The per-volume stack lifecycle PR #402 originally built as `lvm/vdo`
+(`CreateOrAttach`, `ResolveClone`, `Deactivate`, `Remove`, `Grow`,
+`SetFeatures`) retired once `volstack`'s three LVM layers absorbed it (issue
+#277, below): each of those operations is now one layer's `Ensure`, `Release`,
+`Destroy`, or `Grow`, composed through the runner rather than called directly,
+and the flat package was deleted with nothing left importing it.
 
 #### Bring up a volume's stack
 
@@ -1194,14 +1335,23 @@ runner := volstack.NewRunner(volstack.NewStore("/var/lib/simplyblock/stacks"))
 artifact, err := runner.Up(ctx, handle.String(), plan)
 ```
 
-There are four shapes, and they are the design's plan table: `RawBlock`
+There are five shapes, and they are the design's plan table: `RawBlock`
 (`fabric` alone, which is raw block mode as a shorter plan rather than a flag
 inside a stage function), `Plain` (`fabric` → `filesystem`), `LVM` (`fabric` →
 `lvmPhysicalVolume` → `lvmVolumeGroup` → `lvmLogicalVolume` → `filesystem`, for
-client-side deduplication or compression), and `Striped` (the same four above a
-`members` composite, for a volume assembled over several namespaces). The last
-two take a `LogicalVolumeOptions`, which is the only thing separating a linear
-volume from a VDO or a striped one: one layer, three definitions.
+client-side deduplication or compression), `LVMRawBlock` (the same without the
+filesystem, because what deduplicates a volume is the logical volume rather than
+the filesystem over it), and `Striped` (the LVM layers above a `members`
+composite, for a volume assembled over several namespaces). The last three take
+a `LogicalVolumeOptions`, which is the only thing separating a linear volume
+from a VDO or a striped one: one layer, three definitions.
+
+`LogicalVolumeOptions.PoolName` reaches two layers. The logical-volume layer
+takes it as `lvcreate`'s `<vg>/<pool>` target, and the physical-volume layer
+takes it as a name to leave alone when it resolves a clone: the pool is
+structural and named identically in every volume's group, so a resolution that
+did not know about it would rename the pool instead of the volume carrying the
+source's name.
 
 Deciding which shape a volume gets stays with the consumer, because that answer
 comes from a StorageClass, a volume capability, and the node's role for the
@@ -1218,13 +1368,18 @@ Building a plan reaches nothing. It resolves no device, runs no command, and
 reads no sysfs, so a consumer can unit-test the selection it makes and only the
 runner needs a host.
 
-_Today:_ nothing in the operator or the CSI driver imports `volstack` yet. The
-on-node integration suite (`test/integration/onnode`) is the only caller, and it
-fills the seams with the implementations that ship: nvme-cli, the sysfs
-resolvers, `lvm.Manager`, and `blockdev.Prober`. `NodeStageVolume` still
-assembles its own fabric connect, `mkfs`, and mount in
-`csi-driver/internal/csi/node`, which is the call site the `Plain` and `LVM`
-shapes are meant to replace.
+_Today:_ the CSI node service is the consumer. `csi-driver/internal/csi/node`
+builds the seams once in `stack.go`, selects one of the four single-namespace
+rows per volume in `plan.go`, and every node RPC on the data path is one runner call
+against the result: `NodeStageVolume` is `Up`, `NodeUnstageVolume` is `Down`,
+`NodePublishVolume` and a restage are `Heal`, `NodeExpandVolume` is `Grow`, and
+an unstage of a volume that is being deleted is the one caller of `Destroy`. A
+class asking for client-side compression or deduplication is what selects `LVM`,
+with `LogicalVolumeOptions` carrying the VDO pool name and the capability a node
+has to advertise. The on-node integration suite (`test/integration/onnode`) is
+the other caller, and it fills the seams with the implementations that ship:
+nvme-cli, the sysfs resolvers, `lvm.Manager`, and `blockdev.Prober`. The
+`Striped` shape has no consumer yet.
 
 ### Operator ↔ CSI link
 
@@ -1266,8 +1421,16 @@ go hub.Serve(ctx)
 CSI side, one call for the whole lifecycle — dial, identify, serve, reconnect:
 
 ```go
+// The files are read on every attempt: they are mounted from Secrets that can
+// be populated after the pod starts, and rotated in place later. A missing
+// file fails the attempt and never downgrades it to plaintext.
+dial, err := link.TLSFileDialer("simplyblock-csi-link.simplyblock.svc:9500", link.TLSFiles{
+    CAFile:   "/etc/simplyblock/tls/ca.crt",
+    CertFile: "/etc/simplyblock/tls/tls.crt", // mutual TLS only
+    KeyFile:  "/etc/simplyblock/tls/tls.key",
+})
 agent, err := link.NewAgent(link.AgentConfig{
-    Dial:        link.TLSDialer("simplyblock-operator-link:9443", clientTLS),
+    Dial:        dial,
     ID:          link.NodePeer(os.Getenv("NODE_NAME")),   // downward API
     InstanceUID: os.Getenv("POD_UID"),                    // supersedes a stale session
     Token:       link.TokenFile("/var/run/secrets/atlas/link/token"),
@@ -1334,6 +1497,122 @@ And the `nvmeof` composition helpers must not be assembled across a link:
 in the operator it would consult the operator's `/dev`. Those belong on the node,
 behind their own RPC.
 
+#### Forget the flows translated to a dead backend
+
+A Service's ClusterIP is translated to a backend by the first packet of a
+connection, and conntrack keeps that translation for the life of the entry. When
+the backend goes away, a client that retries its SYN on the same tuple keeps the
+entry alive and keeps reaching the dead address, after the EndpointSlice has
+moved on. kube-proxy clears such entries for UDP only. The node forgets them when
+asked, for one protocol, one port, and one address, never more:
+
+```go
+// On the node (the CSI node plugin, host network, privileged):
+srv, err := conntrackrpc.NewServer(conntrack.Forget)
+cfg.Register = func(r grpc.ServiceRegistrar) { storageSrv.Register(r); srv.Register(r) }
+cfg.Capabilities = append(storagerpc.Capabilities(), conntrackrpc.Capabilities()...)
+
+// From the operator, per node peer:
+sel := conntrack.Selector{Protocol: conntrack.TCP, DstPort: 2049, ReplySource: oldPodIP}
+for _, p := range registry.PeersOfKind(link.PeerKindNode) {
+    if p.HasCapability(conntrackrpc.CapabilityFlows) {
+        n, err := conntrackrpc.Remote(p.Conn()).Forget(ctx, sel)
+    }
+}
+```
+
+*Today:* the operator's `NFSExport` reconciler asks for it when a pNFS metadata
+server pod goes away, through `operator/internal/csilink/flows.go`, and
+`csi-driver/internal/driver/driver.go` serves it on every node plugin.
+
+#### Read a host NIC's address and test a connection from the host
+
+A NIC that a `host-device` definition moves into a pod holds its address in the
+host's namespace until the pod takes it, and the kernel NVMe/TCP initiator
+connects from that same namespace. Only a process on the host's network sees
+either, so the operator asks the CSI node plugin, which runs there:
+
+```go
+// On the node (the CSI node plugin, host network, privileged):
+srv, err := netcheckrpc.NewServer(
+    func(sel netcheck.Selector) (netcheck.Report, error) { return netcheck.Interface(inventory.Config{}, sel) },
+    netcheck.Connect,
+)
+cfg.Register = func(r grpc.ServiceRegistrar) { storageSrv.Register(r); srv.Register(r) }
+cfg.Capabilities = append(storagerpc.Capabilities(), netcheckrpc.Capabilities()...)
+
+// From the operator, for the worker's own peer:
+report, err := netcheckrpc.Remote(p.Conn()).InterfaceAddresses(ctx, netcheck.Selector{Name: "ens4"})
+res, err := netcheckrpc.Remote(p.Conn()).Connect(ctx, "10.10.100.200", 4426, 5*time.Second)
+```
+
+An interface the host lacks, a refused connection, and a timeout are answers
+(`Found` false, `Connected` false with a reason), and only a call that fails is
+an error. A worker with no linked plugin that advertises
+`netcheckrpc.CapabilityCheck` is `netcheckrpc.ErrUnavailable`, which a caller
+treats as not yet verifiable and never as passed.
+
+*Today:* the storage node reconciler reads the NIC address before a node is added
+and runs the reachability gate after it is online, through
+`operator/internal/csilink/hostcheck.go`, and `csi-driver/internal/driver/driver.go`
+serves it on every node plugin.
+
+#### Deliver a bucket's mount to a gateway node
+
+An `S3Bucket`'s gateway Deployment runs on a changing set of nodes, and every
+pod on a node needs the same bucket mounted at the same path with no pod spec
+of its own changing to get it (`design-bucket-provisioning.md` §5). No new
+component runs on the node for this: `DeliverBucket` and `WithdrawBucket` wrap
+the CSI node plugin's own `NodeStageVolume`/`NodePublishVolume` and
+`NodeUnpublishVolume`/`NodeUnstageVolume`, called by the operator instead of
+kubelet, over the same `csi-link` session `NFSExport` assembly already reaches
+a node through.
+
+```go
+// On the node (the CSI node plugin), wrapping its own NodeServer:
+type deliverer struct{ ns *node.Server }
+
+func (d *deliverer) Deliver(ctx context.Context, b bucketdeliveryrpc.Bucket) error {
+    path := derivedTargetPath(b.Name) // under the DaemonSet's own Bidirectional hostPath subtree
+    if _, err := d.ns.NodeStageVolume(ctx, &csi.NodeStageVolumeRequest{
+        VolumeId: b.VolumeHandle, StagingTargetPath: path, VolumeContext: b.VolumeContext,
+    }); err != nil {
+        return err
+    }
+    _, err := d.ns.NodePublishVolume(ctx, &csi.NodePublishVolumeRequest{
+        VolumeId: b.VolumeHandle, StagingTargetPath: path, TargetPath: path,
+    })
+    return err
+}
+
+srv, err := bucketdeliveryrpc.NewServer(&deliverer{ns: nodeServer})
+cfg.Register = func(r grpc.ServiceRegistrar) { nodeServer.Register(r); srv.Register(r) }
+cfg.Capabilities = append(cfg.Capabilities, bucketdeliveryrpc.Capabilities()...)
+
+// From the operator, per node newly in the gateway Deployment's pod set:
+conn, err := registry.Conn(link.NodePeer(nodeName)) // the same lookup NFSExport assembly uses
+if err == nil {
+    err = bucketdeliveryrpc.Remote(conn).Deliver(ctx, bucketdeliveryrpc.Bucket{
+        Name: bucketName, VolumeHandle: pv.Spec.CSI.VolumeHandle, VolumeContext: volumeContext,
+    })
+}
+```
+
+The bind mount `NodePublishVolume` makes under the plugin's own `Bidirectional`
+`hostPath` subtree reaches every gateway pod on that node via `HostToContainer`
+propagation, already confirmed on a live cluster
+(`operator/docs/designs/design-bucket-provisioning.md` §5.4). `Withdraw` reverses it the same way,
+and both read and write the plugin's existing stack record, so its own
+restart-recovery path covers a delivered bucket with no new persistence.
+
+*Today:* wired end to end. `csi-driver/internal/csi/node/bucketdelivery.go`
+is the node-side `deliverer` (W-11), `S3BucketReconciler` is the
+operator-side caller (W-12, `kubernetes/operator/internal/controllers/
+objectstore/s3bucket_delivery.go`), and `ObjectStoreReconciler` mounts every
+gateway pod's `GatewayMountRoot` hostPath so a bucket delivered after the pod
+started still reaches it (`kubernetes/operator/internal/controllers/
+objectstore/objectstore_build.go`).
+
 ### Cross-cutting
 
 #### Map errors at the consumer's boundary
@@ -1377,6 +1656,36 @@ defer deferrers.Close(resp.Body)
 defer deferrers.Run(cancelWatch)
 ```
 
+Where an API takes a `func()` instead of a call, such as `t.Cleanup`, `CloseFn`
+and `RunFn` return the cleanup and log the site that registered it:
+
+```go
+t.Cleanup(deferrers.CloseFn(conn))
+t.Cleanup(deferrers.RunFn(func() error { return os.RemoveAll(dir) }))
+```
+
+#### Bound a call that blocks in the kernel
+
+A sysfs read, an ioctl, a device open, or the wait for a child process can sit
+in the kernel until a wedged controller is torn down, and no context reaches it.
+Run it under `bounded`, which gives up at the deadline with an error wrapping
+`context.DeadlineExceeded`, and fails at once while an earlier call on the same
+key is still stuck:
+
+```go
+b, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+    return os.ReadFile(path)
+})
+
+// nvme-cli: the key names the target and never the secrets on the command line.
+out, err := bounded.Output(ctx, bounded.CommandTimeout, "nvme list", "nvme", "list", "-o", "json")
+```
+
+Everything in `nvme` and `nvmeof` that touches the kernel already goes through
+it, so a resolver or a connector never needs wrapping again.
+
+_Today:_ `csi-driver/internal/initiator/initiator.go` (`execNVMeQuery`).
+
 #### Validate user-supplied outbound URLs
 
 Before the operator sends a request to one (e.g., a Prometheus endpoint from a
@@ -1388,7 +1697,7 @@ if err := net.ValidateExternalURL(spec.PrometheusURL); err != nil {
 }
 ```
 
-_Today:_ `operator/internal/controller/simplyblockstoragecluster_controller.go`.
+_Today:_ `operator/internal/controllers/cluster/storagecluster_controller.go`.
 
 ### Testing against the seams
 

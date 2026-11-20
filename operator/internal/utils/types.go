@@ -1,48 +1,5 @@
 package utils
 
-type BackupConfig struct {
-	AccessKeyID     string `json:"access_key_id,omitempty"`
-	SecretAccessKey string `json:"secret_access_key,omitempty"`
-	LocalEndpoint   string `json:"local_endpoint,omitempty"`
-	SnapshotBackups *bool  `json:"snapshot_backups,omitempty"`
-	WithCompression *bool  `json:"with_compression,omitempty"`
-	SecondaryTarget *int32 `json:"secondary_target,omitempty"`
-	LocalTesting    *bool  `json:"local_testing,omitempty"`
-}
-
-type HashicorpVaultConfig struct {
-	BaseURL string `json:"base_url,omitempty"`
-}
-
-type ClusterAddParams struct {
-	Name                   string                `json:"name"`
-	CapWarn                int                   `json:"cap_warn,omitempty"`
-	CapCrit                int                   `json:"cap_crit,omitempty"`
-	ProvCapWarn            int                   `json:"prov_cap_warn,omitempty"`
-	ProvCapCrit            int                   `json:"prov_cap_crit,omitempty"`
-	DistrNdcs              int                   `json:"distr_ndcs,omitempty"`
-	DistrNpcs              int                   `json:"distr_npcs,omitempty"`
-	DistrBs                int                   `json:"distr_bs,omitempty"`
-	DistrChunkBs           int                   `json:"distr_chunk_bs,omitempty"`
-	EnableNodeAffinity     bool                  `json:"enable_node_affinity,omitempty"`
-	Fabric                 string                `json:"fabric,omitempty"`
-	CRName                 string                `json:"cr_name,omitempty"`
-	CRNameSpace            string                `json:"cr_namespace,omitempty"`
-	CRPlural               string                `json:"cr_plural,omitempty"`
-	ClientDataIfname       string                `json:"client_data_ifname,omitempty"`
-	NvmfBasePort           int                   `json:"nvmf_base_port,omitempty"`
-	RpcBasePort            int                   `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           int                   `json:"snode_api_port,omitempty"`
-	BackupConfig           *BackupConfig         `json:"backup_config,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultConfig `json:"hashicorp_vault_settings,omitempty"`
-	// EnableFailureDomain opts the cluster into failure-domain mode.
-	// Wire key must match the /api/v2/clusters/ endpoint — verify against sbcli before release.
-	EnableFailureDomain bool  `json:"enable_failure_domain,omitempty"`
-	SpdkVcpuCount       int   `json:"spdk_vcpu_count,omitempty"`
-	HugepagesMem        int64 `json:"hugepages_mem,omitempty"`
-	MaxSubsys           uint  `json:"max_subsys,omitempty"`
-}
-
 type ClusterUpdateParams struct {
 	CapWarn                int    `json:"cap_warn,omitempty"`
 	CapCrit                int    `json:"cap_crit,omitempty"`
@@ -119,6 +76,35 @@ type StorageNodeSetAddParams struct {
 	// node never came online (2026-08-27 incident, found live redeploying
 	// with domains numbered from 0).
 	FailureDomain *int `json:"failure_domain,omitempty"`
+	// Site is the replication site this node is added to, required on a sync
+	// cluster and rejected otherwise. Wire key must match the add-node endpoint
+	// (sbcli sync-replication branch).
+	Site string `json:"site,omitempty"`
 	// Expand signals that this node is being added to expand an already-active cluster.
 	Expand bool `json:"expand,omitempty"`
+	// ForceFormat wipes partitioned lblk devices at add-node time; node_configure.py
+	// --force-format only marks them selectable, this flag does the actual wipe.
+	ForceFormat bool `json:"force_format,omitempty"`
+	// Networks are the networks the SPDK pod attaches to, with the address it
+	// takes on each. Unset for a node on the host network, and then the request
+	// is what it always was.
+	Networks []NodeNetworkParams `json:"networks,omitempty"`
+	// PodNetwork puts the SPDK pod on the pod network with no attachment, fronted
+	// by a Service the control plane keeps. Exclusive with Networks.
+	PodNetwork bool `json:"pod_network,omitempty"`
+}
+
+// NodeNetworkParams is one network the SPDK pod attaches to, as the control
+// plane's node-add takes it.
+type NodeNetworkParams struct {
+	Name      string   `json:"name"`
+	Namespace string   `json:"namespace,omitempty"`
+	Interface string   `json:"interface"`
+	IPs       []string `json:"ips,omitempty"`
+	// Resource is the extended resource a device plugin hands the interface's
+	// device out under, from the definition's k8s.v1.cni.cncf.io/resourceName
+	// annotation (an SR-IOV VF pool, for example). The SPDK pod requests one of
+	// it, without which the plugin allocates nothing and Multus has no device to
+	// attach. Not part of the Multus network selection element.
+	Resource string `json:"resource,omitempty"`
 }

@@ -101,12 +101,7 @@ metadata:
     nginx.ingress.kubernetes.io/auth-realm: "simplyblock Control Center"
     # The deployment wizard posts a large host and device selection.
     nginx.ingress.kubernetes.io/proxy-body-size: 2m
-    # Watches on /k8s/* and SSE on /cp/* stream for up to an hour: no
-    # buffering, or events arrive in bursts, and a read timeout past the
-    # streams' own. Serve HTTP/2 (the default with TLS here): a browser keeps
-    # at most six HTTP/1.1 connections to one origin, and a dashboard with
-    # several clusters holds more streams than that.
-    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Task lists, logs and SPDK thread utilisation stream.
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:

@@ -1,0 +1,1 @@
+wrote discovered-discover-held-06 in Draft: 1 workers with 4 nvme devices, in 1 group(s) across 1 node set(s); 0 refusal(s)

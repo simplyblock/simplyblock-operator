@@ -104,9 +104,9 @@ spec:
     configName: archive-draft
     nodeSelector:
       node-role.kubernetes.io/simplyblock-archive: ""
+    # Scan the block class, which the backend accepts from 26.4 onward.
+    enableLogicalBlockDevices: true
     deviceFilter:
-      # Scan the block class, which the backend accepts from 26.4 onward.
-      enableLogicalBlockDevices: true
       # The disk every worker in this fleet boots from.
       blockDenyList:
         - /dev/sda

@@ -10,6 +10,7 @@ on:
         description: "Image tag to publish (defaults to the branch ref)"
         required: false
         type: string
+  workflow_dispatch:
 
 jobs:
   build-and-push:
@@ -25,59 +26,160 @@ jobs:
             dockerfile: operator/Dockerfile
             image_name: simplyblock/simplyblock-operator
             ecr_image_name: simply-block/simplyblock-operator
-            build_args: |
-              VERSION=0.1.0
-              RELEASE=1
+            quay_image_name: quay.io/simplyblock-io/simplyblock-operator
+            internal_image_name: registry.simplyblock.ai/simplyblock/simplyblock-operator
           - name: rebalancer
             dockerfile: operator/Dockerfile.simplyblock-rebalancer
             image_name: simplyblock/simplyblock-rebalancer
             ecr_image_name: simply-block/simplyblock-rebalancer
-            build_args: ""
+            quay_image_name: quay.io/simplyblock-io/simplyblock-rebalancer
+            internal_image_name: registry.simplyblock.ai/simplyblock/simplyblock-rebalancer
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Log in to DockerHub
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+      # Quay.io ships customer-facing images, so only a release run (one that
+      # names a version) logs in and pushes there.
+      - name: Log in to container registries
+        id: login
+        uses: ./.github/actions/registry-login
         with:
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
-
-      - name: Configure AWS Credentials
-        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4
-        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: us-east-1
-
-      - name: Login to ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@fa648b43de3d4d023bcb3f89ed6940096949c419 # v2
-        with:
-          registry-type: public
+          quay: ${{ inputs.version != '' }}
+          quay-username: ${{ secrets.QUAY_USERNAME }}
+          quay-password: ${{ secrets.QUAY_PASSWORD }}
+          internal-username: ${{ secrets.INTERNAL_USERNAME }}
+          internal-password: ${{ secrets.INTERNAL_PASSWORD }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
 
       - name: Compute image tag
         id: image_tag
-        # Docker tags cannot contain "/", but branch names (e.g. feature/foo) can —
-        # sanitize before using the ref name as a tag.
-        run: |
-          version="${{ inputs.version || github.ref_name }}"
-          echo "tag=${version//\//-}" >> "$GITHUB_OUTPUT"
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ inputs.version || github.ref_name }}
 
-      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR)
+      # Quay.io is only listed on a release run, matching the login step above.
+      - name: Determine target tags
+        id: tags
+        run: |
+          {
+            echo "tags<<EOF"
+            echo "${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}"
+            echo "${{ steps.login.outputs.ecr-registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            echo "${{ matrix.internal_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            if [ -n "${{ inputs.version }}" ]; then
+              echo "${{ matrix.quay_image_name }}:${{ steps.image_tag.outputs.tag }}"
+            fi
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR + Quay + Internal)
+        id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ matrix.image_name }}:${{ steps.image_tag.outputs.tag }}
-            ${{ steps.login-ecr.outputs.registry }}/${{ matrix.ecr_image_name }}:${{ steps.image_tag.outputs.tag }}
-          build-args: ${{ matrix.build_args }}
+          tags: ${{ steps.tags.outputs.tags }}
+          build-args: |
+            VERSION=${{ steps.image_tag.outputs.label_version }}
+            RELEASE=1
           cache-from: type=gha,scope=${{ matrix.name }}
           cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+
+      # Red Hat certification runs these checks on every image the bundle lists.
+      # Running them on the pushed digest fails the build instead of the release.
+      # preflight exits 0 either way, so the verdict is read from results.json.
+      - name: Run Red Hat preflight container checks
+        env:
+          PREFLIGHT_VERSION: "1.22.0"
+          PREFLIGHT_SHA256: "1451ed8763f209f4d4a63848d9d62d1d40653a247db43d7606feb28eadbbd99b"
+          IMAGE: docker.io/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
+        run: |
+          curl -fsSL -o preflight \
+            "https://github.com/redhat-openshift-ecosystem/openshift-preflight/releases/download/${PREFLIGHT_VERSION}/preflight-linux-amd64"
+          echo "${PREFLIGHT_SHA256}  preflight" | sha256sum -c -
+          chmod +x preflight
+          failed=0
+          for platform in amd64 arm64; do
+            ./preflight check container "$IMAGE" --platform "$platform" --artifacts preflight-artifacts > /dev/null
+            result="preflight-artifacts/${platform}/results.json"
+            if [ "$(jq -r .passed "$result")" != "true" ]; then
+              echo "::error::preflight failed for ${IMAGE} (${platform})"
+              jq -r '.results.failed[], .results.errors[] | "  \(.name): \(.suggestion // .help // "")"' "$result"
+              failed=1
+            fi
+          done
+          exit "$failed"
+
+  # An OLM bundle for the branch's images. A release pushes its own, with
+  # digests, from operator_release.yaml.
+  bundle:
+    name: "Build and push (bundle)"
+    if: inputs.version == ''
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    defaults:
+      run:
+        working-directory: operator
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      # Computed here rather than read from a build-and-push job output, which
+      # GitHub drops when the tag happens to contain a secret's value.
+      - name: Compute image tag
+        id: image_tag
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ github.ref_name }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: operator/go.mod
+
+      - name: Install operator-sdk
+        run: |
+          OPERATOR_SDK_VERSION="v1.42.2"
+          OPERATOR_SDK_SHA256="8847c45ea994ac62b3cd134f77934df2a16a56a39a634eb988e0d1db99d1a413"
+          curl -sLo /usr/local/bin/operator-sdk \
+            "https://github.com/operator-framework/operator-sdk/releases/download/${OPERATOR_SDK_VERSION}/operator-sdk_linux_amd64"
+          echo "${OPERATOR_SDK_SHA256}  /usr/local/bin/operator-sdk" | sha256sum -c -
+          chmod +x /usr/local/bin/operator-sdk
+
+      - name: Install kustomize
+        run: |
+          make kustomize
+          echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
+
+      # A ClusterServiceVersion name must be SemVer, so the run number stands in
+      # for the version and the branch is in the image tag.
+      - name: Build and push the bundle image
+        env:
+          TAG: ${{ steps.image_tag.outputs.tag }}
+        run: |
+          [ -n "$TAG" ] || { echo "::error::empty image tag"; exit 1; }
+          make bundle-dev \
+            VERSION=0.0.0-${{ github.run_number }} IMG_TAG="$TAG" \
+            IMG_BASE=docker.io/simplyblock/simplyblock-operator \
+            REBALANCER_IMG_BASE=docker.io/simplyblock/simplyblock-rebalancer \
+            CLUSTER_IMAGE_BASE=docker.io/simplyblock/simplyblock CLUSTER_IMAGE_TAG=main
+          make bundle-validate
+          docker build -f bundle.Dockerfile -t "docker.io/simplyblock/simplyblock-operator-bundle:$TAG" .
+          docker push "docker.io/simplyblock/simplyblock-operator-bundle:$TAG"

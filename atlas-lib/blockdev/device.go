@@ -51,10 +51,50 @@ type Device struct {
 	// PhysicalBlockSize is the unit the device prefers writes in.
 	PhysicalBlockSize uint32
 
+	// AtomicWriteUnitMaxBytes is the largest write the device completes whole
+	// across a power failure, and AtomicWriteUnitMinBytes the smallest it will
+	// make that promise about. They are what let a cluster run checksum
+	// validation on a device whose logical block size is below the data plane's
+	// minimum: the block size says how an offset is addressed, and these say
+	// what survives losing power mid-write, which is the property that matters.
+	//
+	// Nil and zero are different answers. The kernel has published
+	// queue/atomic_write_unit_max_bytes only since 6.11, so nil is a question
+	// nothing answered and zero is a device that answered no. Reading the first
+	// as the second makes every host of an older vintage look like hardware that
+	// guarantees nothing, which is a claim the absence of a file does not
+	// support.
+	AtomicWriteUnitMaxBytes *uint32
+	AtomicWriteUnitMinBytes *uint32
+
 	// SizeBytes is the device's capacity, and is what locates the tail region a
 	// content reading has to look at.
 	SizeBytes uint64
 
 	// ReadOnly reports whether the kernel presents the device read-only.
 	ReadOnly bool
+}
+
+// AtomicityKnown reports whether the device said anything about atomic writes.
+//
+// It is the guard every reading of the two fields above owes, because the
+// alternative to asking is treating an old kernel's silence as a refusal.
+func (d Device) AtomicityKnown() bool {
+	return d.AtomicWriteUnitMaxBytes != nil
+}
+
+// AtomicAt reports whether a write of size bytes is one the device completes
+// whole across a power failure.
+//
+// An unanswered question is not a yes. A device that never said is one this
+// returns false for, and AtomicityKnown is how a caller tells that apart from a
+// device that said no.
+func (d Device) AtomicAt(size uint32) bool {
+	if d.AtomicWriteUnitMaxBytes == nil {
+		return false
+	}
+	if min := d.AtomicWriteUnitMinBytes; min != nil && size < *min {
+		return false
+	}
+	return size <= *d.AtomicWriteUnitMaxBytes
 }

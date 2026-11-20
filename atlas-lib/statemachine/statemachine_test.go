@@ -493,6 +493,91 @@ func TestNonPositiveTimeoutMeansNoDeadline(t *testing.T) {
 	}
 }
 
+// --- extending a deadline ------------------------------------------------------
+
+// A state whose work is still moving is given more time without leaving it, and
+// the new deadline is what Snapshot persists.
+func TestExtendMovesTheDeadlineOut(t *testing.T) {
+	sm := armed(t)
+	before := time.Now()
+
+	if !sm.Extend(time.Hour) {
+		t.Fatal("Extend reported no change for a deadline an hour later than the armed one")
+	}
+	deadline, ok := sm.Deadline()
+	if !ok {
+		t.Fatal("Extend dropped the deadline")
+	}
+	if deadline.Before(before.Add(time.Hour)) {
+		t.Errorf("deadline = %v, want at least an hour from %v", deadline, before)
+	}
+	if got := sm.Snapshot().Deadline; !got.Equal(deadline) {
+		t.Errorf("Snapshot().Deadline = %v, want the extended %v", got, deadline)
+	}
+	if sm.CurrentState() != on {
+		t.Errorf("state = %v, want Extend to leave the machine in on", sm.CurrentState())
+	}
+}
+
+// Extend only ever moves a deadline out. A caller granting more time must not
+// take time away by asking for less than is left.
+func TestExtendNeverShortensADeadline(t *testing.T) {
+	sm := armed(t)
+	armedAt, _ := sm.Deadline()
+
+	if sm.Extend(time.Second) {
+		t.Error("Extend reported a change for a deadline earlier than the armed one")
+	}
+	if deadline, _ := sm.Deadline(); !deadline.Equal(armedAt) {
+		t.Errorf("deadline = %v, want the armed %v kept", deadline, armedAt)
+	}
+}
+
+// A state declared without a deadline stays without one. Extending is about a
+// budget the graph gave, and inventing one would bound a state the graph says is
+// unbounded.
+func TestExtendLeavesAnUnboundedStateUnbounded(t *testing.T) {
+	sm := newTest(t, nil)
+	mustTransition(t, sm, on)
+
+	if sm.Extend(time.Hour) {
+		t.Error("Extend reported a change for a state with no deadline")
+	}
+	if _, ok := sm.Deadline(); ok {
+		t.Error("Extend armed a deadline on a state that had none")
+	}
+}
+
+// A restored deadline that already passed can still be extended: the caller has
+// decided the state made progress, and it is the caller that checks
+// TimeoutReached first when a lapse must fail.
+func TestExtendRevivesAnExpiredDeadline(t *testing.T) {
+	sm := newTest(t, (&hook{timeout: time.Minute}).fn)
+	if err := sm.Restore(Snapshot[st]{State: on, Deadline: time.Now().Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if !sm.TimeoutReached() {
+		t.Fatal("setup: the restored deadline is not expired")
+	}
+
+	if !sm.Extend(time.Hour) {
+		t.Fatal("Extend reported no change for an expired deadline")
+	}
+	if sm.TimeoutReached() {
+		t.Error("TimeoutReached still true after the deadline was extended")
+	}
+}
+
+// A closed machine has no state left to extend.
+func TestExtendOnAClosedMachineChangesNothing(t *testing.T) {
+	sm := armed(t)
+	sm.Close()
+
+	if sm.Extend(time.Hour) {
+		t.Error("Extend reported a change on a closed machine")
+	}
+}
+
 func TestTransitionCancelsPreviousStateContext(t *testing.T) {
 	sm := newTest(t, nil)
 	first := sm.Context()

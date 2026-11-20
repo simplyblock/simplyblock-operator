@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sbtest"
+version = "0.1.0"
+description = "Component/detector framework for large-scale simplyblock test runs"
+requires-python = ">=3.11"
+# Suites are YAML, because a suite is a document to be read and argued with — every threshold
+# in one wants a comment saying why it is that number, and JSON cannot carry one. Everything
+# runs out of a venv (`make` builds it), so a single dependency costs nothing.
+dependencies = ["pyyaml>=6"]
+
+[project.optional-dependencies]
+dev = ["ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+sbtest = "sbtest.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["sbtest*"]
+
+[tool.setuptools.package-data]
+sbtest = ["suites/*.yaml"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "C4", "RET"]
+ignore = [
+    "E501",  # long lines are the prose in docstrings, not code
+    "B008",
+]
+
+# PTH (pathlib-over-os.path) is deliberately not selected: operator/test/fio_migration_test.py
+# and everything around it use os.path, and one module in a different idiom is worse than a
+# consistent old one.
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E402"]   # sys.path juggling before imports is the point in tests
+
+[tool.mypy]
+python_version = "3.11"
+files = ["sbtest", "tests"]
+# Strict where it buys something. The framework's whole contract is that a detector reads
+# Evidence and returns Findings, so that is exactly the boundary worth type-checking.
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+no_implicit_optional = true
+strict_equality = true
+check_untyped_defs = true
+disallow_untyped_defs = false      # lifecycle hooks and tests read better untyped
+disallow_incomplete_defs = true
+
+[[tool.mypy.overrides]]
+module = "yaml"
+ignore_missing_imports = true    # PyYAML ships no stubs
+
+[[tool.mypy.overrides]]
+# Tests build deliberately-wrong plugins to prove the runner survives them.
+module = ["test_core", "test_detectors"]
+disallow_incomplete_defs = false

@@ -1,0 +1,2 @@
+enableJournalDevice is set: every worker hands over one disk smaller than its others, the smallest being 512G (0000:af:00.0) on worker-01, and the control plane dedicates that disk to the journal manager instead of carving a journal partition out of every disk. This is the line to remove if the disk was meant to carry data
+wrote discovered-discover-filt-09 in Draft: 1 workers with 4 nvme devices, in 1 group(s) across 1 node set(s); 1 refusal(s)

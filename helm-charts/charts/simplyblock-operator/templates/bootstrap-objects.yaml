@@ -1,0 +1,59 @@
+{{/*
+The ControlPlane, the SimplyblockDriver, and the initial discovery run, handed
+to the operator rather than rendered as release resources.
+
+The chart installs the CRDs of these kinds from crds/ and used to render objects
+of them in the same release. Helm creates the CRDs and then maps every release
+object against the API server's discovery, which on a fresh cluster (EKS among
+them) has not listed the new kinds yet. The install failed with "no matches for
+kind ControlPlane ... ensure CRDs are installed first", and a retry failed the
+same way, because it skips the CRDs that now exist and maps against the same
+stale discovery.
+
+A ConfigMap always maps. The operator watches this one, server-side applies each
+key with the field manager simplyblock-chart, and retries while a kind is not
+served yet (operator/internal/controllers/bootstrap). A key is applied again
+when an upgrade changes it.
+
+Removing a key does not delete the object it created. Dropping the ControlPlane
+from the values must not take the database behind every volume with it, so
+deleting one stays a deliberate `kubectl delete`. A deleted object is not
+recreated either until its key changes.
+
+The ConfigMap is rendered for every profile, empty included, with only the keys
+that profile has. It records what the operator applied in an annotation the
+operator writes.
+*/}}
+{{- $objects := dict }}
+{{- with include "simplyblock.bootstrap.controlPlane" . | trim }}
+{{- $_ := set $objects "controlplane.yaml" . }}
+{{- end }}
+{{- with include "simplyblock.bootstrap.simplyblockDriver" . | trim }}
+{{- $_ := set $objects "simplyblockdriver.yaml" . }}
+{{- end }}
+{{- with include "simplyblock.bootstrap.initialDiscovery" . | trim }}
+{{- $_ := set $objects "initial-discovery.yaml" . }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: simplyblock-bootstrap-objects
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: simplyblock-operator
+    app.kubernetes.io/managed-by: {{ .Release.Service }}
+  annotations:
+    # Whether `helm install` or `helm upgrade` rendered it. The operator reads it
+    # once, the first time it sees the ConfigMap: one that first appears on an
+    # upgrade is a release moving from a chart that rendered these objects
+    # itself, and the discovery run that release had is not started again.
+    storage.simplyblock.io/release-is-install: {{ .Release.IsInstall | quote }}
+{{- if $objects }}
+data:
+{{- range $key, $object := $objects }}
+  {{ $key }}: |
+    {{- $object | nindent 4 }}
+{{- end }}
+{{- else }}
+data: {}
+{{- end }}

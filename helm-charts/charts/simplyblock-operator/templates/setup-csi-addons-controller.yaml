@@ -1,0 +1,78 @@
+# The stock kubernetes-csi-addons controller-manager (design
+# design-csi-addons-replication.md §4.1, prerequisite P0-5): it discovers
+# driver endpoints through CSIAddonsNode objects and reconciles
+# VolumeReplication by calling the driver's Replication gRPC through the
+# csi-addons sidecar. Vendored from csi-addons/kubernetes-csi-addons v0.15.0
+# (deploy/controller/setup-controller.yaml) with the image pinned instead of
+# :latest, the namespace bound to the release, and the legacy
+# ControllerManagerConfig ConfigMap dropped (the manager neither mounts nor
+# reads it). Deployed into the release namespace rather than kube-system: this
+# is a chart component, not base cluster functionality.
+{{- if .Values.csiaddons.create -}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app.kubernetes.io/name: csi-addons
+  name: simplyblock-csi-addons-controller-manager
+  namespace: {{ .Release.Namespace }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: csi-addons
+  template:
+    metadata:
+      annotations:
+        kubectl.kubernetes.io/default-container: manager
+      labels:
+        app.kubernetes.io/name: csi-addons
+        control-plane: controller-manager
+    spec:
+      containers:
+        - name: manager
+          image: "{{ .Values.image.csiAddonsController.repository }}:{{ .Values.image.csiAddonsController.tag }}"
+          imagePullPolicy: {{ .Values.image.csiAddonsController.pullPolicy }}
+          command:
+            - /csi-addons-manager
+          args:
+            - --namespace=$(POD_NAMESPACE)
+            - --leader-elect
+            - --automaxprocs
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8081
+            initialDelaySeconds: 15
+            periodSeconds: 20
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8081
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          ports:
+            - containerPort: 8443
+              name: metrics
+              protocol: TCP
+          resources:
+            limits:
+              cpu: 1000m
+              memory: 512Mi
+            requests:
+              cpu: 10m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+      securityContext:
+        runAsNonRoot: true
+      serviceAccountName: simplyblock-csi-addons-controller-manager
+      terminationGracePeriodSeconds: 10
+{{- end -}}

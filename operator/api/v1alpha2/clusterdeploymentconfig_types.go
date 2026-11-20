@@ -18,12 +18,24 @@
 package v1alpha2
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/simplyblock/simplyblock-operator/api/v1alpha1"
-
+	"github.com/simplyblock/atlas/crdtypes"
 	"github.com/simplyblock/atlas/statemachine"
 )
+
+// JournalManagerSpec, the journal tuning this document's node-set template
+// states, is StorageNode's own type in storagenode_types.go. It was declared
+// here while that kind was still v1alpha1, for the reason StripeSpec was, and
+// moved to the kind that owns the concept once it arrived: a journal count and a
+// per-device share are one node's on-disk layout, fixed when its devices were
+// partitioned.
+
+// StripeSpec, the erasure-coding layout this document's template states, is
+// StorageCluster's own type in storagecluster_types.go. It was declared here
+// while that kind was still v1alpha1, for the reason JournalManagerSpec is, and
+// moved to the kind that owns the concept once it arrived.
 
 // ClusterDeploymentConfigPhase is where the operator has got to with this
 // document.
@@ -48,7 +60,7 @@ const (
 )
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
-// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes
+// +kubebuilder:validation:Enum=Validating;CreatingCluster;AwaitingCluster;CreatingNodes;Activating;Completed
 type ClusterDeploymentConfigStep string
 
 const (
@@ -56,12 +68,24 @@ const (
 	ClusterDeploymentConfigStepCreatingCluster ClusterDeploymentConfigStep = "CreatingCluster"
 	ClusterDeploymentConfigStepAwaitingCluster ClusterDeploymentConfigStep = "AwaitingCluster"
 	ClusterDeploymentConfigStepCreatingNodes   ClusterDeploymentConfigStep = "CreatingNodes"
+
+	// ClusterDeploymentConfigStepActivating waits for the nodes this document
+	// created and then asks for the cluster to be activated.
+	//
+	// The document knows how many nodes it made, so it knows when the deployment
+	// it describes is whole. Stopping at "the objects exist" would leave a
+	// cluster that serves nothing behind a document reporting Expanded, with
+	// nothing saying that one more thing is required of anybody.
+	ClusterDeploymentConfigStepActivating ClusterDeploymentConfigStep = "Activating"
+	// ClusterDeploymentConfigStepCompleted is the terminal step of a document
+	// that expanded.
+	ClusterDeploymentConfigStepCompleted ClusterDeploymentConfigStep = "Completed"
 )
 
 // KubernetesEnvironment is the distribution a deployment targets. The values are
-// the distributions' own names, which is the exception design-crd-model.md §7.8
-// carries for a word this group did not invent.
-// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos
+// the distributions' own names: EKS, GKE, AKS, and OKE are the managed services
+// of Amazon, Google, Microsoft, and Oracle.
+// +kubebuilder:validation:Enum=Vanilla;OpenShift;Rancher;K3s;Talos;EKS;GKE;AKS;OKE
 type KubernetesEnvironment string
 
 const (
@@ -70,7 +94,108 @@ const (
 	KubernetesEnvironmentRancher   KubernetesEnvironment = "Rancher"
 	KubernetesEnvironmentK3s       KubernetesEnvironment = "K3s"
 	KubernetesEnvironmentTalos     KubernetesEnvironment = "Talos"
+	KubernetesEnvironmentEKS       KubernetesEnvironment = "EKS"
+	KubernetesEnvironmentGKE       KubernetesEnvironment = "GKE"
+	KubernetesEnvironmentAKS       KubernetesEnvironment = "AKS"
+	KubernetesEnvironmentOKE       KubernetesEnvironment = "OKE"
 )
+
+// HostOSFamily is the packaging tradition a Linux distribution belongs to.
+//
+// It is the coarse half of what a host OS is, and the half most decisions are
+// actually about: what differs between Ubuntu and Debian is rarely what a
+// storage node needs, and what differs between Ubuntu and Rocky always is.
+// There is no member for a host with no package manager: Talos and Flatcar are
+// not a family with no name, they are machines where the question does not
+// arise, and a document describing one leaves the family unstated.
+//
+// +kubebuilder:validation:Enum=Debian;RedHat;SUSE;Alpine;Arch
+type HostOSFamily string
+
+const (
+	HostOSFamilyDebian HostOSFamily = "Debian"
+	HostOSFamilyRedHat HostOSFamily = "RedHat"
+	HostOSFamilySUSE   HostOSFamily = "SUSE"
+	HostOSFamilyAlpine HostOSFamily = "Alpine"
+	HostOSFamilyArch   HostOSFamily = "Arch"
+)
+
+// DistroUbuntu is the one distribution the expansion decides anything by.
+//
+// Ubuntu keeps the NVMe-oF modules in a package the base install does not
+// carry, so a storage node on one installs linux-modules-extra for its kernel
+// before it starts and a node on anything else does not. That is what
+// StorageCluster.spec.storageNodes.ubuntuHost states, and stating it is the
+// whole of what spec.hostOS.distro is spent on.
+const DistroUbuntu = "ubuntu"
+
+// HostOSSpec is the operating system a deployment's workers run.
+//
+// It is a fact about the machines rather than about Kubernetes, which is why it
+// is stated here and not derived from spec.environment: a fleet on OpenShift
+// runs Red Hat Enterprise Linux CoreOS, and a fleet on K3s runs whatever its
+// administrator installed. A discovery run fills it in from what the probes
+// read, and fills it in only when every worker agrees, so a document that
+// states one is a document whose fleet is uniform.
+type HostOSSpec struct {
+	// Distro is the distribution's os-release ID, lowercase and verbatim:
+	// `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Distro string `json:"distro,omitempty"`
+
+	// Family is the packaging tradition Distro belongs to. A discovery run
+	// concludes it from the distribution itself, or from the distributions its
+	// os-release says it is built on, which is what places a derivative this
+	// product has never heard of. It is left unstated for a host with no
+	// package manager.
+	// +optional
+	Family HostOSFamily `json:"family,omitempty"`
+}
+
+// ClusterPortsSpec is where a cluster's storage nodes listen.
+//
+// The three are one block here and three fields on the StorageCluster, which is
+// the one place the document deliberately does not mirror the cluster's shape.
+// They are the same decision taken once — which ports this deployment's nodes
+// bind — and a reviewer reads them together or not at all, where the cluster
+// carries them flat because that is what shipped.
+//
+// Every member is immutable on the cluster: a node binds its ports when it
+// starts and the control plane hands them out from the bases it was given at
+// cluster create, so the document is the only place any of them can be stated.
+//
+// Each carries the control plane's own default, so a document that names the
+// block shows a reviewer the three numbers a cluster will actually run with
+// rather than three blanks they would have to know the backend to fill in.
+type ClusterPortsSpec struct {
+	// NVMf is the base of the NVMe-oF port range every node binds. It expands
+	// into StorageCluster.spec.nvmfBasePort.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=4420
+	// +optional
+	NVMf *int32 `json:"nvmf,omitempty"`
+
+	// Rpc is the base of the RPC port range every node binds. It expands into
+	// StorageCluster.spec.rpcBasePort.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=8080
+	// +optional
+	Rpc *int32 `json:"rpc,omitempty"`
+
+	// NodeAgent is the port each node's agent API listens on. It expands into
+	// StorageCluster.spec.snodeApiPort, and it is named for the component
+	// rather than for that field: the agent is what spec.images.nodeAgent pins
+	// and what the storage-node DaemonSet runs.
+	// +kubebuilder:validation:Minimum=1024
+	// +kubebuilder:validation:Maximum=65535
+	// +kubebuilder:default=50001
+	// +optional
+	NodeAgent *int32 `json:"nodeAgent,omitempty"`
+}
 
 // DeviceSelection is the explicit list of storage devices a group's workers hand
 // to simplyblock. It carries no filter of any kind: a document whose meaning
@@ -106,8 +231,34 @@ type DeviceSelection struct {
 	Block []string `json:"block,omitempty"`
 }
 
+// NetworkAttachmentSelection names the Multus NetworkAttachmentDefinitions a
+// storage node is attached through instead of the host's network. The names
+// are definitions in the namespace the storage nodes run in.
+//
+// Management is required. With Data left out, data traffic flows through the
+// management attachment, as it flows through the management interface of a
+// host-networked node that names no data interfaces.
+type NetworkAttachmentSelection struct {
+	// Management is the definition the storage node's management traffic is
+	// attached through.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +kubebuilder:validation:Required
+	Management string `json:"management"`
+
+	// Data is the definition the storage node's data traffic is attached
+	// through. Absent sends data through the management attachment.
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9.]*[a-z0-9])?$`
+	// +optional
+	Data string `json:"data,omitempty"`
+}
+
 // NodeGroup is a set of workers that share one configuration, which is what
 // makes ten identical machines one entry rather than ten.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -134,6 +285,13 @@ type NodeGroup struct {
 	// +optional
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
 
+	// NetworkAttachment attaches the storage nodes through Multus
+	// NetworkAttachmentDefinitions instead of host networking. A group names
+	// this or its interfaces, and every group of a document uses the same
+	// networking.
+	// +optional
+	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
+
 	// Devices selects the storage devices every worker in the group uses.
 	// +optional
 	Devices *DeviceSelection `json:"devices,omitempty"`
@@ -149,6 +307,16 @@ type NodeGroup struct {
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
 
+	// Site is the replication site every worker in this group belongs to, one of
+	// the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+	// as it does FailureDomain, since a sync cluster's two sites are its two zones.
+	// Required when the cluster has enableSyncReplication=true, rejected otherwise.
+	// It expands into StorageNode.spec.config.site, whose shape it shares.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
+	// +optional
+	Site string `json:"site,omitempty"`
+
 	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
 	// nodes.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
@@ -156,9 +324,27 @@ type NodeGroup struct {
 	// +optional
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
+	// ReservedSystemCPU is the CPU set held back from SPDK for the system on
+	// these nodes, as a core list such as 0,1 or 0-3.
+	//
+	// It is a group's rather than the cluster's because it names core ids, and a
+	// group is what a document calls the workers that share their hardware: 0,1
+	// on a sixteen-core worker and 0,1 on a ninety-six-core worker are different
+	// fractions of the machine. It expands into
+	// StorageNode.spec.config.reservedSystemCPU, whose shape it shares, and a
+	// group that states none leaves the cluster's fleet-wide value to decide.
+	//
+	// On OpenShift it reaches the kubelet through a KubeletConfig for the
+	// machine config pool, which is the cluster's, so groups that disagree there
+	// are writing over one another's pool configuration.
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
+	// +optional
+	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
+
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
-	JournalManager *v1alpha1.JournalManagerSpec `json:"journalManager,omitempty"`
+	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -177,23 +363,85 @@ type NodeSet struct {
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
 	Groups []NodeGroup `json:"groups"`
+
+	// Cluster overrides the document's cluster template for the member cluster
+	// this node set becomes, for a node set whose hardware differs from the
+	// rest. A field left unset takes the template's value. Valid on a document
+	// with more than one node set, or one naming a cluster in clusterRef.
+	// +optional
+	Cluster *NodeSetClusterOverrides `json:"cluster,omitempty"`
+}
+
+// NodeSetClusterOverrides is the sizing a node set's member cluster takes in
+// place of the document's cluster template. A field left unset takes the
+// template's value.
+type NodeSetClusterOverrides struct {
+	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
+	// this member.
+	// +kubebuilder:validation:Minimum=4
+	// +optional
+	VCPUCount *int32 `json:"vcpuCount,omitempty"`
+
+	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
+	// node of this member serves.
+	// +kubebuilder:validation:Minimum=10
+	// +kubebuilder:validation:Maximum=500
+	// +optional
+	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
+
+	// MinHugePagesSize is the smallest huge-page allocation each storage node of
+	// this member makes: 100G or 1T, where a bare number is gigabytes.
+	// +kubebuilder:validation:MaxLength=32
+	// +optional
+	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
+
+	// SocketsToUse are the NUMA sockets that run storage nodes on this member's
+	// workers. With NodesPerSocket it decides how many storage nodes each worker
+	// runs.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket on this
+	// member's workers.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// Stripe is this member's erasure-coding layout.
+	// +optional
+	Stripe *StripeSpec `json:"stripe,omitempty"`
 }
 
 // ClusterTemplate is the StorageCluster the expansion creates, where it creates
 // one. It carries the layout fields a cluster cannot change later, so that a
 // reviewer sees them before the cluster exists rather than after.
+// +kubebuilder:validation:XValidation:rule="(has(self.clusterMode) && self.clusterMode == 'Dual') || (!has(self.arbitration) && !(has(self.enableArbitration) && self.enableArbitration))",message="enableArbitration and arbitration are only valid when clusterMode is Dual"
 type ClusterTemplate struct {
-	// Name is the StorageCluster's name.
+	// Name is the StorageCluster's name, and is therefore held to what such a
+	// name may be rather than to what an object name may be. A longer value is a
+	// document the API server accepts and a CreatingCluster step that can never
+	// succeed, since the cluster it would write is one the API server refuses.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:MaxLength=63
 	Name string `json:"name"`
+
+	// Network states the networks the storage nodes' SPDK pods attach to, which
+	// is spec.storageNodes.network of the cluster this document creates. It is
+	// set here and nowhere else, because a cluster's network is fixed when it is
+	// created. Unstated, the nodes run on the host network.
+	// +optional
+	Network *StorageNetworkSpec `json:"network,omitempty"`
 
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
 	// node of this cluster serves. Required, because the StorageCluster's own
 	// field is, and no StorageNode carries a copy of it.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=10
-	// +kubebuilder:validation:Maximum=75
+	// +kubebuilder:validation:Maximum=500
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
@@ -202,7 +450,10 @@ type ClusterTemplate struct {
 	// into every StorageNode.spec.config.sizing it writes. Required, because the
 	// StorageCluster's own field is.
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Minimum=6
+	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// beyond this budget for the system, and the control plane's core layout
+	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
+	// +kubebuilder:validation:Minimum=4
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node of
@@ -213,19 +464,410 @@ type ClusterTemplate struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// EnableDriveFormat formats every device the document names before a storage
+	// node takes it, which is how a drive carrying anything already is made
+	// usable.
+	//
+	// It says what is wanted rather than how, because the how differs by device
+	// class: an NVMe device is formatted to a 4K block size, and a logical block
+	// device has its signatures wiped. One field covers both, so a document does
+	// not have to know which class the expansion will resolve it to.
+	//
+	// It is on the document rather than defaulted further down because it is
+	// destructive and the document is what somebody approves. A reviewer reading
+	// a draft has to see that the drives it lists will be formatted, and be able
+	// to strike it before approving; the cluster's own field is immutable once
+	// the cluster exists, so a default nobody saw could not be undone either.
+	// +optional
+	EnableDriveFormat *bool `json:"enableDriveFormat,omitempty"`
+
+	// EnableJournalDevice dedicates the smallest NVMe device on each of this
+	// deployment's workers to the journal manager, instead of carving a journal
+	// partition out of every device.
+	//
+	// For logical block devices it dedicates the smallest device of each node
+	// to the journal, instead of carving one journal partition out of that
+	// device (the default journal split), and needs two devices per node.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
+	// built with is not one a later document can vary. It also costs a drive of
+	// capacity per node, which is a trade a reviewer approves rather than one a
+	// default makes for them.
+	// +optional
+	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
+
+	// SocketsToUse restricts the deployment to selected NUMA sockets, and empty
+	// means socket 0 alone. With NodesPerSocket it decides how many storage nodes
+	// each worker runs, so a group of two workers on a two-socket layout expands
+	// to four nodes.
+	//
+	// It is here rather than on a node set because it is immutable on the cluster
+	// it lands on: the layout a fleet was built with is not one a later document
+	// can vary, and a reviewer should see it before the cluster exists.
+	// +kubebuilder:validation:items:MaxLength=16
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=set
+	// +optional
+	SocketsToUse []string `json:"socketsToUse,omitempty"`
+
+	// NodesPerSocket is how many storage nodes run per NUMA socket. See
+	// SocketsToUse, which it multiplies.
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=8
+	// +optional
+	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
+
+	// InitContainerResources sizes both of the storage node's init containers,
+	// and expands into the cluster's own spec.storageNodes.initContainerResources.
+	//
+	// They are sized apart from the container because they do a different job
+	// and are gone before it starts: one writes the node's env file and the
+	// other runs node_configure.py once, so what they need is a short burst
+	// rather than the footprint of a process that runs for the node's life.
+	//
+	// Stating either half replaces both, as with containerResources, and it is
+	// a pointer for the same reason.
+	// +optional
+	InitContainerResources *corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
+
+	// Tolerations are what the storage-node pods tolerate, and they expand into
+	// the cluster's own spec.storageNodes.tolerations.
+	//
+	// A fleet that dedicates machines to storage taints them, which is what
+	// keeps everything else off. The DaemonSet that lands on those machines has
+	// to tolerate the taint or it schedules nowhere, and a document that could
+	// not say so described a deployment that does not start: the correction was
+	// an edit to the cluster the document had just created, on a field the
+	// document owns everywhere else.
+	//
+	// A growth document states none. It names a cluster rather than describing
+	// one, and that cluster already carries what its storage nodes tolerate.
+	// +kubebuilder:validation:MaxItems=32
+	// +optional
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// ContainerResources sizes the storage-node container, and expands into the
+	// cluster's own spec.storageNodes.containerResources.
+	//
+	// The container it sizes is the node's management API rather than SPDK,
+	// which runs in a pod of its own: what outgrows the default is a node
+	// answering for many subsystems, not a node moving more data. It is on the
+	// document because a deployment is where a fleet's sizing is decided, and
+	// a cluster written from a document that could not say so had to be edited
+	// afterward on a field the document owns everywhere else.
+	//
+	// Stating either half replaces both. The defaults apply to a cluster that
+	// states neither requests nor limits, so a document stating requests alone
+	// produces a container with no limits rather than one with the default
+	// limits, and a memory limit is what has the kubelet evict a leaking agent
+	// rather than losing the worker.
+	//
+	// It is a pointer because a resource block is a struct, and a struct with
+	// omitempty is serialized whether or not anything is in it: as a value,
+	// every document a discovery run writes would carry an empty
+	// containerResources that says nothing and that a reviewer has to decide
+	// about.
+	// +optional
+	ContainerResources *corev1.ResourceRequirements `json:"containerResources,omitempty"`
+
+	// NodeProvisioningBudget is how many workers the expansion may have in the
+	// node-add process at once. It expands into the cluster's own
+	// spec.storageNodes.nodeProvisioningBudget, whose meaning it shares: the cap
+	// is counted by distinct worker, so a two-socket host spends one of the
+	// budget, and a worker hosting a FoundationDB pod is sequential whatever the
+	// budget says.
+	//
+	// It is on the document because a document is what states the size of a
+	// deployment, and a deployment of thirty workers added one at a time is the
+	// difference between an afternoon and a week. Omitted, the cluster's default
+	// of one applies, which is the serial behavior.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
+
+	// EnableChecksumValidation turns on inline CRC validation of every I/O, for
+	// silent-data-error protection.
+	//
+	// It is on the document because it is immutable on the cluster it lands on:
+	// the backend bakes the checksum method into each device when the cluster is
+	// created and never re-applies it, so a cluster created without this is one
+	// nobody can turn it on for. A deployment that wants its data checked has to
+	// say so here or not at all.
+	// +optional
+	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
+
+	// EnableAtomicity4K enforces 4K write atomicity on every device this
+	// deployment names, which is what lets checksum validation run on devices
+	// whose logical block size is under the data plane's 4K minimum.
+	//
+	// It is the route to checked I/O on a device that cannot be reformatted: a
+	// logical block device's block size is fixed by the drive, and some NVMe
+	// devices offer no 4K format either. Where a device can be reformatted,
+	// EnableDriveFormat is the other route and this is unnecessary.
+	//
+	// It is an enforcement because the question is often unanswerable. A SATA
+	// drive presenting 512-byte logical blocks over a 4K physical sector reports
+	// 512 and nothing more, and a kernel older than 6.11 publishes no atomic
+	// write attributes at all. Where a device does answer, the storage node's
+	// report carries it, and a reviewer approves this against that rather than
+	// against a vendor's datasheet -- because enforcing a guarantee the hardware
+	// does not keep is how a torn write becomes a checksum that silently
+	// disagrees with it.
+	//
+	// It means nothing unless EnableChecksumValidation is set, which is the
+	// cluster's own rule and is left to the cluster to enforce.
+	// +optional
+	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
+
+	// EnableMetadataJournal journals the lvstore's metadata pages against torn
+	// writes, which a device needs when it does not complete a 4K write whole.
+	//
+	// It is on the document because it is immutable on the cluster it lands on:
+	// the data plane records it when the cluster's lvstores are created. A
+	// discovery run derives it from the devices it found: on when any of them
+	// is not known to be 4K-write atomic once formatted.
+	// +optional
+	EnableMetadataJournal *bool `json:"enableMetadataJournal,omitempty"`
+
+	// EnableCpuTopology turns on topology-aware CPU assignment on the storage
+	// nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+	// and every other environment leaves it off. Stated, it replaces what the
+	// environment decides, for a fleet whose workers the environment does not
+	// describe.
+	// +optional
+	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
+
+	// EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
+	// configuration of their workers and restart the kubelet. On OpenShift that
+	// is the KubeletConfig a storage node creates for its machine-config pool,
+	// and the rolling reboot of that pool which applying it takes.
+	//
+	// Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
+	// K3s, and Talos (whose kubelet is configured through the Talos API), and
+	// off for EKS, GKE, AKS, and OKE, whose kubelet
+	// configuration is not writable or is rebuilt with every node. Stated, it
+	// replaces what the environment decides. A fleet that manages its kubelet
+	// configuration itself states it false: a storage node then neither
+	// rewrites the kubelet nor, on OpenShift, creates a KubeletConfig or waits
+	// for the pool to roll, so CPU pinning holds only if that kubelet already
+	// runs the static CPU manager. Stating it true on an environment whose
+	// kubelet is not writable makes the storage nodes fail to configure it.
+	// +optional
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// TalosMachineConfig is who writes a Talos worker's machine config, the
+	// huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+	// default, is the cluster's operator, before the nodes are added: a node
+	// verifies and fails its add with the patch to apply. Managed is the node
+	// itself, through the Talos API, which needs the os:admin credentials
+	// Secret in the namespace. It is valid only when spec.environment is
+	// Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+	// +optional
+	TalosMachineConfig TalosMachineConfigMode `json:"talosMachineConfig,omitempty"`
+
 	// Stripe is the erasure-coding layout.
 	// +optional
-	Stripe *v1alpha1.StripeSpec `json:"stripe,omitempty"`
+	Stripe *StripeSpec `json:"stripe,omitempty"`
+
+	// ClusterMode is how many storage nodes the cluster is built for: Single
+	// runs every erasure-coding scheme on exactly one storage node, each chunk of
+	// a stripe on its own device, so the node needs dataChunks+parityChunks
+	// devices and the parity protects against device failures rather than the
+	// loss of the node; Dual runs 1+1 on exactly two storage nodes; Standard,
+	// the default, keeps every scheme at its usual minimum. It is carried to the
+	// cluster's spec.clusterMode.
+	// +optional
+	// +kubebuilder:default=Standard
+	ClusterMode ClusterMode `json:"clusterMode,omitempty"`
+
+	// EnableArbitration turns on the control plane's two-node arbitration, and
+	// is carried to the cluster's spec.enableArbitration. Only valid when
+	// clusterMode is Dual.
+	// +optional
+	EnableArbitration *bool `json:"enableArbitration,omitempty"`
+
+	// Arbitration tunes the two-node arbitration, and is carried to the
+	// cluster's spec.arbitration. Only valid when clusterMode is Dual.
+	// +optional
+	Arbitration *ArbitrationSpec `json:"arbitration,omitempty"`
 
 	// FabricType is the storage fabric.
 	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	FabricType string `json:"fabricType,omitempty"`
 
+	// OpenShift is what this deployment states because it runs on OpenShift. It
+	// expands into StorageCluster.spec.storageNodes.openshift, whose shape it
+	// shares, and it is read only for a document whose environment is
+	// OpenShift: the environment is what says which distribution this is, and
+	// the block is what that distribution needs said beyond it.
+	// +optional
+	OpenShift *OpenShiftSpec `json:"openshift,omitempty"`
+
+	// Ports are where this cluster's storage nodes listen. Unstated, and for
+	// each member left unstated, the cluster's own defaults decide.
+	// +optional
+	Ports *ClusterPortsSpec `json:"ports,omitempty"`
+
 	// EnableFailureDomains opts the cluster into failure-domain mode, in which
 	// every group must label the fault group its workers belong to.
 	// +optional
 	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
+	// EnableSyncReplication opts the cluster into synchronous two-site
+	// replication. The cluster then spans exactly two sites and every node group
+	// declares a site (see NodeGroup.Site). It is on the document because it is
+	// immutable on the cluster it lands on: the backend accepts it only at
+	// cluster-create, so a cluster created without it is one nobody can turn it
+	// on for.
+	// +optional
+	EnableSyncReplication *bool `json:"enableSyncReplication,omitempty"`
+
+	// Stretched makes the cluster one site of a stretched cluster, whose two
+	// sites are two Kubernetes clusters: the site this document's nodes join,
+	// the other site, and whether this site creates the cluster or adopts it.
+	// Written by the hub that manages both sites, and expanded verbatim into the
+	// StorageCluster. Requires enableSyncReplication; every node group's site
+	// must equal stretched.site.
+	// +optional
+	Stretched *StretchedSpec `json:"stretched,omitempty"`
+
+	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
+	// from the local node's own devices where it can, before crossing the
+	// network.
+	//
+	// It is not Kubernetes affinity, and the name is the one place this API
+	// invites that reading: nothing about it schedules a pod, labels a worker,
+	// or places a volume's primary node. The control plane carries it into the
+	// cluster map it pushes to each node, where it sets the local node's index,
+	// and what changes is which copy of a chunk is read.
+	// Co-locating a workload with the primary node of its volume is a separate
+	// mechanism and is not configured here.
+	//
+	// It is on the document because it is immutable on the cluster: the control
+	// plane takes it at cluster create and never re-applies it, so this is the
+	// only moment it can be set at all.
+	// +optional
+	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
+
+	// Backup is where this cluster's backups live, and it expands into
+	// StorageCluster.spec.backup unchanged.
+	//
+	// It is here for the reason KMS is: a store stated on the document is
+	// present when the cluster is created rather than patched in afterward by
+	// whoever remembers. Unlike most of what this template carries, the field it
+	// fills is mutable, so a document that states none costs nothing permanent.
+	// A cluster can be given a store whenever there is one to give.
+	//
+	// The Secret it names is not resolved at admission. It is a core object a
+	// deployment legitimately creates alongside the document or after it, and
+	// the cluster's own creation is where its absence is reported.
+	// +optional
+	Backup *BackupStoreSpec `json:"backup,omitempty"`
+
+	// KMS selects where the cluster stores volume encryption keys. Stating it on
+	// the document is what makes it present when the cluster is created, where
+	// setting it on the StorageCluster afterward races with that creation.
+	// +optional
+	KMS *KMSSpec `json:"kms,omitempty"`
+}
+
+// ImageSpec is one container image and when to pull it, which is the pair every
+// image in this product is stated as.
+//
+// Both members are optional so that each can be stated without the other: an
+// air-gapped deployment overrides the image and keeps the policy, and a
+// development one keeps the image and pins the policy to IfNotPresent so a tag
+// rebuilt in place is not picked up mid-deployment.
+type ImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned. An empty value
+	// is not written downstream, so the field it would fill keeps its own
+	// default rather than being overridden with nothing.
+	//
+	// Every image field in this API is held to the same reference format and
+	// to no particular registry, so an air-gapped deployment can name its own
+	// mirror.
+	// +optional
+	Image crdtypes.ImageReference `json:"image,omitempty"`
+
+	// ImagePullPolicy is when that image is pulled. It defaults to Always,
+	// because every image this product ships by default is a moving tag and a
+	// node brought up after a release otherwise runs what its kubelet held.
+	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
+	// +kubebuilder:default=Always
+	// +optional
+	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+}
+
+// DeploymentImages is every image a deployment pins, in one block.
+//
+// All three are software that runs on a storage node, which is what the slot
+// names say and what an earlier spelling of the first one hid. They are together
+// rather than each beside the object it configures because pinning images is one
+// decision taken once: an air-gapped installation overrides all three against its
+// own registry, and a reviewer reading the document has one place to check what
+// this deployment will run. The expansion is what spends them on two different
+// objects, since the three fields they land on are not all on the same kind.
+//
+// The control plane's own image is not here. A ClusterDeploymentConfig creates a
+// StorageCluster and its StorageNodes and neither creates nor adopts the
+// ControlPlane, so a slot for it would be a field the expansion has nowhere to
+// write. It is ControlPlane.spec.source.local.image, and the CSI driver's is
+// SimplyblockDriver.spec.image.
+type DeploymentImages struct {
+	// NodeAgent is the image the storage-node DaemonSet runs: the agent the
+	// control plane drives a worker through, and the two init containers that
+	// configure the host before it starts. The expansion writes it to
+	// StorageCluster.spec.storageNodes, which is where the retired
+	// StorageNodeSet.spec.clusterImage went.
+	//
+	// It is the same artifact the control plane itself runs, which is why
+	// spec.storageNodes.image defaults to the ControlPlane singleton's: the agent
+	// and the tasks that call it are one codebase, and version skew between them
+	// is what breaks a node add.
+	//
+	// It is spent only where the document creates the cluster. A document that
+	// names an existing one in ClusterRef adds nodes to a DaemonSet that is
+	// already running under an image the cluster states, and this slot is ignored
+	// the same way Cluster is.
+	// +optional
+	NodeAgent *ImageSpec `json:"nodeAgent,omitempty"`
+
+	// SPDK is the SPDK image, which the expansion writes onto every
+	// StorageNode.spec.config it creates rather than onto the cluster: the field
+	// is per node so that a later rollout can walk the fleet one machine at a
+	// time, and a document states the fleet's starting point.
+	// +optional
+	SPDK *ImageSpec `json:"spdk,omitempty"`
+
+	// SPDKProxy is the SPDK proxy image, written per node for the reason SPDK is.
+	// +optional
+	SPDKProxy *ImageSpec `json:"spdkProxy,omitempty"`
+
+	// Talosctl is the talosctl image a Talos worker's node runs as a Job to
+	// reserve its huge pages through the Talos API. It is the fleet's, written
+	// to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+	// image. Unstated keeps the node agent's default; a deployment pins it to
+	// the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+	// for a document whose environment is Talos.
+	// +optional
+	Talosctl *ExternalImageSpec `json:"talosctl,omitempty"`
+}
+
+// ExternalImageSpec is an image this product does not build, stated the way
+// ImageSpec states one it does. It exists because ImageSpec holds every image to
+// simplyblock's own registries, which is right for software simplyblock publishes
+// and wrong for talosctl: Sidero publishes it on ghcr.io, and a deployment that
+// mirrors it names its own registry. Any registry is admitted; the shape of a
+// reference is still checked.
+type ExternalImageSpec struct {
+	// Image is the repository and tag, optionally digest-pinned, on any
+	// registry. An empty value is not written downstream, so the field it would
+	// fill keeps its own default.
+	// +kubebuilder:validation:Pattern=`^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$`
+	// +optional
+	Image string `json:"image,omitempty"`
 }
 
 // ClusterDeploymentConfigSpec is a whole simplyblock deployment as one
@@ -236,22 +878,44 @@ type ClusterTemplate struct {
 // node set names the same member of its DeviceSelection. The expansion reads the
 // class off them and stamps it onto the cluster it creates, which is why the
 // document carries no field for it.
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self == oldSelf",message="an approved deployment config is immutable"
-// +kubebuilder:validation:XValidation:rule="!oldSelf.approved || self.approved",message="approval cannot be withdrawn"
-// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
+// +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
+// +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.talosMachineConfig) || (has(self.environment) && self.environment == 'Talos')",message="spec.cluster.talosMachineConfig is what a deployment onto Talos states, so spec.environment has to be Talos"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
 	// reviewing a wrong document safe.
+	//
+	// It is defaulted and serialized rather than omitted when false, and the
+	// two are the same requirement read twice. A reviewer has to see the gate
+	// they are being asked to open, and the rules above have to find the field
+	// they read: a bool omitted when false is a key the apiserver never stores,
+	// so a rule reading it fails rather than reading false, and the first rule
+	// guarding approval denied every approval there could ever be. The has()
+	// guards are what carry documents written before the default existed.
 	// +optional
-	Approved bool `json:"approved,omitempty"`
+	// +kubebuilder:default=false
+	Approved bool `json:"approved"`
 
 	// Environment is the Kubernetes distribution this deployment targets. It is a
 	// shorthand the expansion spends: it sets enableKubeletConfiguration,
-	// enableCpuTopology, ubuntuHost, and openShiftCluster on every StorageNode
-	// the document produces, after which nothing reads it again.
+	// enableCpuTopology, and openShiftCluster on the cluster the document
+	// produces, after which nothing reads it again. The worker's host OS is not
+	// among them and is stated in hostOS, because a distribution decides what
+	// Kubernetes does to a machine and not which packages the machine has.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system the workers run, which decides what the
+	// host itself offers rather than what Kubernetes does to it. The expansion
+	// spends the distro on StorageCluster.spec.storageNodes.ubuntuHost and
+	// carries the family for the reviewer reading the document.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 
 	// EdgeCluster states that this is an edge deployment. An edge deployment
 	// differs from a datacenter one in topology and scale rather than in kind,
@@ -259,24 +923,32 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	EdgeCluster *bool `json:"edgeCluster,omitempty"`
 
-	// ClusterRef names an existing StorageCluster this document adds nodes to.
-	// Absent means the document creates the cluster in Cluster. Setting it to a
+	// ClusterRef names an existing StorageCluster this document adds to: the
+	// nodes of every node set to a standalone cluster or a member, and one new
+	// member per node set to a supercluster. Absent means the document creates
+	// the cluster in Cluster. Setting it to a
 	// cluster that does not exist, or leaving it absent when one already does,
 	// is refused rather than reconciled.
-	// +kubebuilder:validation:MaxLength=253
+	//
+	// The maximum is what a StorageCluster name may be and not the 253 an object
+	// name may be: a reference between the two names nothing that can exist.
+	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
 
-	// Cluster is the StorageCluster to create. Ignored when ClusterRef is set.
+	// Cluster is the StorageCluster to create, or the sizing of the members to
+	// add when ClusterRef names a supercluster, whose name is then not used.
+	// Ignored when ClusterRef names a standalone cluster or a member.
 	// +optional
 	Cluster *ClusterTemplate `json:"cluster,omitempty"`
 
-	// NodeSets are the nodes the deployment is made of.
-	//
-	// The upper bound is what makes the device-class rule above estimable: the
-	// API server costs a CEL rule against the largest value the schema permits,
-	// and a list with no bound is costed as unbounded, which the rule's nested
-	// all() then multiplies past the budget.
+	// Images are the container images this deployment pins. Unstated, each field
+	// the expansion would write keeps its own default.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
+
+	// NodeSets are the nodes the deployment is made of. At least one, and at
+	// most 64.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:Required
@@ -284,21 +956,40 @@ type ClusterDeploymentConfigSpec struct {
 }
 
 // ClusterDeploymentConfigStatus is the observed state of the document.
+// ExpansionMember is a member cluster the expansion drew a name for.
+type ExpansionMember struct {
+	// NodeSet is the node set the member is made of.
+	NodeSet string `json:"nodeSet"`
+
+	// Cluster is the member StorageCluster's name, <cluster>-<nodeset>-<suffix>.
+	Cluster string `json:"cluster"`
+}
+
 type ClusterDeploymentConfigStatus struct {
 	// Phase is the operator's own view of the document.
 	// +optional
 	Phase ClusterDeploymentConfigPhase `json:"phase,omitempty"`
 
 	// Step is the position of the expansion machine within Expanding.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Validating','CreatingCluster','AwaitingCluster','CreatingNodes','Activating','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 
-	// ClusterRef names the StorageCluster the expansion produced or added to. It
-	// is a record rather than a dependency: nothing resolves it after expansion,
-	// which is what makes the document safe to delete.
+	// ClusterRef names the StorageCluster the expansion produced or added to,
+	// the supercluster when it produced one. It is a record rather than a
+	// dependency: nothing resolves it after expansion, which is what makes the
+	// document safe to delete.
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Members are the member clusters the expansion created or is creating, one
+	// per node set, when the document produces a supercluster. Each name is
+	// recorded before its member is created, so that a retry creates the same
+	// member rather than drawing another name.
+	// +optional
+	// +listType=map
+	// +listMapKey=nodeSet
+	Members []ExpansionMember `json:"members,omitempty"`
 
 	// NodeRefs names the StorageNode objects the expansion created, for the same
 	// reason.
@@ -316,6 +1007,18 @@ type ClusterDeploymentConfigStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// ExpansionStartedAt is when the expansion machine was born, which is the
+	// first reconcile after the document was approved. A document may sit as a
+	// draft for as long as a review takes, so this is not creationTimestamp and
+	// the difference is the whole point: how long a deployment takes is measured
+	// from the moment somebody said yes.
+	//
+	// It is the start of the expansion_duration_seconds metric, whose histogram
+	// needs an instant that survives the operator restarting mid-expansion,
+	// which nothing in memory and no step deadline supplies.
+	// +optional
+	ExpansionStartedAt *metav1.Time `json:"expansionStartedAt,omitempty"`
 }
 
 // +kubebuilder:object:root=true

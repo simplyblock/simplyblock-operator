@@ -1,0 +1,4 @@
+worker-01/sda: declined by allow and deny lists because it is not in the allow list
+worker-01/sdb: declined by allow and deny lists because it is not in the allow list
+worker-01/sdc: declined by allow and deny lists because it is not in the allow list
+worker-01/vdd: declined by allow and deny lists because it is not in the allow list

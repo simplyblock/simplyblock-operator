@@ -1,10 +1,5 @@
 package main
 
-import (
-	"fmt"
-	"strings"
-)
-
 // Test data sets. A Scenario is a parameterized world; the generator (gen.go)
 // turns one into a coherent object graph — devices reference their nodes,
 // slots their PVCs, DRPCs their DRPolicy — with the remaining detail drawn
@@ -32,21 +27,6 @@ type Scenario struct {
 	EventStorm      bool
 	Snapshots       int
 	Backups         int
-
-	// Several storage clusters per world. Clusters renders that many clusters
-	// into the primary tenant namespace (0 and 1 both mean one), and
-	// ClusterNamespaces renders one cluster per listed namespace instead.
-	// Every cluster gets its own Workers, Pools, Volumes, and so on.
-	Clusters          int
-	ClusterNamespaces []string
-
-	// Fleet labels the console groups by: storage.simplyblock.io/site, /stage,
-	// and /tenant on every StorageCluster when set. Tenant defaults to the
-	// cluster namespace without its sb- prefix when ClusterNamespaces is used.
-	// SitePerCluster gives every cluster its own site (<Site>-NN) and places
-	// its workers in a zone of that name, the many-edge-sites layout.
-	Site, Stage, Tenant string
-	SitePerCluster      bool
 }
 
 func scenarios() []Scenario {
@@ -104,137 +84,6 @@ func scenarioByName(name string) (Scenario, bool) {
 		}
 	}
 	return Scenario{}, false
-}
-
-// ---- fleets ---------------------------------------------------------------------
-//
-// A Fleet is what a console configured with several Kubernetes contexts sees:
-// one world per context, each served under `/k8s/<name>/` and `/cp/<name>/`, with
-// the labels the console falls back to when neither the StorageCluster nor
-// its Namespace carries site, stage, or tenant. A plain scenario is a
-// one-context fleet named local.
-
-type FleetContext struct {
-	Name     string
-	Labels   map[string]string // site, stage, tenant: the context's configured labels
-	Scenario Scenario
-	Seed     uint64 // 0 derives the world's seed from --seed and the context name
-}
-
-type Fleet struct {
-	Name        string
-	Description string
-	Contexts    []FleetContext
-}
-
-// edgeScenario is the small two-worker cluster an edge site runs, placed in
-// the system namespace the way a single-purpose edge Kubernetes cluster is.
-func edgeScenario(site string) Scenario {
-	return Scenario{
-		Name:        site,
-		Description: "two-worker edge cluster at " + site,
-		Workers:     2, MgmtNodes: 1, DevicesPerNode: 2, Pools: 1, Volumes: 4,
-		AppNamespaces:     []string{"edge-apps"},
-		ClusterNamespaces: []string{"simplyblock"},
-		Site:              site,
-		Snapshots:         1, Backups: 1,
-	}
-}
-
-func fleets() []Fleet {
-	stage := func(ctx, dataset string) FleetContext {
-		sc, _ := scenarioByName(dataset)
-		return FleetContext{Name: ctx, Labels: map[string]string{"stage": ctx}, Scenario: sc}
-	}
-	tenants := Scenario{
-		Name:        "tenants",
-		Description: "one cluster per tenant namespace",
-		Workers:     3, MgmtNodes: 3, DevicesPerNode: 2, Pools: 2, Volumes: 10,
-		AppNamespaces:     []string{"acme-apps", "globex-apps", "initech-apps"},
-		ClusterNamespaces: []string{"sb-acme", "sb-globex", "sb-initech"},
-		Stage:             "prd", RunningOps: true, FailedOps: 1,
-		Snapshots: 4, Backups: 2,
-	}
-	namespaces := Scenario{
-		Name:        "namespaces",
-		Description: "two clusters in sb-blue and sb-green",
-		Workers:     4, MgmtNodes: 3, DevicesPerNode: 2, Pools: 2, Volumes: 12,
-		AppNamespaces:     []string{"blue-apps", "green-apps"},
-		ClusterNamespaces: []string{"sb-blue", "sb-green"},
-		OfflineNodes:      1, DegradedDevices: 1, RunningOps: true,
-		Snapshots: 4, Backups: 2,
-	}
-	edgeShared := Scenario{
-		Name:        "edge-shared",
-		Description: "twelve small edge clusters in one Kubernetes cluster",
-		Workers:     2, MgmtNodes: 3, DevicesPerNode: 2, Pools: 1, Volumes: 3,
-		AppNamespaces: []string{"edge-apps"},
-		Clusters:      12, Site: "edge", SitePerCluster: true,
-		OfflineNodes: 1, DegradedDevices: 1, RunningOps: true,
-		Snapshots: 1, Backups: 1,
-	}
-	var sites []FleetContext
-	for i := 1; i <= 8; i++ {
-		name := fmt.Sprintf("edge-%02d", i)
-		sites = append(sites, FleetContext{Name: name, Labels: map[string]string{"site": name}, Scenario: edgeScenario(name)})
-	}
-	return []Fleet{
-		{
-			Name:        "fleet-stages",
-			Description: "three contexts by lifecycle stage: dev, uat, prd",
-			Contexts:    []FleetContext{stage("dev", "small-healthy"), stage("uat", "medium-degraded"), stage("prd", "large-scale")},
-		},
-		{
-			Name:        "fleet-tenants",
-			Description: "one context, one cluster per sb-<tenant> namespace",
-			Contexts:    []FleetContext{{Name: "hub", Labels: map[string]string{"stage": "prd"}, Scenario: tenants}},
-		},
-		{
-			Name:        "fleet-namespaces",
-			Description: "one context, clusters in sb-blue and sb-green",
-			Contexts:    []FleetContext{{Name: "shared", Labels: map[string]string{}, Scenario: namespaces}},
-		},
-		{
-			Name:        "fleet-edge-shared",
-			Description: "one context, twelve two-worker edge clusters with their own sites and zones",
-			Contexts:    []FleetContext{{Name: "edge", Labels: map[string]string{"stage": "prd"}, Scenario: edgeShared}},
-		},
-		{
-			Name:        "fleet-edge-sites",
-			Description: "eight edge contexts, one small cluster each",
-			Contexts:    sites,
-		},
-	}
-}
-
-// fleetByName resolves a fleet or a plain scenario (as a one-context fleet
-// named local).
-func fleetByName(name string) (Fleet, bool) {
-	for _, f := range fleets() {
-		if f.Name == name {
-			return f, true
-		}
-	}
-	if sc, ok := scenarioByName(name); ok {
-		return oneContextFleet(sc), true
-	}
-	return Fleet{}, false
-}
-
-func oneContextFleet(sc Scenario) Fleet {
-	return Fleet{Name: sc.Name, Description: sc.Description, Contexts: []FleetContext{{Name: "local", Labels: map[string]string{}, Scenario: sc}}}
-}
-
-// datasetNames is the --dataset help text: every scenario, then every fleet.
-func datasetNames() string {
-	var names []string
-	for _, s := range scenarios() {
-		names = append(names, s.Name)
-	}
-	for _, f := range fleets() {
-		names = append(names, f.Name)
-	}
-	return strings.Join(names, " | ")
 }
 
 // ---- pools the generator draws from ------------------------------------------

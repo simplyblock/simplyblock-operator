@@ -48,15 +48,15 @@ File: `operator/internal/controllers/volume/persistentvolumeops_resolve_test.go`
 
 ### Target Resolution (design §4.1)
 
-| #    | Scenario                                                                     | Type     | Test |
-|------|------------------------------------------------------------------------------|----------|------|
-| U-09 | `spec.migrate.targetNodeRef` names a node: its `status.uuid` is used         | Positive | —    |
-| U-10 | The target node does not exist: the operation fails with a not-found message | Negative | —    |
-| U-11 | The target node has no `status.uuid`: held, not failed                       | Negative | —    |
-| U-12 | The target node is not online: `TargetNodeNotReady`, held                    | Negative | —    |
-| U-13 | The target node is the volume's current node: `TargetNodeIsSource`, failed   | Negative | —    |
-| U-14 | The target node belongs to another cluster: refused before any backend call  | Negative | —    |
-| U-15 | `spec.migrate` absent for `action: Migrate`: rejected                        | Negative | —    |
+| #    | Scenario                                                                                                       | Type     | Test                                                        |
+|------|----------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------|
+| U-09 | `spec.migrate.targetNodeRef` names a node: its `status.uuid` is used                                           | Positive | —                                                           |
+| U-10 | The target node does not exist: the operation fails with a not-found message                                   | Negative | —                                                           |
+| U-11 | The target node has no `status.uuid`: held, not failed                                                         | Negative | —                                                           |
+| U-12 | The target node is not online: `TargetNodeNotReady`, held                                                      | Negative | —                                                           |
+| U-13 | The target node is the volume's current node: `TargetNodeIsSource`, succeeded with nothing migrated (see U-55) | Negative | `TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration` |
+| U-14 | The target node belongs to another cluster: refused before any backend call                                    | Negative | —                                                           |
+| U-15 | `spec.migrate` absent for `action: Migrate`: rejected                                                          | Negative | —                                                           |
 
 ### The Step Machine (design §5)
 
@@ -112,6 +112,111 @@ File: `operator/internal/webhook/persistentvolumeops_validator_test.go`
 | U-49 | An update rather than a create: not inspected                                   | Boundary | —    |
 | U-50 | A thousand terminal operations in the namespace: the check uses the field index | Boundary | —    |
 | U-51 | The second `Validating` finds the volume already migrating and fails            | Negative | —    |
+
+### Create Refusals (design §5)
+
+Regression id for the rows marked so: `2026-10-05-drain-target-memory`.
+
+| #    | Scenario                                                                                                                     | Type       | Test                                                             |
+|------|------------------------------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------------|
+| U-59 | A 400 to the create fails the operation on the first answer, with the control plane's reason                                 | Regression | `TestARefusedCreateFailsTheOperationAtOnce`                      |
+| U-60 | A 409 to the create is waited on in the step rather than failed                                                              | Negative   | `TestABusyControlPlaneIsWaitedOnRatherThanFailed`                |
+| U-61 | A 400 saying the volume is already on the target ends the operation as `Succeeded`                                           | Regression | `TestARefusalSayingTheVolumeIsAlreadyThereSucceeds`              |
+| U-73 | A 400 reporting an active migration of the subsystem is waited on like a 409 (2026-10-06-pvops-400-conflict-read-as-final)   | Regression | `TestAConflictAnsweredWithA400IsWaitedOn`                        |
+| U-74 | A refusal's message is the control plane's reason and names no target of its own (2026-10-06-pvops-refusal-names-the-target) | Regression | `TestARefusalKeepsTheControlPlanesWordsAndNamesNoTargetOfItsOwn` |
+| U-75 | Every pin spelling, canonical keys included, reaches the validator (2026-10-06-pinned-volume-matchcondition-canonical-key)   | Regression | `TestPinnedVolumeMatchConditionCoversEverySpelling`              |
+| U-95 | A repeat pin to an earlier target raises a new move and keeps the old (2026-10-07-pin-repin-to-previous-target)              | Regression | `TestPVCReconcile_RepinToAPreviousTargetRaisesANewMove`          |
+| U-96 | A 400 reporting a rebalancing cluster, as release 26.3 answers it, is waited on like a 409                                   | Negative   | `TestARebalancingClusterAnsweredWithA400IsWaitedOn`              |
+
+### The Namespace Scan (design §5)
+
+Regression id for the rows marked so: `2026-10-05-migration-path-namespace-scan`.
+
+| #    | Scenario                                                                                            | Type       | Test                                                                  |
+|------|-----------------------------------------------------------------------------------------------------|------------|-----------------------------------------------------------------------|
+| U-62 | The wait returns once every live path serves every namespace of the subsystem                       | Regression | `TestWaitForPathsToServeWaitsForTheNamespaceScan`                     |
+| U-63 | A path that never settles ends the wait with the controller and its namespace count named           | Regression | `TestWaitForPathsToServeNamesWhatNeverSettled`                        |
+| U-64 | A subsystem without per-controller path lists, native multipath off, is not waited on               | Boundary   | `TestWaitForPathsToServeAcceptsASubsystemWithoutPathLists`            |
+| U-65 | The validation Job waits for the scan between the connect and the verification, spending no attempt | Regression | `TestValidationRun_WaitsForThePathsToSettleBeforeVerifying`           |
+| U-66 | A wait that runs out leaves the verdict to the verification                                         | Negative   | `TestValidationRun_AWaitThatRunsOutLeavesTheVerdictToTheVerification` |
+
+### The Subsystem as the Unit (design §5, §6)
+
+The control plane migrates an NVMe-oF subsystem as a whole, so every row here is about
+the volumes an operation does not name. Regression id for the rows marked so:
+`2026-10-05-pvops-per-volume-lock`.
+
+| #    | Scenario                                                                                                                                 | Type       | Test                                                        |
+|------|------------------------------------------------------------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
+| U-52 | The lock is taken on every volume of the named volume's subsystem                                                                        | Regression | `TestAnOperationHoldsEveryVolumeOfItsSubsystem`             |
+| U-53 | A sibling's operation holds the subsystem: this one waits at `Pending`, holds nothing, and creates no migration                          | Regression | `TestAnOperationWaitsWhileASiblingOfItsVolumeIsBeingMoved`  |
+| U-54 | The release clears the lock from every volume carrying this operation's name                                                             | Regression | `TestFinishingReleasesEveryVolumeOfItsSubsystem`            |
+| U-55 | The subsystem is already on the target: `Succeeded`, no migration created, every lock released                                           | Regression | `TestASubsystemAlreadyOnTheTargetSucceedsWithoutAMigration` |
+| U-56 | A volume the control plane reports under no subsystem is locked alone                                                                    | Boundary   | `TestTheLockIsTakenWhenTheVolumeIsFree`                     |
+| U-57 | An operation past `Pending` does not read the subsystem's membership again                                                               | Boundary   | —                                                           |
+| U-58 | Two operations on one subsystem acquiring at once: one holds every volume, the other holds none                                          | Negative   | —                                                           |
+| U-67 | A running operation reading a stale copy of its named volume keeps its claim and every lock (2026-10-06-pvops-lock-rollback-on-own-lock) | Regression | `TestARunningOperationReadingAStaleCopyKeepsItsLocks`       |
+| U-68 | The release finds locks the cache has not seen yet (2026-10-06-pvops-release-misses-uncached-lock)                                       | Regression | `TestReleaseFindsLocksTheCacheHasNotSeen`                   |
+| U-69 | A release whose patch conflicts is retried after re-checking ownership (2026-10-06-pvops-release-conflict-read-as-done)                  | Regression | `TestAReleaseThatConflictsIsRetried`                        |
+| U-70 | An acquisition that fails halfway gives back everything it took (2026-10-06-pvops-partial-lock-on-error)                                 | Regression | `TestAnAcquisitionThatFailsHalfwayHoldsNothing`             |
+| U-71 | A subsystem only partly on the target is waited on, not reported moved (2026-10-06-pvops-noop-on-a-split-subsystem)                      | Regression | `TestASubsystemOnlyPartlyOnTheTargetIsWaitedOn`             |
+| U-72 | A pass reading a superseded copy cannot finish the operation through the already-there shortcut (2026-10-06-pvops-noop-bypasses-claim)   | Regression | `TestAStalePassCannotFinishTheOperationThroughTheShortcut`  |
+
+### Pins (design §6)
+
+A pinned volume is moved by its pin and by nothing else. Regression id for the rows
+marked so without one of their own: `2026-10-07-pvops-pinned-volume-moved`.
+
+| #    | Scenario                                                                                                                                              | Type       | Test                                                                      |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------------|
+| U-75 | The named volume is pinned to another node: `Failed` at `Pending`, no lock taken, no migration created                                                | Regression | `TestAPinnedVolumeIsNotMovedToAnotherNode`                                |
+| U-76 | The pin-driven move targets the node the volume is pinned to: it runs                                                                                 | Positive   | `TestAMoveToThePinnedNodeRuns`                                            |
+| U-77 | The pin of a pin-driven move is removed before it starts: `Aborted`, the volume stays                                                                 | Regression | `TestAPinDrivenMoveWhosePinWasRemovedLeavesTheVolume`                     |
+| U-78 | The volume is repinned before the pin-driven move starts: `Aborted`, no migration created                                                             | Regression | `TestAPinDrivenMoveSupersededByARepinLeavesTheVolume`                     |
+| U-79 | A sibling on the subsystem is pinned to another node: `Failed`, the sibling named                                                                     | Regression | `TestAPinnedSiblingBlocksTheSubsystemsMove`                               |
+| U-80 | A volume whose claim carries no pin moves as before                                                                                                   | Positive   | `TestAnUnpinnedVolumeMovesAsBefore`                                       |
+| U-81 | A sibling pinned elsewhere joins the subsystem after `Pending`: `Failed` before the copy, the migration taken back (2026-10-07-pvops-late-member-pin) | Regression | `TestASiblingPinnedElsewhereThatJoinedLateFailsTheOperationBeforeTheCopy` |
+| U-82 | The volume's claim was replaced by another of the same name: its pin does not hold the volume (2026-10-07-pvops-pin-from-reused-claim-name)           | Regression | `TestAPinOnAClaimThatOnlySharesTheNameDoesNotHoldTheVolume`               |
+| U-83 | The pin is removed while the pin-driven move validates: `Aborted`, the migration taken back, no copy                                                  | Negative   | `TestAPinRemovedWhileTheMoveValidatesWithdrawsIt`                         |
+
+### The Cluster Migration Slot (design §6)
+
+The control plane runs one data migration per cluster. Regression id:
+`2026-10-07-pvops-concurrent-migrations`.
+
+| #    | Scenario                                                                                           | Type       | Test                                           |
+|------|----------------------------------------------------------------------------------------------------|------------|------------------------------------------------|
+| U-84 | Two operations of one cluster: one holds the slot and runs, the other stays `Pending` and names it | Regression | `TestOnlyOneOperationPerClusterLeavesPending`  |
+| U-85 | The holder finishes: the slot is released and the next operation takes it                          | Positive   | `TestTheSlotPassesOnWhenItsHolderFinishes`     |
+| U-86 | The slot names an operation that no longer exists: it is broken                                    | Boundary   | `TestASlotHeldByAnOperationThatIsGoneIsBroken` |
+| U-87 | The slot names a terminal operation: it is broken                                                  | Boundary   | `TestASlotHeldByATerminalOperationIsBroken`    |
+| U-88 | An operation queued on its volume's lock gives the slot back                                       | Negative   | `TestAnOperationWaitingOnItsVolumeHoldsNoSlot` |
+
+### The Validation Result (design §5)
+
+A completed validation Job is not a pass; only a `validated` result is. Regression id for
+the rows marked so without one of their own: `2026-10-07-pvops-complete-job-read-as-pass`.
+
+| #    | Scenario                                                                                                       | Type       | Test                                                           |
+|------|----------------------------------------------------------------------------------------------------------------|------------|----------------------------------------------------------------|
+| U-89 | The Job completed and reported `validated`: the host passes                                                    | Positive   | `TestAValidatedHostPassesTheCheck`                             |
+| U-90 | The Job completed and reported `skipped`: `Failed`, the migration taken back                                   | Regression | `TestACompletedJobThatSkippedTheHostFailsTheOperation`         |
+| U-91 | The Job completed and reported no result: `Failed`                                                             | Regression | `TestACompletedJobWithNoResultFailsTheOperation`               |
+| U-92 | The only result comes from a pod another Job controls: not accepted (2026-10-07-pvops-result-from-a-stale-pod) | Regression | `TestAResultFromAPodOfAnotherJobIsNotAccepted`                 |
+| U-93 | The validate mode writes `validated` or `skipped` as its result                                                | Regression | `TestTheValidateModeReportsWhatItConcluded`                    |
+| U-94 | The Job names one path for the binary's `VMIG_RESULT_PATH` and the container's `terminationMessagePath`        | Boundary   | `TestTheValidationJobReadsTheResultFromWhereTheBinaryWritesIt` |
+
+### Taking a Migration Back (design §5)
+
+A cancel the control plane refuses because the migration has already ended is the state
+the cancel asks for. Regression id for the rows marked so: `SFAM-2824`.
+
+| #     | Scenario                                                                                             | Type       | Test                                                         |
+|-------|------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
+| U-97  | A failure whose cancel is refused as not active still deletes the Jobs and releases the target paths | Regression | `TestAFailedMigrationReleasesItsPathsWhenTheCancelIsRefused` |
+| U-98  | An abort whose cancel is refused as not active ends the operation `Aborted` and releases the lock    | Regression | `TestAnAbortOfAnEndedMigrationFinishes`                      |
+| U-99  | A delete whose cancel answers 404 releases the finalizer                                             | Regression | `TestDeletingAnOperationWhoseMigrationIsGoneLetsTheObjectGo` |
+| U-100 | An abort whose cancel is refused for any other reason is held                                        | Negative   | `TestAnAbortHeldOnAnyOtherRefusedCancelWaits`                |
 
 ---
 
@@ -247,13 +352,16 @@ question is whether the operation holds legibly or fails.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 51        | 0       | 51          |
+| Unit        | 94        | 42      | 52          |
 | Integration | 14        | 0       | 14          |
 | E2E         | 15        | 0       | 15          |
 | Manual      | 4         | 0       | 4           |
-| **Total**   | **84**    | **0**   | **84**      |
+| **Total**   | **127**   | **42**  | **85**      |
 
-Nothing is covered against the target model. `VolumeMigration` has the most test
+Only the subsystem rows `U-52` to `U-56` and `U-67` to `U-72`, the create refusals
+`U-59` to `U-61` and `U-73` to `U-74`, the namespace-scan rows `U-62` to `U-66`, the pin,
+slot, and validation-result rows `U-75` to `U-94`, and `U-13` are covered against the
+target model. `VolumeMigration` has the most test
 files of any kind in this repository, five of them, and none can be cited here:
 they assert the merged phase enum, the `pvName` spelling, and a lifecycle with no
 `Verifying` step.
@@ -277,6 +385,7 @@ production.
 | U-29 … U-35 | Aborts and deadlines                                  | Partly covered. `U-31`'s refusal is new and comes from the graph                                                 |
 | U-36 … U-42 | The phase and step split                              | Planned, not built. They are one enum today                                                                      |
 | U-43 … U-51 | The exclusion webhook                                 | Planned, not built. Nothing prevents two migrations of one volume today                                          |
+| U-57, U-58  | Membership reuse and concurrent acquisition           | Needs a counting fake for the membership reads, and two reconcilers racing on one fake client                    |
 | I-01 … I-14 | Admission, concurrency, and ownership                 | Needs `envtest`, because CEL, `Required`, and real webhook admission cannot be exercised against a fake client   |
 | E-01 … E-15 | All end-to-end scenarios                              | Needs a live cluster and a real data path. The e2e harness under `test/` is not committed yet                    |
 | E-05 … E-10 | The five regression rows                              | Each pins a defect this repository has seen in the field. None has an automated reproduction                     |

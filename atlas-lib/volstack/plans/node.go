@@ -13,8 +13,10 @@ import (
 	"context"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/devmapper"
 	"github.com/simplyblock/atlas/lvm"
 	"github.com/simplyblock/atlas/lvol"
+	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvme"
 	"github.com/simplyblock/atlas/nvmeof"
 	"github.com/simplyblock/atlas/volstack"
@@ -55,6 +57,10 @@ type NodeConfig struct {
 	// it nil, and the reading decides alone.
 	PriorFormat func(ctx context.Context, volume Volume) (string, error)
 
+	// Mapper runs the device-mapper commands of the dmLinear indirection, and
+	// defaults to the host's dmsetup.
+	Mapper layers.DMMapper
+
 	// Resolve answers what the kernel says about a device path, and defaults to
 	// blockdev.ResolveDevice. It is a seam only because the logical-volume layer
 	// creates a device-mapper node and has to describe it upward, which a test
@@ -69,18 +75,57 @@ type Node struct {
 	cfg NodeConfig
 }
 
-// NewNode holds the given seams, filling in the one that has a single shipped
-// implementation. It validates nothing: a missing seam is a programming error
-// that surfaces at the first call through it, and refusing to build a plan here
-// would only move that failure earlier without making it clearer.
+// NewNode holds the given seams, filling in those that have a single shipped
+// implementation.
+//
+// The two filled in here are the two whose absence is not an error but a panic.
+// Both are concrete types rather than interfaces, so a layer reaching a nil one
+// dereferences it: the manager is a *lvm.Manager whose methods take a pointer
+// receiver, and a nil receiver panics inside the command it was about to run
+// rather than returning. In a node plugin that is the process, and with it that
+// node's CSI. A consumer that wants its own passes it; one that forgets gets the
+// real thing rather than a crash on the first LVM command.
+//
+// The host id is taken from the host NQN's own UUID rather than from the node's
+// /etc/nvme/hostid, because the kernel keeps the pair strictly 1:1: a node
+// holding even one connection under the default identity would otherwise refuse
+// every connect naming this one. A caller that set both keeps what it set.
+//
+// It still validates nothing else. A missing interface seam surfaces at the
+// first call through it as an ordinary nil-interface panic that names the seam,
+// and refusing to build a plan here would only move that failure earlier without
+// making it clearer.
 func NewNode(cfg NodeConfig) *Node {
 	if cfg.Resolve == nil {
 		cfg.Resolve = blockdev.ResolveDevice
+	}
+	if cfg.Manager == nil {
+		cfg.Manager = lvm.NewManager()
+	}
+	if cfg.HostID == "" && cfg.HostNQN != "" {
+		if hostID, ok := nqn.HostUUID(cfg.HostNQN); ok {
+			cfg.HostID = hostID
+		}
 	}
 	return &Node{cfg: cfg}
 }
 
 // fabric is the bottom layer of every plan: one namespace, attached.
+// dmLinear is the indirection between the fabric and what uses the volume
+// (docs/consistency-group-colocation.md §6 in sbcli): its device survives a
+// move of the volume's namespace to another subsystem.
+func (n *Node) dmLinear(volume Volume) volstack.Layer {
+	mapper := n.cfg.Mapper
+	if mapper == nil {
+		mapper = devmapper.New(nil)
+	}
+	return layers.NewDMLinear(layers.DMLinearConfig{
+		Name:    layers.DMLinearName(volume.UUID),
+		Mapper:  mapper,
+		Resolve: n.cfg.Resolve,
+	})
+}
+
 func (n *Node) fabric(connection lvol.Connection) volstack.Layer {
 	return layers.NewFabric(layers.FabricConfig{
 		Connection: connection,
@@ -95,10 +140,12 @@ func (n *Node) fabric(connection lvol.Connection) volstack.Layer {
 func (n *Node) filesystem(volume Volume) volstack.Layer {
 	return layers.NewFilesystem(layers.FilesystemConfig{
 		FsType:                volume.FsType,
+		DefaultFsType:         volume.DefaultFsType,
 		StagingPath:           volume.StagingPath,
 		MountFlags:            volume.MountFlags,
 		FormatOptions:         volume.FormatOptions,
 		ReservedBlocksPercent: volume.ReservedBlocksPercent,
+		Encrypted:             volume.Encrypted,
 		PriorFormat:           n.priorFormat(volume),
 		Ops:                   n.cfg.Filesystem,
 		Content:               n.cfg.Content,
@@ -125,20 +172,39 @@ func (n *Node) priorFormat(volume Volume) func(context.Context) (string, error) 
 // It is told the logical volume's name as well as the group's, because resolving
 // a clone renames the group and leaves the volume inside it named after the
 // source.
-func (n *Node) physicalVolume(volume Volume) volstack.Layer {
+//
+// The pool, when the options name one, is passed as a name to preserve for the
+// same reason: it is structural rather than per-volume, carries the same name in
+// every volume's group, and renaming it along with the clone's source-named
+// volume would leave the logical volume pointing at a pool that no longer
+// answers to what its metadata calls it.
+func (n *Node) physicalVolume(volume Volume, options LogicalVolumeOptions) volstack.Layer {
+	var preserve []string
+	if options.PoolName != "" {
+		preserve = []string{options.PoolName}
+	}
 	return layers.NewLVMPhysicalVolume(layers.LVMPhysicalVolumeConfig{
-		VolumeGroup:   volume.VolumeGroup(),
-		LogicalVolume: volume.LogicalVolume(),
-		Manager:       n.cfg.Manager,
-		Content:       n.cfg.Content,
+		VolumeGroup:            volume.VolumeGroup(),
+		LogicalVolume:          volume.LogicalVolume(),
+		PreserveLogicalVolumes: preserve,
+		RecognizeStack:         RecognizeStack(preserve...),
+		Manager:                n.cfg.Manager,
+		Content:                n.cfg.Content,
 	})
 }
 
 // volumeGroup is the layer between the physical volumes and the logical one.
-func (n *Node) volumeGroup(volume Volume) volstack.Layer {
+func (n *Node) volumeGroup(volume Volume, options LogicalVolumeOptions) volstack.Layer {
+	var preserve []string
+	if options.PoolName != "" {
+		preserve = []string{options.PoolName}
+	}
 	return layers.NewLVMVolumeGroup(layers.LVMVolumeGroupConfig{
-		VolumeGroup: volume.VolumeGroup(),
-		Manager:     n.cfg.Manager,
+		VolumeGroup:            volume.VolumeGroup(),
+		LogicalVolume:          volume.LogicalVolume(),
+		PreserveLogicalVolumes: preserve,
+		Tags:                   volume.InformationalTags(),
+		Manager:                n.cfg.Manager,
 	})
 }
 

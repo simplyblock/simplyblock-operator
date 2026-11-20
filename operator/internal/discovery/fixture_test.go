@@ -45,15 +45,16 @@ func refused(d nodeprobe.Device, reasons ...blockdev.Reason) nodeprobe.Device {
 }
 
 // blockDisk is a free disk of the other class: a virtio disk with a path and no
-// PCI address the draft would name it by.
-func blockDisk(name string, numaNode int, sizeBytes uint64) nodeprobe.Device {
+// PCI address the draft would name it by. It sits on the first memory node,
+// which is where every case that uses it puts its disks.
+func blockDisk(name string, sizeBytes uint64) nodeprobe.Device {
 	return nodeprobe.Device{
 		Name:      name,
 		Path:      "/dev/" + name,
 		SizeBytes: sizeBytes,
 		Kind:      string(blockdev.KindDisk),
 		Transport: string(blockdev.TransportVirtio),
-		NUMANode:  numaNode,
+		NUMANode:  0,
 		Available: true,
 		Content:   "Blank",
 	}

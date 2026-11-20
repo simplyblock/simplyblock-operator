@@ -1,6 +1,9 @@
 package nvme
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // NVMe Identify Controller data structure (CNS 01h): a fixed 4096-byte blob
 // from the Identify admin command. atlas decodes only MNAN, and the notable
@@ -20,15 +23,30 @@ import "encoding/binary"
 //	   516     4  NN       number of namespaces (largest valid NSID)
 //	   520     2  ONCS     optional NVM command support (discard, copy, ...)
 //	   525     1  VWC      volatile write cache present
+//	   526     2  AWUN     atomic write unit, normal operation
+//	   528     2  AWUPF    atomic write unit, power fail          (decoded)
 //	   536     4  SGLS     SGL support
 //	   540     4  MNAN     maximum number of allowed namespaces  (decoded)
 //	   768   256  SUBNQN   NVM subsystem NQN
 const (
 	// identifyControllerLen is the size of the Identify Controller structure.
 	identifyControllerLen = 4096
+	// awupfOffset is the byte offset of AWUPF (uint16, little-endian, 0's
+	// based, in logical blocks).
+	awupfOffset = 528
 	// mnanOffset is the byte offset of MNAN (uint32, little-endian).
 	mnanOffset = 540
 )
+
+// awupfFromIdentify decodes AWUPF from a raw Identify Controller buffer as a
+// count of logical blocks. A buffer too short to contain the field yields 0,
+// which no controller reports: the field is 0's based.
+func awupfFromIdentify(buf []byte) uint32 {
+	if len(buf) < awupfOffset+2 {
+		return 0
+	}
+	return uint32(binary.LittleEndian.Uint16(buf[awupfOffset:])) + 1
+}
 
 // mnanFromIdentify decodes MNAN (Maximum Number of Allowed Namespaces) from a
 // raw Identify Controller buffer. SPDK sets MNAN to the subsystem's
@@ -39,4 +57,19 @@ func mnanFromIdentify(buf []byte) uint32 {
 		return 0
 	}
 	return binary.LittleEndian.Uint32(buf[mnanOffset : mnanOffset+4])
+}
+
+// adminStatus is the error an NVMe admin passthrough's return value carries.
+//
+// The ioctl reports two kinds of failure in two places. A failure to submit
+// the command is an errno, and a command the controller completed with an
+// error is a positive return value with errno 0: the NVMe status field, Status
+// Code Type in bits 10:8 and Status Code in bits 7:0. Reading only the errno
+// takes a rejected command's untouched buffer for its answer.
+func adminStatus(ret uintptr) error {
+	if ret == 0 {
+		return nil
+	}
+	return fmt.Errorf("the controller rejected the command: status code type %d, status code %#x",
+		(ret>>8)&0x7, ret&0xff)
 }

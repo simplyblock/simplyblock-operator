@@ -4,10 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/nvme"
 )
@@ -75,12 +77,21 @@ func ConnectMultipathDevice(
 }
 
 // WaitForDevice polls devs until the namespace selected by sel is attached and
-// returns it. The block device shows up a moment after the controller goes
-// live, so a caller that connected and immediately looked it up would race the
-// kernel. The wait ends on ctx (deadline or cancellation), and the first probe
+// can be opened, and returns it. The block device shows up a moment after the
+// controller goes live, so a caller that connected and immediately looked it up
+// would race the kernel.
+//
+// Being listed is not the same moment as being usable. sysfs gains the namespace
+// when the controller wires it up and the block device becomes openable a little
+// after, so the wait ends on an open succeeding rather than on the listing
+// naming it. A caller that took the listing as the answer got a path whose first
+// open failed ENXIO for a device that was about to be perfectly fine, which is a
+// failure it then reported as its own. The wait ends on ctx (deadline or cancellation), and the first probe
 // happens before any waiting, so an already-expired ctx still gets one attempt.
-// sel must name at least the NQN, because waiting for "any device" is
-// meaningless.
+// sel must name something, because waiting for "any device" is meaningless. The
+// NQN is the usual key and is not required: a namespace UUID names one volume
+// wherever it is being served from, which is what a lookup falls back to once a
+// failover has moved it to a clone under another subsystem.
 //
 // Several devices can match at once, which is why this goes through
 // nvme.DeviceResolver.ListWithSelector rather than a By* lookup: those return
@@ -95,8 +106,9 @@ func ConnectMultipathDevice(
 // single subsystem where sel needs an NSID or UUID, fails immediately
 // instead.
 func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.DeviceSelector) (nvme.Device, error) {
-	if sel.NQN == "" {
-		return nvme.Device{}, fmt.Errorf("wait for device %s: selector must set the NQN", sel)
+	if sel.IsZero() {
+		return nvme.Device{}, fmt.Errorf("wait for device %s: the selector names nothing, "+
+			"and waiting for any device at all is meaningless", sel)
 	}
 	ticker := time.NewTicker(defaultPoll)
 	defer ticker.Stop()
@@ -110,10 +122,18 @@ func WaitForDevice(ctx context.Context, devs nvme.DeviceResolver, sel nvme.Devic
 
 		switch {
 		case len(matched) == 1:
+			if err := ready(matched[0]); err != nil {
+				unsettled = err
+				break
+			}
 			return matched[0], nil
 		case len(matched) > 1:
 			d, err := soleDevice(reachable(matched))
 			if err == nil {
+				if err := ready(d); err != nil {
+					unsettled = err
+					break
+				}
 				return d, nil
 			}
 			if errors.Is(err, errAmbiguousSelector) {
@@ -203,7 +223,9 @@ func deviceIdentity(d nvme.Device) (string, error) {
 	if d.Namespace.DevicePath == "" {
 		return "", fmt.Errorf("namespace %q has neither dev nor device path: %w", d.Namespace.Name, errs.ErrNotFound)
 	}
-	resolved, err := filepath.EvalSymlinks(d.Namespace.DevicePath)
+	resolved, err := bounded.Call("resolve "+d.Namespace.DevicePath, bounded.ReadTimeout, func() (string, error) {
+		return filepath.EvalSymlinks(d.Namespace.DevicePath)
+	})
 	if err != nil {
 		return "", fmt.Errorf("resolving %s: %w", d.Namespace.DevicePath, err)
 	}
@@ -216,4 +238,120 @@ func describeDevices(matched []nvme.Device, ids []string) string {
 		parts[i] = fmt.Sprintf("%s (%s, %s)", d.Namespace.DevicePath, d.Subsystem.ID, ids[i])
 	}
 	return strings.Join(parts, ", ")
+}
+
+// ready reports whether the kernel will let a reader open d's block device, as
+// the error the open itself gave so a caller reading the log sees what the
+// kernel said rather than a description of it.
+//
+// A namespace with no device path yet is not ready and is not an error: it is
+// the same "not settled yet" the rest of this loop waits through.
+func ready(d nvme.Device) error {
+	path := d.Namespace.DevicePath
+	if path == "" {
+		return errors.New("the namespace has no device path yet")
+	}
+	return openDevice(path)
+}
+
+// openDevice asks the kernel to open the device read-only and closes it again,
+// which costs the device nothing and is the only way to learn that it is really
+// there. A test's device path is a real file, so this answers for a fake exactly
+// as it does for a namespace.
+//
+// The open runs under bounded.ReadTimeout: opening a namespace whose paths are
+// all in error recovery can block until the kernel gives the namespace up.
+func openDevice(path string) error {
+	return bounded.Do("open "+path, bounded.ReadTimeout, func() error {
+		f, err := os.OpenFile(path, os.O_RDONLY, 0)
+		if err != nil {
+			return err
+		}
+		return f.Close()
+	})
+}
+
+// WaitForPathsToServe waits until every live controller of the subsystem nqn
+// names serves a path to every namespace the subsystem exports, and returns nil
+// once they all do.
+//
+// It is the multipath counterpart of what WaitForDevice is to a single device.
+// ConnectPaths returns once each path's controller is live, and the kernel
+// attaches the subsystem's namespaces to a new controller one by one after
+// that. In between, a live controller serves some of the namespaces, which is
+// exactly the picture of a path that will never serve them
+// (DefectControllerNotContributing), so a check run straight after a connect
+// cannot tell a scan in progress from a broken path. Waiting for the scan to
+// finish, under the caller's deadline, is what separates the two: a path that
+// settles was scanning, and one that does not is reported by name.
+//
+// "Serves" is the rule Inspect applies: the controller appears in the
+// namespace's per-controller path list. A namespace without a path list, which
+// is what the kernel publishes with native multipath off, says nothing either
+// way and is not waited on. A subsystem that is not attached yet, or exports no
+// namespace yet, is waited on. ctx bounds the wait, and on expiry the error
+// names each controller still short of namespaces.
+func WaitForPathsToServe(ctx context.Context, subs nvme.SubsystemResolver, nqn string) error {
+	ticker := time.NewTicker(defaultPoll)
+	defer ticker.Stop()
+
+	var unsettled error
+	for {
+		s, err := subs.ByNQN(ctx, nqn)
+		switch {
+		case errors.Is(err, errs.ErrNotFound):
+			unsettled = fmt.Errorf("subsystem %s is not attached yet", nqn)
+		case err != nil:
+			return fmt.Errorf("wait for the paths of %s: %w", nqn, err)
+		default:
+			unsettled = pathsNotServing(s)
+			if unsettled == nil {
+				return nil
+			}
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for the paths of %s: %w", nqn, errors.Join(ctx.Err(), unsettled))
+		case <-ticker.C:
+		}
+	}
+}
+
+// pathsNotServing describes the live controllers of s that serve a path to
+// fewer namespaces than s exports, and is nil when none does.
+func pathsNotServing(s nvme.Subsystem) error {
+	if len(s.Namespaces) == 0 {
+		return fmt.Errorf("subsystem %s exports no namespace yet", s.NQN)
+	}
+
+	listed, served := 0, map[nvme.ControllerID]int{}
+	for _, ns := range s.Namespaces {
+		if len(ns.Paths) == 0 {
+			continue
+		}
+		listed++
+		seen := map[nvme.ControllerID]bool{}
+		for _, p := range ns.Paths {
+			if !seen[p.Controller] {
+				seen[p.Controller] = true
+				served[p.Controller]++
+			}
+		}
+	}
+	if listed == 0 {
+		return nil
+	}
+
+	var short []string
+	for _, ctrl := range liveControllers(s) {
+		if n := served[ctrl.ID]; n < listed {
+			short = append(short, fmt.Sprintf("controller %s at %s serves %d of %d namespaces",
+				ctrl.ID, endpointOf(ctrl), n, listed))
+		}
+	}
+	if len(short) == 0 {
+		return nil
+	}
+	return errors.New(strings.Join(short, "; "))
 }

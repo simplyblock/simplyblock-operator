@@ -22,13 +22,11 @@ func IsManaged(pv *corev1.PersistentVolume) bool {
 // one-shot AnnoPlacementHint is deliberately NOT a pin: hinted volumes stay
 // eligible for rebalancing.
 func PinnedNode(annotations map[string]string) string {
-	if v := annotations[AnnoSelectedStorageNode]; v != "" {
+	if v, _ := KeySelectedStorageNode.Get(annotations); v != "" {
 		return v
 	}
-	if v := annotations[AnnoHostID]; v != "" {
-		return v
-	}
-	return annotations[DeprecatedAnnoHostID]
+	v, _ := KeyHostID.Get(annotations)
+	return v
 }
 
 // IsPinnedVolume reports whether the given (PVC) annotations pin a volume to a
@@ -58,7 +56,7 @@ func PendingPin(annotations map[string]string) (string, bool) {
 	if target == "" {
 		return "", false
 	}
-	if target == annotations[AnnoSelectedStorageNodeApplied] {
+	if applied, _ := KeySelectedStorageNodeApplied.Get(annotations); target == applied {
 		return "", false
 	}
 	return target, true
@@ -68,7 +66,8 @@ func PendingPin(annotations map[string]string) (string, bool) {
 // rejected as an unknown storage node, i.e., whether warning about it again would
 // be a duplicate.
 func PinRejected(annotations map[string]string, target string) bool {
-	return target != "" && annotations[AnnoSelectedStorageNodeRejected] == target
+	rejected, _ := KeySelectedStorageNodeRejected.Get(annotations)
+	return target != "" && rejected == target
 }
 
 // VolumeHandleFromPV extracts the simplyblock logical-volume handle from a

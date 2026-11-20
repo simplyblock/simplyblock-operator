@@ -14,18 +14,29 @@ ECR_REBALANCER_IMG      ?= $(ECR_REBALANCER_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
 
-# Related images deployed by the operator (used in relatedImages for airgap support)
+# Related images deployed by the operator (used in relatedImages for airgap support).
+# The simplyblock and ultra tags follow the operator's: no "v", and a hotfix dash
+# as a dot (v26.3.2-1 is 26.3.2.1), as helm-charts/scripts/stamp-release-version.sh maps them.
+RELEASE_IMAGE_TAG  := $(shell printf '%s' '$(IMG_TAG)' | sed -E 's/^v//; s/-([0-9]+)$$/.\1/')
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
-CLUSTER_IMAGE_TAG  ?= 26.2.6-PRE
+CLUSTER_IMAGE_TAG  ?= $(RELEASE_IMAGE_TAG)
 SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
-SPDK_IMAGE_TAG     ?= R26.2-PRE-latest
+SPDK_IMAGE_TAG     ?= $(RELEASE_IMAGE_TAG)
+NUMA_PLUGIN_IMAGE_BASE ?= quay.io/simplyblock-io/numa-resource-plugin
+NUMA_PLUGIN_IMAGE_TAG  ?= v1.0.0
 
 YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | .spec.relatedImages = [{"name": "simplyblock-operator", "image": strenv(OPERATOR_IMG)}, \
     {"name": "simplyblock", "image": strenv(CLUSTER_IMG)}, \
     {"name": "ultra-spdk", "image": strenv(SPDK_IMG)}, \
     {"name": "simplyblock-rebalancer", "image": strenv(REBALANCER_IMG)}] \
-  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG)
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].image = strenv(OPERATOR_IMG) \
+  | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NODEPROBE_IMAGE")).value = strenv(OPERATOR_IMG) \
+  | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_OPERATOR_IMAGE")).value = strenv(OPERATOR_TAGGED_IMG) \
+  | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NUMA_PLUGIN_IMAGE")).value = strenv(NUMA_PLUGIN_IMG) \
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].env += [{"name": "SIMPLYBLOCK_REBALANCER_IMAGE", "value": strenv(REBALANCER_IMG)}] \
+  | .metadata.annotations."operatorframework.io/initialization-resource" |= (from_json | .spec.source.local.image = strenv(CLUSTER_IMG) | to_json(0)) \
+  | .metadata.annotations."alm-examples" |= (from_json | (.[] | select(.kind == "ControlPlane") | .spec.source.local.image) = strenv(CLUSTER_IMG) | to_json)
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -75,25 +86,42 @@ help: ## Display this help.
 ##@ Development
 
 .PHONY: manifests
-manifests: controller-gen ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
+manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
+	@# controller-gen has no marker for spec.conversion, so the stanza is written
+	@# back after every regeneration. The upgrade tool embeds these files through
+	@# config/crd/bases/bases.go, so the stanza reaches its binary too.
+	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
 
 .PHONY: generate
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.
 	"$(CONTROLLER_GEN)" object:headerFile="hack/boilerplate.go.txt" paths="./..."
 
+# The versions of the metrics group that openapi-gen runs over. There is one
+# today, and the loop is what a second one would need: the generator writes one
+# file per output package, and the aggregated API server merges the definitions
+# of every version it serves.
+METRICS_API_VERSIONS ?= v1alpha2
+
 .PHONY: openapi
 openapi: openapi-gen ## Generate the OpenAPI v3 definitions the aggregated metrics API server serves.
-	"$(OPENAPI_GEN)" \
-		--output-file zz_generated.openapi.go \
-		--output-dir ./api/metrics/v1alpha1 \
-		--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1 \
-		--go-header-file hack/boilerplate.go.txt \
-		k8s.io/apimachinery/pkg/apis/meta/v1 \
-		k8s.io/apimachinery/pkg/api/resource \
-		k8s.io/apimachinery/pkg/runtime \
-		k8s.io/apimachinery/pkg/version \
-		github.com/simplyblock/simplyblock-operator/api/metrics/v1alpha1
+	for version in $(METRICS_API_VERSIONS); do \
+		"$(OPENAPI_GEN)" \
+			--output-file zz_generated.openapi.go \
+			--output-model-name-file zz_generated.model_name.go \
+			--output-dir ./api/metrics/$$version \
+			--output-pkg github.com/simplyblock/simplyblock-operator/api/metrics/$$version \
+			--go-header-file hack/boilerplate.go.txt \
+			--readonly-pkg k8s.io/apimachinery/pkg/apis/meta/v1 \
+			--readonly-pkg k8s.io/apimachinery/pkg/api/resource \
+			--readonly-pkg k8s.io/apimachinery/pkg/runtime \
+			--readonly-pkg k8s.io/apimachinery/pkg/version \
+			k8s.io/apimachinery/pkg/apis/meta/v1 \
+			k8s.io/apimachinery/pkg/api/resource \
+			k8s.io/apimachinery/pkg/runtime \
+			k8s.io/apimachinery/pkg/version \
+			github.com/simplyblock/simplyblock-operator/api/metrics/$$version || exit 1; \
+	done
 
 .PHONY: fmt
 fmt: ## Run go fmt against code.
@@ -105,7 +133,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet setup-envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell "$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(ENVTEST_ASSETS)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
 
 # TODO(user): To use a different vendor for e2e tests, modify the setup under 'tests/e2e'.
 # The default setup assumes Kind is pre-installed and builds/loads the Manager Docker image locally.
@@ -153,11 +181,32 @@ lint-config: golangci-lint ## Verify golangci-lint linter configuration
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	mkdir -p build
-	go build -o build/manager cmd/main.go
+	go build -o build/manager ./cmd
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
-	go run ./cmd/main.go
+	go run ./cmd
+
+# The API upgrade tool, built on its own and not in the operator image: it is a
+# prerequisite for running the new operator, so shipping it inside that
+# operator's image would put it behind the pull it precedes.
+#
+# The platform is a variable, and the output name carries it, so that CI can
+# build every combination from one runner and collect the results side by side.
+#
+# CGO is off. The tool reaches the Kubernetes API with the caller's credentials
+# and does no crypto of its own, and a static binary is copyable to the host it
+# is run from.
+UPGRADE_GOOS   ?= $(shell go env GOOS)
+UPGRADE_GOARCH ?= $(shell go env GOARCH)
+UPGRADE_BIN    ?= build/simplyblock-upgrade-$(UPGRADE_GOOS)-$(UPGRADE_GOARCH)
+
+.PHONY: build-upgrade
+build-upgrade: ## Build simplyblock-upgrade for UPGRADE_GOOS/UPGRADE_GOARCH.
+	mkdir -p $(dir $(UPGRADE_BIN))
+	CGO_ENABLED=0 GOOS=$(UPGRADE_GOOS) GOARCH=$(UPGRADE_GOARCH) \
+		go build -o $(UPGRADE_BIN) ./cmd/simplyblock-upgrade
+	@echo "built $(UPGRADE_BIN)"
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.
 # (i.e. docker build --platform linux/arm64). However, you must enable docker buildKit for it.
@@ -259,9 +308,13 @@ verify-config-yaml: yq ## Check that every manifest under config/ parses as YAML
 	fi; \
 	echo "config/: every manifest parses"
 
+.PHONY: verify-crd-kustomization
+verify-crd-kustomization: ## Check that every generated CRD is listed in config/crd/kustomization.yaml.
+	@hack/check-crd-kustomization.sh
+
 .PHONY: bundle
-bundle: yq verify-config-yaml ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
-	@set -e; \
+bundle: yq kustomize verify-config-yaml verify-crd-kustomization ## Generate bundle manifests with digest-pinned images (operator image must be pushed first)
+	@set -e; export PATH="$(BIN_DIR):$$PATH"; \
 	operator-sdk generate kustomize manifests -q; \
 	OPERATOR_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-operator/manifests/$(IMG_TAG)" \
@@ -273,26 +326,63 @@ bundle: yq verify-config-yaml ## Generate bundle manifests with digest-pinned im
 	  "https://quay.io/v2/simplyblock-io/simplyblock/manifests/$(CLUSTER_IMAGE_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$CLUSTER_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)"; exit 1; }; \
+	SPDK_HOST=$$(printf %s "$(SPDK_IMAGE_BASE)" | cut -d/ -f1); \
+	SPDK_REPO=$$(printf %s "$(SPDK_IMAGE_BASE)" | cut -d/ -f2-); \
+	SPDK_AUTH=""; \
+	if [ "$$SPDK_HOST" = public.ecr.aws ]; then \
+	  SPDK_AUTH="Authorization: Bearer $$(curl -s "https://public.ecr.aws/token/?scope=repository:$$SPDK_REPO:pull" \
+	    | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"; \
+	fi; \
 	SPDK_DIGEST=$$(curl -sI \
-	  "https://quay.io/v2/simplyblock-io/ultra/manifests/$(SPDK_IMAGE_TAG)" \
+	  "https://$$SPDK_HOST/v2/$$SPDK_REPO/manifests/$(SPDK_IMAGE_TAG)" \
+	  $${SPDK_AUTH:+-H "$$SPDK_AUTH"} \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$SPDK_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)"; exit 1; }; \
 	REBALANCER_DIGEST=$$(curl -sI \
 	  "https://quay.io/v2/simplyblock-io/simplyblock-rebalancer/manifests/$(IMG_TAG)" \
 	  -H "Accept: $(MANIFEST_ACCEPT)" \
 	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
 	test -n "$$REBALANCER_DIGEST" \
 	  || { echo "ERROR: could not fetch digest for $(REBALANCER_IMG_BASE):$(IMG_TAG) — is the image pushed?"; exit 1; }; \
-	(cd config/manager && kustomize edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
-	kustomize build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
+	NUMA_PLUGIN_DIGEST=$$(curl -sI \
+	  "https://quay.io/v2/simplyblock-io/numa-resource-plugin/manifests/$(NUMA_PLUGIN_IMAGE_TAG)" \
+	  -H "Accept: $(MANIFEST_ACCEPT)" \
+	  | grep -i "docker-content-digest" | awk '{print $$2}' | tr -d '\r\n'); \
+	test -n "$$NUMA_PLUGIN_DIGEST" \
+	  || { echo "ERROR: could not fetch digest for $(NUMA_PLUGIN_IMAGE_BASE):$(NUMA_PLUGIN_IMAGE_TAG)"; exit 1; }; \
+	(cd config/manager && "$(KUSTOMIZE)" edit set image controller=$(IMG_BASE)@$$OPERATOR_DIGEST); \
+	"$(KUSTOMIZE)" build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
 	OPERATOR_IMG="$(IMG_BASE)@$$OPERATOR_DIGEST" \
+	OPERATOR_TAGGED_IMG="$(IMG_BASE):$(IMG_TAG)@$$OPERATOR_DIGEST" \
 	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)@$$CLUSTER_DIGEST" \
 	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)@$$SPDK_DIGEST" \
 	REBALANCER_IMG="$(REBALANCER_IMG_BASE)@$$REBALANCER_DIGEST" \
+	NUMA_PLUGIN_IMG="$(NUMA_PLUGIN_IMAGE_BASE):$(NUMA_PLUGIN_IMAGE_TAG)@$$NUMA_PLUGIN_DIGEST" \
 	"$(YQ)" e '$(YQ_CSV_EXPR)' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml; \
 	OPENSHIFT_VERSION="$(OPENSHIFT_VERSION)" \
 	"$(YQ)" e '$(YQ_ANNOTATIONS_EXPR)' -i bundle/metadata/annotations.yaml;
 
+.PHONY: bundle-validate
+bundle-validate: ## Validate the generated bundle with the operatorframework suite OperatorHub certification runs
+	operator-sdk bundle validate ./bundle --select-optional suite=operatorframework
+
+.PHONY: bundle-dev
+bundle-dev: yq kustomize ## Generate a bundle that references images by tag, for branch builds (bundle resolves digests on Quay)
+	@set -e; export PATH="$(BIN_DIR):$$PATH"; \
+	operator-sdk generate kustomize manifests -q; \
+	(cd config/manager && "$(KUSTOMIZE)" edit set image controller=$(IMG_BASE):$(IMG_TAG)); \
+	"$(KUSTOMIZE)" build config/manifests | operator-sdk generate bundle -q --overwrite --version $(VERSION); \
+	OPERATOR_IMG="$(IMG_BASE):$(IMG_TAG)" \
+	OPERATOR_TAGGED_IMG="$(IMG_BASE):$(IMG_TAG)" \
+	CLUSTER_IMG="$(CLUSTER_IMAGE_BASE):$(CLUSTER_IMAGE_TAG)" \
+	SPDK_IMG="$(SPDK_IMAGE_BASE):$(SPDK_IMAGE_TAG)" \
+	REBALANCER_IMG="$(REBALANCER_IMG_BASE):$(IMG_TAG)" \
+	NUMA_PLUGIN_IMG="$(NUMA_PLUGIN_IMAGE_BASE):$(NUMA_PLUGIN_IMAGE_TAG)" \
+	"$(YQ)" e '$(YQ_CSV_EXPR)' -i bundle/manifests/simplyblock-operator.clusterserviceversion.yaml
 
 .PHONY: bundle-build
 bundle-build: bundle
@@ -331,31 +421,29 @@ undeploy: kustomize ## Undeploy controller from the K8s cluster specified in ~/.
 KUBECTL ?= kubectl
 KIND ?= kind
 
-# envtest's Kubernetes asset binaries (etcd, kube-apiserver, ...) also live in .bin.
-LOCALBIN := $(BIN_DIR)
-
 # setup-envtest's version and its Kubernetes asset version are derived from
 # go.mod (not statically pinned in the manifest); the envtest target in
-# tools.mk consumes $(ENVTEST_VERSION) at recipe time.
+# tools.mk consumes $(ENVTEST_VERSION), and its setup-envtest target
+# $(ENVTEST_K8S_VERSION), at recipe time.
 # gomodver resolves the effective version of a go.mod dependency (honoring replace).
 define gomodver
 $(shell go list -m -f '{{if .Replace}}{{.Replace.Version}}{{else}}{{.Version}}{{end}}' $(1) 2>/dev/null)
 endef
 
-#ENVTEST_VERSION is the controller-runtime release branch matching go.mod (i.e. release-0.20).
+#ENVTEST_VERSION is setup-envtest's own tag, which is controller-runtime's from
+# go.mod: the tool module is tagged in lockstep with it (i.e. v0.24.1).
+#
+# A tag rather than the release-X.Y branch this used to name. A branch is not a
+# version: `go install @release-0.24` resolves to whatever its head is that
+# minute, so the hash tools.lock pins against went stale the moment upstream
+# pushed to it, and every build in the monorepo failed on a mismatch for a change
+# nobody here made. A tag cannot move, so the lock stays true and what CI
+# installs is what was reviewed.
 ENVTEST_VERSION ?= $(shell v='$(call gomodver,sigs.k8s.io/controller-runtime)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_VERSION manually (controller-runtime replace has no tag)" >&2; exit 1; }; \
-  printf '%s\n' "$$v" | sed -E 's/^v?([0-9]+)\.([0-9]+).*/release-\1.\2/')
+  printf '%s\n' "$$v" | sed -E 's/^v?/v/')
 
 #ENVTEST_K8S_VERSION is the Kubernetes version for envtest assets, from go.mod (i.e. 1.31).
 ENVTEST_K8S_VERSION ?= $(shell v='$(call gomodver,k8s.io/api)'; \
   [ -n "$$v" ] || { echo "Set ENVTEST_K8S_VERSION manually (k8s.io/api replace has no tag)" >&2; exit 1; }; \
   printf '%s\n' "$$v" | sed -E 's/^v?[0-9]+\.([0-9]+).*/1.\1/')
-
-.PHONY: setup-envtest
-setup-envtest: envtest ## Download the binaries required for ENVTEST in the local bin directory.
-	@echo "Setting up envtest binaries for Kubernetes version $(ENVTEST_K8S_VERSION)..."
-	@"$(ENVTEST)" use $(ENVTEST_K8S_VERSION) --bin-dir "$(LOCALBIN)" -p path || { \
-		echo "Error: Failed to set up envtest binaries for version $(ENVTEST_K8S_VERSION)."; \
-		exit 1; \
-	}

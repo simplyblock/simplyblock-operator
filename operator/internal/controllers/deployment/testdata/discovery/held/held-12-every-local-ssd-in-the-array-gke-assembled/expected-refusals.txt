@@ -1,0 +1,3 @@
+worker-01/nvme0n1: declined by available because the probe refused it: RAIDMember (a member of the MD RAID array md0 (raid0)), Busy (the kernel refused an exclusive open: md0 holds it)
+worker-01/nvme0n2: declined by available because the probe refused it: RAIDMember (a member of the MD RAID array md0 (raid0)), Busy (the kernel refused an exclusive open: md0 holds it)
+worker-01: declined by has devices because no device of it survived the device rules

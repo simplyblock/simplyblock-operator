@@ -23,6 +23,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 )
 
 // Reason is a ground on which a device was refused.
@@ -32,6 +33,10 @@ const (
 	// ReasonNotAWholeDisk is a partition, a device-mapper node, a software-RAID
 	// array, a loop device, or a RAM disk. A cluster is built out of whole
 	// disks, and each of these is either a slice of one or not one at all.
+	//
+	// A logical block device run waives it for a partition, which the backend
+	// takes through the kernel. A partition is therefore read like a disk when
+	// nothing else refused it, so the waiver has its content to rest on.
 	ReasonNotAWholeDisk Reason = "NotAWholeDisk"
 
 	// ReasonFabricNamespace is an NVMe namespace reached over a fabric, which
@@ -58,18 +63,38 @@ const (
 	ReasonSwapArea Reason = "SwapArea"
 
 	// ReasonStacked is a device another device is built on: the device-mapper
-	// node of a volume group that took it, or a RAID array it is a member of.
+	// node of a volume group that took it, an encrypted volume opened on it, a
+	// multipath map over it. A software-RAID array is its own reason below.
 	ReasonStacked Reason = "Stacked"
 
-	// ReasonBusy is a device the kernel refused to hand over for a reason none
-	// of the readable sources named. It is the backstop, and a device refused
-	// on this ground alone is one to look at by hand.
+	// ReasonRAIDMember is a device a software-RAID array is built on. The
+	// detail names the array and its level, because the array is the thing to
+	// look at and who assembled it is the question: GKE builds a RAID-0 out of
+	// a node pool's local SSDs when the pool attaches them as ephemeral
+	// storage, so on such a node every disk is a member of md0 and none is
+	// free, and a reader told only "held by md0" is left to work out what md0
+	// is.
+	ReasonRAIDMember Reason = "RAIDMember"
+
+	// ReasonBusy is a device the kernel refused to hand over. The kernel gives
+	// no reason, so the detail supplies one when a readable source found it:
+	// the array or the device-mapper node that holds the device, the mount, or
+	// the swap. A device refused on this ground alone is one to look at by
+	// hand, and the detail says so.
 	ReasonBusy Reason = "Busy"
 
 	// ReasonUnreadable is a device whose usage or whose content could not be
 	// established. It is not a device that was checked and found free, and the
 	// difference is the whole reason this package exists.
 	ReasonUnreadable Reason = "Unreadable"
+
+	// ReasonRemovable is a device the kernel reports as removable: an optical
+	// drive, a USB stick, a card reader. It is refused for what it is rather
+	// than for what is currently in it, because backend storage that can be
+	// taken out of the machine is storage the cluster loses without a fault to
+	// diagnose, and an empty drive and a loaded one differ only in the size
+	// they report.
+	ReasonRemovable Reason = "Removable"
 
 	// ReasonReadOnly is a device the kernel presents read-only, which a cluster
 	// cannot write to.
@@ -88,10 +113,21 @@ const (
 	// also carries a filesystem.
 	ReasonPartitioned Reason = "Partitioned"
 
-	// ReasonNotBlank is a device carrying anything else: a filesystem, an LVM
-	// physical-volume label, a RAID superblock, or bytes matching no signature
-	// this package knows. Candidate.Reading names what was found.
+	// ReasonNotBlank is a device carrying anything else: a filesystem, a RAID
+	// superblock, or bytes matching no signature this package knows.
+	// Candidate.Reading names what was found.
 	ReasonNotBlank Reason = "NotBlank"
+
+	// ReasonLVMPhysicalVolume is a device carrying an LVM physical-volume label
+	// with no logical volume of it active. Nothing holds it and nothing is
+	// mounted from it, so lsblk shows a bare disk while pvs lists it. A device
+	// with an active logical volume is refused as ReasonStacked before its
+	// bytes are read, and never reaches this reason.
+	//
+	// It is separate from ReasonNotBlank because the fix is different: the
+	// label belongs to LVM, and pvremove, not wipefs on a filesystem, is what
+	// hands the disk back.
+	ReasonLVMPhysicalVolume Reason = "LVMPhysicalVolume"
 )
 
 // Rejection is one ground with the evidence for it, so that an event or a log
@@ -122,6 +158,17 @@ type Candidate struct {
 	// Rejections is every ground the device was refused on, in the order they
 	// were established, and is empty for a device that may be handed over.
 	Rejections []Rejection
+
+	// StablePath is the persistent /dev/disk name of this device, or empty when
+	// udev published none. It is what a caller accepting the candidate records,
+	// because Path is a position in this boot's enumeration order and names
+	// another device after the next reboot. StableLinkSet documents which link
+	// is chosen and why.
+	//
+	// It is on the candidate rather than on the embedded Disk because the two
+	// come from different places: a Disk is what sysfs says, and is readable
+	// from a captured tree, while these links exist only in a live /dev.
+	StablePath string
 }
 
 // Available reports whether the device may be handed to a storage cluster.
@@ -188,14 +235,31 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 		return nil, err
 	}
 
+	// The persistent names, read once for the whole host: every device's links
+	// sit in the same two directories, so a reading per device would walk them
+	// again for each disk.
+	links, err := ReadStableLinks(in.Config)
+	if err != nil {
+		return nil, err
+	}
+
 	prober := in.Prober
 	if prober == nil {
 		prober = NewProber()
 	}
 
+	// The holders by name, so that a member can say what kind of device took
+	// it: an array is reported as one, and the rest as a stack.
+	byName := make(map[string]Disk, len(disks))
+	for _, disk := range disks {
+		byName[disk.Name] = disk
+	}
+
 	candidates := make([]Candidate, 0, len(disks))
 	for _, disk := range disks {
-		candidates = append(candidates, judge(ctx, prober, disk, usage[disk.Name]))
+		candidate := judge(ctx, prober, disk, usage[disk.Name], byName)
+		candidate.StablePath = links.Preferred(disk.Path)
+		candidates = append(candidates, candidate)
 	}
 	return candidates, nil
 }
@@ -204,11 +268,13 @@ func (in Inspector) Candidates(ctx context.Context) ([]Candidate, error) {
 //
 // The order is what makes it safe. Everything establishable without touching
 // the device comes first, and the content reading runs only for a device that
-// has survived all of it, so a mounted disk is never opened. A partition table
-// found in sysfs is the one structural finding that does not stop the read: the
-// override that accepts a stale table still wants to know what else is on the
-// disk.
-func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidate {
+// has survived all of it, so a mounted disk is never opened. Two structural
+// findings do not stop the read. A partition table found in sysfs does not,
+// because the override that accepts a stale table still wants to know what else
+// is on the disk. Being a partition does not either, because a logical block
+// device run may take one, and it needs the reading to know the partition is
+// empty.
+func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage, byName map[string]Disk) Candidate {
 	c := Candidate{Disk: disk, Usage: usage}
 
 	if disk.Kind != KindDisk {
@@ -217,11 +283,15 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 	if disk.Transport == TransportNVMeFabric {
 		c.reject(ReasonFabricNamespace,
 			"the namespace is reached over a fabric, so its bytes belong to whatever exported it")
-	} else if disk.Kind == KindDisk && disk.Transport == TransportUnknown {
+	} else if (disk.Kind == KindDisk || disk.Kind == KindPartition) && disk.Transport == TransportUnknown {
 		c.reject(ReasonUnknownTransport, "the device sits on no bus this scan could name")
 	}
 	if disk.SizeBytes == 0 {
 		c.reject(ReasonNoCapacity, "the device reports a size of zero")
+	}
+	if disk.Removable {
+		c.reject(ReasonRemovable,
+			"the kernel reports the device as removable, so it can leave the machine")
 	}
 	if disk.ReadOnly {
 		c.reject(ReasonReadOnly, "the kernel presents the device read-only")
@@ -232,11 +302,15 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 	if usage.Swap {
 		c.reject(ReasonSwapArea, "the device is an active swap area")
 	}
-	if len(usage.Holders) > 0 {
-		c.reject(ReasonStacked, fmt.Sprintf("held by %v", usage.Holders))
+	arrays, stacked := splitHolders(usage.Holders, byName)
+	for _, array := range arrays {
+		c.reject(ReasonRAIDMember, "a member of the MD RAID array "+describeArray(array))
+	}
+	if len(stacked) > 0 {
+		c.reject(ReasonStacked, fmt.Sprintf("held by %v", stacked))
 	}
 	if usage.Busy {
-		c.reject(ReasonBusy, "the kernel refused an exclusive open, and gives no reason")
+		c.reject(ReasonBusy, busyDetail(usage))
 	}
 	if usage.ProbeErr != nil {
 		c.reject(ReasonUnreadable, fmt.Sprintf("the kernel could not be asked: %v", usage.ProbeErr))
@@ -247,7 +321,7 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 
 	// Everything above was established without opening anything. A device
 	// already refused on any of those grounds is one this must not read.
-	if c.rejectedApartFromPartitions() {
+	if c.refusedBeyondReading(disk.Kind) {
 		return c
 	}
 
@@ -271,8 +345,38 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 			break
 		}
 		c.reject(ReasonNotBlank, reading.Detail)
-	case ContentFilesystem, ContentStackLayer:
+	case ContentStackLayer:
+		// An LVM label is the only stack layer the signatures name today. One
+		// added later is refused as NotBlank until it is given its own reason,
+		// rather than being reported as LVM.
+		if reading.Type == "LVM2_member" {
+			c.reject(ReasonLVMPhysicalVolume, reading.Detail)
+			break
+		}
 		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentFilesystem:
+		c.reject(ReasonNotBlank, reading.Detail)
+	case ContentReleased:
+		// Not a rejection. The signature was erased where the format keeps it,
+		// which is what wipefs does and what an administrator runs it for, so
+		// the device was handed over on purpose. The reading carries which
+		// format it was and where the name went, so a caller taking it can say
+		// what it is taking.
+		//
+		// It is written out rather than left to fall through, for the reason
+		// below: a content this package adds later must not become available by
+		// default the way this one would have.
+	case ContentSimplyblock:
+		// Not a rejection, and the reading is what says so: a device a storage
+		// node is driving is bound to a userspace driver, which takes the block
+		// device away, so a device whose superblock can be read here is one no
+		// node currently holds. What is left on it is a previous deployment's,
+		// and the reading carries that to the caller, which decides whether to
+		// take it back.
+		//
+		// It is written out rather than left to fall through the switch, because
+		// a content this package adds later must not become available by
+		// default the way this one would have.
 	case ContentUnknown:
 		// Read never returns it, and a reading that carries it anyway is one
 		// nothing established. Refusing is the only safe reading of that.
@@ -281,17 +385,62 @@ func judge(ctx context.Context, prober *Prober, disk Disk, usage Usage) Candidat
 	return c
 }
 
+// splitHolders sorts a device's holders into the software-RAID arrays among
+// them and everything else, so that each gets the reason that names it. A
+// holder the scan did not list is reported as a stack, which is what it is:
+// something is built on the device, and nothing more is known about it.
+func splitHolders(holders []string, byName map[string]Disk) (arrays []Disk, stacked []string) {
+	for _, name := range holders {
+		if holder, ok := byName[name]; ok && holder.Kind == KindMDRaid {
+			arrays = append(arrays, holder)
+			continue
+		}
+		stacked = append(stacked, name)
+	}
+	return arrays, stacked
+}
+
+// describeArray names an array with its level, when the md driver reported
+// one: "md0 (raid0)," or "md0" for an array whose level could not be read.
+func describeArray(array Disk) string {
+	if array.RAIDLevel == "" {
+		return array.Name
+	}
+	return fmt.Sprintf("%s (%s)", array.Name, array.RAIDLevel)
+}
+
+// busyDetail explains the kernel's refusal by whatever readable source already
+// accounts for it. The kernel itself gives no reason, and a detail that said so
+// beside a holder the reading found would send the reader looking for a reason
+// that is already on the list.
+func busyDetail(usage Usage) string {
+	const refused = "the kernel refused an exclusive open"
+	switch {
+	case len(usage.Holders) > 0:
+		return fmt.Sprintf("%s: %s holds it", refused, strings.Join(usage.Holders, " and "))
+	case len(usage.Mountpoints) > 0:
+		return refused + ": it is mounted"
+	case usage.Swap:
+		return refused + ": it is an active swap area"
+	}
+	return refused + ", and gives no reason"
+}
+
 // reject records a ground.
 func (c *Candidate) reject(reason Reason, detail string) {
 	c.Rejections = append(c.Rejections, Rejection{Reason: reason, Detail: detail})
 }
 
-// rejectedApartFromPartitions reports whether the device was refused on any
-// ground other than carrying a partition table, which is the test for whether
-// reading its bytes is still worth doing.
-func (c Candidate) rejectedApartFromPartitions() bool {
+// refusedBeyondReading reports whether the device was refused on a ground that
+// rules out reading its bytes: anything other than carrying a partition table,
+// or, for a partition, being one. It is the test for whether the content
+// reading still runs.
+func (c Candidate) refusedBeyondReading(kind Kind) bool {
 	for _, rejection := range c.Rejections {
-		if rejection.Reason != ReasonPartitioned {
+		switch {
+		case rejection.Reason == ReasonPartitioned:
+		case rejection.Reason == ReasonNotAWholeDisk && kind == KindPartition:
+		default:
 			return true
 		}
 	}

@@ -1,0 +1,400 @@
+// The RBAC has to be the chart's, because adoption reconciles toward the state
+// that is running: a rule this package widens is a permission the deployment did
+// not have before the handover, and one it narrows is a sidecar that stops
+// working after it.
+//
+// The subject namespace is the load-bearing part. Each binding names a
+// ServiceAccount together with the namespace it lives in, which is why two
+// drivers writing one binding alternate its subject, and why design §3.4 keeps a
+// Kubernetes cluster to one driver.
+
+package driver
+
+import (
+	"slices"
+	"testing"
+
+	rbacv1 "k8s.io/api/rbac/v1"
+)
+
+func TestEveryComponentHasARoleAndABinding(t *testing.T) {
+	d := testDriver("simplyblock")
+
+	roles := clusterRoles(d)
+	bindings := clusterRoleBindings(d)
+	if len(roles) != len(clusterRoleComponents) || len(bindings) != len(clusterRoleComponents) {
+		t.Fatalf("got %d roles and %d bindings, want %d of each",
+			len(roles), len(bindings), len(clusterRoleComponents))
+	}
+
+	for _, r := range roles {
+		if len(r.Rules) == 0 {
+			t.Errorf("%s has no rules, so its sidecar can do nothing", r.Name)
+		}
+	}
+}
+
+// Each binding names its ServiceAccount in this driver's namespace, and points
+// at the role of the same component.
+func TestBindingsNameTheirOwnAccountAndRole(t *testing.T) {
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	byName := map[string]*rbacv1.ClusterRoleBinding{}
+	for _, b := range clusterRoleBindings(d) {
+		byName[b.Name] = b
+	}
+
+	for _, component := range clusterRoleComponents {
+		b := byName[n.clusterRoleBinding(component)]
+		if b == nil {
+			t.Errorf("no binding for %s", component)
+			continue
+		}
+		if len(b.Subjects) != 1 {
+			t.Errorf("%s has %d subjects, want exactly this driver's", b.Name, len(b.Subjects))
+			continue
+		}
+		s := b.Subjects[0]
+		if s.Namespace != d.Namespace {
+			t.Errorf("%s subject namespace = %q, want %q", b.Name, s.Namespace, d.Namespace)
+		}
+		want := n.controllerServiceAccount
+		if component == nodeComponent {
+			want = n.nodeServiceAccount
+		}
+		if s.Name != want {
+			t.Errorf("%s subject = %q, want %q", b.Name, s.Name, want)
+		}
+		if b.RoleRef.Name != n.clusterRole(component) {
+			t.Errorf("%s roleRef = %q, want %q", b.Name, b.RoleRef.Name, n.clusterRole(component))
+		}
+	}
+}
+
+// The node plugin's account is not the controller plugin's. The node plugin runs
+// privileged on every worker, and giving it the provisioner's rights would put
+// volume creation behind every node in the cluster.
+func TestTheTwoAccountsAreSeparate(t *testing.T) {
+	d := testDriver("simplyblock")
+	accounts := serviceAccounts(d)
+	if len(accounts) != 2 {
+		t.Fatalf("got %d service accounts, want 2", len(accounts))
+	}
+	if accounts[0].Name == accounts[1].Name {
+		t.Errorf("both accounts are %q", accounts[0].Name)
+	}
+	for _, sa := range accounts {
+		if sa.Namespace != d.Namespace {
+			t.Errorf("%s is in %q, want %q", sa.Name, sa.Namespace, d.Namespace)
+		}
+	}
+}
+
+// The rules are the chart's. These are the ones a reader would most likely tidy,
+// and each is load bearing: the node plugin deletes pods to recover a stuck
+// mount, and the provisioner patches volumesnapshotcontents/status.
+func TestRulesMatchTheChart(t *testing.T) {
+	tests := []struct {
+		component string
+		group     string
+		resource  string
+		verbs     []string
+	}{
+		{nodeComponent, "", "pods", []string{"get", "list", "watch", "delete"}},
+		{nodeComponent, "", "events", []string{"create", "patch"}},
+		{"provisioner", "snapshot.storage.k8s.io", "volumesnapshotcontents/status", []string{"get", "update", "patch"}},
+		{"provisioner", "", "persistentvolumes", []string{"get", "list", "watch", "create", "delete", "patch"}},
+		{"provisioner", "storage.simplyblock.io", "volumemigrations", []string{"get", "create"}},
+		// U-104 (design-cg-live-subsystem-flip.md §8.4): the membership watcher
+		// creates the JoinConsistencyGroup operation and reports its phase.
+		{"provisioner", "storage.simplyblock.io", "persistentvolumeops", []string{"get", "list", "watch", "create"}},
+		{"attacher", "storage.k8s.io", "volumeattachments/status", []string{"patch"}},
+		{"resizer", "", "persistentvolumeclaims/status", []string{"patch"}},
+		{"health-monitor", "", "events", []string{"get", "list", "watch", "create", "patch"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.component+"/"+tc.resource, func(t *testing.T) {
+			var found *rbacv1.PolicyRule
+			for i, r := range clusterRoleRules[tc.component] {
+				if len(r.APIGroups) == 1 && r.APIGroups[0] == tc.group &&
+					len(r.Resources) == 1 && r.Resources[0] == tc.resource {
+					found = &clusterRoleRules[tc.component][i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("no rule for %s in the %s role", tc.resource, tc.component)
+			}
+			if len(found.Verbs) != len(tc.verbs) {
+				t.Fatalf("verbs = %v, want %v", found.Verbs, tc.verbs)
+			}
+			for i, v := range tc.verbs {
+				if found.Verbs[i] != v {
+					t.Fatalf("verbs = %v, want %v", found.Verbs, tc.verbs)
+				}
+			}
+		})
+	}
+}
+
+// The node role's one deliberate departure from the chart's rule set
+// (issue #277): patch on nodes, so the node plugin can label its own node
+// with its self-probed vdo-capable result. Node objects are cluster-scoped,
+// so this is the narrowest verb set self-labeling allows.
+func TestNodeRoleCanPatchNodesForVDOCapability(t *testing.T) {
+	var found *rbacv1.PolicyRule
+	for i, r := range clusterRoleRules[nodeComponent] {
+		if len(r.APIGroups) == 1 && r.APIGroups[0] == "" &&
+			len(r.Resources) == 1 && r.Resources[0] == "nodes" {
+			found = &clusterRoleRules[nodeComponent][i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatal("no rule for nodes in the node role")
+	}
+	hasPatch := false
+	for _, v := range found.Verbs {
+		if v == "patch" {
+			hasPatch = true
+		}
+	}
+	if !hasPatch {
+		t.Errorf("nodes verbs = %v, want patch among them", found.Verbs)
+	}
+}
+
+// No rule reaches everything. A wildcard in a CSI sidecar's role is the escalation
+// primitive that turns a sidecar compromise into cluster-admin.
+func TestNoRuleIsAWildcard(t *testing.T) {
+	for component, rules := range clusterRoleRules {
+		for _, r := range rules {
+			for _, v := range r.Verbs {
+				if v == "*" {
+					t.Errorf("%s grants a wildcard verb on %v", component, r.Resources)
+				}
+			}
+			for _, res := range r.Resources {
+				if res == "*" {
+					t.Errorf("%s grants %v on every resource", component, r.Verbs)
+				}
+			}
+		}
+	}
+}
+
+// The csi-addons sidecar is the one component whose grant is a namespaced Role:
+// CSIAddonsNode is namespaced (helm-charts'
+// csiaddons.openshift.io_csiaddonsnodes.yaml sets scope: Namespaced), so a
+// ClusterRole would be wider than the sidecar's own job.
+func TestCSIAddonsRoleIsNamespacedAndBoundToTheControllerAccount(t *testing.T) {
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	role := csiAddonsRole(d)
+	if role.Namespace != d.Namespace {
+		t.Errorf("role namespace = %q, want %q", role.Namespace, d.Namespace)
+	}
+	if len(role.Rules) == 0 {
+		t.Error("csi-addons role has no rules, so its sidecar can do nothing")
+	}
+
+	binding := csiAddonsRoleBinding(d)
+	if binding.Namespace != d.Namespace {
+		t.Errorf("binding namespace = %q, want %q", binding.Namespace, d.Namespace)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != n.controllerServiceAccount ||
+		binding.Subjects[0].Namespace != d.Namespace {
+		t.Errorf("binding subject = %+v, want the controller account in %q",
+			binding.Subjects, d.Namespace)
+	}
+	if binding.RoleRef.Kind != "Role" || binding.RoleRef.Name != role.Name {
+		t.Errorf("roleRef = %+v, want Role %q", binding.RoleRef, role.Name)
+	}
+}
+
+// The csi-addons sidecar's gRPC server authenticates every incoming call
+// from the controller-manager via TokenReview (internal/kubernetes/token/grpc.go,
+// --enable-auth defaults to true), which is cluster-scoped and so cannot be
+// granted by the namespaced Role above -- confirmed against a live cluster,
+// where omitting this left every connection failing with "failed to review
+// token ... is forbidden ... at the cluster scope".
+func TestCSIAddonsSidecarCanAuthenticateIncomingCalls(t *testing.T) {
+	d := testDriver("simplyblock")
+	n := names(d)
+
+	binding := csiAddonsAuthDelegatorBinding(d)
+	if binding.Namespace != "" {
+		t.Errorf("namespace = %q, want \"\" (ClusterRoleBinding is cluster-scoped)", binding.Namespace)
+	}
+	if len(binding.Subjects) != 1 || binding.Subjects[0].Name != n.controllerServiceAccount ||
+		binding.Subjects[0].Namespace != d.Namespace {
+		t.Errorf("binding subject = %+v, want the controller account in %q",
+			binding.Subjects, d.Namespace)
+	}
+	if binding.RoleRef.Kind != "ClusterRole" || binding.RoleRef.Name != "system:auth-delegator" {
+		t.Errorf("roleRef = %+v, want the built-in ClusterRole system:auth-delegator", binding.RoleRef)
+	}
+}
+
+// The rule set is exactly what the sidecar's own job needs: its CSIAddonsNode
+// and its leader-election Lease, both scoped to this namespace.
+func TestCSIAddonsRoleRulesAreScopedToItsOwnJob(t *testing.T) {
+	tests := []struct {
+		group    string
+		resource string
+		verbs    []string
+	}{
+		{"csiaddons.openshift.io", "csiaddonsnodes", []string{"get", "list", "watch", "create", "update", "delete"}},
+		{"csiaddons.openshift.io", "csiaddonsnodes/status", []string{"get", "update", "patch"}},
+		{"coordination.k8s.io", "leases", []string{"get", "list", "watch", "create", "update", "delete"}},
+		{"", "events", []string{"create", "patch"}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.resource, func(t *testing.T) {
+			var found *rbacv1.PolicyRule
+			for i, r := range csiAddonsRoleRules {
+				if len(r.APIGroups) == 1 && r.APIGroups[0] == tc.group &&
+					len(r.Resources) == 1 && r.Resources[0] == tc.resource {
+					found = &csiAddonsRoleRules[i]
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("no rule for %s in the csi-addons role", tc.resource)
+			}
+			if !slices.Equal(found.Verbs, tc.verbs) {
+				t.Errorf("verbs = %v, want %v", found.Verbs, tc.verbs)
+			}
+		})
+	}
+}
+
+// The csi-snapshotter sidecar watches VolumeGroupSnapshotContent and drives
+// the GroupController when the CSIVolumeGroupSnapshot gate is on
+// (design-consistency-groups.md §9, P0-4). The chart granted these on the
+// provisioner role before the deployment moved into the operator.
+func TestProvisionerRoleCarriesGroupSnapshotRules(t *testing.T) {
+	wanted := map[string][]string{
+		"volumegroupsnapshotclasses":         {"get", "list", "watch"},
+		"volumegroupsnapshotcontents":        {"create", "get", "list", "watch", "update", "delete", "patch"},
+		"volumegroupsnapshotcontents/status": {"get", "update", "patch"},
+	}
+	for resource, verbs := range wanted {
+		found := false
+		for _, r := range clusterRoleRules["provisioner"] {
+			if !slices.Contains(r.APIGroups, "groupsnapshot.storage.k8s.io") {
+				continue
+			}
+			if !slices.Contains(r.Resources, resource) {
+				continue
+			}
+			found = true
+			if !slices.Equal(r.Verbs, verbs) {
+				t.Errorf("groupsnapshot rule for %s has verbs %v, want %v", resource, r.Verbs, verbs)
+			}
+		}
+		if !found {
+			t.Errorf("the provisioner role carries no groupsnapshot rule for %s", resource)
+		}
+	}
+}
+
+// The pNFS record is a custom resource, and neither plugin could touch
+// storage.simplyblock.io before this design: their roles covered PVs, PVCs,
+// snapshots, nodes, and attachments. The controller plugin creates the record
+// during provisioning, and the node plugin reads its own back at stage time
+// (design-pnfs-rwx.md §9.3).
+func TestPluginRolesCarryTheExportRules(t *testing.T) {
+	wanted := map[string]map[string][]string{
+		controllerComponent: {
+			"nfsexports":        {"get", "list", "watch", "create", "update", "delete"},
+			"nfsexports/status": {"get", "update", "patch"},
+		},
+		nodeComponent: {
+			"nfsexports": {"get", "list", "watch"},
+		},
+	}
+	for component, resources := range wanted {
+		for resource, verbs := range resources {
+			found := false
+			for _, r := range clusterRoleRules[component] {
+				if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+					!slices.Contains(r.Resources, resource) {
+					continue
+				}
+				found = true
+				if !slices.Equal(r.Verbs, verbs) {
+					t.Errorf("%s rule for %s has verbs %v, want %v", component, resource, r.Verbs, verbs)
+				}
+			}
+			if !found {
+				t.Errorf("the %s role carries no rule for %s", component, resource)
+			}
+		}
+	}
+}
+
+// The node plugin reads exports and never writes them. It is the operator that
+// drives assembly, over the link, and a node that could write its own record
+// could bind an export to itself.
+func TestNodeRoleCannotWriteExports(t *testing.T) {
+	for _, r := range clusterRoleRules[nodeComponent] {
+		if !slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		for _, v := range r.Verbs {
+			switch v {
+			case "create", "update", "patch", "delete", "deletecollection":
+				t.Errorf("the node role grants %q on nfsexports", v)
+			}
+		}
+	}
+}
+
+// The controller plugin deletes an export record: DeleteVolume calls
+// deleteExportFor, which issues the delete and then waits for the operator's
+// finalizer to finish tearing the export down on its host.
+//
+// Without the verb the delete is refused, DeleteVolume returns Internal
+// forever, and the PersistentVolume parks in Released with the export, the
+// host mount, and the backing lvol all still live. Nothing converges: the
+// provisioner retries a call that cannot succeed.
+func TestControllerRoleCanDeleteExports(t *testing.T) {
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+			!slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		if slices.Contains(r.Verbs, "delete") {
+			return
+		}
+	}
+	t.Error("the controller role cannot delete nfsexports, so DeleteVolume can never converge")
+}
+
+// Regression: expanding a pNFS volume records the new size on the export,
+// which bumps its generation and is what tells the operator to re-assemble and
+// grow the filesystem. That is an update, and the controller could create,
+// list, and delete an NFSExport but not update one:
+//
+//	nfsexports.storage.simplyblock.io "nfsexp-030640ab-..." is forbidden:
+//	User "system:serviceaccount:simplyblock:simplyblock-csi-controller-sa"
+//	cannot update resource "nfsexports"
+//
+// Every ControllerExpandVolume failed, so no pNFS volume could grow at all.
+func TestControllerCanRecordANewSizeOnAnExport(t *testing.T) {
+	for _, r := range clusterRoleRules[controllerComponent] {
+		if !slices.Contains(r.APIGroups, "storage.simplyblock.io") ||
+			!slices.Contains(r.Resources, "nfsexports") {
+			continue
+		}
+		if slices.Contains(r.Verbs, "update") {
+			return
+		}
+	}
+	t.Error("the controller cannot update nfsexports, so expanding a pNFS volume always fails")
+}

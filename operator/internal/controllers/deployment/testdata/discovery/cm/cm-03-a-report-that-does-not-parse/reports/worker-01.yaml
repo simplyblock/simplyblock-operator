@@ -1,0 +1,11 @@
+apiVersion: v1
+data:
+  report.json: '{"version": 4, "node": "worker-01",'
+kind: ConfigMap
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-node: worker-01
+    storage.simplyblock.io/nodeprobe-run: discover-cm-03
+  name: sb-nodeprobe-discover-cm-03-worker-01-120c4748
+  namespace: simplyblock

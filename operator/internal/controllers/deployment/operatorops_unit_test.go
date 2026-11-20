@@ -16,9 +16,11 @@ package deployment
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -26,13 +28,17 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	discoverypkg "github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
 
@@ -120,8 +126,8 @@ func reportConfigMap(t *testing.T, node string, addresses ...string) *corev1.Con
 		CPU: nodeprobe.CPU{
 			OnlineCPUs: 32, PhysicalCores: 16, Sockets: 2, ThreadsPerCore: 2, HyperThreading: true,
 			NUMANodes: []nodeprobe.NUMACPUs{
-				{Node: 0, OnlineCPUs: []int{0, 1, 2, 3}, PhysicalCores: 8},
-				{Node: 1, OnlineCPUs: []int{4, 5, 6, 7}, PhysicalCores: 8},
+				{Node: 0, OnlineCPUs: []int{0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15}, PhysicalCores: 8},
+				{Node: 1, OnlineCPUs: []int{16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31}, PhysicalCores: 8},
 			},
 		},
 		HugePages: []nodeprobe.HugePagePool{{
@@ -163,11 +169,22 @@ type runner struct {
 // newRunner builds a reconciler over the objects given.
 func newRunner(t *testing.T, objects ...client.Object) *runner {
 	t.Helper()
+	return newRunnerWithInterceptors(t, interceptor.Funcs{}, objects...)
+}
+
+// newRunnerWithInterceptors is the same runner with the client's answers
+// scripted, which is how a test reaches the failures a real API server produces
+// and a fake one never does.
+func newRunnerWithInterceptors(
+	t *testing.T, funcs interceptor.Funcs, objects ...client.Object,
+) *runner {
+	t.Helper()
 	scheme := opsScheme(t)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(objects...).
 		WithStatusSubresource(&simplyblockv1alpha2.OperatorOps{}).
+		WithInterceptorFuncs(funcs).
 		Build()
 
 	return &runner{
@@ -271,13 +288,77 @@ func TestDiscoverSkipsWorkersNothingCanBePlacedOn(t *testing.T) {
 	}
 }
 
+// storagePlaneTainted carries the taint storagePlaneTaint tolerates.
+func storagePlaneTainted(node *corev1.Node) {
+	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+		Key: "io.simplyblock.node-type", Value: "storage-plane", Effect: corev1.TaintEffectNoSchedule,
+	})
+}
+
+// gpuTainted carries a taint nothing in these tests tolerates.
+func gpuTainted(node *corev1.Node) {
+	node.Spec.Taints = append(node.Spec.Taints, corev1.Taint{
+		Key: "nvidia.com/gpu", Value: "present", Effect: corev1.TaintEffectNoSchedule,
+	})
+}
+
+// Regression: 2026-10-24-discovery-ignores-tolerations. A worker carrying a
+// taint the run tolerates was declined as tainted, so a fleet that dedicates its
+// storage machines with a taint, and states the toleration in
+// spec.discover.tolerations as the field says to, got no draft at all.
+func TestDiscoverInspectsAWorkerWhoseTaintTheRunTolerates(t *testing.T) {
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}),
+		worker("worker-1"),
+		worker("storage-1", storagePlaneTainted),
+	)
+
+	r.step()
+	_, ops := r.step()
+
+	if !slices.Equal(ops.Status.Workers, []string{"storage-1", "worker-1"}) {
+		t.Errorf("the run settled on %v, want storage-1 and worker-1", ops.Status.Workers)
+	}
+}
+
+// Regression: 2026-10-24-discovery-ignores-tolerations. Tolerating one taint is
+// not tolerating the worker. A worker that also carries a taint the run does not
+// tolerate is declined, and the event names that taint rather than the
+// tolerated one, which would send a reviewer after the wrong taint.
+func TestDiscoverDeclinesAWorkerWithATaintTheRunDoesNotTolerate(t *testing.T) {
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}),
+		worker("worker-1"),
+		worker("storage-gpu-1", storagePlaneTainted, gpuTainted),
+	)
+	recorder := events.NewFakeRecorder(64)
+	r.reconciler.Recorder = recorder
+
+	r.step()
+	_, ops := r.step()
+
+	if !slices.Equal(ops.Status.Workers, []string{"worker-1"}) {
+		t.Errorf("the run settled on %v, want worker-1 alone", ops.Status.Workers)
+	}
+	var declined string
+	for len(recorder.Events) > 0 {
+		line := <-recorder.Events
+		if strings.Contains(line, WorkerDeclined) && strings.Contains(line, "storage-gpu-1") {
+			declined = line
+		}
+	}
+	if !strings.Contains(declined, "nvidia.com/gpu") {
+		t.Errorf("the decline does not name the untolerated taint: %q", declined)
+	}
+}
+
 func TestDiscoverSkipsWorkersAStorageNodeAlreadyRunsOn(t *testing.T) {
 	// A run reports only what is unclaimed, which is what makes re-running it
 	// useful: a run against a deployed fleet finds the machines nobody has
 	// taken yet.
-	taken := &simplyblockv1alpha1.StorageNode{
+	taken := &simplyblockv1alpha2.StorageNode{
 		ObjectMeta: metav1.ObjectMeta{Name: "sn-1", Namespace: opsNamespace},
-		Spec:       simplyblockv1alpha1.StorageNodeSpec{WorkerNode: "worker-1"},
+		Spec:       simplyblockv1alpha2.StorageNodeSpec{WorkerNode: "worker-1"},
 	}
 	r := newRunner(t, discoverRun(nil), worker("worker-1"), worker("worker-2"), taken)
 
@@ -315,7 +396,10 @@ func TestDiscoverFailsWhenNoWorkerIsFree(t *testing.T) {
 	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
 		t.Fatalf("the run is %q, want Failed", ops.Status.Phase)
 	}
-	if !strings.Contains(ops.Status.Message, "no schedulable worker") {
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepInspecting) {
+		t.Errorf("a failed run is on step %q, want the step it broke on, Inspecting", ops.Status.Step.State)
+	}
+	if !strings.Contains(ops.Status.Message, "no worker is free") {
 		t.Errorf("the message is %q, and it does not say what was wrong", ops.Status.Message)
 	}
 }
@@ -389,6 +473,9 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if ops.Status.CompletedAt == nil {
 		t.Error("a finished run does not say when it finished")
 	}
+	if ops.Status.Step.State != string(simplyblockv1alpha2.OperatorOpsStepCompleted) {
+		t.Errorf("a succeeded run is on step %q, want Completed", ops.Status.Step.State)
+	}
 
 	configs := r.configs()
 	if len(configs) != 1 {
@@ -429,9 +516,9 @@ func TestDiscoverWritesADraftFromTheReports(t *testing.T) {
 	if config.Spec.Cluster == nil {
 		t.Fatal("the document proposes no cluster")
 	}
-	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 8 {
-		t.Errorf("the cluster asks for %v vCPUs, want the 8 cores of the chosen node",
-			config.Spec.Cluster.VCPUCount)
+	if config.Spec.Cluster.VCPUCount == nil || *config.Spec.Cluster.VCPUCount != 5 {
+		t.Errorf("the cluster asks for %v vCPUs, want 5: a tenth of the 16 logical CPUs of the chosen node, raised to the default minimum",
+			ptr.IntFromOrZero(config.Spec.Cluster.VCPUCount))
 	}
 	if config.Spec.Cluster.MaxSubsystemCount == nil {
 		t.Error("the cluster names no maxSubsystemCount, which the API requires")
@@ -487,6 +574,40 @@ func TestDiscoverNamesTheDocumentItWasAskedFor(t *testing.T) {
 
 	if ops.Status.ConfigRef != "rack-b-draft" {
 		t.Errorf("wrote %q, want the name the run asked for", ops.Status.ConfigRef)
+	}
+}
+
+// Regression: the chart's discovery.draft.images seeded the draft through the
+// bootstrap ConfigMap until #780 removed it, after which an SPDK image an
+// installation pinned was accepted and silently dropped. The run carries the
+// images now, and the draft takes them from it.
+func TestDiscoverPinsTheImagesTheRunStates(t *testing.T) {
+	images := &simplyblockv1alpha2.DeploymentImages{
+		SPDK:      &simplyblockv1alpha2.ImageSpec{Image: "public.ecr.aws/simply-block/ultra:md-journal-e2e-latest"},
+		SPDKProxy: &simplyblockv1alpha2.ImageSpec{Image: "public.ecr.aws/simply-block/simplyblock:feat-md-journal-cluster-flag"},
+	}
+	r := newRunner(t,
+		discoverRun(&simplyblockv1alpha2.DiscoverSpec{ConfigName: "pinned", Images: images}),
+		worker("worker-1"),
+	)
+
+	r.step()
+	r.step()
+	r.step()
+	if err := r.client.Create(context.Background(),
+		reportConfigMap(t, "worker-1", "0000:5e:00.0")); err != nil {
+		t.Fatal(err)
+	}
+	r.step()
+	r.step()
+
+	var config simplyblockv1alpha2.ClusterDeploymentConfig
+	if err := r.client.Get(context.Background(),
+		client.ObjectKey{Namespace: opsNamespace, Name: "pinned"}, &config); err != nil {
+		t.Fatalf("read the draft: %v", err)
+	}
+	if !reflect.DeepEqual(config.Spec.Images, images) {
+		t.Errorf("the draft pins %+v, want the run's %+v", config.Spec.Images, images)
 	}
 }
 
@@ -595,5 +716,343 @@ func TestDiscoverAddsItsFinalizerBeforeDoingAnything(t *testing.T) {
 	}
 	if ops.Status.Phase != "" {
 		t.Error("the run started before its finalizer was recorded")
+	}
+}
+
+// heldReportConfigMap is a machine whose NVMe controllers are on a userspace
+// driver. The kernel presents no disk for such a controller, so the report
+// carries no device at all and the controllers say where the disks went.
+//
+// Something is driving them, which is what puts the machine out of reach: a
+// binding nothing is using is a disk the draft claims, and only a held one is a
+// disk in service. Whatever holds it need not be this product.
+func heldReportConfigMap(t *testing.T, node string, addresses ...string) *corev1.ConfigMap {
+	t.Helper()
+
+	report := nodeprobe.Report{
+		Version: nodeprobe.ReportVersion,
+		Node:    node,
+		CPU: nodeprobe.CPU{
+			OnlineCPUs: 12, PhysicalCores: 12, Sockets: 1, ThreadsPerCore: 1,
+			NUMANodes: []nodeprobe.NUMACPUs{{Node: 0, OnlineCPUs: []int{0, 1, 2, 3}, PhysicalCores: 12}},
+		},
+		HugePages: []nodeprobe.HugePagePool{{
+			SizeBytes: 1 << 21, Total: 3584, Free: 3584,
+			NUMANodes: []nodeprobe.NUMAHugePages{{Node: 0, Total: 3584, Free: 3584}},
+		}},
+	}
+	for _, address := range addresses {
+		report.NVMeControllers = append(report.NVMeControllers, nodeprobe.Controller{
+			Address:  address,
+			Driver:   "uio_pci_generic",
+			NUMANode: -1,
+			// Held rather than idle, which is what makes the machine unusable:
+			// an idle binding is a disk the draft now claims.
+			InUse: ptr.To(true),
+		})
+	}
+
+	cm, err := nodeprobe.ConfigMap(opsNamespace, opsName, nil, report)
+	if err != nil {
+		t.Fatalf("render the report ConfigMap: %v", err)
+	}
+	return cm
+}
+
+// A run that produces nothing owes the reason it produced nothing.
+//
+// The rules compute one: a worker whose controllers are held by a userspace
+// driver is refused with the controllers and the driver named, which is the
+// difference between a reviewer concluding the machines have no storage and
+// knowing to reclaim them. That explanation was computed and then dropped,
+// because the failure returned before anything reported a refusal, and what the
+// reviewer was left with was a count.
+func TestARunThatFindsNothingSaysWhy(t *testing.T) {
+	r := newRunner(t, discoverRun(nil), worker("worker-1"), worker("worker-2"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probing: creates the Jobs
+
+	for _, node := range []string{"worker-1", "worker-2"} {
+		cm := heldReportConfigMap(t, node,
+			"0000:00:02.0", "0000:00:03.0", "0000:00:04.0", "0000:00:05.0")
+		if err := r.client.Create(context.Background(), cm); err != nil {
+			t.Fatalf("write a report: %v", err)
+		}
+	}
+
+	r.step() // probing: sees the reports, moves to Writing
+	_, ops := r.step()
+
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("the run is %q, want Failed: %s", ops.Status.Phase, ops.Status.Message)
+	}
+	if len(r.configs()) != 0 {
+		t.Error("a run with no usable device wrote a document anyway")
+	}
+
+	// What the message has to carry is the reason, not the arithmetic of it.
+	for _, want := range []string{"uio_pci_generic", "0000:00:02.0", "worker-1"} {
+		if !strings.Contains(ops.Status.Message, want) {
+			t.Errorf("the failure does not mention %q: %s", want, ops.Status.Message)
+		}
+	}
+}
+
+// partitionedReportConfigMap is a machine whose NVMe disks are on the kernel
+// driver, whole, of the right class, and carrying a partition table somebody
+// left on them.
+//
+// It is the other half of a lab that ran simplyblock before: the controllers
+// were handed back to the kernel and the disks still hold the old table.
+func partitionedReportConfigMap(t *testing.T, node string, addresses ...string) *corev1.ConfigMap {
+	t.Helper()
+
+	const gb = uint64(1) << 30
+	report := nodeprobe.Report{
+		Version: nodeprobe.ReportVersion,
+		Node:    node,
+		CPU: nodeprobe.CPU{
+			OnlineCPUs: 12, PhysicalCores: 12, Sockets: 1, ThreadsPerCore: 1,
+			NUMANodes: []nodeprobe.NUMACPUs{{Node: 0, OnlineCPUs: []int{0, 1, 2, 3}, PhysicalCores: 12}},
+		},
+		HugePages: []nodeprobe.HugePagePool{{
+			SizeBytes: 1 << 21, Total: 3584, Free: 3584,
+			NUMANodes: []nodeprobe.NUMAHugePages{{Node: 0, Total: 3584, Free: 3584}},
+		}},
+	}
+	for i, address := range addresses {
+		report.NVMeControllers = append(report.NVMeControllers, nodeprobe.Controller{
+			Address: address, Driver: "nvme", NUMANode: -1,
+		})
+		report.Devices = append(report.Devices, nodeprobe.Device{
+			Name:       fmt.Sprintf("nvme%dn1", i),
+			Path:       fmt.Sprintf("/dev/nvme%dn1", i),
+			PCIAddress: address,
+			SizeBytes:  70 * gb,
+			Kind:       string(blockdev.KindDisk),
+			Transport:  string(blockdev.TransportNVMe),
+			NUMANode:   -1,
+			Available:  false,
+			Content:    "Foreign",
+			Rejections: []nodeprobe.Rejection{{
+				Reason: string(blockdev.ReasonPartitioned),
+				Detail: "GPT header at 4096 (LBA 1), MBR partition table at 446",
+			}},
+		})
+		// The machine also presents the devices nothing would ever take, which
+		// is what makes the reporting hard: they outnumber the disks that
+		// matter and they are refused for reasons nobody needs.
+		report.Devices = append(report.Devices, nodeprobe.Device{
+			Name: fmt.Sprintf("nbd%d", i), Path: fmt.Sprintf("/dev/nbd%d", i),
+			Kind: string(blockdev.KindNetwork), NUMANode: -1,
+		})
+	}
+
+	cm, err := nodeprobe.ConfigMap(opsNamespace, opsName, nil, report)
+	if err != nil {
+		t.Fatalf("render the report ConfigMap: %v", err)
+	}
+	return cm
+}
+
+// A worker refused one device at a time still owes the reason.
+//
+// Its worker-level refusal reads "no device of it survived the device rules."
+// That is the arithmetic and not the reason. The reason is on the devices, and
+// it has to reach the message past the devices refused for being loopback or
+// network block devices, which outnumber it and explain nothing.
+func TestARunRefusedDeviceByDeviceSaysWhichReasonMatters(t *testing.T) {
+	r := newRunner(t, discoverRun(nil), worker("worker-1"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probing: creates the Jobs
+
+	cm := partitionedReportConfigMap(t, "worker-1",
+		"0000:00:02.0", "0000:00:03.0", "0000:00:04.0", "0000:00:05.0")
+	if err := r.client.Create(context.Background(), cm); err != nil {
+		t.Fatalf("write a report: %v", err)
+	}
+
+	r.step() // probing: sees the report, moves to Writing
+	_, ops := r.step()
+
+	if ops.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("the run is %q, want Failed: %s", ops.Status.Phase, ops.Status.Message)
+	}
+	if !strings.Contains(ops.Status.Message, string(blockdev.ReasonPartitioned)) {
+		t.Errorf("the failure does not say the disks are partitioned: %s", ops.Status.Message)
+	}
+	// The devices that were never candidates are noise, and a message they
+	// reach is one nobody finishes reading.
+	if strings.Contains(ops.Status.Message, "whole disk") {
+		t.Errorf("the failure reports devices that were never candidates: %s", ops.Status.Message)
+	}
+}
+
+// A step that outlives its deadline says what outliving it means for this run,
+// not only that it happened. Probing's partial reports survive in ConfigMaps
+// labeled for the run, and a failure message that did not say so would leave a
+// reviewer with the evidence in the cluster and no way to know it is there.
+func TestARunThatOutlivesItsDeadlineSaysWhereTheEvidenceIs(t *testing.T) {
+	ops := discoverRun(nil)
+	ops.Status.Phase = simplyblockv1alpha2.OperatorOpsPhaseRunning
+	ops.Status.Workers = []string{"worker-1"}
+	ops.Status.Step.State = string(simplyblockv1alpha2.OperatorOpsStepProbing)
+	expired := metav1.NewTime(time.Now().Add(-time.Minute))
+	ops.Status.Step.Deadline = &expired
+
+	r := newRunner(t, ops, worker("worker-1"))
+	_, got := r.step()
+
+	if got.Status.Phase != simplyblockv1alpha2.OperatorOpsPhaseFailed {
+		t.Fatalf("phase = %q, want Failed on a step past its deadline", got.Status.Phase)
+	}
+	if !strings.Contains(got.Status.Message, "ConfigMaps") {
+		t.Errorf("the failure does not say where the reports that did arrive are: %q",
+			got.Status.Message)
+	}
+}
+
+// The draft states the operating system the probes read, so that the reviewer
+// approving it sees what the cluster will be told and the expansion has
+// something to spend on ubuntuHost.
+func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
+	// draftFor reads kube-system's UID to disambiguate the cluster name; a fake
+	// client with no such namespace returns NotFound, so the disambiguator falls
+	// back cleanly and this test still asserts only the host OS.
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{{
+		Name: "worker-01",
+		Report: nodeprobe.Report{Node: "worker-01", HostOS: nodeprobe.HostOS{
+			Distro: "ubuntu", Family: "Debian", Version: "22.04",
+		}},
+	}}}
+
+	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
+
+	if config.Spec.HostOS == nil {
+		t.Fatalf("the draft states no host OS; the notes are %v", notes)
+	}
+	if config.Spec.HostOS.Distro != simplyblockv1alpha2.DistroUbuntu {
+		t.Errorf("the draft states the distro %q, want %q",
+			config.Spec.HostOS.Distro, simplyblockv1alpha2.DistroUbuntu)
+	}
+	if config.Spec.HostOS.Family != simplyblockv1alpha2.HostOSFamilyDebian {
+		t.Errorf("the draft states the family %q, want %q",
+			config.Spec.HostOS.Family, simplyblockv1alpha2.HostOSFamilyDebian)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "hostOS") }) {
+		t.Errorf("the notes are %v, and none of them explains the host OS", notes)
+	}
+}
+
+// A fleet whose workers run different distributions gets no host OS and a note
+// naming the split, because one document becomes one DaemonSet with one flag.
+func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	worker := func(name, distro string) discoverypkg.Worker {
+		return discoverypkg.Worker{
+			Name:   name,
+			Report: nodeprobe.Report{Node: name, HostOS: nodeprobe.HostOS{Distro: distro}},
+		}
+	}
+	plan := discoverypkg.Plan{Workers: []discoverypkg.Worker{
+		worker("worker-01", "ubuntu"),
+		worker("worker-02", "rocky"),
+	}}
+
+	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
+
+	if config.Spec.HostOS != nil {
+		t.Fatalf("the draft states %+v for a fleet running two distributions", config.Spec.HostOS)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "worker-02") }) {
+		t.Errorf("the notes are %v, and none of them says which worker runs what", notes)
+	}
+}
+
+// storagePlaneTaint is what a fleet that dedicates machines to storage puts on
+// them, and what a probe and a storage node both have to tolerate to land
+// there.
+var storagePlaneTaint = []corev1.Toleration{{
+	Key:      "io.simplyblock.node-type",
+	Operator: corev1.TolerationOpEqual,
+	Value:    "storage-plane",
+	Effect:   corev1.TaintEffectNoSchedule,
+}}
+
+// A probe pod is pinned to its worker rather than scheduled onto it, but a
+// taint still evicts what the scheduler was bypassed for. A run against a
+// tainted fleet that tolerated nothing probed nothing.
+func TestDiscoverProbesTolerateWhatTheRunWasToldTo(t *testing.T) {
+	run := discoverRun(&simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint})
+	r := newRunner(t, run, worker("worker-1"))
+
+	r.step() // start
+	r.step() // inspect
+	r.step() // probe
+
+	jobs := r.jobs()
+	if len(jobs) != 1 {
+		t.Fatalf("created %d Jobs for 1 worker", len(jobs))
+	}
+	if !reflect.DeepEqual(jobs[0].Spec.Template.Spec.Tolerations, storagePlaneTaint) {
+		t.Errorf("the probe tolerates %+v, want %+v",
+			jobs[0].Spec.Template.Spec.Tolerations, storagePlaneTaint)
+	}
+}
+
+// The taints a run was allowed to probe through are the taints the cluster it
+// drafts has to live with, so the draft states them rather than leaving a
+// reviewer to work out that the DaemonSet will schedule nowhere.
+func TestTheDraftCarriesTheTolerationsTheRunProbedWith(t *testing.T) {
+	r := &OperatorOpsReconciler{Client: fake.NewClientBuilder().WithScheme(opsScheme(t)).Build()}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	spec := &simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}
+
+	config, notes, err := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
+
+	if config.Spec.Cluster == nil {
+		t.Fatalf("the draft describes no cluster; the notes are %v", notes)
+	}
+	if !reflect.DeepEqual(config.Spec.Cluster.Tolerations, storagePlaneTaint) {
+		t.Errorf("the draft tolerates %+v, want %+v", config.Spec.Cluster.Tolerations, storagePlaneTaint)
+	}
+	if !slices.ContainsFunc(notes, func(note string) bool { return strings.Contains(note, "tolerations") }) {
+		t.Errorf("the notes are %v, and none of them says where the tolerations came from", notes)
+	}
+}
+
+// A growth document names a cluster that already states what it tolerates, so
+// there is no template to put them on and nothing to restate.
+func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
+	r := &OperatorOpsReconciler{}
+	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
+	spec := &simplyblockv1alpha2.DiscoverSpec{
+		ClusterRef:  "an-existing-cluster",
+		Tolerations: storagePlaneTaint,
+	}
+
+	config, _, err := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{})
+	if err != nil {
+		t.Fatalf("the fleet was refused: %v", err)
+	}
+
+	if config.Spec.Cluster != nil {
+		t.Errorf("a growth draft describes a cluster: %+v", config.Spec.Cluster)
 	}
 }

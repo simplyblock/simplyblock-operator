@@ -1,0 +1,16 @@
+worker-01/loop0: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop1: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop2: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop3: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop4: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop5: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop6: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop7: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop8: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop9: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop10: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop11: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop12: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop13: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop14: declined by whole disk because it is a Loop rather than a whole disk
+worker-01/loop15: declined by whole disk because it is a Loop rather than a whole disk

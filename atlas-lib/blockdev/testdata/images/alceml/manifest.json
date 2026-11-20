@@ -1,0 +1,15 @@
+{
+  "name": "alceml",
+  "tool": "spdk bdev_alceml_create",
+  "tool_version": "unknown",
+  "command": "(not reproducible locally: the superblock is written by the storage node, not by a formatting tool)",
+  "device_size": 1920383410176,
+  "logical_block_size": 4096,
+  "region_size": 1048576,
+  "captured": "2026-09-20T12:59:15Z",
+  "captured_on": "Red Hat Enterprise Linux CoreOS 9.6.20260616-0 (Plow), kernel 5.14.0-570.122.1.el9_6.x86_64",
+  "blkid": "",
+  "head_sha256": "fdc684ae298874e1b347231e6a1320b6ce1dabe928ae6ea115d06e4f4ab3df42",
+  "tail_sha256": "30e14955ebf1352266dc2ff8067e68104607e750abb9d3b36582b8af909fcb58",
+  "note": "A simplyblock storage device left behind by a previous deployment, captured from a Micron 7450 on an OKD worker. blkid reports nothing, which is why wipefs cannot see it either. The head carries 112 non-zero bytes: the superblock at 0, an _UNMAPPED_ marker at LBA 1, and the device partition entries (journal, part1) at LBA 2. The tail is entirely zero."
+}

@@ -14,19 +14,13 @@ func TestManager_VolumeGroup(t *testing.T) {
 		err  error
 		want string
 	}{
-		{"blank device", "", nil, ""},
-		{"belongs to a VG", "  vdo-abc123  \n", nil, "vdo-abc123"},
-		{
-			"WARNING lines ahead of the real field, from a duplicate-PV clone",
-			"WARNING: PV a is duplicate for PVID b\n  vdo-abc123\n",
-			nil,
-			"vdo-abc123",
-		},
+		{"blank device", `{"report":[{"pv":[]}]}`, nil, ""},
+		{"belongs to a VG", `{"report":[{"pv":[{"vg_name":"vdo-abc123"}]}]}`, nil, "vdo-abc123"},
 		{"no PV signature on the device", "", errors.New(`Failed to find physical volume "/dev/nvme0n1"`), ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "vg_name", "/dev/nvme0n1"})
+			key := joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--reportformat", "json", "-o", "vg_name", "/dev/nvme0n1"})
 			fake := &fakeRunner{
 				out: map[string]string{key: tt.out},
 				err: map[string]error{key: tt.err},
@@ -45,7 +39,7 @@ func TestManager_VolumeGroup(t *testing.T) {
 
 func TestManager_VolumeGroup_PropagatesRealProbeError(t *testing.T) {
 	wantErr := errors.New("device or resource busy")
-	key := joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--noheadings", "-o", "vg_name", "/dev/nvme0n1"})
+	key := joinKey([]string{"pvs", "--devices", "/dev/nvme0n1", "--reportformat", "json", "-o", "vg_name", "/dev/nvme0n1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
 	if _, err := mgr.VolumeGroup(context.Background(), PhysicalVolume{DevicePath: "/dev/nvme0n1"}); !errors.Is(err, wantErr) {
@@ -54,9 +48,9 @@ func TestManager_VolumeGroup_PropagatesRealProbeError(t *testing.T) {
 }
 
 func TestManager_ListLogicalVolumes(t *testing.T) {
-	key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
+	key := joinKey([]string{"lvs", "--reportformat", "json", "-o", "lv_name", "vg1"})
 	fake := &fakeRunner{
-		out: map[string]string{key: "  vdopool\n  data1\n"},
+		out: map[string]string{key: `{"report":[{"lv":[{"lv_name":"vdopool"},{"lv_name":"data1"}]}]}`},
 		err: map[string]error{},
 	}
 	mgr := NewManagerWithRunner(fake.run)
@@ -73,7 +67,7 @@ func TestManager_ListLogicalVolumes(t *testing.T) {
 
 func TestManager_ListLogicalVolumes_PropagatesRunnerError(t *testing.T) {
 	wantErr := errors.New("failed to find VG")
-	key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
+	key := joinKey([]string{"lvs", "--reportformat", "json", "-o", "lv_name", "vg1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
 	if _, err := mgr.ListLogicalVolumes(context.Background(), VolumeGroup{Name: "vg1"}); !errors.Is(err, wantErr) {
@@ -88,13 +82,13 @@ func TestManager_HasLogicalVolume(t *testing.T) {
 		err  error
 		want bool
 	}{
-		{"lv present among others", "  poolvol\n  data1\n", nil, true},
-		{"orphaned VG, zero LVs", "", nil, false},
-		{"lv absent", "  poolvol\n", nil, false},
+		{"lv present among others", `{"report":[{"lv":[{"lv_name":"poolvol"},{"lv_name":"data1"}]}]}`, nil, true},
+		{"orphaned VG, zero LVs", `{"report":[{"lv":[]}]}`, nil, false},
+		{"lv absent", `{"report":[{"lv":[{"lv_name":"poolvol"}]}]}`, nil, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
+			key := joinKey([]string{"lvs", "--reportformat", "json", "-o", "lv_name", "vg1"})
 			fake := &fakeRunner{
 				out: map[string]string{key: tt.out},
 				err: map[string]error{key: tt.err},
@@ -114,7 +108,7 @@ func TestManager_HasLogicalVolume(t *testing.T) {
 
 func TestManager_HasLogicalVolume_PropagatesRunnerError(t *testing.T) {
 	wantErr := errors.New("failed to find VG")
-	key := joinKey([]string{"lvs", "--noheadings", "-o", "lv_name", "vg1"})
+	key := joinKey([]string{"lvs", "--reportformat", "json", "-o", "lv_name", "vg1"})
 	fake := &fakeRunner{out: map[string]string{}, err: map[string]error{key: wantErr}}
 	mgr := NewManagerWithRunner(fake.run)
 	lv := LogicalVolume{VolumeGroup: VolumeGroup{Name: "vg1"}, Name: "data1"}
@@ -134,7 +128,7 @@ func TestManager_Rescan(t *testing.T) {
 		t.Fatalf("Rescan: %v", err)
 	}
 	want := []string{"pvscan", "--devices", "/dev/nvme0n1,/dev/nvme1n1", "--cache"}
-	if len(fake.calls) != 1 || !reflect.DeepEqual(fake.calls[0], want) {
+	if !reflect.DeepEqual(fake.mutating(), [][]string{want}) {
 		t.Errorf("recorded call = %v, want %v", fake.calls, want)
 	}
 }

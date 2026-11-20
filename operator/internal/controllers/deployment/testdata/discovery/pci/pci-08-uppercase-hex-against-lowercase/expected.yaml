@@ -1,0 +1,34 @@
+metadata:
+  labels:
+    storage.simplyblock.io/nodeprobe-run: discover-pci-08
+  name: discovered-discover-pci-08
+spec:
+  cluster:
+    clusterMode: Dual
+    enableNodeAffinity: true
+    name: discovered-discover-pci-08-cluster
+    stripe:
+      dataChunks: 1
+  nodeSets:
+  - groups:
+    - dataInterfaces:
+      - eth1
+      devices:
+        nvme:
+        - 0000:5E:00.0
+        - 0000:5F:00.0
+      mgmtInterface: eth0
+      name: group-1-nvme-2x3T
+      workers:
+      - worker-01
+    - dataInterfaces:
+      - eth1
+      devices:
+        nvme:
+        - 0000:5e:00.0
+        - 0000:5f:00.0
+      mgmtInterface: eth0
+      name: group-2-nvme-2x3T
+      workers:
+      - worker-02
+    name: discovered

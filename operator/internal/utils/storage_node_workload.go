@@ -1,0 +1,892 @@
+package utils
+
+import (
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/simplyblock/atlas/kube"
+	"github.com/simplyblock/atlas/ptr"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	discoveryv1 "k8s.io/api/discovery/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
+)
+
+// The two values a boolean reaches the agent's environment as. It reads them
+// as strings, so they are spelled once here.
+const (
+	envTrue  = "true"
+	envFalse = "false"
+)
+
+// defaultInitContainerResources are applied when the cluster states no
+// initContainerResources. The init containers write one env file and run
+// node_configure.py once, so both are sized for a short, small job.
+var defaultInitContainerResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("100m"),
+		corev1.ResourceMemory: resource.MustParse("128Mi"),
+	},
+	Limits: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("200m"),
+		corev1.ResourceMemory: resource.MustParse("256Mi"),
+	},
+}
+
+// defaultContainerResources are applied when the cluster states no
+// containerResources.
+//
+// They are the node management API's and not SPDK's. The container they size
+// runs node_webapp.py, which answers RPCs and starts the SPDK pod; SPDK itself
+// runs in a pod of its own, with its cores pinned outside this cgroup, so a CPU
+// limit here throttles the agent rather than the data path. Memory is limited
+// so that a leaking agent is evicted rather than taking the worker down with
+// it.
+var defaultContainerResources = corev1.ResourceRequirements{
+	Requests: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("200m"),
+		corev1.ResourceMemory: resource.MustParse("256Mi"),
+	},
+	Limits: corev1.ResourceList{
+		corev1.ResourceCPU:    resource.MustParse("500m"),
+		corev1.ResourceMemory: resource.MustParse("512Mi"),
+	},
+}
+
+func BuildStorageNodeDaemonSet(
+	sn *simplyblockv1alpha2.StorageCluster,
+	tlsEnabled, tlsMutualEnabled bool,
+	tlsProvider, tlsSecretResourceVersion, image string,
+) *appsv1.DaemonSet {
+	wl := storageNodesOf(sn)
+
+	labels := map[string]string{
+		kube.LabelApp:                kube.AppStorageNode,
+		kube.LabelSimplyblockCluster: sn.Name,
+		kube.LabelStorageNodeSet:     sn.Name,
+	}
+
+	// Build the fleet-level (non-overridable) args that are always appended.
+	// Per-node args (pci-*, device-*, size-range, lblk/blk-*) and the cluster-scoped
+	// sizing args (max-subsys-count, max-size, vcpu-count) are read at runtime from
+	// the per-node ConfigMap via the init script.
+	fleetArgs := ""
+	if len(wl.SocketsToUse) > 0 {
+		fleetArgs += " --sockets-to-use=" + JoinList(wl.SocketsToUse)
+	}
+	if wl.NodesPerSocket != nil {
+		fleetArgs += " --nodes-per-socket=" + ptr.StringOrDefault(wl.NodesPerSocket, "")
+	}
+
+	// The init container sources the per-node env file (written by node-env-writer)
+	// so that node_configure.py receives per-node values for each pod.
+	initScript, nodeEnvWriterScript := nodeEnvScripts()
+	initScript += fleetArgs + configureInvocation
+	initCmd := []string{"sh", "-c", initScript}
+
+	nodeEnvWriterCmd := []string{"sh", "-c", nodeEnvWriterScript}
+
+	imagePullPolicy := wl.ImagePullPolicy
+	if imagePullPolicy == "" {
+		imagePullPolicy = corev1.PullAlways
+	}
+
+	mainEnv := []corev1.EnvVar{
+		{Name: "UBUNTU_HOST", Value: ptr.StringOrDefault(wl.UbuntuHost, envFalse)},
+		{Name: "OPENSHIFT_CLUSTER", Value: strconv.FormatBool(wl.OpenShift != nil)},
+		{Name: "TALOS_CLUSTER", Value: ptr.StringOrDefault(wl.Talos, envFalse)},
+		{Name: "SKIP_KUBELET_CONFIGURATION", Value: skipKubeletConfiguration(wl)},
+		{Name: "SIMPLY_BLOCK_DOCKER_IMAGE", Value: image},
+		{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+		}},
+		{Name: "CPU_TOPOLOGY_ENABLED", Value: ptr.StringOrDefault(wl.EnableCpuTopology, envFalse)},
+	}
+	// The agent is in the pod network, where its interfaces are not the host's, so
+	// the control plane takes the worker's address from here.
+	mainEnv = append(mainEnv,
+		corev1.EnvVar{Name: "HOST_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+		}},
+		// The node-preparation job calls the agent, which is not at the worker's
+		// address.
+		corev1.EnvVar{Name: "POD_IP", ValueFrom: &corev1.EnvVarSource{
+			FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.podIP"},
+		}})
+	if wl.NodeProvisioningBudget != nil {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "MAX_PARALLEL_NODE_ADDS", Value: fmt.Sprintf("%d", *wl.NodeProvisioningBudget)})
+	}
+	if wl.OpenShift != nil && wl.OpenShift.MachineConfigPool != "" {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "OPENSHIFT_MCP", Value: wl.OpenShift.MachineConfigPool})
+	}
+	if wl.ReservedSystemCPU != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "RESERVED_SYSTEM_CPUS", Value: wl.ReservedSystemCPU})
+	}
+	if wl.TalosctlImage != "" {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOSCTL_IMAGE", Value: wl.TalosctlImage})
+	}
+	if wl.Talos != nil && *wl.Talos {
+		mainEnv = append(mainEnv, corev1.EnvVar{Name: "TALOS_MACHINE_CONFIG", Value: talosMachineConfigEnv(wl.TalosMachineConfig)})
+	}
+	if tlsMutualEnabled {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: envTrue},
+			corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "authenticated"},
+			corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "required"},
+			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
+		)
+	} else if tlsEnabled {
+		mainEnv = append(mainEnv,
+			corev1.EnvVar{Name: "SB_TLS_SERVE", Value: envTrue},
+			corev1.EnvVar{Name: "SB_TLS_CONNECT", Value: "anonymous"},
+			corev1.EnvVar{Name: "SB_TLS_CLIENT_AUTH", Value: "optional"},
+			corev1.EnvVar{Name: "SB_TLS_PROVIDER", Value: NormalizeTLSProvider(tlsProvider)},
+		)
+	}
+
+	perNodeConfigMapName := sn.Name + "-per-node-config"
+
+	volumes := []corev1.Volume{
+		// per-node-config: ConfigMap with one key per worker hostname.
+		// Written by reconcilePerNodeConfigMap; read by node-env-writer init container.
+		{
+			Name: "per-node-config",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: perNodeConfigMapName},
+					Optional:             ptr.To(true),
+				},
+			},
+		},
+		// node-env: emptyDir shared between init containers and the main container.
+		// node-env-writer writes /etc/node-env/env.sh; others source it.
+		{
+			Name:         "node-env",
+			VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}},
+		},
+		{
+			Name: "dev-vol",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/dev",
+				},
+			},
+		},
+		{
+			// The node configuration the init container generates and the
+			// storage node reads, at one path per worker rather than per
+			// cluster: the backend's own constant is
+			// /etc/simplyblock/sn_config_file, which this directory backs.
+			//
+			// TODO: it is therefore shared by every storage node on the worker,
+			// and a second cluster's node regenerates the whole document rather
+			// than taking a slot in it, so two clusters on one worker replace
+			// each other's configuration. Nothing here or in the backend keys a
+			// slot by cluster, and the operator does not see across clusters
+			// either: awaitSlot reads this cluster's nodes alone. Whether one
+			// worker may carry nodes of two clusters at all is the question to
+			// settle first — if it may, this path and the backend's constant
+			// have to carry the cluster; if it may not, a StorageNode whose
+			// worker already holds another cluster's node belongs in the
+			// validating webhook rather than in a file both of them overwrite.
+			Name: "etc-simplyblock",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/simplyblock",
+				},
+			},
+		},
+		{
+			Name: "host-sys",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/sys",
+				},
+			},
+		},
+		{
+			Name: "host-mnt",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/mnt",
+				},
+			},
+		},
+		{
+			Name: "host-modules",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/lib/modules",
+				},
+			},
+		},
+		{
+			Name: "var-run-simplyblock",
+			VolumeSource: corev1.VolumeSource{
+				HostPath: &corev1.HostPathVolumeSource{
+					Path: "/var/run/simplyblock",
+					Type: func() *corev1.HostPathType { t := corev1.HostPathDirectoryOrCreate; return &t }(),
+				},
+			},
+		},
+	}
+
+	nodeEnvMount := corev1.VolumeMount{Name: "node-env", MountPath: "/etc/node-env"}
+
+	initMounts := []corev1.VolumeMount{
+		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
+		{Name: "host-modules", MountPath: "/lib/modules", ReadOnly: true},
+		{Name: "host-mnt", MountPath: "/mnt"},
+		// node_configure.py's lblk eligibility check inspects /dev and
+		// /sys/block directly at config-generation time.
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "host-sys", MountPath: "/sys"},
+		nodeEnvMount,
+	}
+
+	mainMounts := []corev1.VolumeMount{
+		{Name: "dev-vol", MountPath: "/dev"},
+		{Name: "etc-simplyblock", MountPath: "/etc/simplyblock"},
+		{Name: "host-sys", MountPath: "/sys"},
+		{Name: "var-run-simplyblock", MountPath: "/var/run/simplyblock"},
+		nodeEnvMount,
+	}
+
+	readinessProbe := &corev1.Probe{
+		ProbeHandler: corev1.ProbeHandler{
+			HTTPGet: &corev1.HTTPGetAction{
+				Path: "/snode/check",
+				Port: intstr.FromInt(5000),
+			},
+		},
+		InitialDelaySeconds: 10,
+		PeriodSeconds:       5,
+	}
+
+	if tlsMutualEnabled {
+		// kubelet cannot present a client certificate, so an HTTPS probe would
+		// be rejected by the snode API. Run the check in the container
+		// instead, where the agent's own certificate is mounted alongside it.
+		readinessProbe.TimeoutSeconds = 5
+		readinessProbe.ProbeHandler = corev1.ProbeHandler{
+			Exec: &corev1.ExecAction{Command: []string{"python3", "-c", storageNodeAgentTLSAnswerCheck}},
+		}
+	} else if tlsEnabled {
+		readinessProbe.HTTPGet.Scheme = corev1.URISchemeHTTPS
+	}
+
+	livenessProbe := buildStorageNodeAgentLivenessProbe(readinessProbe.HTTPGet, tlsMutualEnabled)
+
+	if tlsEnabled {
+		names, _ := WorkloadNamesOf(sn)
+		volumes = append(volumes, buildStorageNodeSetTLSVolume(tlsProvider, names.NodeAPITLSSecret))
+
+		tlsMounts := []corev1.VolumeMount{
+			{Name: "tls", MountPath: "/etc/simplyblock/tls", ReadOnly: true},
+		}
+		initMounts = append(initMounts, tlsMounts...)
+		mainMounts = append(mainMounts, tlsMounts...)
+	}
+
+	podAnnotations := map[string]string{AnnotationLogCollector: envTrue}
+	if tlsEnabled && tlsSecretResourceVersion != "" {
+		podAnnotations[AnnotationTLSSecretRevision] = tlsSecretResourceVersion
+	}
+
+	// The DaemonSet is named and selected per-StorageNodeSet so that multiple
+	// StorageNodeSets can coexist in the same cluster without sharing a
+	// DaemonSet or ConfigMap. Each StorageNodeSet owns its own DaemonSet and
+	// targets only the workers it enrolled (via the io.simplyblock.storagenodeset label).
+	return &appsv1.DaemonSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      kube.StorageNodeSetDaemonSetName(sn.Name),
+			Namespace: sn.Namespace,
+			Labels:    labels,
+		},
+		Spec: appsv1.DaemonSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: labels,
+			},
+			UpdateStrategy: appsv1.DaemonSetUpdateStrategy{
+				Type: appsv1.RollingUpdateDaemonSetStrategyType,
+				RollingUpdate: &appsv1.RollingUpdateDaemonSet{
+					MaxUnavailable: &intstr.IntOrString{
+						Type:   intstr.Int,
+						IntVal: 1,
+					},
+				},
+			},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels:      labels,
+					Annotations: podAnnotations,
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "simplyblock-storage-node-sa",
+					// Off the host network, and in its PID namespace: the agent reads
+					// the host's interfaces and opens its connections by entering
+					// PID 1's network namespace.
+					HostPID:     true,
+					Tolerations: storageNodeAgentTolerations(sn, wl),
+					NodeSelector: map[string]string{
+						kube.LabelStorageNodeSet: sn.Name,
+					},
+
+					Volumes: volumes,
+
+					InitContainers: []corev1.Container{
+						// node-env-writer: copies the per-node env file from the
+						// ConfigMap (keyed by hostname) into the shared node-env volume
+						// so both the config-generator and the main container can source it.
+						{
+							Name:            "node-env-writer",
+							Image:           image,
+							ImagePullPolicy: imagePullPolicy,
+							Command:         nodeEnvWriterCmd,
+							Env: []corev1.EnvVar{
+								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+								}},
+							},
+							Resources: effectiveResources(wl.InitContainerResources, defaultInitContainerResources),
+							VolumeMounts: []corev1.VolumeMount{
+								{Name: "per-node-config", MountPath: "/etc/per-node-config", ReadOnly: true},
+								nodeEnvMount,
+							},
+						},
+						// s-node-api-config-generator: runs node_configure.py with
+						// per-node values sourced from /etc/node-env/env.sh.
+						{
+							Name:            "s-node-api-config-generator",
+							Image:           image,
+							ImagePullPolicy: imagePullPolicy,
+							Command:         initCmd,
+							// node_configure.py's device inspection needs root, so
+							// the container runs as root outright rather than
+							// escalating via sudo.
+							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
+							VolumeMounts:    initMounts,
+							Resources:       effectiveResources(wl.InitContainerResources, defaultInitContainerResources),
+							Env: []corev1.EnvVar{
+								{Name: "HOSTNAME", ValueFrom: &corev1.EnvVarSource{
+									FieldRef: &corev1.ObjectFieldSelector{FieldPath: "spec.nodeName"},
+								}},
+							},
+						},
+					},
+
+					Containers: []corev1.Container{
+						{
+							Name:            "s-node-api-container",
+							Image:           image,
+							ImagePullPolicy: imagePullPolicy,
+							// Published on the worker's port 5000, where a control plane on
+							// another cluster dials it (Workload.NodeAddress).
+							Ports: []corev1.ContainerPort{{
+								Name:          "node-api",
+								ContainerPort: 5000,
+								HostPort:      5000,
+								Protocol:      corev1.ProtocolTCP,
+							}},
+							// The entry is sourced and one variable is exported
+							// out of it, because sourcing alone sets a shell
+							// variable and exec only inherits what is exported.
+							// Only that one: exporting the entry wholesale would
+							// put the device lists and the class flag into the
+							// agent's environment, where nothing asked for them.
+							// An entry that states none leaves the pod's own
+							// RESERVED_SYSTEM_CPUS, which is the fleet's.
+							Command: []string{"sh", "-c",
+								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
+[ -n "${RESERVED_SYSTEM_CPUS}" ] && export RESERVED_SYSTEM_CPUS
+exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
+							},
+							// node_webapp.py needs root for device access, so the
+							// container runs as root outright rather than
+							// escalating via sudo.
+							SecurityContext: &corev1.SecurityContext{Privileged: ptr.To(true), RunAsUser: ptr.To(int64(0))},
+							Resources:       effectiveResources(wl.ContainerResources, defaultContainerResources),
+							ReadinessProbe:  readinessProbe,
+							LivenessProbe:   livenessProbe,
+							Env:             mainEnv,
+							VolumeMounts:    mainMounts,
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// storageNodeAgentTLSAnswerCheck exits 0 when the node agent on port 5000
+// completes a full, mutually authenticated TLS handshake within three
+// seconds. It runs inside the agent's own container, where the agent's
+// serving certificate is mounted at /etc/simplyblock/tls alongside the CA
+// that issued it, so the check can present that certificate as its client
+// identity and the agent's CA check accepts it. A timeout, a refused
+// connection, or a certificate failure all exit non-zero, since none of them
+// is distinguishable from the agent genuinely being unhealthy once the check
+// authenticates both ends instead of merely eliciting a rejection.
+const storageNodeAgentTLSAnswerCheck = `import socket, ssl
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_REQUIRED
+ctx.load_verify_locations("/etc/simplyblock/tls/ca.crt")
+ctx.load_cert_chain("/etc/simplyblock/tls/tls.crt", "/etc/simplyblock/tls/tls.key")
+sock = socket.create_connection(("127.0.0.1", 5000), timeout=3)
+ctx.wrap_socket(sock).close()
+`
+
+// buildStorageNodeAgentLivenessProbe returns the probe that restarts a node
+// agent which has stopped answering. The agent is the control plane's only way
+// to start, stop, and probe SPDK on the worker, so while it hangs the storage
+// node can neither be declared dead nor be restarted.
+//
+// The agent serves TLS from Werkzeug, which runs the handshake inside accept()
+// without a timeout, so one client that connects and goes silent (a network
+// cut between the TCP handshake and the ClientHello) blocks it for good. The
+// probe therefore needs an answer, not a TCP connect: the kernel completes
+// connects against a listener nobody accepts on until its backlog is full.
+//
+// Without mutual TLS the kubelet asks the readiness endpoint over HTTP(S).
+// With it the kubelet's request is refused for lacking a client certificate,
+// so the check runs inside the container instead, presenting the agent's own
+// certificate to complete a real handshake rather than provoke a rejection.
+func buildStorageNodeAgentLivenessProbe(httpGet *corev1.HTTPGetAction, tlsMutualEnabled bool) *corev1.Probe {
+	probe := &corev1.Probe{
+		InitialDelaySeconds: 30,
+		PeriodSeconds:       10,
+		TimeoutSeconds:      5,
+		FailureThreshold:    3,
+	}
+	if tlsMutualEnabled {
+		probe.Exec = &corev1.ExecAction{Command: []string{"python3", "-c", storageNodeAgentTLSAnswerCheck}}
+	} else {
+		probe.HTTPGet = httpGet.DeepCopy()
+	}
+	return probe
+}
+
+// buildStorageNodeSetTLSVolume returns a Volume that exposes tls.crt, tls.key,
+// and ca.crt at /etc/simplyblock/tls. cert-manager already bundles the CA in
+// the Secret, so a plain Secret volume is enough; OpenShift's serving-cert
+// controller emits the CA via a separate ConfigMap, so the two sources are
+// combined through a projected volume.
+func buildStorageNodeSetTLSVolume(tlsProvider, secretName string) corev1.Volume {
+	if IsCertManagerTLSProvider(tlsProvider) {
+		return corev1.Volume{
+			Name: "tls",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: secretName,
+				},
+			},
+		}
+	}
+
+	return corev1.Volume{
+		Name: "tls",
+		VolumeSource: corev1.VolumeSource{
+			Projected: &corev1.ProjectedVolumeSource{
+				Sources: []corev1.VolumeProjection{
+					{
+						Secret: &corev1.SecretProjection{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: secretName,
+							},
+						},
+					},
+					{
+						ConfigMap: &corev1.ConfigMapProjection{
+							LocalObjectReference: corev1.LocalObjectReference{
+								Name: "simplyblock-certificate-authority",
+							},
+							Items: []corev1.KeyToPath{
+								{Key: "service-ca.crt", Path: "ca.crt"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+// EKSRoleARNAnnotation is the key Amazon EKS's pod-identity webhook reads on a
+// ServiceAccount, injecting AWS_ROLE_ARN, AWS_WEB_IDENTITY_TOKEN_FILE, and the
+// projected token volume into every pod that runs as the account it is on.
+const EKSRoleARNAnnotation = "eks.amazonaws.com/role-arn"
+
+// BuildStorageNodeSetServiceAccount is the account the storage-node pods run
+// as. eksRoleARN, when set, is the IAM role they assume on Amazon EKS; empty
+// leaves the account with no such annotation.
+func BuildStorageNodeSetServiceAccount(namespace, eksRoleARN string) *corev1.ServiceAccount {
+	sa := &corev1.ServiceAccount{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ServiceAccount",
+			APIVersion: "v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "simplyblock-storage-node-sa",
+			Namespace: namespace,
+		},
+	}
+	if eksRoleARN != "" {
+		sa.Annotations = map[string]string{EKSRoleARNAnnotation: eksRoleARN}
+	}
+	return sa
+}
+
+// talosMachineConfigEnv is the mode as the agent reads it: lowercase, and
+// preprovisioned when the cluster states none, which is the agent's own
+// default said out loud so the DaemonSet shows what the node will do.
+func talosMachineConfigEnv(mode simplyblockv1alpha2.TalosMachineConfigMode) string {
+	if mode == simplyblockv1alpha2.TalosMachineConfigManaged {
+		return "managed"
+	}
+	return "preprovisioned"
+}
+
+func BuildStorageNodeSetClusterRole(isOpenShift bool) *rbacv1.ClusterRole {
+	baseRules := []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{""},
+			Resources: []string{"pods", "pods/exec"},
+			Verbs:     []string{"list", "get", "create", "delete", "watch"},
+		},
+		{
+			// The Service in front of an SPDK pod on the pod network: created
+			// with the pod, its ports set as the node's are allotted, deleted
+			// with the node.
+			APIGroups: []string{""},
+			Resources: []string{"services"},
+			Verbs:     []string{"get", "create", "update", "delete"},
+		},
+		{
+			// The agent copies a finished Job's pod log into its own log before
+			// it deletes the Job: on Talos the talosctl Job is the only record
+			// of what happened on the host side.
+			APIGroups: []string{""},
+			Resources: []string{"pods/log"},
+			Verbs:     []string{"get"},
+		},
+		{
+			// Read-only, for the pre-flight check that the Talos API
+			// credentials Secret exists before a Job is created to mount it;
+			// without it a missing Secret shows up as a Job pod stuck in
+			// ContainerCreating for the whole Job timeout.
+			APIGroups: []string{""},
+			Resources: []string{"secrets"},
+			Verbs:     []string{"get"},
+		},
+		{
+			// The kubelet's live configuration (nodes/<name>/proxy/configz), read
+			// before the Talos kubelet CPU-topology patch so that a node whose
+			// kubelet already runs with the settings is left alone: Talos
+			// restarts the kubelet on every machine-config change.
+			APIGroups: []string{""},
+			Resources: []string{"nodes/proxy"},
+			Verbs:     []string{"get"},
+		},
+		{
+			APIGroups: []string{"apps"},
+			Resources: []string{"deployments"},
+			Verbs:     []string{"create", "delete"},
+		},
+		{
+			APIGroups: []string{"batch"},
+			Resources: []string{"jobs"},
+			Verbs:     []string{"create", "delete", "get", "list", "watch"},
+		},
+		{
+			APIGroups: []string{""},
+			Resources: []string{"nodes"},
+			Verbs:     []string{"list", "get", "update", "patch", "watch"},
+		},
+	}
+
+	if isOpenShift {
+		baseRules = append(baseRules,
+			rbacv1.PolicyRule{
+				APIGroups: []string{"machineconfiguration.openshift.io"},
+				Resources: []string{"machineconfigs", "machineconfigpools", "kubeletconfigs"},
+				Verbs:     []string{"list", "get", "create", "update", "patch", "watch"},
+			},
+			rbacv1.PolicyRule{
+				APIGroups: []string{"machineconfiguration.openshift.io"},
+				Resources: []string{"kubeletconfigs"},
+				Verbs:     []string{"delete"},
+			})
+	}
+
+	return &rbacv1.ClusterRole{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ClusterRole",
+			APIVersion: "rbac.authorization.k8s.io/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "simplyblock-storage-node-role",
+		},
+		Rules: baseRules,
+	}
+}
+
+// StorageNodeSetAPIAddress returns the per-pod headless-service DNS address that
+// the cluster control-plane uses to reach a storage-node-api pod backing the
+// given worker node, in the Service the cluster's workload names name.
+func StorageNodeSetAPIAddress(workerNode, namespace string, names kube.WorkloadNames) string {
+	return fmt.Sprintf("%s.%s:5000", names.Hostname(workerNode), ServiceDNSName(names.NodeAPIService, namespace))
+}
+
+// BuildStorageNodeService is the headless Service the storage-node API pods'
+// per-pod DNS names hang off, under the cluster's recorded name.
+func BuildStorageNodeService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {
+	names, _ := WorkloadNamesOf(sn)
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        names.NodeAPIService,
+			Namespace:   sn.Namespace,
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, names.NodeAPITLSSecret),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+			Ports: []corev1.ServicePort{
+				{
+					Name:     "api",
+					Port:     5000,
+					Protocol: corev1.ProtocolTCP,
+				},
+			},
+		},
+	}
+}
+
+func BuildStorageNodeEndpointSlice(sn *simplyblockv1alpha2.StorageCluster, nodeIPs map[string]string) *discoveryv1.EndpointSlice {
+	names, _ := WorkloadNamesOf(sn)
+	protocol := corev1.ProtocolTCP
+	port := int32(5000)
+	portName := "api"
+
+	endpoints := make([]discoveryv1.Endpoint, 0, len(nodeIPs))
+	for nodeName, ip := range nodeIPs {
+		hostname := names.Hostname(nodeName)
+		endpoints = append(endpoints, discoveryv1.Endpoint{
+			Addresses: []string{ip},
+			Hostname:  &hostname,
+		})
+	}
+
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			// Named per-StorageNodeSet so multiple StorageNodeSets can each own
+			// their own slice while all contributing to the same Service.
+			Name:      kube.StorageNodeSetAPIEndpointSliceName(sn.Name),
+			Namespace: sn.Namespace,
+			Labels: map[string]string{
+				discoveryv1.LabelServiceName: names.NodeAPIService,
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   endpoints,
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name:     &portName,
+				Protocol: &protocol,
+				Port:     &port,
+			},
+		},
+	}
+}
+
+// SpdkProxyEndpoint describes a single spdk-proxy pod instance that backs the
+// headless spdk-proxy Service.
+type SpdkProxyEndpoint struct {
+	NodeName string
+	PodIP    string
+	RpcPort  int32
+}
+
+// BuildSpdkProxyService is the headless Service the SPDK proxies' per-pod DNS
+// names hang off, under the cluster's recorded name.
+func BuildSpdkProxyService(sn *simplyblockv1alpha2.StorageCluster, tlsEnabled bool, tlsProvider string) *corev1.Service {
+	names, _ := WorkloadNamesOf(sn)
+	return &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        names.SpdkProxyService,
+			Namespace:   sn.Namespace,
+			Annotations: ServingCertServiceAnnotations(tlsEnabled, tlsProvider, names.SpdkProxyTLSSecret),
+		},
+		Spec: corev1.ServiceSpec{
+			ClusterIP: "None",
+		},
+	}
+}
+
+// BuildSpdkProxyEndpointSlice builds one EndpointSlice for a single RPC_PORT.
+// Each endpoint resolves <nodeLabel>.spdk-proxy.<ns>.svc to the node's IP via
+// the headless Service's per-endpoint hostname DNS. The hostname is the node
+// name truncated at the first dot so FQDN-style node names stay within the
+// 63-char DNS label limit.
+func BuildSpdkProxyEndpointSlice(
+	sn *simplyblockv1alpha2.StorageCluster,
+	rpcPort int32,
+	endpoints []SpdkProxyEndpoint,
+) (*discoveryv1.EndpointSlice, error) {
+	names, _ := WorkloadNamesOf(sn)
+	protocol := corev1.ProtocolTCP
+	port := rpcPort
+	portName := "proxy"
+	ready := true
+
+	eps := make([]discoveryv1.Endpoint, 0, len(endpoints))
+	seen := make(map[string]string, len(endpoints))
+	for _, e := range endpoints {
+		label := names.Hostname(e.NodeName)
+		if prev, ok := seen[label]; ok && prev != e.NodeName {
+			return nil, fmt.Errorf("spdk-proxy endpoint hostname collision on label %q (nodes %q and %q): node names share the same first DNS segment", label, prev, e.NodeName)
+		}
+		seen[label] = e.NodeName
+
+		hostname := label
+		eps = append(eps, discoveryv1.Endpoint{
+			Addresses:  []string{e.PodIP},
+			Hostname:   &hostname,
+			Conditions: discoveryv1.EndpointConditions{Ready: &ready},
+		})
+	}
+
+	return &discoveryv1.EndpointSlice{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      SpdkProxyEndpointSliceName(sn, rpcPort),
+			Namespace: sn.Namespace,
+			Labels: map[string]string{
+				discoveryv1.LabelServiceName: names.SpdkProxyService,
+			},
+		},
+		AddressType: discoveryv1.AddressTypeIPv4,
+		Endpoints:   eps,
+		Ports: []discoveryv1.EndpointPort{
+			{
+				Name:     &portName,
+				Protocol: &protocol,
+				Port:     &port,
+			},
+		},
+	}, nil
+}
+
+// SpdkProxyEndpointSliceName names the slice publishing one RPC port's SPDK
+// proxies of one cluster. A cluster under the constant names keeps the name
+// every cluster published under before a namespace could hold two; any other
+// prefixes its own name, because a supercluster's members publish into one
+// Service and their SPDK pods may answer on one port.
+func SpdkProxyEndpointSliceName(cluster *simplyblockv1alpha2.StorageCluster, rpcPort int32) string {
+	if names, _ := WorkloadNamesOf(cluster); names.IsConstant() {
+		return fmt.Sprintf("spdk-proxy-endpoints-%d", rpcPort)
+	}
+	return fmt.Sprintf("%s-spdk-proxy-endpoints-%d", cluster.Name, rpcPort)
+}
+
+// NodeHostnameLabel returns the DNS-label form of a node name: the segment
+// before the first dot, so FQDN-style node names stay within the 63-char DNS
+// label limit. It matches the Hostname stored in the storage-node-api
+// EndpointSlice, so callers can check whether a worker's per-pod DNS name is
+// published.
+func NodeHostnameLabel(nodeName string) string {
+	label, _, _ := strings.Cut(nodeName, ".")
+	return label
+}
+
+func BuildStorageNodeSetClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
+	return &rbacv1.ClusterRoleBinding{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ClusterRoleBinding",
+			APIVersion: "rbac.authorization.k8s.io/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name: fmt.Sprintf("simplyblock-storage-node-binding-%s", namespace),
+		},
+		Subjects: []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      "simplyblock-storage-node-sa",
+				Namespace: namespace,
+			},
+		},
+		RoleRef: rbacv1.RoleRef{
+			Kind:     "ClusterRole",
+			Name:     "simplyblock-storage-node-role",
+			APIGroup: "rbac.authorization.k8s.io",
+		},
+	}
+}
+
+// effectiveResources returns user if the user has set any requests or limits,
+// otherwise falls back to def. This ensures defaults are always applied while
+// still allowing full user override.
+func effectiveResources(user, def corev1.ResourceRequirements) corev1.ResourceRequirements {
+	if len(user.Requests) > 0 || len(user.Limits) > 0 {
+		return user
+	}
+	return def
+}
+
+// storageNodesOf is the cluster's workload block, never nil, so a builder reads
+// defaults from a zero value rather than guarding every field.
+//
+// A cluster that states no block is the ordinary case: every field in it has a
+// default or is legitimately empty, and the DaemonSet a zero block produces is the
+// one a deployment that configured nothing asked for.
+func storageNodesOf(cluster *simplyblockv1alpha2.StorageCluster) *simplyblockv1alpha2.StorageNodesSpec {
+	if cluster.Spec.StorageNodes == nil {
+		return &simplyblockv1alpha2.StorageNodesSpec{}
+	}
+	return cluster.Spec.StorageNodes
+}
+
+// skipKubeletConfiguration renders the environment variable the storage node
+// still reads, from the field that replaced it.
+//
+// It is written out rather than substituted because this is the one rename in the
+// migration that also inverts: the retired skipKubeletConfiguration was off unless
+// set, and enableKubeletConfiguration is off unless asked for, so the two say the
+// opposite thing about the same deployment. A mechanical rename here would have
+// turned kubelet configuration on for every cluster that never mentioned it
+// (design-storagenode.md §15.1).
+func skipKubeletConfiguration(wl *simplyblockv1alpha2.StorageNodesSpec) string {
+	if ptr.BoolFromOrFalse(wl.EnableKubeletConfiguration) {
+		return envFalse
+	}
+	return envTrue
+}
+
+// storageNodeAgentTolerations is what the storage-node agent tolerates: the
+// configured tolerations, and on a cluster with host fencing the out-of-service
+// taint as well. The storage fence remediation puts that taint on a fenced
+// node, and the control plane heals the node through its agent; evicted, the
+// agent would hold the heal, and with it the release of the taint, forever
+// (sbcli docs/design/two-node-kubernetes-fencing.md §1). The SPDK pods the
+// control plane starts tolerate every NoExecute taint already.
+func storageNodeAgentTolerations(
+	cluster *simplyblockv1alpha2.StorageCluster, wl *simplyblockv1alpha2.StorageNodesSpec,
+) []corev1.Toleration {
+	if !cluster.HostFencingEnabled() {
+		return wl.Tolerations
+	}
+	for _, t := range wl.Tolerations {
+		if (t.Key == simplyblockv1alpha2.TaintOutOfService || (t.Key == "" && t.Operator == corev1.TolerationOpExists)) &&
+			(t.Effect == "" || t.Effect == corev1.TaintEffectNoExecute) {
+			return wl.Tolerations
+		}
+	}
+	return append(slices.Clone(wl.Tolerations), corev1.Toleration{Key: simplyblockv1alpha2.TaintOutOfService,
+		Operator: corev1.TolerationOpExists, Effect: corev1.TaintEffectNoExecute})
+}

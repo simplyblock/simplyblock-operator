@@ -17,14 +17,14 @@ const discoveryDialog = (k, prev) => ({
   confirm: "Run discovery",
   desc: "The operator deploys an inspection pod on every matching worker node and reports NUMA topology, vCPU, memory, network interfaces and every unmounted, unused device. Filters apply during discovery — an excluded device is never reported. Runs asynchronously; the cluster is marked discovered when it completes.",
   fields: v => [
-    {k: "tag_key", label: "Only nodes with this label", type: "text", def: (prev && Object.keys(prev.nodeSelector || {})[0]) || "", placeholder: "simplyblock.io/storage-node-candidate"},
+    {k: "tag_key", label: "Only nodes with this label", type: "text", def: (prev && Object.keys(prev.nodeSelector || {})[0]) || ""},
     v.tag_key ? {k: "tag_value", label: "Label value", type: "text", def: "true"} : null,
-    {k: "pcie_allow", label: "PCIe addresses — allow", type: "text", def: ((prev && prev.filter.pcieAllowList) || []).join(", "), placeholder: "0000:5e:, 0000:5f:  (prefixes, comma-separated)"},
-    {k: "pcie_deny", label: "PCIe addresses — deny", type: "text", def: ((prev && prev.filter.pcieDenyList) || []).join(", "), placeholder: "0000:00:04.0"},
-    {k: "blockdev", label: "Block device name pattern", type: "text", def: ((prev && prev.filter.blockDeviceNames) || []).join(", "), placeholder: "nvme*, sd[b-f]  (glob, comma-separated)"},
-    {k: "models", label: "Device model contains", type: "text", def: ((prev && prev.filter.models) || []).join(", "), placeholder: "PM9A3, CD8"},
+    {k: "pcie_allow", label: "PCIe addresses — allow", type: "text", def: ((prev && prev.filter.pcieAllowList) || []).join(", "), hint: "Prefixes, comma-separated.", example: "0000:5e:, 0000:5f:"},
+    {k: "pcie_deny", label: "PCIe addresses — deny", type: "text", def: ((prev && prev.filter.pcieDenyList) || []).join(", "), example: "0000:00:04.0"},
+    {k: "blockdev", label: "Block device name pattern", type: "text", def: ((prev && prev.filter.blockDeviceNames) || []).join(", "), hint: "Globs, comma-separated.", example: "nvme*, sd[b-f]"},
+    {k: "models", label: "Device model contains", type: "text", def: ((prev && prev.filter.models) || []).join(", ")},
     {k: "size_min", label: "Capacity — smallest", unit: "GB", type: "number", min: 0, def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.min) : 400},
-    {k: "size_max", label: "Capacity — largest (0 = no limit)", unit: "GB", type: "number", min: 0, def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.max) : 0},
+    {k: "size_max", label: "Capacity — largest", desc: "0 means no limit.", unit: "GB", type: "number", min: 0, def: prev && prev.filter.driveSizeRange ? gb(prev.filter.driveSizeRange.max) : 0},
     {k: "n2", type: "note", label: "Leave a filter empty to skip it. All filters combine; a device must pass every one to be reported."}
   ].filter(Boolean),
   run: v => api.discoveryRun(k.id, k.name, {
@@ -34,13 +34,28 @@ const discoveryDialog = (k, prev) => ({
 });
 
 // "Deploy cluster" from the clusters overview: pick a discovered Kubernetes cluster
+// Two ways to a storage cluster: onto a Kubernetes cluster the operator
+// discovered, or onto a managed site of the DR hub, discovered there and
+// approved from the hub (StorageSiteDeployment).
 const deployFromDialog = nav => ({
   title: "Deploy a storage cluster", confirm: "Continue",
-  desc: "A storage cluster is deployed onto the worker nodes of a discovered Kubernetes cluster. Undiscovered clusters are not offered — run discovery on them first.",
-  fields: [{k: "kid", label: "Kubernetes cluster", type: "select", required: true,
-    load: () => api.k8sClusters().then(ks => ks.filter(k => k.discovered).map(k => ({v: k.id, l: `${k.name} · discovered ${fmtAgo(k.discoveredAt)}`}))),
-    empty: "No Kubernetes cluster has been discovered yet."}],
-  run: v => { nav.deployWizard(v.kid); return Promise.resolve({}); }
+  desc: "A storage cluster is deployed onto the worker nodes of a discovered Kubernetes cluster, or onto a managed site, whose nodes are discovered there and approved from the hub.",
+  fields: v => [
+    {k: "how", label: "Deploy", type: "select", def: "k8s", options: [{v: "k8s", l: "onto a discovered Kubernetes cluster"}, {v: "site", l: "on a managed site (hub-approved discovery)"}]},
+    v.how !== "site" && {k: "kid", label: "Kubernetes cluster", type: "select", required: true,
+      load: () => api.k8sClusters().then(ks => ks.filter(k => k.discovered).map(k => ({v: k.id, l: `${k.name} · discovered ${fmtAgo(k.discoveredAt)}`}))),
+      empty: "No Kubernetes cluster has been discovered yet."},
+    v.how === "site" && {k: "n0", type: "note", icon: "check", label: "Continue opens the site deployment: choose the managed site, then review and approve its discovered nodes under Clusters → Site storage."}
+  ].filter(Boolean),
+  run: v => {
+    if (v.how === "site") {
+      nav.siteStorage();
+      return Promise.all([drhub.managedClusters(), drhub.siteProfiles().catch(() => []), drhub.siteDeploys()]).then(([mcs, sps, sds]) =>
+        setTimeout(() => window.__ui.dialog(deploySiteDialog(mcs.length ? mcs.map(m => m.metadata.name) : sps.map(s => s.name), sds.map(d => d.site)), {kind: "sitedeploy", id: "new"}), 50));
+    }
+    nav.deployWizard(v.kid);
+    return Promise.resolve({});
+  }
 });
 
 const FilterProps = ({f}) => (
@@ -248,7 +263,7 @@ function DeployWizard({kid, nav}) {
       <div className="wzstep"><b>1</b><h2>Cluster parameters</h2><span className="ln"></span></div>
       <div className="card"><div className="bd">
         <div className="frow">
-          <Fl l="Cluster name"><Inp v={c.name} set={v => up(setC, {name: v})} placeholder="prod-eu-central-2" /></Fl>
+          <Fl l="Cluster name"><Inp v={c.name} set={v => up(setC, {name: v})} /></Fl>
           <Fl l="Device type" sm><select className="sel" value={c.deviceClass} onChange={e => up(setC, {deviceClass: e.target.value})}><option value="nvme">NVMe (PCIe)</option><option value="block">Linux block devices</option></select></Fl>
           <Fl l="Erasure coding" sm><select className="sel" value={c.ec} onChange={e => up(setC, {ec: e.target.value})}>{EC_OPTS.map(x => <option key={x} value={x}>{x} data+parity</option>)}</select></Fl>
           <Fl l="NUMA sockets" sub="one storage node per socket" sm><select className="sel" value={c.numa} onChange={e => up(setC, {numa: e.target.value})}><option value="0">socket 0</option><option value="1">socket 1</option><option value="both">both</option></select></Fl>
@@ -256,7 +271,7 @@ function DeployWizard({kid, nav}) {
         <div className="frow">
           <Fl l="vCPU per storage node" sm><Inp type="number" min="4" v={c.vcpu} set={v => up(setC, {vcpu: v})} /></Fl>
           <Fl l="Max subsystems" sm sub={`→ ${fmtBytes(hugepagesFor(Number(c.maxSubsystems) || 0), 0)} hugepages`}><Inp type="number" min="8" v={c.maxSubsystems} set={v => up(setC, {maxSubsystems: v})} /></Fl>
-          <Fl l="Hugepage memory override" sub="GB — empty = derived" sm><Inp type="number" min="2" step="2" v={c.hugepagesGb} set={v => up(setC, {hugepagesGb: v})} placeholder={String(gb(hugepagesFor(Number(c.maxSubsystems) || 0)))} /></Fl>
+          <Fl l="Hugepage memory override" sub={`GB; empty uses ${gb(hugepagesFor(Number(c.maxSubsystems) || 0))}`} sm><Inp type="number" min="2" step="2" v={c.hugepagesGb} set={v => up(setC, {hugepagesGb: v})} /></Fl>
           <Fl l="System memory per node" sub="GB" sm><Inp type="number" min="4" v={c.memoryGb} set={v => up(setC, {memoryGb: v})} /></Fl>
         </div>
         <div className="togs">
@@ -273,10 +288,10 @@ function DeployWizard({kid, nav}) {
         <div className="sech" style={{margin: "6px 0 8px"}}><h2>Device filter</h2><span className="ln"></span><span className="cnt">{nvme ? "NVMe" : "block devices"}</span></div>
         <div className="frow">
           {nvme ? <>
-            <Fl l="PCIe allow" sub="prefixes, comma-separated"><Inp v={c.pcieAllow} set={v => up(setC, {pcieAllow: v})} placeholder="0000:5e:, 0000:5f:" /></Fl>
-            <Fl l="PCIe deny"><Inp v={c.pcieDeny} set={v => up(setC, {pcieDeny: v})} placeholder="0000:00:04.0" /></Fl>
-            <Fl l="SSD model contains"><Inp v={c.models} set={v => up(setC, {models: v})} placeholder="PM9A3, CD8" /></Fl>
-          </> : <Fl l="Block device name pattern" sub="glob, comma-separated"><Inp v={c.namePattern} set={v => up(setC, {namePattern: v})} placeholder="/dev/sd*, /dev/nvme?n1" /></Fl>}
+            <Fl l="PCIe allow" sub="prefixes, comma-separated; for example 0000:5e:, 0000:5f:"><Inp v={c.pcieAllow} set={v => up(setC, {pcieAllow: v})} /></Fl>
+            <Fl l="PCIe deny" sub="for example 0000:00:04.0"><Inp v={c.pcieDeny} set={v => up(setC, {pcieDeny: v})} /></Fl>
+            <Fl l="SSD model contains"><Inp v={c.models} set={v => up(setC, {models: v})} /></Fl>
+          </> : <Fl l="Block device name pattern" sub="glob, comma-separated; for example /dev/sd*, /dev/nvme?n1"><Inp v={c.namePattern} set={v => up(setC, {namePattern: v})} /></Fl>}
           <Fl l="Capacity min" sub="GB" sm><Inp type="number" min="0" v={c.sizeMin} set={v => up(setC, {sizeMin: v})} /></Fl>
           <Fl l="Capacity max" sub="GB, 0 = any" sm><Inp type="number" min="0" v={c.sizeMax} set={v => up(setC, {sizeMax: v})} /></Fl>
         </div>
@@ -289,7 +304,7 @@ function DeployWizard({kid, nav}) {
       {mode === "tag" ? (
         <div className="card"><div className="bd">
           <div className="frow">
-            <Fl l="Label key"><Inp v={tag.key} set={v => up(setTag, {key: v})} placeholder="simplyblock.io/storage-node-candidate" /></Fl>
+            <Fl l="Label key"><Inp v={tag.key} set={v => up(setTag, {key: v})} /></Fl>
             <Fl l="Value" sm><Inp v={tag.value} set={v => up(setTag, {value: v})} /></Fl>
           </div>
           <p className="mdesc" style={{marginBottom: 0}}>{tag.key ? `${selected.length} of ${pool.length} discovered node(s) carry this label.` : "Enter a label key to match nodes by."}</p>
@@ -317,7 +332,7 @@ function DeployWizard({kid, nav}) {
           return <div key={h.id} className="nset">
             <div className="nsh"><b>{h.hostname}</b>{h.zone && <span className="lab"><i>site</i>{h.zone}</span>}
               {c.failureDomains && <label className="fdin" title="fixed for the node's lifetime"><i>failure domain</i>
-                <input className="inp" list="fdlist" value={fdOf(h)} placeholder="rack-1" onChange={e => setFd(f => Object.assign({}, f, {[h.id]: e.target.value}))} /></label>}
+                <input className="inp" list="fdlist" value={fdOf(h)} onChange={e => setFd(f => Object.assign({}, f, {[h.id]: e.target.value}))} /></label>}
               <div className="socks">{Array.from({length: h.sockets || 1}, (_, s) => {
                 const on = socketsOf(h).includes(s);
                 return <button key={s} className={"chip" + (on ? " on" : "")} onClick={() => setOvOf(h, {sockets: on ? socketsOf(h).filter(y => y !== s) : [...socketsOf(h), s].sort()})}>socket {s}<b className="n">{h.devices.filter(d => d.socket === s && matches(d, filter)).length}</b></button>;
@@ -351,9 +366,9 @@ function DeployWizard({kid, nav}) {
       <div className="card"><div className="bd">
         {c.backups ? <>
           <div className="frow">
-            <Fl l="S3 endpoint" sub="backups of snapshot chains are written here"><Inp v={c.s3Endpoint} set={v => up(setC, {s3Endpoint: v})} placeholder="https://s3.eu-central-1.amazonaws.com" /></Fl>
-            <Fl l="Bucket" sm><Inp v={c.s3Bucket} set={v => up(setC, {s3Bucket: v})} placeholder="sb-backups-prod" /></Fl>
-            <Fl l="Region" sm><Inp v={c.s3Region} set={v => up(setC, {s3Region: v})} placeholder="eu-central-1" /></Fl>
+            <Fl l="S3 endpoint" sub="backups of snapshot chains are written here"><Inp v={c.s3Endpoint} set={v => up(setC, {s3Endpoint: v})} /></Fl>
+            <Fl l="Bucket" sm><Inp v={c.s3Bucket} set={v => up(setC, {s3Bucket: v})} /></Fl>
+            <Fl l="Region" sub="for example eu-central-1" sm><Inp v={c.s3Region} set={v => up(setC, {s3Region: v})} /></Fl>
           </div>
           <div className="frow">
             <Fl l="Access key ID" sm><Inp v={c.s3AccessKey} set={v => up(setC, {s3AccessKey: v})} /></Fl>
@@ -367,8 +382,8 @@ function DeployWizard({kid, nav}) {
           <div className="frow">
             <Fl l="Provider" sm><select className="sel" value={c.kmsProvider} onChange={e => up(setC, {kmsProvider: e.target.value})}>
               <option value="vault">HashiCorp Vault</option><option value="aws-kms">AWS KMS</option><option value="azure-keyvault">Azure Key Vault</option><option value="gcp-kms">Google Cloud KMS</option></select></Fl>
-            <Fl l="Address" sub="API endpoint"><Inp v={c.kmsAddress} set={v => up(setC, {kmsAddress: v})} placeholder="https://vault.internal:8200" /></Fl>
-            <Fl l="Key name" sm><Inp v={c.kmsKeyName} set={v => up(setC, {kmsKeyName: v})} placeholder="simplyblock-prod" /></Fl>
+            <Fl l="Address" sub="API endpoint"><Inp v={c.kmsAddress} set={v => up(setC, {kmsAddress: v})} /></Fl>
+            <Fl l="Key name" sm><Inp v={c.kmsKeyName} set={v => up(setC, {kmsKeyName: v})} /></Fl>
           </div>
           <div className="frow">
             <Fl l="Authentication" sm><select className="sel" value={c.kmsAuth} onChange={e => up(setC, {kmsAuth: e.target.value})}>

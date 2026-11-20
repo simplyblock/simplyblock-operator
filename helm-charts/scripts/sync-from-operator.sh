@@ -22,17 +22,27 @@ echo ""
 # ── CRDs ──────────────────────────────────────────────────────────────────────
 echo "==> Syncing CRDs..."
 
+# One glob per API group this operator owns CRDs in. objectstore.simplyblock.io
+# (design-bucket-provisioning.md) is the first group besides storage.simplyblock.io,
+# so a sync that only ever matched the one prefix stopped covering it silently.
+CRD_GLOBS=("storage.simplyblock.io_*.yaml" "objectstore.simplyblock.io_*.yaml")
+
 # Clear stale CRDs not present in the source (e.g. a CRD type was removed).
-for dst in "$CRD_DST"/storage.simplyblock.io_*.yaml; do
-  [ -f "$dst" ] || continue
-  name=$(basename "$dst")
-  [ -f "$CRD_SRC/$name" ] || { rm "$dst"; echo "  removed (no longer in source): $name"; }
+for glob in "${CRD_GLOBS[@]}"; do
+  for dst in "$CRD_DST"/$glob; do
+    [ -f "$dst" ] || continue
+    name=$(basename "$dst")
+    [ -f "$CRD_SRC/$name" ] || { rm "$dst"; echo "  removed (no longer in source): $name"; }
+  done
 done
 
-for src in "$CRD_SRC"/storage.simplyblock.io_*.yaml; do
-  name=$(basename "$src")
-  cp "$src" "$CRD_DST/$name"
-  echo "  copied: $name"
+for glob in "${CRD_GLOBS[@]}"; do
+  for src in "$CRD_SRC"/$glob; do
+    [ -f "$src" ] || continue
+    name=$(basename "$src")
+    cp "$src" "$CRD_DST/$name"
+    echo "  copied: $name"
+  done
 done
 
 # ── Roles ─────────────────────────────────────────────────────────────────────
@@ -61,6 +71,7 @@ for src in "$RBAC_SRC"/*_role.yaml "$RBAC_SRC"/*_role_binding.yaml; do
   sed \
     -e 's|app.kubernetes.io/managed-by: kustomize|app.kubernetes.io/managed-by: Helm|g' \
     -e 's|name: ssimplyblocktoragenode-editor-role|name: storagenode-editor-role|g' \
+    -e 's|name: metrics-reader$|name: simplyblock-operator-metrics-reader|' \
     "$src" > "$ROLES_DST/$name"
   echo "  copied: $name"
 done
@@ -95,8 +106,9 @@ echo "==> Syncing webhook manifests..."
 # kustomize namePrefix (see utils.WebhookServiceName / *ConfigurationName).
 KUSTOMIZE_BIN="${KUSTOMIZE:-$HELM_CHARTS_DIR/../.bin/kustomize}"
 command -v "$KUSTOMIZE_BIN" >/dev/null 2>&1 || KUSTOMIZE_BIN="kustomize"
+# The admission configurations are unconditional: the operator serves every
+# handler it registers, so the chart routes to all of them.
 {
-  echo "{{- if .Values.operator.enabled }}"
   "$KUSTOMIZE_BIN" build "$WEBHOOK_SRC" | sed \
     -e 's|name: webhook-service|name: simplyblock-operator-webhook-service|' \
     -e 's|name: mutating-webhook-configuration|name: simplyblock-operator-mutating-webhook-configuration|' \
@@ -104,7 +116,6 @@ command -v "$KUSTOMIZE_BIN" >/dev/null 2>&1 || KUSTOMIZE_BIN="kustomize"
     -e 's|namespace: system|namespace: {{ .Release.Namespace }}|' \
     -e 's|control-plane: controller-manager|control-plane: simplyblock-operator|' \
     -e 's|app.kubernetes.io/name: simplyblock-operator|app: simplyblock-operator|'
-  echo "{{- end }}"
 } > "$WEBHOOK_DST"
 echo "  copied: webhook.yaml (from kustomize build config/webhook)"
 

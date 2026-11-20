@@ -235,8 +235,15 @@ func (lvs *LogicalVolumeSelector) selectMigrationSet(ranked []RankedCandidate, m
 	return out
 }
 
+// consistencyGroupLabel marks a PVC whose volume is a consistency-group member.
+const consistencyGroupLabel = "storage.simplyblock.io/consistency-group"
+
 // BuildPinnedSet returns the set of volume UUIDs whose bound PVC carries a pin
-// annotation (see kube.IsPinnedVolume). It scans all PersistentVolumes and
+// annotation (see kube.IsPinnedVolume) or the consistency-group label. A
+// group's members live on one node/LVS, so the rebalancer must not move one
+// of them alone; it skips them (the control plane refuses such a migration
+// too), and a group moves only as a whole through the group migration
+// (co-location design §3). It scans all PersistentVolumes and
 // resolves the volume UUID from the CSI volume handle
 // ("<clusterUUID>:<poolName>:<volumeUUID>"). Pass an empty clusterUUID to include
 // volumes from all clusters.
@@ -270,7 +277,7 @@ func (lvs *LogicalVolumeSelector) BuildPinnedSet(ctx context.Context, clusterUUI
 		}, pvc); err != nil {
 			continue
 		}
-		if atlaskube.IsPinnedVolume(pvc.Annotations) {
+		if atlaskube.IsPinnedVolume(pvc.Annotations) || pvc.Labels[consistencyGroupLabel] != "" {
 			pinned[lvolID] = true
 		}
 	}

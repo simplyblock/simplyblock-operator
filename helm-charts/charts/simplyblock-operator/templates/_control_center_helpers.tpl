@@ -47,8 +47,65 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{/* Default upstream URLs. This chart names its objects statically
      (simplyblock-operator, simplyblock-prometheus, …) rather than deriving
      them from the release, so the fallbacks here are static too. */}}
+{{/* The operator's HTTP API, when this release serves one. Unset, it is the
+     simplyblock-operator Service if that exists in the release namespace, and
+     empty otherwise: nginx refuses to start on an upstream host it cannot
+     resolve ("host not found in upstream"), and an empty upstream makes the
+     console answer 503 "not part of this deployment" on the operator-backed
+     screens instead (2026-10-03, a release without the operator API). */}}
 {{- define "sbcc.operatorUrl" -}}
-{{- .Values.controlCenter.operatorUrl | default "http://simplyblock-operator:8080" -}}
+{{- if .Values.controlCenter.operatorUrl -}}
+{{- .Values.controlCenter.operatorUrl -}}
+{{- else if (lookup "v1" "Service" .Release.Namespace "simplyblock-operator") -}}
+http://simplyblock-operator:8080
+{{- end -}}
+{{- end -}}
+
+{{/* The control plane API the console reads storage from. Fully qualified:
+     nginx resolves it per request without the pod's search domains. */}}
+{{- define "sbcc.controlPlaneUrl" -}}
+{{- $cp := .Values.controlCenter.controlPlane | default dict -}}
+{{- if and $cp.enabled (not .Values.controlCenter.mock.enabled) -}}
+{{- if $cp.url -}}
+{{- $cp.url -}}
+{{- else if eq .Values.deployment.profile "standalone" -}}
+{{- printf "%s://simplyblock-webappapi.%s.svc:5000" (ternary "https" "http" .Values.tls.enabled) .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The log store the console searches: Graylog of this release's
+     observability stack, unless an explicit URL is given. Fully qualified for
+     the same reason as the control plane URL. */}}
+{{- define "sbcc.graylogUrl" -}}
+{{- $ls := .Values.controlCenter.logStore | default dict -}}
+{{- if and $ls.enabled (not .Values.controlCenter.mock.enabled) -}}
+{{- if $ls.url -}}
+{{- $ls.url -}}
+{{- else if ((.Values.controlplane).observability).enabled -}}
+{{- printf "http://simplyblock-graylog.%s.svc:9000" .Release.Namespace -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}
+
+{{/* The Secret and key holding the log store's password: the given one, or
+     the observability stack's own secret (its root password is
+     controlplane.observability.secret, kept in simplyblock-grafana-secrets). */}}
+{{- define "sbcc.graylogPasswordSecret" -}}
+{{- $ls := .Values.controlCenter.logStore | default dict -}}
+{{- $ls.passwordSecret | default "simplyblock-grafana-secrets" -}}
+{{- end -}}
+{{- define "sbcc.graylogPasswordKey" -}}
+{{- $ls := .Values.controlCenter.logStore | default dict -}}
+{{- $ls.passwordKey | default "MONITORING_SECRET" -}}
+{{- end -}}
+
+{{/* The service account the operator adds to the management API's admins. */}}
+{{- define "sbcc.trustedAccount" -}}
+{{- $cp := .Values.controlCenter.controlPlane | default dict -}}
+{{- if and .Values.controlCenter.enabled $cp.trustServiceAccount (include "sbcc.controlPlaneUrl" .) (eq .Values.controlCenter.authMode "serviceaccount") (not $cp.tokenSecret) -}}
+{{- printf "system:serviceaccount:%s:%s" .Release.Namespace (include "sbcc.fullname" .) -}}
+{{- end -}}
 {{- end -}}
 
 {{- define "sbcc.prometheusUrl" -}}
@@ -58,97 +115,4 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{- $p := ((.Values.prometheus).simplyblock) | default dict -}}
 {{- printf "http://%s:%v" ($p.prometheusURL | default "simplyblock-prometheus") ($p.prometheusPORT | default 9090) -}}
 {{- end -}}
-{{- end -}}
-
-{{/* The sb-mock service, which impersonates every upstream when the mock is
-     enabled. */}}
-{{- define "sbcc.mockUrl" -}}
-{{- printf "http://%s-mock:8080" (include "sbcc.fullname" .) -}}
-{{- end -}}
-
-{{/* The local control plane v2 API (/cp/local/). Mirrors how the operator
-     picks its URL: the chart's simplyblock-webappapi service on 5000, HTTPS
-     when the chart serves TLS. The mock takes over the whole thing when
-     enabled. */}}
-{{- define "sbcc.controlPlaneUrl" -}}
-{{- $cc := .Values.controlCenter -}}
-{{- if $cc.mock.enabled -}}
-{{- printf "%s/cp/local" (include "sbcc.mockUrl" .) -}}
-{{- else if $cc.controlPlaneUrl -}}
-{{- $cc.controlPlaneUrl -}}
-{{- else if (.Values.tls).enabled -}}
-https://simplyblock-webappapi:5000
-{{- else -}}
-http://simplyblock-webappapi:5000
-{{- end -}}
-{{- end -}}
-
-{{/* "true" when the local control plane is the chart's own service over TLS:
-     the chart's CA bundle then has to be mounted so nginx can verify it. */}}
-{{- define "sbcc.localCpTls" -}}
-{{- $cc := .Values.controlCenter -}}
-{{- if and (not $cc.mock.enabled) (not $cc.controlPlaneUrl) ((.Values.tls).enabled) -}}true{{- end -}}
-{{- end -}}
-
-{{/* The CA volume for sbcc.localCpTls, named cp-ca. The same projection the
-     chart's own clients use (simplyblock.caVolume in _helpers.tpl), repeated
-     here so the console templates stay self-contained: the OpenShift
-     service CA ConfigMap, or the ca.crt of the cert-manager CA bundle
-     Certificate issued into the release namespace. Caller pipes through
-     nindent. */}}
-{{- define "sbcc.cpCaVolume" -}}
-{{- if eq ((.Values.tls).provider | default "cert-manager") "openshift" }}
-- name: cp-ca
-  configMap:
-    name: simplyblock-certificate-authority
-    items:
-      - key: service-ca.crt
-        path: ca.crt
-{{- else }}
-- name: cp-ca
-  secret:
-    secretName: simplyblock-ca-bundle-tls
-    items:
-      - key: ca.crt
-        path: ca.crt
-{{- end }}
-{{- end -}}
-
-{{/* controlCenter.localContext.labels as the entrypoint's SB_LOCAL_LABELS:
-     key=value pairs joined by commas, empty values dropped. */}}
-{{- define "sbcc.localLabels" -}}
-{{- $parts := list -}}
-{{- range $k, $v := (((.Values.controlCenter).localContext).labels | default dict) -}}
-{{- if $v }}{{ $parts = append $parts (printf "%s=%s" $k $v) }}{{ end -}}
-{{- end -}}
-{{- join "," $parts -}}
-{{- end -}}
-
-{{/* controlCenter.contexts as the contexts.json the entrypoint reads: one
-     {name, labels, namespaces, kubernetesApi, kubernetesApiHost, controlPlane}
-     per context and nothing secret. With the mock enabled every context's
-     Kubernetes API and control plane point at the mock's per-context routes,
-     /k8s/<name> and /cp/<name>, so a demo install shows a fleet with one pod. */}}
-{{- define "sbcc.contextsJson" -}}
-{{- $cc := .Values.controlCenter -}}
-{{- $mock := include "sbcc.mockUrl" . -}}
-{{- $out := list -}}
-{{- range $ctx := $cc.contexts -}}
-{{- $name := required "controlCenter.contexts[].name is required" $ctx.name -}}
-{{- $labels := dict -}}
-{{- range $k, $v := ($ctx.labels | default dict) }}{{ if $v }}{{ $_ := set $labels $k $v }}{{ end }}{{ end -}}
-{{- $c := dict "name" $name "labels" $labels "namespaces" ($ctx.namespaces | default list) -}}
-{{- if $cc.mock.enabled -}}
-{{- $_ := set $c "kubernetesApi" (printf "%s/k8s/%s" $mock $name) -}}
-{{- $_ := set $c "controlPlane" (dict "url" (printf "%s/cp/%s" $mock $name)) -}}
-{{- else -}}
-{{- $_ := set $c "kubernetesApi" (required (printf "controlCenter.contexts[%s].kubernetesApi is required" $name) $ctx.kubernetesApi) -}}
-{{- with $ctx.kubernetesApiHost }}{{ $_ := set $c "kubernetesApiHost" . }}{{ end -}}
-{{- with $ctx.controlPlane -}}
-{{- if .url }}{{ $_ := set $c "controlPlane" (dict "url" .url "host" (.host | default "")) }}{{ end -}}
-{{- end -}}
-{{- end -}}
-{{- $out = append $out $c -}}
-{{- end -}}
-{{- $out | toJson -}}
 {{- end -}}

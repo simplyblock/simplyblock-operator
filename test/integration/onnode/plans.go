@@ -71,15 +71,25 @@ func connections(targets []Target) []lvol.Connection {
 type node struct {
 	*plans.Node
 
+	// The host's identity, kept so that a case can build a second node with the
+	// same identity and a different seam.
+	hostNQN, hostID string
+
 	manager *lvm.Manager
 	content *blockdev.Prober
 }
 
 // newNode fills the plan builder's seams with the implementations that ship.
 func newNode(hostNQN, hostID string) *node {
+	return newNodeWithManager(hostNQN, hostID, lvm.NewManager())
+}
+
+// newNodeWithManager is newNode with the LVM seam supplied by the caller, for a
+// case that has to make LVM fail at one exact point and nowhere else. Everything
+// but that seam is still what ships.
+func newNodeWithManager(hostNQN, hostID string, manager *lvm.Manager) *node {
 	cfg := nvme.SysfsConfig{}
 	subs := nvme.NewSysfsSubsystemResolver(cfg)
-	manager := lvm.NewManager()
 	content := blockdev.NewProber()
 
 	return &node{
@@ -92,6 +102,8 @@ func newNode(hostNQN, hostID string) *node {
 			Content:    content,
 			Filesystem: shellFilesystem{},
 		}),
+		hostNQN: hostNQN,
+		hostID:  hostID,
 		manager: manager,
 		content: content,
 	}

@@ -70,6 +70,8 @@ EXCLUDED_PATH_PATTERNS = (
     # Published chart repositories: packaged .tgz releases and their index.
     re.compile(r"^helm-charts/charts/(?!simplyblock-operator(?:/|$))"),
     re.compile(r"^csi-driver/charts(?:/|$)"),
+    # Upstream add-on manifests the operator installs as prerequisites.
+    re.compile(r"^operator/internal/prerequisites/manifests(?:/|$)"),
     # Vendored subcharts of the development chart.
     re.compile(r"^helm-charts/charts/simplyblock-operator/charts(?:/|$)"),
     # Written by make helm-sync from operator/config.
