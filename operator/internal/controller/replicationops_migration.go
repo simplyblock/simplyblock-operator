@@ -365,10 +365,22 @@ func (r *ReplicationOpsReconciler) trackMigrationPlan(
 	}
 	results := mergePlanResults(keptResults(ops.Status.Results), &plan, known)
 	forecast := forecastFromPlan(plan.Forecast)
-	r.markMigratedVolumes(ctx, ops, apiClient, results)
+	unmarked := r.markMigratedVolumes(ctx, ops, apiClient, results)
 
 	switch plan.Status {
 	case migrationPlanDone:
+		// The plan finishing is not the operation finishing: every moved
+		// volume must also be recorded where it lives now, on its PV and on
+		// its slot, or the next operation addresses the deleted source.
+		if unsettled := r.unsettledMigratedVolumes(ctx, apiClient, results, known, unmarked); len(unsettled) > 0 {
+			log.Info("Migration plan done; waiting for moved volumes to be recorded", "plan", ops.Status.PlanID,
+				"volumes", unsettled)
+			r.patchMigrationStatus(ctx, ops, replOpsSubphaseTrackingPlan,
+				fmt.Sprintf("Migration plan %s done; waiting for %d volume(s) to record where they live now: %s",
+					ops.Status.PlanID, len(unsettled), strings.Join(unsettled, ", ")),
+				results, forecast, plan.Warnings)
+			return ctrl.Result{RequeueAfter: replOpsWaitPoll}, nil
+		}
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal, "MigrationComplete", "MigrationComplete",
 			"Migration plan %s complete (%d volume(s))", ops.Status.PlanID, len(plan.Volumes))
 		return r.finishMigration(ctx, ops, results, fmt.Sprintf("Migration complete; plan %s", ops.Status.PlanID))
@@ -384,6 +396,59 @@ func (r *ReplicationOpsReconciler) trackMigrationPlan(
 			results, forecast, plan.Warnings)
 		return ctrl.Result{RequeueAfter: replOpsPlanPoll}, nil
 	}
+}
+
+// unsettledMigratedVolumes are the claims of volumes the plan reports done
+// whose new location is not recorded yet: a PV mark that could not be written
+// (unmarked), or a slot still replicating or cutover_pending on a volume the
+// control plane says has moved. The slot reconciler cuts such a slot over from
+// the same relationship record; until it has, the slot names the deleted
+// source, and the next cluster migration would place the volume on the wrong
+// cluster (bf24 2026-11-14). A slot whose volume the control plane does not
+// report as moved is not waited for: there is nothing it could catch up on.
+func (r *ReplicationOpsReconciler) unsettledMigratedVolumes(
+	ctx context.Context,
+	apiClient *webapi.Client,
+	results []simplyblockv1alpha1.ReplicationOpsResult,
+	known []migrationVolume,
+	unmarked []string,
+) []string {
+	log := logf.FromContext(ctx)
+	unsettled := append([]string{}, unmarked...)
+	pending := make(map[string]bool, len(unmarked))
+	for _, ref := range unmarked {
+		pending[ref] = true
+	}
+	slotByRef := make(map[string]*simplyblockv1alpha1.ReplicationSlot, len(known))
+	for _, v := range known {
+		slotByRef[v.slotRef] = v.slot
+	}
+	for _, res := range results {
+		if res.Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) || res.SlotRef == "" {
+			continue
+		}
+		slot := slotByRef[res.SlotRef]
+		if slot == nil || pending[res.PVCRef] {
+			continue
+		}
+		switch simplyblockv1alpha1.ReplicationSlotState(slot.Status.State) {
+		case simplyblockv1alpha1.ReplicationSlotStateReplicating, simplyblockv1alpha1.ReplicationSlotStateCutoverPending:
+		default:
+			continue
+		}
+		current, err := currentVolumeHandle(ctx, apiClient, slot.Spec.VolumeID)
+		if err != nil {
+			log.Info("Cannot resolve where a migrated volume lives; retrying", "slot", res.SlotRef, "err", err)
+		} else if current == slot.Spec.VolumeID {
+			continue
+		}
+		ref := res.PVCRef
+		if ref == "" {
+			ref = res.SlotRef
+		}
+		unsettled = append(unsettled, ref)
+	}
+	return unsettled
 }
 
 // commitPerVolume is the path for a control plane without migration plans:
@@ -681,18 +746,31 @@ func (r *ReplicationOpsReconciler) locateClusterClaim(
 	if !ok {
 		return nil, nil
 	}
-	// An attached slot already addresses the current volume (the slot
-	// reconciler resolves it at attach); anything else is located from
-	// its handle.
+	// Where the volume lives is the control plane's answer, not the slot's:
+	// a live slot is resolved at attach, but one that missed its own
+	// cutover still addresses the source the cutover deleted. Such a slot
+	// is finished like one that saw cutover_done, and the volume is placed
+	// where it moved (bf24 2026-11-14: two slots released as abandoned
+	// after their cutover kept the round-3 source; round 4 skipped the
+	// volumes and round 5 asked for a plan on the cluster they had left).
+	// A failed-over, erroring or detaching slot keeps its own handling.
 	current := origin
-	finished := slot != nil &&
-		slot.Status.State == string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
-	unstarted := slot != nil && slot.Status.State == ""
-	if slot == nil || unstarted || finished {
+	state := ""
+	if slot != nil {
+		state = slot.Status.State
+	}
+	finished := slot != nil && state == string(simplyblockv1alpha1.ReplicationSlotStateCutoverDone)
+	unstarted := slot != nil && state == ""
+	live := slot != nil && (state == string(simplyblockv1alpha1.ReplicationSlotStateReplicating) ||
+		state == string(simplyblockv1alpha1.ReplicationSlotStateCutoverPending))
+	if slot == nil || unstarted || finished || live {
 		var err error
 		if current, err = currentVolumeHandle(ctx, apiClient, origin); err != nil {
 			return nil, fmt.Errorf("locate the volume of claim %s/%s: %w", pvc.Namespace, pvc.Name, err)
 		}
+	}
+	if live && current != origin {
+		finished = true
 	}
 	clusterID, _, volumeID, _ := splitVolumeHandle(current)
 	return &clusterClaim{

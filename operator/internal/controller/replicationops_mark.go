@@ -35,18 +35,20 @@ import (
 //
 // It is repeated on every poll and changes nothing once the mark is current;
 // a volume whose mark could not be written is logged and tried again on the
-// next poll.
+// next poll. It returns the claims of finished volumes whose mark is not
+// current yet, which hold the operation back from Succeeded.
 func (r *ReplicationOpsReconciler) markMigratedVolumes(
 	ctx context.Context,
 	ops *simplyblockv1alpha1.ReplicationOps,
 	apiClient *webapi.Client,
 	results []simplyblockv1alpha1.ReplicationOpsResult,
-) {
+) []string {
 	if !ops.Spec.DeleteSource {
-		return
+		return nil
 	}
 	log := logf.FromContext(ctx)
 	lookup := relationshipLookup(apiClient)
+	var unmarked []string
 	for _, res := range results {
 		if res.Status != string(simplyblockv1alpha1.ReplicationOpsResultSucceeded) || res.PVCRef == "" {
 			continue
@@ -54,8 +56,10 @@ func (r *ReplicationOpsReconciler) markMigratedVolumes(
 		if err := r.markMigratedVolume(ctx, ops.Namespace, res.PVCRef, lookup); err != nil {
 			log.Info("Could not record where a migrated volume lives now; retrying on the next poll",
 				"pvc", res.PVCRef, "err", err)
+			unmarked = append(unmarked, res.PVCRef)
 		}
 	}
+	return unmarked
 }
 
 // markMigratedVolume writes the mark for the claim pvcRef. A claim or volume
