@@ -1,0 +1,227 @@
+# ServiceMonitor, PodMonitor, and ScrapeConfig objects for a prometheus-operator.
+# prometheus.enabled alone brings one: the kube-prometheus-stack dependency
+# below is on by default, so this chart needs nothing installed beforehand.
+# Set the kube-prometheus-stack.* values below to false instead, and point
+# prometheus.serviceAccount at the existing one, to scrape with a
+# prometheus-operator the customer already runs rather than this one.
+{{- if .Values.prometheus.enabled }}
+{{- if eq (include "simplyblock.bundlesPrometheusOperator" .) "true" }}
+{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "servicemonitors.monitoring.coreos.com" }}
+{{- if $existing }}
+{{- $owner := get (get $existing "metadata") "annotations" | default dict }}
+{{- $ownerRelease := get $owner "meta.helm.sh/release-name" }}
+{{- if ne $ownerRelease .Release.Name }}
+{{ fail "prometheus.enabled is true, and this chart bundles its own prometheus-operator by default, but monitoring.coreos.com CRDs already exist on this cluster from somewhere else. Installing another prometheus-operator would conflict with it. Set kube-prometheus-stack.crds.enabled, kube-prometheus-stack.prometheusOperator.enabled, kube-prometheus-stack.prometheus.enabled, and kube-prometheus-stack.alertmanager.enabled all to false, and point prometheus.serviceAccount.name/namespace at the existing Prometheus's own ServiceAccount, to scrape with it instead." }}
+{{- end }}
+{{- end }}
+{{- else }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor") }}
+{{ fail "prometheus.enabled is true and kube-prometheus-stack.crds.enabled/.prometheusOperator.enabled are not both true, but this cluster has no monitoring.coreos.com/v1 ServiceMonitor CRD either. Point prometheus.serviceAccount at the prometheus-operator the customer already runs, install one first, or set prometheus.enabled to false." }}
+{{- end }}
+{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1alpha1/ScrapeConfig") }}
+{{ fail "prometheus.enabled is true and kube-prometheus-stack.crds.enabled/.prometheusOperator.enabled are not both true, but this cluster has no monitoring.coreos.com/v1alpha1 ScrapeConfig CRD either. Upgrade the existing prometheus-operator to a version that ships it, or set prometheus.enabled to false." }}
+{{- end }}
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: simplyblock-webappapi
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Mirrors ComponentWebAPI in
+    # operator/internal/controllers/controlplane/names.go, which builds the
+    # Service this matches. That file is authoritative. Helm renders before
+    # the operator binary exists to read it, so this copy has to be kept in
+    # sync by hand.
+    matchLabels:
+      app: simplyblock-webappapi
+  endpoints:
+    # /_meta/metrics is FastAPI's own per-process instrumentation (request
+    # latency, in-flight count): one real series per replica, so this scrapes
+    # every pod the Service backs rather than a single static target.
+    # /api/v2/metrics is the other half: the cluster-wide collector in
+    # simplyblock_web/api/v2/metrics.py, which every replica answers
+    # identically from shared FoundationDB state, and it is scraped
+    # elsewhere, once, by the ScrapeConfig below. Scraping it here too would
+    # double every count and sum over this job, though not its ratios.
+    - port: http
+      path: /_meta/metrics
+      interval: {{ .Values.prometheus.interval }}
+      scrapeTimeout: 30s
+      {{- if .Values.tls.enabled }}
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: simplyblock-ca-bundle-tls
+            key: ca.crt
+        serverName: simplyblock-webappapi
+        {{- if .Values.tls.mutual_enabled }}
+        cert:
+          secret:
+            name: simplyblock-prometheus-client-tls
+            key: tls.crt
+        keySecret:
+          name: simplyblock-prometheus-client-tls
+          key: tls.key
+        {{- end }}
+      {{- end }}
+---
+# A ScrapeConfig rather than a second ServiceMonitor endpoint, because a
+# ServiceMonitor always expands to one target per pod the Service backs and
+# this target is the opposite shape: one answer for the whole cluster,
+# wherever it lands. staticConfigs is a literal address rather than pod
+# discovery, which is what keeps it to the one target this needs regardless of
+# how many webappapi replicas are running.
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: ScrapeConfig
+metadata:
+  name: simplyblock-webappapi-cluster-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
+spec:
+  staticConfigs:
+    - targets:
+        - simplyblock-webappapi.{{ .Release.Namespace }}.svc:5000
+  metricsPath: /api/v2/metrics
+  scrapeInterval: {{ .Values.prometheus.interval }}
+  scrapeTimeout: 30s
+  # The webappapi job's own identity, read off the scraping pod rather than a
+  # minted Secret: it is Prometheus's own in-cluster token, the same one the
+  # static scrape config points `credentials_file` at.
+  authorization:
+    credentialsFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+  {{- if .Values.tls.enabled }}
+  # ScrapeConfig's scheme is the enum HTTP/HTTPS, unlike ServiceMonitor's
+  # lowercase http/https: the two CRDs disagree on casing for the same field.
+  scheme: HTTPS
+  tlsConfig:
+    ca:
+      secret:
+        name: simplyblock-ca-bundle-tls
+        key: ca.crt
+    serverName: simplyblock-webappapi
+    {{- if .Values.tls.mutual_enabled }}
+    cert:
+      secret:
+        name: simplyblock-prometheus-client-tls
+        key: tls.crt
+    keySecret:
+      name: simplyblock-prometheus-client-tls
+      key: tls.key
+    {{- end }}
+  {{- end }}
+{{- if .Values.controlplane.foundationdb.exporter.enabled }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: simplyblock-fdb-exporter
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Mirrors ComponentFDBExporter in names.go, same reasoning as the
+    # webappapi ServiceMonitor above.
+    matchLabels:
+      app: simplyblock-fdb-exporter
+  endpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.prometheus.interval }}
+      honorLabels: true
+      # No namespace relabeling here: unlike the static target in
+      # controlplane_configmap.yaml, a ServiceMonitor-discovered target already
+      # carries a real `namespace` label from the Service it was found through.
+{{- end }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: simplyblock-rebalancer
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # This label is set on the pod by sbcli's storage_deploy_spdk.yaml.j2, not
+    # by this operator or this chart. operator/internal/utils/constants.go's
+    # LabelRole/LabelSpdkProxyRole reads it back to find these same pods. This
+    # is a third independent copy, matched here for the same reason. Change
+    # sbcli's template first if this ever needs to change.
+    matchLabels:
+      role: simplyblock-storage-node
+  podMetricsEndpoints:
+    - port: latency-metrics
+      path: /metrics
+      interval: {{ .Values.prometheus.interval }}
+      # Storage node pods that have no rebalancer sidecar simply have no port
+      # of this name. prometheus-operator drops them from the target list
+      # rather than scraping nothing.
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: simplyblock-spdk-proxy
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+  selector:
+    # Same label as the rebalancer PodMonitor above, sbcli-applied and
+    # independently matched here.
+    matchLabels:
+      role: simplyblock-storage-node
+  podMetricsEndpoints:
+    - port: proxy-http
+      path: /_meta/metrics
+      interval: {{ .Values.prometheus.interval }}
+      {{- if .Values.tls.enabled }}
+      scheme: https
+      tlsConfig:
+        ca:
+          secret:
+            name: simplyblock-ca-bundle-tls
+            key: ca.crt
+        serverName: simplyblock-spdk-proxy
+        {{- if .Values.tls.mutual_enabled }}
+        cert:
+          secret:
+            name: simplyblock-prometheus-client-tls
+            key: tls.crt
+        keySecret:
+          name: simplyblock-prometheus-client-tls
+          key: tls.key
+        {{- end }}
+      {{- end }}
+      # proxy-http is the same port the JSON-RPC proxy answers RPCs on, named
+      # rather than numbered because each pod binds its own RPC_PORT on the
+      # host network. No basicAuth here: unlike the RPC path, /_meta/metrics
+      # on this port carries no HTTP-level credential of its own. It is not
+      # reachable without one, though: the mutual TLS above is what actually
+      # gates it, and a scrape that skips presenting the client certificate
+      # stalls at the handshake rather than getting an HTTP 401.
+      #
+      # The name itself has no Go constant behind it at all: sbcli's
+      # storage_deploy_spdk.yaml.j2 is the sole place it is declared
+      # (spdk-proxy-container's containerPort), and this is the only other
+      # copy. Keep them in sync by hand.
+{{- end }}

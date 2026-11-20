@@ -76,12 +76,6 @@ func (h *SimplyblockRebalancerInjector) Handle(
 		patched.Annotations = make(map[string]string)
 	}
 	patched.Annotations[injectedAnnotation] = annotationTrue
-	// Standard Prometheus pod annotations for annotation-based scrape discovery
-	// (used by Prometheus setups that don't run the Prometheus Operator).
-	// Prometheus Operator users rely on the PodMonitor in config/prometheus/ instead.
-	patched.Annotations["prometheus.simplyblock.io/scrape"] = "true"
-	patched.Annotations["prometheus.simplyblock.io/port"] = "9199"
-	patched.Annotations["prometheus.simplyblock.io/path"] = "/metrics"
 
 	original, err := json.Marshal(pod)
 	if err != nil {

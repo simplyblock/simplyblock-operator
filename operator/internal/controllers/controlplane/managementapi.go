@@ -285,8 +285,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 		// trust before anything else works: every controller in this process
 		// authenticates with its token.
 		{Name: "SB_K8S_ADMIN_SERVICE_ACCOUNTS", Value: adminServiceAccounts(cp.Namespace)},
-		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS",
-			Value: "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"},
+		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS", Value: metricsServiceAccounts()},
 	}
 	if ref := managed.AdminTokenSecretRef; ref != nil && ref.Name != "" {
 		// Sourced from the Secret directly rather than read and copied in here,
@@ -473,7 +472,10 @@ func webAPIResources(managed *simplyblockv1alpha2.LocalControlPlane) corev1.Reso
 func webAPIService(cp *simplyblockv1alpha2.ControlPlane) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:        ComponentWebAPI,
+			Name: ComponentWebAPI,
+			// Carried on the Service, not just its Pod selector, so a
+			// ServiceMonitor can match it by label.
+			Labels:      map[string]string{appLabel: ComponentWebAPI},
 			Namespace:   cp.Namespace,
 			Annotations: servingCertAnnotations(cp),
 		},
@@ -796,6 +798,32 @@ const extraAdminAccountsEnv = "SB_EXTRA_ADMIN_SERVICE_ACCOUNTS"
 func adminServiceAccounts(namespace string) string {
 	accounts := []string{"system:serviceaccount:" + namespace + ":simplyblock-operator"}
 	for _, a := range strings.Split(os.Getenv(extraAdminAccountsEnv), ",") {
+		a = strings.TrimSpace(a)
+		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {
+			accounts = append(accounts, a)
+		}
+	}
+	return strings.Join(accounts, ",")
+}
+
+// extraMetricsAccountsEnv names the operator's own environment variable
+// listing the service accounts the management API trusts as metrics
+// scrapers. There is no account this operator could trust on its own
+// authority, unlike adminServiceAccounts trusting itself: the Prometheus
+// pod presents its own ServiceAccount's token, and the chart names it here
+// from the Helm value prometheus.serviceAccount, whether that Prometheus is
+// the one the chart bundles or one the customer already runs. An install
+// without it trusts no metrics scraper at all, and every scrape gets a 401.
+const extraMetricsAccountsEnv = "SB_EXTRA_METRICS_SERVICE_ACCOUNTS"
+
+// metricsServiceAccounts is every account named in extraMetricsAccountsEnv,
+// filtered the same way adminServiceAccounts filters its list. Empty unless
+// the chart set something, by design: there is no account this operator
+// could trust on its own authority the way adminServiceAccounts trusts
+// itself, since it does not run the Prometheus doing the scraping.
+func metricsServiceAccounts() string {
+	var accounts []string
+	for _, a := range strings.Split(os.Getenv(extraMetricsAccountsEnv), ",") {
 		a = strings.TrimSpace(a)
 		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {
 			accounts = append(accounts, a)
