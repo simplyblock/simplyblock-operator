@@ -282,10 +282,15 @@ const histOf = h => ({iops: (h || {}).iops || [], bw: (h || {}).bytes || []});
 // identity (k8s), the fields the pages read under the CRD's own names, and
 // the object itself (raw). Nothing here is a field the CRD does not have; a
 // derived value says what it was derived from.
-const k8sOf = o => ({name: o.metadata.name, namespace: o.metadata.namespace, kind: o.kind, uid: o.metadata.uid,
+const k8sOf = o => ({name: o.metadata.name, namespace: o.metadata.namespace, kind: o.kind, uid: o.metadata.uid, ctx: o.__ctx || LOCAL_CTX,
   labels: o.metadata.labels || {}, annotations: o.metadata.annotations || {}, generation: o.metadata.generation,
   observedGeneration: (o.status || {}).observedGeneration, creationTimestamp: o.metadata.creationTimestamp});
-const sameNs = (a, b) => (a.metadata.namespace || "") === (b.metadata.namespace || "");
+// the same namespace in the same context
+const sameNs = (a, b) => (a.metadata.namespace || "") === (b.metadata.namespace || "") && (a.__ctx || LOCAL_CTX) === (b.__ctx || LOCAL_CTX);
+// the worker Node an object's spec.workerNode names, in the object's context
+const workerOf = (w, o, name) => (w.workers || []).find(n => n.metadata.name === name && (n.__ctx || LOCAL_CTX) === (o.__ctx || LOCAL_CTX)) || null;
+const zoneOf = n => n ? ((n.metadata.labels || {})["topology.kubernetes.io/zone"] || null) : null;
+const regionOf = n => n ? ((n.metadata.labels || {})["topology.kubernetes.io/region"] || null) : null;
 const nodesOfCluster = (w, c) => w.nodes.filter(n => (n.spec || {}).clusterRef === c.metadata.name && sameNs(n, c));
 const devicesOfNode = (w, n) => w.devices.filter(d => (d.spec || {}).nodeRef === n.metadata.name && sameNs(d, n));
 const poolsOfCluster = (w, c) => w.pools.filter(x => (x.spec || {}).clusterRef === c.metadata.name && sameNs(x, c));
@@ -298,8 +303,13 @@ const normCluster = (o, w) => {
   const devices = nodes.flatMap(n => devicesOfNode(w, n));
   const phaseCount = (list, phase) => list.filter(x => (x.status || {}).phase === phase).length;
   const cap = nodes.reduce((a, n) => { const c = ((n.status || {}).resources || {}).capacity || {}; return {total: a.total + (c.totalBytes || 0), used: a.used + (c.usedBytes || 0)}; }, {total: 0, used: 0});
+  const zones = Array.from(new Set(nodes.map(n => zoneOf(workerOf(w, n, (n.spec || {}).workerNode))).filter(Boolean))).sort();
+  const regions = Array.from(new Set(nodes.map(n => regionOf(workerOf(w, n, (n.spec || {}).workerNode))).filter(Boolean))).sort();
   return reg({
-    kind: "cluster", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    kind: "cluster", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, ctx: o.__ctx || LOCAL_CTX, k8s: k8sOf(o), raw: o,
+    // sites: the cluster's own spec.stretched.site when it is one site of a stretched cluster, else the zones its nodes' workers are labeled with
+    sites: (sp.stretched || {}).site ? [{value: sp.stretched.site, from: "spec.stretched.site"}] : zones.map(z => ({value: z, from: "worker Node label topology.kubernetes.io/zone"})),
+    regions, stretchedSpec: sp.stretched || null, labels: o.metadata.labels || {},
     phase: s.phase || "Pending", status: s.status || null, message: s.message || "", step: (s.step || {}).state || null, stepClaim: (s.step || {}).claim || null,
     activeOpsRef: s.activeOpsRef || null, configured: !!s.configured, nqn: s.nqn || null, erasureCodingScheme: s.erasureCodingScheme || null,
     maxFaultTolerance: s.maxFaultTolerance, rebalancing: !!s.rebalancing, tasks: s.tasks || [], provisioningSlots: s.provisioningSlots || [],
@@ -320,8 +330,10 @@ const normCluster = (o, w) => {
 const normNode = (o, w) => {
   const s = o.status || {}, sp = o.spec || {}, res = s.resources || {}, cap = res.capacity || {};
   const cluster = clusterOfRef(w, o, sp.clusterRef);
+  const worker = workerOf(w, o, sp.workerNode);
   return reg({
-    kind: "node", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    kind: "node", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, ctx: o.__ctx || LOCAL_CTX, k8s: k8sOf(o), raw: o,
+    zone: zoneOf(worker), region: regionOf(worker), workerFound: !!worker,
     hostname: s.hostname || sp.workerNode || o.metadata.name, clusterRef: sp.clusterRef, clusterId: cluster ? idOf(cluster) : null,
     workerNode: sp.workerNode || null, slot: sp.slot, socketId: sp.socketId, nodeIndex: sp.nodeIndex, nodeSet: sp.nodeSet || null, config: sp.config || {}, stretchedRemote: !!(sp.stretched || {}).remote,
     phase: s.phase || "Pending", status: s.status || null, health: s.health, message: s.message || "", step: (s.step || {}).state || null, stepClaim: (s.step || {}).claim || null,
@@ -336,7 +348,7 @@ const normDevice = (o, w) => {
   const s = o.status || {}, sp = o.spec || {};
   const node = w.nodes.find(n => n.metadata.name === sp.nodeRef && sameNs(n, o)) || null;
   return reg({
-    kind: "device", id: sp.deviceID || o.metadata.uid, name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    kind: "device", id: sp.deviceID || o.metadata.uid, name: o.metadata.name, namespace: o.metadata.namespace, ctx: o.__ctx || LOCAL_CTX, k8s: k8sOf(o), raw: o,
     nodeRef: sp.nodeRef, nodeId: s.nodeID || (node ? idOf(node) : null), clusterId: s.clusterID || (node ? (node.status || {}).uuid : null) || null,
     phase: s.phase || "Unknown", deviceStatus: s.deviceStatus || null, role: s.role || null, message: s.message || "", activeOpsRef: s.activeOpsRef || null,
     capacity: {total: (s.capacity || {}).totalBytes || 0}, hardware: s.hardware || {}, health: s.health || {}, site: s.site || null, remote: s.remote,
@@ -347,7 +359,7 @@ const normPool = (o, w) => {
   const s = o.status || {}, sp = o.spec || {};
   const cluster = clusterOfRef(w, o, sp.clusterRef);
   return reg({
-    kind: "pool", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    kind: "pool", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, ctx: o.__ctx || LOCAL_CTX, k8s: k8sOf(o), raw: o,
     clusterRef: sp.clusterRef, clusterId: cluster ? idOf(cluster) : null,
     phase: s.phase || "Pending", status: s.status || null, message: s.message || "", activeOpsRef: s.activeOpsRef || null,
     limits: sp.limits || {}, volumeDefaults: sp.volumeDefaults || {}, allowedNodes: sp.allowedNodes || [],
@@ -359,16 +371,32 @@ const normPool = (o, w) => {
 // One read of the four kinds across every namespace, shared by every getter
 // for a few seconds, so a page that asks for a cluster, its nodes, and their
 // devices lists each kind once.
-let WORLD = null, WORLD_AT = 0;
+// Every context is read; one that fails keeps its error in WORLD_ERRORS so
+// the dashboard can say which context is unreachable instead of hiding the
+// rest. Each object is stamped with its context (__ctx).
+let WORLD = null, WORLD_AT = 0, WORLD_ERRORS = {};
 const WORLD_TTL = 4000;
+const WORLD_KINDS = ["StorageCluster", "StorageNode", "StorageDevice", "StoragePool", "Node"];
 function world() {
   if (WORLD && Date.now() - WORLD_AT < WORLD_TTL) return WORLD;
   WORLD_AT = Date.now();
-  WORLD = Promise.all(["StorageCluster", "StorageNode", "StorageDevice", "StoragePool"].map(k => k8s.list(k, {allNamespaces: true})))
-    .then(([clusters, nodes, devices, pools]) => ({clusters, nodes, devices, pools}))
+  WORLD = Promise.all(CONTEXTS.map(async c => {
+    const out = {clusters: [], nodes: [], devices: [], pools: [], workers: []};
+    const lists = await Promise.all(WORLD_KINDS.map(k => k8s.list(k, {allNamespaces: true, ctx: c.name}).then(r => ({k, r})).catch(e => ({k, e}))));
+    const errs = {};
+    lists.forEach(({k, r, e}) => {
+      if (e) { errs[k] = e; return; }
+      const stamped = r.map(o => Object.assign(o, {__ctx: c.name}));
+      ({StorageCluster: out.clusters, StorageNode: out.nodes, StorageDevice: out.devices, StoragePool: out.pools, Node: out.workers})[k].push(...stamped);
+    });
+    if (Object.keys(errs).length) WORLD_ERRORS[c.name] = errs; else delete WORLD_ERRORS[c.name];
+    return out;
+  })).then(parts => parts.reduce((a, p) => ({clusters: a.clusters.concat(p.clusters), nodes: a.nodes.concat(p.nodes), devices: a.devices.concat(p.devices), pools: a.pools.concat(p.pools), workers: a.workers.concat(p.workers)}),
+    {clusters: [], nodes: [], devices: [], pools: [], workers: []}))
     .catch(e => { WORLD = null; throw e; });
   return WORLD;
 }
+const worldErrors = () => WORLD_ERRORS;
 const invalidateWorld = () => { WORLD = null; };
 const notFound = (kind, id) => new ApiError(404, `${kind} ${id} not found`, "/" + id, "NotFound");
 const findCluster = (w, id) => w.clusters.find(c => idOf(c) === id) || w.clusters.find(c => c.metadata.name === id) || null;
@@ -1333,7 +1361,7 @@ function useResource(key, loader, pollMs) {
   return {...s, reload: () => load(false)};
 }
 
-Object.assign(window, {api, world, invalidateWorld, normCluster, normNode, normDevice, normPool, API, ApiError, STATUS_META, REG, GETTER, resolve, useResource,
+Object.assign(window, {api, world, invalidateWorld, worldErrors, normCluster, normNode, normDevice, normPool, API, ApiError, STATUS_META, REG, GETTER, resolve, useResource,
   normCluster, normHost, normNode, normDevice, normPool, normVolume, normSnapshot, normBackup, normPolicy,
   normTask, normLog, normAlert, normOperation, OPS_TARGET_LABEL, normPlan, normSite, normMethod, normLeg, normGeneration,
   normReplPair, normReplPolicy, normReplSlot, normReplOps, ivMinutes, normPair, normDrPolicy, normZone, normCg, normCgSnap, normMigration, normK8s, normSc, normPvc, normBucket, normDrCluster, normApp});

@@ -21,17 +21,17 @@ const WORK_KINDS = ["StorageClusterOps", "StorageNodeOps", "StorageDeviceOps", "
 const TERMINAL = ["Succeeded", "Failed", "Aborted"];
 const PHASE_COLOR = {Pending: "var(--dim2)", Running: "var(--info)", Suspended: "var(--warn)", Succeeded: "var(--ok)", Failed: "var(--bad)", Aborted: "var(--warn)", Provisioning: "var(--info)", Expanding: "var(--info)", Draft: "var(--dim2)", Expanded: "var(--ok)", Unknown: "var(--idle)"};
 const TASK_PHASE = {new: "Pending", running: "Running", suspended: "Suspended", done: "Succeeded"};
-const wkey = (kind, ns, name) => `${kind}/${ns || ""}/${name}`;
+const wkey = (kind, ns, name, ctx) => `${ctx || LOCAL_CTX}/${kind}/${ns || ""}/${name}`;
 
 // ---- the objects the operation points at ---------------------------------------
-const vmByName = (kind, name, ns) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns)) || null;
+const vmByName = (kind, name, ns, ctx) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns) && (!ctx || (v.ctx || LOCAL_CTX) === ctx)) || null;
 const clusterByUUID = uuid => Object.values(REG).find(v => v.kind === "cluster" && v.id === uuid) || null;
 function targetOf(o) {
   const r = RESOURCES[o.kind] || {}, sp = o.spec || {};
   if (!r.ref) return {kind: null, name: null, vm: null};
   const raw = sp[r.ref];
   const name = raw && typeof raw === "object" ? raw.name : raw;
-  const vm = r.ops ? vmByName(r.ops, name, r.ops === "PersistentVolume" ? undefined : o.metadata.namespace) : null;
+  const vm = r.ops ? vmByName(r.ops, name, r.ops === "PersistentVolume" ? undefined : o.metadata.namespace, o.__ctx || LOCAL_CTX) : null;
   return {kind: r.ops, name: name || null, vm};
 }
 function clusterIdOf(o, target) {
@@ -39,8 +39,8 @@ function clusterIdOf(o, target) {
   if (target.vm) return target.vm.kind === "cluster" ? target.vm.id : target.vm.clusterId || null;
   if (st.migration && st.migration.clusterUUID) return clusterByUUID(st.migration.clusterUUID) ? st.migration.clusterUUID : null;
   if (st.relocate && st.relocate.sourceClusterUUID) return st.relocate.sourceClusterUUID;
-  if (o.kind === "ClusterDeploymentConfig" && st.clusterRef) { const c = vmByName("StorageCluster", st.clusterRef, o.metadata.namespace); return c ? c.id : null; }
-  if (o.kind === "StorageNode") { const c = vmByName("StorageCluster", (o.spec || {}).clusterRef, o.metadata.namespace); return c ? c.id : null; }
+  if (o.kind === "ClusterDeploymentConfig" && st.clusterRef) { const c = vmByName("StorageCluster", st.clusterRef, o.metadata.namespace, o.__ctx || LOCAL_CTX); return c ? c.id : null; }
+  if (o.kind === "StorageNode") { const c = vmByName("StorageCluster", (o.spec || {}).clusterRef, o.metadata.namespace, o.__ctx || LOCAL_CTX); return c ? c.id : null; }
   return null;
 }
 
@@ -68,7 +68,7 @@ function normOpsItem(o) {
     : pos.abortable ? {can: true, how: "abort-patch", reason: null}
     : {can: false, how: null, reason: `step ${(st.step || {}).state || "unknown"} does not honor spec.abort; the graph for ${sp.action} aborts only at ${((graphOf(o.kind, sp.action) || {}).abortable || []).join(", ") || "no step"}`};
   return {
-    key: wkey(o.kind, o.metadata.namespace, o.metadata.name), src: "ops", crKind: o.kind, name: o.metadata.name, ns: o.metadata.namespace, uid: o.metadata.uid,
+    key: wkey(o.kind, o.metadata.namespace, o.metadata.name, o.__ctx), src: "ops", crKind: o.kind, name: o.metadata.name, ns: o.metadata.namespace, ctx: o.__ctx || LOCAL_CTX, uid: o.metadata.uid,
     clusterId: clusterIdOf(o, target), action: sp.action || null, target,
     phase, step: (st.step || {}).state || null, stepClaim: (st.step || {}).claim || null, stepDeadline: (st.step || {}).deadline || null,
     steps: pos.steps, stepIndex: pos.index, abortable: pos.abortable, perNode: pos.perNode,
@@ -84,9 +84,9 @@ function normOpsItem(o) {
 function normNodeAddItem(n) {
   const st = n.status || {};
   const pos = stepPosition("StorageNode", null, (st.step || {}).state);
-  const vm = vmByName("StorageNode", n.metadata.name, n.metadata.namespace);
+  const vm = vmByName("StorageNode", n.metadata.name, n.metadata.namespace, n.__ctx || LOCAL_CTX);
   return {
-    key: wkey("StorageNode", n.metadata.namespace, n.metadata.name), src: "nodeadd", crKind: "StorageNode", name: n.metadata.name, ns: n.metadata.namespace, uid: n.metadata.uid,
+    key: wkey("StorageNode", n.metadata.namespace, n.metadata.name, n.__ctx), src: "nodeadd", crKind: "StorageNode", name: n.metadata.name, ns: n.metadata.namespace, ctx: n.__ctx || LOCAL_CTX, uid: n.metadata.uid,
     clusterId: clusterIdOf(n, {vm: null}), action: "provisioning", target: {kind: "StorageNode", name: n.metadata.name, vm},
     phase: st.phase === "Failed" ? "Failed" : "Running", step: (st.step || {}).state || null, stepClaim: (st.step || {}).claim || null, stepDeadline: (st.step || {}).deadline || null,
     steps: pos.steps, stepIndex: pos.index, abortable: false,
@@ -99,7 +99,7 @@ function normNodeAddItem(n) {
 function normTaskItem(t, cluster) {
   const phase = TASK_PHASE[t.status] || "Unknown";
   return {
-    key: `task/${cluster.id}/${t.id}`, src: "task", crKind: null, name: t.id, ns: cluster.namespace, clusterId: cluster.id, action: t.type || null, target: {kind: "StorageCluster", name: cluster.name, vm: cluster},
+    key: `task/${cluster.id}/${t.id}`, src: "task", crKind: null, name: t.id, ns: cluster.namespace, ctx: cluster.ctx, clusterId: cluster.id, action: t.type || null, target: {kind: "StorageCluster", name: cluster.name, vm: cluster},
     phase, step: null, steps: [], stepIndex: -1, abortable: false, startedAt: null, completedAt: null, message: "", progress: null, aborting: false,
     retry: t.retry || 0, cancel: TERMINAL.includes(phase) ? {can: false, how: null, reason: "the task is done"} : {can: true, how: "cancel-task", reason: null},
     parentKey: null, children: [], raw: t
@@ -114,24 +114,24 @@ function buildTree(items) {
   const ops = items.filter(i => i.src === "ops");
   ops.forEach(o => {
     // spec.creatorRef names the operation that created this one (a drain's migrations, the rebalancer's)
-    if (o.creatorRef && o.creatorRef.kind !== "StorageCluster") attach(o, byKey.get(wkey(o.creatorRef.kind, o.creatorRef.namespace, o.creatorRef.name)));
+    if (o.creatorRef && o.creatorRef.kind !== "StorageCluster") attach(o, byKey.get(wkey(o.creatorRef.kind, o.creatorRef.namespace, o.creatorRef.name, o.ctx)));
     // the drain-node label, for a mover that wrote no creatorRef
     else if (o.crKind === "PersistentVolumeOps" && o.labels["storage.simplyblock.io/drain-node"]) {
       const drain = ops.find(p => p.crKind === "StorageNodeOps" && p.action === "Remove" && p.target.vm && p.target.vm.id === o.labels["storage.simplyblock.io/drain-node"]);
       attach(o, drain);
     }
     // a controller owner that is itself an operation (the activation a deployment creates)
-    if (o.owner && WORK_KINDS.includes(o.owner.kind)) attach(o, byKey.get(wkey(o.owner.kind, o.ns, o.owner.name)));
+    if (o.owner && WORK_KINDS.includes(o.owner.kind)) attach(o, byKey.get(wkey(o.owner.kind, o.ns, o.owner.name, o.ctx)));
     // a discovery's document
-    if (o.crKind === "OperatorOps" && o.configRef) attach(byKey.get(wkey("ClusterDeploymentConfig", o.ns, o.configRef)), o);
+    if (o.crKind === "OperatorOps" && o.configRef) attach(byKey.get(wkey("ClusterDeploymentConfig", o.ns, o.configRef, o.ctx)), o);
   });
   // a node add under the document that created it (status.nodeRefs)
   items.filter(i => i.src === "nodeadd").forEach(n => {
-    const doc = ops.find(d => d.crKind === "ClusterDeploymentConfig" && d.ns === n.ns && ((d.raw.status || {}).nodeRefs || []).includes(n.name));
+    const doc = ops.find(d => d.crKind === "ClusterDeploymentConfig" && d.ns === n.ns && d.ctx === n.ctx && ((d.raw.status || {}).nodeRefs || []).includes(n.name));
     attach(n, doc);
   });
   // a child without a cluster takes its parent's; a creatorRef naming a StorageCluster is that cluster
-  items.forEach(i => { if (!i.clusterId && i.creatorRef && i.creatorRef.kind === "StorageCluster") { const c = vmByName("StorageCluster", i.creatorRef.name, i.creatorRef.namespace); if (c) i.clusterId = c.id; } });
+  items.forEach(i => { if (!i.clusterId && i.creatorRef && i.creatorRef.kind === "StorageCluster") { const c = vmByName("StorageCluster", i.creatorRef.name, i.creatorRef.namespace, i.ctx); if (c) i.clusterId = c.id; } });
   const inherit = it => it.children.forEach(c => { if (!c.clusterId) c.clusterId = it.clusterId; inherit(c); });
   items.filter(i => !i.parentKey).forEach(inherit);
   // a task under the object that recorded its id
@@ -153,7 +153,7 @@ const workStore = {
       // the nodes, devices, and pools go through the registry so an operation's target resolves
       await Promise.all(clusters.flatMap(c => [api.nodes(c.id), api.clusterDevices(c.id), api.pools(c.id)]));
       const w = await world();
-      const lists = await Promise.all(WORK_KINDS.map(k => k8s.list(k, {allNamespaces: true}).catch(() => [])));
+      const lists = await Promise.all(CONTEXTS.flatMap(c => WORK_KINDS.map(k => k8s.list(k, {allNamespaces: true, ctx: c.name}).then(r => r.map(o => Object.assign(o, {__ctx: c.name}))).catch(() => []))));
       const ops = lists.flat().map(normOpsItem);
       const adds = w.nodes.filter(n => (n.status || {}).phase === "Provisioning" || (n.status || {}).phase === "Pending").map(normNodeAddItem);
       const tasks = clusters.flatMap(c => (c.tasks || []).map(t => normTaskItem(t, c)));
@@ -186,7 +186,7 @@ function cancelDialog(item) {
       title: `StorageClusterOps CancelTask for ${item.action} ${item.name}?`, danger: true,
       desc: "Creates a StorageClusterOps with action CancelTask and spec.cancelTask.taskID set to this task. The operator asks the control plane to cancel it; Awaiting completes when the task leaves status.tasks.",
       confirm: "Create StorageClusterOps",
-      run: () => submitOps("StorageCluster", c.name, "CancelTask", {taskID: item.name}, {namespace: c.namespace}).then(() => workStore.load()),
+      run: () => submitOps("StorageCluster", c.name, "CancelTask", {taskID: item.name}, {namespace: c.namespace, ctx: c.ctx}).then(() => workStore.load()),
       done: "CancelTask created"
     };
   }
@@ -194,7 +194,7 @@ function cancelDialog(item) {
     title: `Abort ${item.crKind} ${item.name}?`, danger: true,
     desc: `Sets spec.abort. The operator honors it at step ${item.step || "Pending"} and the operation lands in Aborted; past the abortable steps it emits AbortRefused and runs on.`,
     confirm: "Set spec.abort",
-    run: () => abortOps(item.crKind, item.name, {namespace: item.ns}).then(() => workStore.load()),
+    run: () => abortOps(item.crKind, item.name, {namespace: item.ns, ctx: item.ctx}).then(() => workStore.load()),
     done: "spec.abort set"
   };
 }
@@ -223,7 +223,7 @@ function WorkRow({it, nav, expanded, onToggle, onCancel}) {
     if (vm && vm.kind === "device") return nav.openDevice(vm.clusterId, vm.nodeId, vm.id);
     if (vm && vm.kind === "pool") return nav.openPool(vm.clusterId, vm.id);
     if (vm && vm.kind === "cluster") return nav.openCluster(vm.id);
-    if (t.kind && t.name) return nav.openCR({ns: t.kind === "PersistentVolume" ? undefined : it.ns, kind: t.kind, name: t.name});
+    if (t.kind && t.name) return nav.openCR({ctx: it.ctx, ns: t.kind === "PersistentVolume" ? undefined : it.ns, kind: t.kind, name: t.name});
   };
   const label = it.src === "task" ? it.action : it.src === "nodeadd" ? "StorageNode provisioning" : `${it.crKind} ${it.action || ""}`;
   return (
@@ -231,7 +231,7 @@ function WorkRow({it, nav, expanded, onToggle, onCancel}) {
       <td style={{width: 24}}>{hasKids && <button className="xpand" onClick={onToggle}><Icon n={expanded ? "chevd" : "chev"} s={11} /></button>}</td>
       <td><div style={{display: "flex", flexDirection: "column", lineHeight: 1.25, paddingLeft: (it.depth || 0) * 16}}>
         <span><b>{label}</b>{t.name && <> on <button className="tlink" onClick={openTarget}>{t.name}</button></>}</span>
-        <span className="mono" style={{fontSize: 10, color: "var(--dim2)"}}>{it.src === "task" ? `status.tasks[] id ${it.name}` : `${it.ns ? it.ns + "/" : ""}${it.name}`}</span>
+        <span className="mono" style={{fontSize: 10, color: "var(--dim2)"}}>{it.src === "task" ? `status.tasks[] id ${it.name}` : `${it.ns ? it.ns + "/" : ""}${it.name}`}{window.MULTI_CTX ? ` · ${it.ctx}` : ""}</span>
       </div></td>
       <td><span className="badge">{it.src === "task" ? "task" : it.crKind}</span></td>
       <td><Phase p={it.phase} /></td>
@@ -338,8 +338,8 @@ function WorkItemDetail({seg, nav}) {
       <div className="sech" style={{marginTop: 14}}><h2>Links</h2><span className="ln"></span></div>
       <div className="labels">
         {it.clusterId && REG[it.clusterId] && <button className="lab link" onClick={() => nav.openCluster(it.clusterId)}><Icon n="cluster" s={10} />{REG[it.clusterId].name}</button>}
-        {it.crKind && <button className="lab link" onClick={() => nav.openCR({ns: it.ns, kind: it.crKind, name: it.name})}><Icon n="list" s={10} />{it.crKind} {it.name}</button>}
-        {it.creatorRef && <button className="lab link" onClick={() => nav.openCR({ns: it.creatorRef.namespace, kind: it.creatorRef.kind, name: it.creatorRef.name})}><Icon n="chev" s={10} />spec.creatorRef {it.creatorRef.kind}/{it.creatorRef.name}</button>}
+        {it.crKind && <button className="lab link" onClick={() => nav.openCR({ctx: it.ctx, ns: it.ns, kind: it.crKind, name: it.name})}><Icon n="list" s={10} />{it.crKind} {it.name}</button>}
+        {it.creatorRef && <button className="lab link" onClick={() => nav.openCR({ctx: it.ctx, ns: it.creatorRef.namespace, kind: it.creatorRef.kind, name: it.creatorRef.name})}><Icon n="chev" s={10} />spec.creatorRef {it.creatorRef.kind}/{it.creatorRef.name}</button>}
       </div>
       {it.raw && <div className="card" style={{marginTop: 12}}><h3>{it.src === "task" ? "status.tasks[] entry" : "spec and status"}</h3><div className="bd"><pre className="code" style={{maxHeight: 360, overflow: "auto"}}>{JSON.stringify(it.src === "task" ? it.raw : {spec: it.raw.spec, status: it.raw.status}, null, 2)}</pre></div></div>}
     </div>

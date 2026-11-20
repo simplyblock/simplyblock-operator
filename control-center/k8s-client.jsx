@@ -198,31 +198,34 @@ async function call(base, path, init) {
   return body;
 }
 
+// the proxy base of a context (contexts.jsx); no ctx is the local cluster
+const baseFor = ctx => { const c = window.ctxByName ? ctxByName(ctx) : null; return c ? c.k8sBase : SB.k8sBase; };
 const k8s = {
   // list: returns items[], never the List envelope
-  list: (kind, opts) => call(SB.k8sBase, pathFor(kind, opts) + qs(opts))
+  list: (kind, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts))
     .then(r => (r && r.items) || []),
-  get: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({name}, opts))),
-  create: (kind, obj, opts) => call(SB.k8sBase, pathFor(kind, opts), {
+  get: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({name}, opts))),
+  create: (kind, obj, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(obj)
   }),
   // spec edits go through a merge patch, which is what kubectl edit does
-  patch: (kind, name, patch, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({name}, opts)), {
+  patch: (kind, name, patch, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({name}, opts)) + qs(opts), {
     method: "PATCH",
     headers: {"Content-Type": "application/merge-patch+json"},
     body: JSON.stringify(patch)
   }),
-  remove: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({name}, opts)), {method: "DELETE"}),
+  remove: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({name}, opts)), {method: "DELETE"}),
   // pod logs are the Kubernetes API, not a side channel
-  logs: (pod, opts) => call(SB.k8sBase,
-    pathFor("Pod", {name: pod, subresource: "log"}) + qs(Object.assign({tailLines: 200}, opts)))
+  logs: (pod, opts) => call(baseFor((opts || {}).ctx),
+    pathFor("Pod", {name: pod, subresource: "log", namespace: (opts || {}).namespace}) + qs(Object.assign({tailLines: 200}, opts))),
+  version: ctx => call(baseFor(ctx), "/version")
 };
 
 function qs(opts) {
   const o = Object.assign({}, opts);
-  delete o.namespace; delete o.name; delete o.subresource; delete o.allNamespaces;
+  delete o.namespace; delete o.name; delete o.subresource; delete o.allNamespaces; delete o.ctx;
   const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "")
     .map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   return parts.length ? "?" + parts.join("&") : "";
@@ -235,15 +238,15 @@ function qs(opts) {
 // namespace, including cluster-wide ones; a SelfSubjectReview says who the
 // caller is. All three are POSTs that create nothing.
 const review = {
-  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
+  can: (verb, group, resource, ns, name, ctx) => k8s.create("SelfSubjectAccessReview", {
     apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectAccessReview",
     spec: {resourceAttributes: Object.assign({verb, group: group || "", resource},
       ns ? {namespace: ns} : {}, name ? {name} : {})}
-  }).then(r => !!(r.status && r.status.allowed)),
-  rules: ns => k8s.create("SelfSubjectRulesReview", {
+  }, {ctx}).then(r => !!(r.status && r.status.allowed)),
+  rules: (ns, ctx) => k8s.create("SelfSubjectRulesReview", {
     apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectRulesReview", spec: {namespace: ns}
-  }).then(r => r.status || {resourceRules: [], incomplete: true}),
-  whoami: () => k8s.create("SelfSubjectReview", {apiVersion: "authentication.k8s.io/v1", kind: "SelfSubjectReview"})
+  }, {ctx}).then(r => r.status || {resourceRules: [], incomplete: true}),
+  whoami: ctx => k8s.create("SelfSubjectReview", {apiVersion: "authentication.k8s.io/v1", kind: "SelfSubjectReview"}, {ctx})
     .then(r => (r.status && r.status.userInfo) || {})
 };
 
@@ -306,6 +309,7 @@ function submitOps(entityKind, targetName, action, payload, opts) {
   const ns = o.namespace || NS();
   const stamp = Date.now().toString(36);
   const spec = {action};
+  const where = Object.assign({}, r.namespaced ? {namespace: ns} : {}, o.ctx ? {ctx: o.ctx} : {});
   if (targetName && r.ref) {
     spec[r.ref] = r.refIsObject ? {name: targetName} : targetName;
   }
@@ -318,7 +322,7 @@ function submitOps(entityKind, targetName, action, payload, opts) {
     }, r.namespaced ? {namespace: ns} : {})
   };
   body.spec = spec;
-  return k8s.create(kind, body, r.namespaced ? {namespace: ns} : {});
+  return k8s.create(kind, body, where);
 }
 // Every Ops kind above has spec.abort; the replication kinds do not.
 const ABORTABLE_KINDS = Object.keys(RESOURCES).filter(k => RESOURCES[k].actions);
@@ -335,4 +339,4 @@ const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
 const opsRunning = o => o && o.status && !OPS_TERMINAL.includes(o.status.phase);
 
 Object.assign(window, {k8s, operator, helm, review, ApiError, RESOURCES, API_GROUP, GROUP, VERSION, LEGACY_VERSION, DR_GROUP, DR_API_GROUP,
-  pathFor, apiVersionOf, inCluster, ofNode, onWorker, sel, submitOps, abortOps, ABORTABLE_KINDS, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS, DR_HUB_NS});
+  pathFor, apiVersionOf, baseFor, inCluster, ofNode, onWorker, sel, submitOps, abortOps, ABORTABLE_KINDS, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS, DR_HUB_NS});

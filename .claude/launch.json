@@ -11,14 +11,14 @@
         ".",
         "--serve-ui",
         "..",
-        "--dataset",
-        "medium-degraded",
         "--seed",
         "42",
         "--listen",
         ":8081",
         "--crd-dir",
-        "C:/Users/Michael/simplyblock-operator/operator/config/crd/bases"
+        "C:/Users/Michael/simplyblock-operator/operator/config/crd/bases",
+        "--contexts",
+        "dev=small-healthy,uat=medium-degraded,prd=large-scale"
       ],
       "port": 8081
     }

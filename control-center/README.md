@@ -17,6 +17,19 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
 
 ## Recent additions
 
+- **Fleet dashboard over several Kubernetes contexts:** the Clusters section
+  opens on every StorageCluster of every configured context (`dashboard.jsx`,
+  `contexts.jsx`), grouped by context, namespace, site, region, any label on
+  the StorageCluster, or any label the console's configuration gives a context;
+  each group names the field its value came from. A site is a stretched
+  cluster's `spec.stretched.site`, else the `topology.kubernetes.io/zone` label
+  of the workers the storage nodes run on. `SB_CONFIG.contexts[]` lists the
+  contexts (`name`, `labels`, `k8sBase`, `namespaces`, `local`); with none
+  configured the console reads its own cluster as the one context. The
+  control planes card and the top bar's pill show each context's ControlPlane
+  object; the former Control plane section lives there, and Access under the
+  identity menu. The mock serves several contexts with `--contexts`.
+
 - **Storage sections on v1alpha2, nothing invented:** the Clusters section reads
   StorageCluster, StorageNode, StorageDevice, and StoragePool from
   `storage.simplyblock.io/v1alpha2` across every namespace and shows the objects'

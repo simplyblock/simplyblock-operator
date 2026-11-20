@@ -77,18 +77,19 @@ const isImmutable = (schema, path) => { const parts = path.split("."); for (let 
 
 // ---- the object -------------------------------------------------------------
 function useCR(ref, rev) {
-  const key = ref ? `${ref.kind}|${ref.ns || ""}|${ref.name}|${rev || 0}` : "none";
-  return useResource("cr|" + key, () => ref ? k8s.get(ref.kind, ref.name, {namespace: ref.ns}) : Promise.resolve(null), 6000);
+  const key = ref ? `${ref.ctx || ""}|${ref.kind}|${ref.ns || ""}|${ref.name}|${rev || 0}` : "none";
+  return useResource("cr|" + key, () => ref ? k8s.get(ref.kind, ref.name, {namespace: ref.ns, ctx: ref.ctx}) : Promise.resolve(null), 6000);
 }
 const refOfVm = vm => {
   if (!vm) return null;
-  if (vm.k8s && vm.k8s.kind) return {ns: vm.k8s.namespace || undefined, kind: vm.k8s.kind, name: vm.k8s.name};
+  if (vm.k8s && vm.k8s.kind) return {ctx: vm.k8s.ctx || vm.ctx || LOCAL_CTX, ns: vm.k8s.namespace || undefined, kind: vm.k8s.kind, name: vm.k8s.name};
   const kind = VM_CR_KIND[vm.kind];
   if (!kind) return null;
-  return {ns: vm.namespace || undefined, kind, name: vm.name || vm.pvName};
+  return {ctx: vm.ctx || LOCAL_CTX, ns: vm.namespace || undefined, kind, name: vm.name || vm.pvName};
 };
-const objKey = (ns, kind, name) => `${ns || ""}/${kind}/${name}`;
-const parseObjKey = key => { const [ns, kind, ...rest] = String(key).split("/"); return {ns: ns || undefined, kind, name: rest.join("/")}; };
+// an object key names the context too, so a deep link lands on the right cluster
+const objKey = (ctx, ns, kind, name) => `${ctx || LOCAL_CTX}/${ns || ""}/${kind}/${name}`;
+const parseObjKey = key => { const [ctx, ns, kind, ...rest] = String(key).split("/"); return {ctx: ctx || LOCAL_CTX, ns: ns || undefined, kind, name: rest.join("/")}; };
 
 // ---- editing ------------------------------------------------------------------
 function useSpecPatch(ref, onDone) {
@@ -100,8 +101,8 @@ function useSpecPatch(ref, onDone) {
     const patch = setPath({}, path, value);
     setBusy(true);
     try {
-      await k8s.patch(ref.kind, ref.name, patch, {namespace: ref.ns, dryRun: "All"});
-      await k8s.patch(ref.kind, ref.name, patch, {namespace: ref.ns});
+      await k8s.patch(ref.kind, ref.name, patch, {namespace: ref.ns, ctx: ref.ctx, dryRun: "All"});
+      await k8s.patch(ref.kind, ref.name, patch, {namespace: ref.ns, ctx: ref.ctx});
       if (window.invalidateWorld) invalidateWorld();
       window.__toast(`${path} updated`);
       if (onDone) onDone();
@@ -157,19 +158,19 @@ function DriftBanner({obj}) {
   return <div className="banner"><Icon n="clock" s={15} /><span><b>Status is behind the spec.</b> metadata.generation is {g}; status.observedGeneration is {og}. What status says may predate the latest edit.</span></div>;
 }
 // the view model in the registry that a CR name points at
-const vmByCR = (kind, name, ns) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns));
+const vmByCR = (kind, name, ns, ctx) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns) && (!ctx || (v.ctx || LOCAL_CTX) === ctx));
 function LinkValue({r, value, obj, nav}) {
   if (!r.link || value === undefined || value === null || value === "") return null;
-  const ns = obj.metadata.namespace;
+  const ns = obj.metadata.namespace, ctx = obj.__ctx || LOCAL_CTX;
   const go = () => {
-    if (r.link === "cluster") { const c = vmByCR("StorageCluster", value, ns); if (c) nav.openCluster(c.id); else nav.openCR({ns, kind: "StorageCluster", name: value}); }
-    else if (r.link === "node") { const n = vmByCR("StorageNode", value, getPath(obj, r.path.replace(/\.name$/, ".namespace")) || ns); if (n) nav.openNode(n.clusterId, n.id); else nav.openCR({ns, kind: "StorageNode", name: value}); }
-    else if (r.link === "pool") { const p = vmByCR("StoragePool", value, ns) || Object.values(REG).find(v => v.kind === "pool" && v.name === value); if (p) nav.openPool(p.clusterId, p.id); else nav.openCR({ns, kind: "StoragePool", name: value}); }
-    else if (r.link === "worker") nav.openCR({kind: "Node", name: value});
-    else if (r.link === "storageclass") nav.openCR({kind: "StorageClass", name: value});
-    else if (r.link === "pvc") nav.openCR({ns: getPath(obj, r.path.replace(/\.name$/, ".namespace")) || getPath(obj, "status.source.claimNamespace") || ns, kind: "PersistentVolumeClaim", name: value});
-    else if (r.link === "pv") nav.openCR({kind: "PersistentVolume", name: value});
-    else if (r.link === "vsc") nav.openCR({kind: "VolumeSnapshotContent", name: value});
+    if (r.link === "cluster") { const c = vmByCR("StorageCluster", value, ns, ctx); if (c) nav.openCluster(c.id); else nav.openCR({ctx, ns, kind: "StorageCluster", name: value}); }
+    else if (r.link === "node") { const n = vmByCR("StorageNode", value, getPath(obj, r.path.replace(/\.name$/, ".namespace")) || ns, ctx); if (n) nav.openNode(n.clusterId, n.id); else nav.openCR({ctx, ns, kind: "StorageNode", name: value}); }
+    else if (r.link === "pool") { const p = vmByCR("StoragePool", value, ns, ctx) || Object.values(REG).find(v => v.kind === "pool" && v.name === value && (v.ctx || LOCAL_CTX) === ctx); if (p) nav.openPool(p.clusterId, p.id); else nav.openCR({ctx, ns, kind: "StoragePool", name: value}); }
+    else if (r.link === "worker") nav.openCR({ctx, kind: "Node", name: value});
+    else if (r.link === "storageclass") nav.openCR({ctx, kind: "StorageClass", name: value});
+    else if (r.link === "pvc") nav.openCR({ctx, ns: getPath(obj, r.path.replace(/\.name$/, ".namespace")) || getPath(obj, "status.source.claimNamespace") || ns, kind: "PersistentVolumeClaim", name: value});
+    else if (r.link === "pv") nav.openCR({ctx, kind: "PersistentVolume", name: value});
+    else if (r.link === "vsc") nav.openCR({ctx, kind: "VolumeSnapshotContent", name: value});
   };
   return <button className="lab link" style={{marginLeft: 6}} onClick={go}><Icon n="chev" s={9} />open</button>;
 }
@@ -186,7 +187,7 @@ function EssentialsTab({obj, cref: ref, nav, vm, onChanged}) {
       <span style={{display: "inline-flex", alignItems: "center", gap: 4, justifyContent: "flex-end", flexWrap: "wrap"}}>
         {isSpec ? <InlineField r={r} value={v} immutable={isImmutable(schema, r.path)} patch={patch} schema={schema} />
           : <span title={schema.descriptions[r.path] || r.path}>{shown(r, v) === null ? <span style={{color: "var(--dim2)"}}>unset</span> : shown(r, v)}</span>}
-        <LinkValue r={r} value={v} obj={obj} nav={nav} />
+        <LinkValue r={r} value={v} obj={Object.assign({__ctx: ref.ctx}, obj)} nav={nav} />
       </span>];
   });
   const specRows = rows(h.spec, true), statusRows = rows(h.status, false);
@@ -267,9 +268,9 @@ function EverythingTab({obj, cref: ref}) {
 // ---- the Kubernetes side -----------------------------------------------------------------
 function KubernetesTab({obj, cref: ref, nav}) {
   const m = obj.metadata || {};
-  const {data: events} = useResource("crev|" + m.uid, () => k8s.list("Event", {namespace: m.namespace || "default", fieldSelector: `involvedObject.uid=${m.uid}`}).catch(() => []), 10000);
+  const {data: events} = useResource("crev|" + ref.ctx + "|" + m.uid, () => k8s.list("Event", {namespace: m.namespace || "default", fieldSelector: `involvedObject.uid=${m.uid}`, ctx: ref.ctx}).catch(() => []), 10000);
   const evs = (events || []).slice().sort((a, b) => Date.parse(b.lastTimestamp || b.eventTime || 0) - Date.parse(a.lastTimestamp || a.eventTime || 0));
-  const openRef = r => nav.openCR({ns: m.namespace, kind: r.kind, name: r.name});
+  const openRef = r => nav.openCR({ctx: ref.ctx, ns: m.namespace, kind: r.kind, name: r.name});
   return (
     <>
       <div className="dcols">
@@ -280,7 +281,7 @@ function KubernetesTab({obj, cref: ref, nav}) {
         <div className="card"><h3>metadata</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}><Props rows={[
           ["name", <span className="mono">{m.name}</span>], ["namespace", m.namespace || "cluster-scoped"], ["uid", <span className="mono" style={{fontSize: 11}}>{m.uid}</span>],
           ["resourceVersion", m.resourceVersion], ["generation", m.generation], ["creationTimestamp", fmtDate(m.creationTimestamp)], ["deletionTimestamp", m.deletionTimestamp ? fmtDate(m.deletionTimestamp) : null],
-          ["finalizers", (m.finalizers || []).join(", ") || null]]} /></div></div>
+          ["finalizers", (m.finalizers || []).join(", ") || null], ["context", ref.ctx]]} /></div></div>
       </div>
       <div className="dcols" style={{marginTop: 12}}>
         <div className="card"><h3>metadata.labels</h3><div className="bd"><div className="labels">{Object.entries(m.labels || {}).map(([k, v]) => <span key={k} className="lab mono" style={{fontSize: 10.5}}><i>{k}</i>{v}</span>)}{!Object.keys(m.labels || {}).length && <span className="nolim">none</span>}</div></div></div>
@@ -308,7 +309,7 @@ function CRPanel({vm, nav, cref: refProp}) {
   return (
     <div className="crpanel">
       <div className="tabs sub">{items.map(t => <button key={t.k} className={"tab" + (tab === t.k ? " on" : "")} onClick={() => setTab(t.k)}><Icon n={t.icon} s={12} />{t.label}</button>)}
-        <span style={{flex: 1}}></span><span className="mono" style={{fontSize: 10.5, color: "var(--dim2)", alignSelf: "center"}}>{obj.apiVersion} {ref.kind} {ref.ns ? ref.ns + "/" : ""}{ref.name}</span></div>
+        <span style={{flex: 1}}></span><span className="mono" style={{fontSize: 10.5, color: "var(--dim2)", alignSelf: "center"}}>{obj.apiVersion} {ref.kind} {ref.ns ? ref.ns + "/" : ""}{ref.name}{window.MULTI_CTX ? ` · ${ref.ctx}` : ""}</span></div>
       {tab === "essentials" && <EssentialsTab obj={obj} cref={ref} nav={nav} vm={vm} onChanged={() => setRev(r => r + 1)} />}
       {tab === "everything" && <EverythingTab obj={obj} cref={ref} />}
       {tab === "k8s" && <KubernetesTab obj={obj} cref={ref} nav={nav} />}
@@ -328,7 +329,7 @@ function CRView({seg, nav}) {
       <div className="dhead"><div style={{flex: 1, minWidth: 0}}>
         <div style={{display: "flex", alignItems: "center", gap: 11, flexWrap: "wrap"}}><h1>{obj.metadata.name}</h1><span className="badge">{obj.kind}</span>{phase && <span className="badge">{phase}</span>}</div>
         <div className="mdesc" style={{marginTop: 4}}>{obj.apiVersion} · {obj.metadata.namespace ? `namespace ${obj.metadata.namespace}` : "cluster-scoped"}</div></div>
-        {abortable && <button className="btn" onClick={() => abortOps(obj.kind, obj.metadata.name, {namespace: ref.ns}).then(() => { window.__toast("spec.abort set"); reload(); }).catch(e => window.__toast(e.message))}><Icon n="x" s={11} />Abort</button>}
+        {abortable && <button className="btn" onClick={() => abortOps(obj.kind, obj.metadata.name, {namespace: ref.ns, ctx: ref.ctx}).then(() => { window.__toast("spec.abort set"); reload(); }).catch(e => window.__toast(e.message))}><Icon n="x" s={11} />Abort</button>}
       </div>
       <CRPanel cref={ref} nav={nav} vm={null} />
     </div>

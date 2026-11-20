@@ -19,7 +19,19 @@ const apiextGroup = "apiextensions.k8s.io"
 // loadCRDs reads every YAML file in dir into the store as a
 // CustomResourceDefinition and reports how many it loaded.
 func (s *server) loadCRDs(dir string) (int, error) {
-	d, ok := s.store.Lookup(apiextGroup, "v1", "customresourcedefinitions")
+	n := 0
+	for _, name := range s.order {
+		k, err := loadCRDsInto(s.worlds[name].store, dir)
+		if err != nil {
+			return n, err
+		}
+		n = k
+	}
+	return n, nil
+}
+
+func loadCRDsInto(store *Store, dir string) (int, error) {
+	d, ok := store.Lookup(apiextGroup, "v1", "customresourcedefinitions")
 	if !ok {
 		return 0, fmt.Errorf("customresourcedefinitions are not registered")
 	}
@@ -43,7 +55,7 @@ func (s *server) loadCRDs(dir string) (int, error) {
 		if getStr(obj, "kind") != "CustomResourceDefinition" {
 			continue
 		}
-		if _, err := s.store.Create(d, "", obj); err != nil {
+		if _, err := store.Create(d, "", obj); err != nil {
 			return n, fmt.Errorf("%s: %s", e.Name(), err.Message)
 		}
 		n++

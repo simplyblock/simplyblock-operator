@@ -55,16 +55,16 @@ const ALERT_RULES = {
     inst("ops.failed", "warning", {kind: o.crKind, id: o.key, name: o.name, namespace: o.ns}, o.clusterId ? REG[o.clusterId] : null, `${o.crKind} ${o.action || ""} ${o.name} failed`, `${o.message || "status.phase is Failed"}${o.step ? ` (at step ${o.step})` : ""}`, "status.phase"))},
   "controlplane.phase": {scope: "controlplane", evaluate: w => w.controlplanes.flatMap(cp => {
     const st = cp.status || {}, out = [];
-    if (["Degraded", "Unavailable"].includes(st.phase)) out.push(inst("controlplane.phase", st.phase === "Unavailable" ? "critical" : "warning", {kind: "ControlPlane", id: cp.metadata.uid, name: cp.metadata.name, namespace: cp.metadata.namespace}, null, `ControlPlane ${cp.metadata.name} is ${st.phase}`, st.message || `status.phase is ${st.phase}`, "status.phase"));
-    (st.components || []).filter(c => (c.ready || 0) < (c.desired || 0)).forEach(c => out.push(inst("controlplane.phase", c.essential ? "critical" : "warning", {kind: "ControlPlane", id: cp.metadata.uid + "/" + c.name, name: cp.metadata.name, namespace: cp.metadata.namespace}, null, `ControlPlane component ${c.name}: ${c.ready || 0} of ${c.desired} ready`, `status.components[] ${c.name} ready ${c.ready || 0}, desired ${c.desired}${c.essential ? ", essential" : ""}`, "status.components[]")));
+    if (["Degraded", "Unavailable"].includes(st.phase)) out.push(inst("controlplane.phase", st.phase === "Unavailable" ? "critical" : "warning", {kind: "ControlPlane", id: cp.metadata.uid, name: cp.metadata.name, namespace: cp.metadata.namespace, ctx: cp.__ctx}, null, `ControlPlane ${cp.metadata.name} is ${st.phase}`, st.message || `status.phase is ${st.phase}`, "status.phase"));
+    (st.components || []).filter(c => (c.ready || 0) < (c.desired || 0)).forEach(c => out.push(inst("controlplane.phase", c.essential ? "critical" : "warning", {kind: "ControlPlane", id: cp.metadata.uid + "/" + c.name, name: cp.metadata.name, namespace: cp.metadata.namespace, ctx: cp.__ctx}, null, `ControlPlane component ${c.name}: ${c.ready || 0} of ${c.desired} ready`, `status.components[] ${c.name} ready ${c.ready || 0}, desired ${c.desired}${c.essential ? ", essential" : ""}`, "status.components[]")));
     return out;
   })},
   "driver.phase": {scope: "driver", evaluate: w => w.drivers.filter(d => ["Degraded", "Unavailable"].includes((d.status || {}).phase)).map(d =>
-    inst("driver.phase", d.status.phase === "Unavailable" ? "critical" : "warning", {kind: "SimplyblockDriver", id: d.metadata.uid, name: d.metadata.name, namespace: d.metadata.namespace}, null, `SimplyblockDriver ${d.metadata.name} is ${d.status.phase}`, d.status.message || `nodesReady ${d.status.nodesReady} of ${d.status.nodesTotal}`, "status.phase"))}
+    inst("driver.phase", d.status.phase === "Unavailable" ? "critical" : "warning", {kind: "SimplyblockDriver", id: d.metadata.uid, name: d.metadata.name, namespace: d.metadata.namespace, ctx: d.__ctx}, null, `SimplyblockDriver ${d.metadata.name} is ${d.status.phase}`, d.status.message || `nodesReady ${d.status.nodesReady} of ${d.status.nodesTotal}`, "status.phase"))}
 };
 function inst(rule, severity, obj, cluster, title, detail, field) {
   return {fingerprint: `${rule}|${obj.kind}|${obj.namespace || ""}|${obj.id || obj.name}`, rule, severity, title, detail, field,
-    object: {kind: obj.kind, id: obj.id, name: obj.name, namespace: obj.namespace, clusterId: obj.clusterId || (cluster ? cluster.id : null), nodeId: obj.nodeId || null},
+    object: {kind: obj.kind, id: obj.id, name: obj.name, namespace: obj.namespace, ctx: obj.ctx || (obj.metadata ? obj.__ctx : null) || LOCAL_CTX, clusterId: obj.clusterId || (cluster ? cluster.id : null), nodeId: obj.nodeId || null},
     clusterId: cluster ? cluster.id : (obj.clusterId || null), clusterName: cluster ? cluster.name : null};
 }
 
@@ -77,7 +77,8 @@ const alertStore = {
   saveSilences() { try { localStorage.setItem("sb.silences", JSON.stringify(this.silences)); } catch (e) {} },
   async evaluate() {
     try {
-      const [clusters, cps, drivers] = await Promise.all([api.clusters(), k8s.list("ControlPlane", {allNamespaces: true}).catch(() => []), k8s.list("SimplyblockDriver", {allNamespaces: true}).catch(() => [])]);
+      const perCtx = async kind => (await Promise.all(CONTEXTS.map(c => k8s.list(kind, {allNamespaces: true, ctx: c.name}).then(r => r.map(o => Object.assign(o, {__ctx: c.name}))).catch(() => [])))).flat();
+      const [clusters, cps, drivers] = await Promise.all([api.clusters(), perCtx("ControlPlane"), perCtx("SimplyblockDriver")]);
       const nodes = (await Promise.all(clusters.map(c => api.nodes(c.id)))).flat();
       const devices = (await Promise.all(clusters.map(c => api.clusterDevices(c.id)))).flat();
       const pools = (await Promise.all(clusters.map(c => api.pools(c.id)))).flat();
@@ -120,7 +121,7 @@ function openAlertObject(a, nav) {
   if (vm && vm.kind === "node") return nav.openNode(vm.clusterId, vm.id);
   if (vm && vm.kind === "device") return nav.openDevice(vm.clusterId, vm.nodeId, vm.id);
   if (vm && vm.kind === "pool") return nav.openPool(vm.clusterId, vm.id);
-  if (o.kind && o.name && nav.openCR) return nav.openCR({ns: o.namespace, kind: o.kind, name: o.name});
+  if (o.kind && o.name && nav.openCR) return nav.openCR({ctx: o.ctx, ns: o.namespace, kind: o.kind, name: o.name});
   if (a.clusterId) return nav.openCluster(a.clusterId);
 }
 function AlertRow({a, nav, resolved}) {

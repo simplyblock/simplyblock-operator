@@ -573,15 +573,15 @@ const newClusterDialog = () => ({
 // Every one creates the Ops object in the target's namespace with the CRD's
 // own field names, then drops the cached world so the lock shows at once.
 const afterOps = p => p.then(r => { if (window.invalidateWorld) invalidateWorld(); return r; });
-const clusterOps = (o, action, params) => afterOps(submitOps("StorageCluster", o.name, action, params || null, {namespace: o.namespace}));
-const nodeOps = (o, action, params, extra) => afterOps(submitOps("StorageNode", o.name, action, params || null, {namespace: o.namespace}).then(created => {
+const clusterOps = (o, action, params) => afterOps(submitOps("StorageCluster", o.name, action, params || null, {namespace: o.namespace, ctx: o.ctx}));
+const nodeOps = (o, action, params, extra) => afterOps(submitOps("StorageNode", o.name, action, params || null, {namespace: o.namespace, ctx: o.ctx}).then(created => {
   // force and reattachVolume sit beside the action, not in a parameter block
   const flags = Object.entries(extra || {}).filter(([, v]) => v);
   if (!flags.length) return created;
-  return k8s.patch("StorageNodeOps", created.metadata.name, {spec: Object.fromEntries(flags)}, {namespace: o.namespace});
+  return k8s.patch("StorageNodeOps", created.metadata.name, {spec: Object.fromEntries(flags)}, {namespace: o.namespace, ctx: o.ctx});
 }));
-const deviceOps = (o, action) => afterOps(submitOps("StorageDevice", o.name, action, null, {namespace: o.namespace}));
-const poolOps = (o, action) => afterOps(submitOps("StoragePool", o.name, action, null, {namespace: o.namespace}));
+const deviceOps = (o, action) => afterOps(submitOps("StorageDevice", o.name, action, null, {namespace: o.namespace, ctx: o.ctx}));
+const poolOps = (o, action) => afterOps(submitOps("StoragePool", o.name, action, null, {namespace: o.namespace, ctx: o.ctx}));
 
 const ACTIONS = {
   deployconfig: o => [
@@ -660,7 +660,7 @@ const ACTIONS = {
       title: `StorageNodeOps Migrate ${o.name} to another worker`,
       desc: "Preparing labels the target worker and waits for its pod; Relocating restarts the node on it; AwaitingNode waits for online; Promoting asks the control plane to promote the target's devices, fail and migrate the origin's, and re-home the volumes. Only Preparing honors spec.abort.",
       fields: [{k: "targetWorkerNode", label: "spec.migrate.targetWorkerNode", type: "select", required: true,
-        load: () => k8s.list("Node").then(ns => ns.filter(n => n.metadata.name !== o.workerNode).map(n => ({v: n.metadata.name, l: n.metadata.name}))),
+        load: () => k8s.list("Node", {ctx: o.ctx}).then(ns => ns.filter(n => n.metadata.name !== o.workerNode).map(n => ({v: n.metadata.name, l: n.metadata.name}))),
         empty: "No other Kubernetes Node."},
         {k: "newSsdPcie", label: "spec.migrate.newSsdPcie", desc: "Additional NVMe PCI addresses to bind on the target, comma-separated.", type: "text"}],
       confirm: "Create StorageNodeOps", run: v => nodeOps(o, "Migrate", Object.assign({targetWorkerNode: v.targetWorkerNode}, v.newSsdPcie ? {newSsdPcie: String(v.newSsdPcie).split(",").map(s => s.trim()).filter(Boolean)} : {}))}},

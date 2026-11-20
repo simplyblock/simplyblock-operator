@@ -17,6 +17,8 @@ const LAYER_META = {
   monitor: {label: "Tasks and operations", icon: "clock"}, work: {icon: "clock"},
   // the alerts derived from the objects (alerts.jsx)
   alerts: {label: "Alerts", icon: "bell"},
+  // the fleet dashboard's sites (dashboard.jsx) and the access page
+  sites: {label: "Sites", icon: "zone"}, site: {icon: "zone"}, access: {label: "Access", icon: "lock"},
   cp: {label: "Control plane", icon: "host"},
   hosts: {label: "Hosts", icon: "host"}, host: {icon: "host"},
   nodes: {label: "Storage nodes", icon: "node"}, node: {icon: "node"},
@@ -136,7 +138,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : [...pC(o.clusterId), {t: "policies"}, {t: "policy", id: o.id}];
 
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
-const segLabel = s => s.t === "work" ? String(s.id).split("/").pop() : s.t === "cr" ? String(s.id).split("/").slice(1).join(" ") : s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
+const segLabel = s => s.t === "site" ? (s.id === "none" ? "No site" : s.id) : s.t === "work" ? String(s.id).split("/").pop() : s.t === "cr" ? String(s.id).split("/").slice(2).join(" ") : s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
 const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain,
   o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`),
   o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest,
@@ -750,11 +752,15 @@ function App() {
     layerRef: (cid, l) => go([...pC(cid), {t: l}]),
     openCluster: cid => go(pC(cid)),
     alerts: p => go([Object.assign({t: "alerts"}, p ? {p} : {})]),
+    dashboard: p => go([Object.assign({t: "clusters"}, p ? {p} : {})]),
+    sites: () => go([{t: "clusters"}, {t: "sites"}]),
+    openSite: name => go([{t: "clusters"}, {t: "sites"}, {t: "site", id: name}]),
+    access: () => go([{t: "access"}]),
     // the operations monitor; a filter rides on the segment
     monitor: p => go(p && p.cluster ? [...pC(p.cluster), Object.assign({t: "monitor"}, {p})] : [Object.assign({t: "monitor"}, p ? {p} : {})]),
     openWork: (cid, key) => go(cid ? [...pC(cid), {t: "monitor"}, {t: "work", id: key}] : [{t: "monitor"}, {t: "work", id: key}]),
     // any custom resource, as a child of wherever the user is
-    openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {t: "cr", id: objKey(ref.ns, ref.kind, ref.name)}]),
+    openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {t: "cr", id: objKey(ref.ctx, ref.ns, ref.kind, ref.name)}]),
     openHost: (cid, hid) => go(pH(cid, hid)),
     openNode: (cid, nid) => go(pN(cid, nid)),
     openDevice: (cid, nid, did) => go(pD(cid, nid, did)),
@@ -867,7 +873,6 @@ function App() {
           {drVisible && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
           {window.AlertsView && <button className={section === "alerts" ? "on" : ""} onClick={() => nav.alerts()} title="Alerts"><Icon n="bell" s={13} /><span className="swlabel">Alerts</span></button>}
           {window.MonitorView && <button className={section === "ops" ? "on" : ""} onClick={() => nav.monitor()} title="Tasks and operations"><Icon n="clock" s={13} /><span className="swlabel">Operations</span></button>}
-          <button className={section === "cp" ? "on" : ""} onClick={() => nav.cp()} title="Control plane"><Icon n="host" s={13} /><span className="swlabel">Control plane</span></button>
           <button className={"sw-logs" + (section === "logs" ? " on" : "")} onClick={() => nav.logs()} title="Logs"><Icon n="list" s={13} /><span className="swlabel">Logs</span></button>
         </div>}
         {DR_ONLY && <div className="sectionsw">
@@ -887,8 +892,8 @@ function App() {
               <button className="menu-item" onClick={() => nav.root()}><Icon n="cluster" s={13} c="var(--dim)" />All clusters</button>
               {clusters.map(c => (
                 <button key={c.id} className={"menu-item" + (ctxCluster && ctxCluster.id === c.id ? " on" : "")} onClick={() => nav.openCluster(c.id)}>
-                  <Dot c={STATUS_META[c.status].c} /><span style={{flex: 1}}>{c.name}</span>
-                  <span className="badge">{c.siting === "edge" ? "edge" : "dc"}</span>
+                  <Dot c={(STATUS_META[c.phase] || STATUS_META[c.status] || {}).c} /><span style={{flex: 1}}>{c.name}</span>
+                  <span className="mono" style={{fontSize: 10, color: "var(--dim2)"}} title="context · metadata.namespace">{window.MULTI_CTX ? c.ctx + " · " : ""}{c.namespace}</span>
                 </button>
               ))}
             </div>
@@ -896,7 +901,7 @@ function App() {
         </div>}
         <div className="spacer"></div>
         {window.SB_CONFIG.mock && <MockPanel />}
-        {!DR_ONLY && <span className="env"><span className="pulse"></span>control plane healthy</span>}
+        {!DR_ONLY && window.ControlPlanePill && <ControlPlanePill nav={nav} />}
         {DR_ONLY && <span className="env"><span className="pulse"></span>dr-hub</span>}
         {!DR_ONLY && (window.AlertBell ? <AlertBell nav={nav} clusterId={(path.find(x => x.t === "cluster") || {}).id} /> : <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
           onClick={() => { const s = path.find(x => x.t === "cluster"); if (s) nav.openCluster(s.id); else if (clusters.length) nav.openCluster(clusters.find(c => c.status === "degraded") ? clusters.find(c => c.status === "degraded").id : clusters[0].id); }}>
@@ -926,7 +931,15 @@ function App() {
 
       {!acc.state.ready ? <div className="scroll"><div className="lmsg">Resolving your access…</div></div> :
       <ViewBoundary routeKey={viewKey} onReset={() => nav.root()}>
-      {cur.t === "cr"
+      {cur.t === "site"
+        ? <FleetSiteDetail key={viewKey} seg={cur} nav={nav} rev={rev} />
+        : cur.t === "sites"
+        ? <SitesView key={viewKey} nav={nav} rev={rev} />
+        : cur.t === "access"
+        ? <div className="scroll" key={viewKey}><div className="dhead"><div style={{flex: 1, minWidth: 0}}><h1>Access</h1><div className="mdesc" style={{marginTop: 4}}>Roles, grants, and effective access of this console's users.</div></div></div><AccessView nav={nav} /></div>
+        : cur.t === "clusters" && path.length === 1 && !DR_ONLY && window.DashboardView
+        ? <DashboardView key={viewKey} seg={cur} nav={nav} rev={rev} />
+        : cur.t === "cr"
         ? <CRView key={viewKey} seg={cur} nav={nav} />
         : cur.t === "alerts"
         ? <AlertsView key={viewKey} seg={cur} nav={nav} />

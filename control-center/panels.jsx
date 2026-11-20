@@ -702,7 +702,7 @@ function ControlPlaneView({nav}) {
         <div className="mdesc" style={{marginTop: 4}}>One deployment manages every storage cluster. Its services, logs and state database are shared, so they live here rather than under any single cluster.</div>
       </div></div>
       <div className="tabs">
-        {[["services", "Services"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
+        {[["services", "Services"], ["clusters", "Managed clusters"]].map(function (t) {
           return <button key={t[0]} className={"tab" + (tab === t[0] ? " on" : "")} onClick={() => setTab(t[0])}>{t[1]}</button>;
         })}
       </div>

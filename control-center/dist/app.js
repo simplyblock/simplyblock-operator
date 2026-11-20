@@ -1,4 +1,63 @@
 // generated — do not edit; see build.md
+// ---- contexts.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// CONTEXTS: the Kubernetes clusters the console reads
+//
+// The console can manage storage across several Kubernetes clusters. Each
+// one is a named context: the browser reaches its API server through the
+// same-origin proxy at the context's `k8sBase` (`/k8s` for the local
+// cluster, `/k8s/<name>` for another one), rendered into config.js by the
+// console pod's entrypoint. A context carries free-form `labels` the
+// administrator chose when configuring the console (a lifecycle stage, a
+// tenant, a site); the fleet dashboard can group by any of them, and says
+// that the value came from the console's configuration rather than from an
+// object.
+//
+// This file loads first: every other module reads CONTEXTS.
+// ---------------------------------------------------------------------------
+const SBC = window.SB_CONFIG || {};
+const LOCAL_DEFAULT = {
+  name: "local",
+  local: true,
+  labels: {},
+  k8sBase: SBC.k8sBase || "/k8s",
+  namespaces: "all"
+};
+function normalizeContext(c, i) {
+  const o = Object.assign({}, c);
+  o.name = String(o.name || (i === 0 ? "local" : `ctx-${i}`));
+  o.local = i === 0;
+  o.labels = Object.assign({}, o.labels || {});
+  o.k8sBase = o.k8sBase || (o.local ? LOCAL_DEFAULT.k8sBase : `/k8s/${o.name}`);
+  if (o.namespaces !== "all" && !Array.isArray(o.namespaces)) o.namespaces = "all";
+  if (Array.isArray(o.namespaces) && o.namespaces.length === 0) o.namespaces = "all";
+  return o;
+}
+
+// The first context is always the local cluster, so a config.js written
+// before contexts existed still boots with exactly what it had.
+const CONTEXTS = (Array.isArray(SBC.contexts) && SBC.contexts.length ? SBC.contexts : [LOCAL_DEFAULT]).map(normalizeContext);
+const LOCAL_CTX = CONTEXTS[0].name;
+const MULTI_CTX = CONTEXTS.length > 1;
+const ctxByName = name => CONTEXTS.find(c => c.name === (name || LOCAL_CTX)) || null;
+const ctxLabels = name => (ctxByName(name) || LOCAL_DEFAULT).labels || {};
+const ctxNamespaces = name => (ctxByName(name) || LOCAL_DEFAULT).namespaces;
+// the context an object belongs to, read from the registry a normalizer fills
+const ctxOf = id => ((window.REG || {})[id] || {}).ctx || LOCAL_CTX;
+// every label key any context declares, for the dashboard's grouping switch
+const ctxLabelKeys = () => Array.from(new Set(CONTEXTS.flatMap(c => Object.keys(c.labels || {})))).sort();
+Object.assign(window, {
+  CONTEXTS,
+  LOCAL_CTX,
+  MULTI_CTX,
+  ctxByName,
+  ctxLabels,
+  ctxNamespaces,
+  ctxOf,
+  ctxLabelKeys
+});
+})();
 // ---- k8s-client.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
@@ -554,13 +613,19 @@ async function call(base, path, init) {
   }
   return body;
 }
+
+// the proxy base of a context (contexts.jsx); no ctx is the local cluster
+const baseFor = ctx => {
+  const c = window.ctxByName ? ctxByName(ctx) : null;
+  return c ? c.k8sBase : SB.k8sBase;
+};
 const k8s = {
   // list: returns items[], never the List envelope
-  list: (kind, opts) => call(SB.k8sBase, pathFor(kind, opts) + qs(opts)).then(r => r && r.items || []),
-  get: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  list: (kind, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts)).then(r => r && r.items || []),
+  get: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
   }, opts))),
-  create: (kind, obj, opts) => call(SB.k8sBase, pathFor(kind, opts), {
+  create: (kind, obj, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -568,27 +633,29 @@ const k8s = {
     body: JSON.stringify(obj)
   }),
   // spec edits go through a merge patch, which is what kubectl edit does
-  patch: (kind, name, patch, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  patch: (kind, name, patch, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
-  }, opts)), {
+  }, opts)) + qs(opts), {
     method: "PATCH",
     headers: {
       "Content-Type": "application/merge-patch+json"
     },
     body: JSON.stringify(patch)
   }),
-  remove: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  remove: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
   }, opts)), {
     method: "DELETE"
   }),
   // pod logs are the Kubernetes API, not a side channel
-  logs: (pod, opts) => call(SB.k8sBase, pathFor("Pod", {
+  logs: (pod, opts) => call(baseFor((opts || {}).ctx), pathFor("Pod", {
     name: pod,
-    subresource: "log"
+    subresource: "log",
+    namespace: (opts || {}).namespace
   }) + qs(Object.assign({
     tailLines: 200
-  }, opts)))
+  }, opts))),
+  version: ctx => call(baseFor(ctx), "/version")
 };
 function qs(opts) {
   const o = Object.assign({}, opts);
@@ -596,6 +663,7 @@ function qs(opts) {
   delete o.name;
   delete o.subresource;
   delete o.allNamespaces;
+  delete o.ctx;
   const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   return parts.length ? "?" + parts.join("&") : "";
 }
@@ -607,7 +675,7 @@ function qs(opts) {
 // namespace, including cluster-wide ones; a SelfSubjectReview says who the
 // caller is. All three are POSTs that create nothing.
 const review = {
-  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
+  can: (verb, group, resource, ns, name, ctx) => k8s.create("SelfSubjectAccessReview", {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SelfSubjectAccessReview",
     spec: {
@@ -621,20 +689,26 @@ const review = {
         name
       } : {})
     }
+  }, {
+    ctx
   }).then(r => !!(r.status && r.status.allowed)),
-  rules: ns => k8s.create("SelfSubjectRulesReview", {
+  rules: (ns, ctx) => k8s.create("SelfSubjectRulesReview", {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SelfSubjectRulesReview",
     spec: {
       namespace: ns
     }
+  }, {
+    ctx
   }).then(r => r.status || {
     resourceRules: [],
     incomplete: true
   }),
-  whoami: () => k8s.create("SelfSubjectReview", {
+  whoami: ctx => k8s.create("SelfSubjectReview", {
     apiVersion: "authentication.k8s.io/v1",
     kind: "SelfSubjectReview"
+  }, {
+    ctx
   }).then(r => r.status && r.status.userInfo || {})
 };
 
@@ -719,6 +793,11 @@ function submitOps(entityKind, targetName, action, payload, opts) {
   const spec = {
     action
   };
+  const where = Object.assign({}, r.namespaced ? {
+    namespace: ns
+  } : {}, o.ctx ? {
+    ctx: o.ctx
+  } : {});
   if (targetName && r.ref) {
     spec[r.ref] = r.refIsObject ? {
       name: targetName
@@ -738,9 +817,7 @@ function submitOps(entityKind, targetName, action, payload, opts) {
     } : {})
   };
   body.spec = spec;
-  return k8s.create(kind, body, r.namespaced ? {
-    namespace: ns
-  } : {});
+  return k8s.create(kind, body, where);
 }
 // Every Ops kind above has spec.abort; the replication kinds do not.
 const ABORTABLE_KINDS = Object.keys(RESOURCES).filter(k => RESOURCES[k].actions);
@@ -774,6 +851,7 @@ Object.assign(window, {
   DR_API_GROUP,
   pathFor,
   apiVersionOf,
+  baseFor,
   inCluster,
   ofNode,
   onWorker,
@@ -2833,13 +2911,19 @@ const k8sOf = o => ({
   namespace: o.metadata.namespace,
   kind: o.kind,
   uid: o.metadata.uid,
+  ctx: o.__ctx || LOCAL_CTX,
   labels: o.metadata.labels || {},
   annotations: o.metadata.annotations || {},
   generation: o.metadata.generation,
   observedGeneration: (o.status || {}).observedGeneration,
   creationTimestamp: o.metadata.creationTimestamp
 });
-const sameNs = (a, b) => (a.metadata.namespace || "") === (b.metadata.namespace || "");
+// the same namespace in the same context
+const sameNs = (a, b) => (a.metadata.namespace || "") === (b.metadata.namespace || "") && (a.__ctx || LOCAL_CTX) === (b.__ctx || LOCAL_CTX);
+// the worker Node an object's spec.workerNode names, in the object's context
+const workerOf = (w, o, name) => (w.workers || []).find(n => n.metadata.name === name && (n.__ctx || LOCAL_CTX) === (o.__ctx || LOCAL_CTX)) || null;
+const zoneOf = n => n ? (n.metadata.labels || {})["topology.kubernetes.io/zone"] || null : null;
+const regionOf = n => n ? (n.metadata.labels || {})["topology.kubernetes.io/region"] || null : null;
 const nodesOfCluster = (w, c) => w.nodes.filter(n => (n.spec || {}).clusterRef === c.metadata.name && sameNs(n, c));
 const devicesOfNode = (w, n) => w.devices.filter(d => (d.spec || {}).nodeRef === n.metadata.name && sameNs(d, n));
 const poolsOfCluster = (w, c) => w.pools.filter(x => (x.spec || {}).clusterRef === c.metadata.name && sameNs(x, c));
@@ -2861,13 +2945,27 @@ const normCluster = (o, w) => {
     total: 0,
     used: 0
   });
+  const zones = Array.from(new Set(nodes.map(n => zoneOf(workerOf(w, n, (n.spec || {}).workerNode))).filter(Boolean))).sort();
+  const regions = Array.from(new Set(nodes.map(n => regionOf(workerOf(w, n, (n.spec || {}).workerNode))).filter(Boolean))).sort();
   return reg({
     kind: "cluster",
     id: idOf(o),
     name: o.metadata.name,
     namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
     k8s: k8sOf(o),
     raw: o,
+    // sites: the cluster's own spec.stretched.site when it is one site of a stretched cluster, else the zones its nodes' workers are labeled with
+    sites: (sp.stretched || {}).site ? [{
+      value: sp.stretched.site,
+      from: "spec.stretched.site"
+    }] : zones.map(z => ({
+      value: z,
+      from: "worker Node label topology.kubernetes.io/zone"
+    })),
+    regions,
+    stretchedSpec: sp.stretched || null,
+    labels: o.metadata.labels || {},
     phase: s.phase || "Pending",
     status: s.status || null,
     message: s.message || "",
@@ -2929,13 +3027,18 @@ const normNode = (o, w) => {
     res = s.resources || {},
     cap = res.capacity || {};
   const cluster = clusterOfRef(w, o, sp.clusterRef);
+  const worker = workerOf(w, o, sp.workerNode);
   return reg({
     kind: "node",
     id: idOf(o),
     name: o.metadata.name,
     namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
     k8s: k8sOf(o),
     raw: o,
+    zone: zoneOf(worker),
+    region: regionOf(worker),
+    workerFound: !!worker,
     hostname: s.hostname || sp.workerNode || o.metadata.name,
     clusterRef: sp.clusterRef,
     clusterId: cluster ? idOf(cluster) : null,
@@ -2983,6 +3086,7 @@ const normDevice = (o, w) => {
     id: sp.deviceID || o.metadata.uid,
     name: o.metadata.name,
     namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
     k8s: k8sOf(o),
     raw: o,
     nodeRef: sp.nodeRef,
@@ -3012,6 +3116,7 @@ const normPool = (o, w) => {
     id: idOf(o),
     name: o.metadata.name,
     namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
     k8s: k8sOf(o),
     raw: o,
     clusterRef: sp.clusterRef,
@@ -3034,25 +3139,77 @@ const normPool = (o, w) => {
 // One read of the four kinds across every namespace, shared by every getter
 // for a few seconds, so a page that asks for a cluster, its nodes, and their
 // devices lists each kind once.
+// Every context is read; one that fails keeps its error in WORLD_ERRORS so
+// the dashboard can say which context is unreachable instead of hiding the
+// rest. Each object is stamped with its context (__ctx).
 let WORLD = null,
-  WORLD_AT = 0;
+  WORLD_AT = 0,
+  WORLD_ERRORS = {};
 const WORLD_TTL = 4000;
+const WORLD_KINDS = ["StorageCluster", "StorageNode", "StorageDevice", "StoragePool", "Node"];
 function world() {
   if (WORLD && Date.now() - WORLD_AT < WORLD_TTL) return WORLD;
   WORLD_AT = Date.now();
-  WORLD = Promise.all(["StorageCluster", "StorageNode", "StorageDevice", "StoragePool"].map(k => k8s.list(k, {
-    allNamespaces: true
-  }))).then(([clusters, nodes, devices, pools]) => ({
-    clusters,
-    nodes,
-    devices,
-    pools
+  WORLD = Promise.all(CONTEXTS.map(async c => {
+    const out = {
+      clusters: [],
+      nodes: [],
+      devices: [],
+      pools: [],
+      workers: []
+    };
+    const lists = await Promise.all(WORLD_KINDS.map(k => k8s.list(k, {
+      allNamespaces: true,
+      ctx: c.name
+    }).then(r => ({
+      k,
+      r
+    })).catch(e => ({
+      k,
+      e
+    }))));
+    const errs = {};
+    lists.forEach(({
+      k,
+      r,
+      e
+    }) => {
+      if (e) {
+        errs[k] = e;
+        return;
+      }
+      const stamped = r.map(o => Object.assign(o, {
+        __ctx: c.name
+      }));
+      ({
+        StorageCluster: out.clusters,
+        StorageNode: out.nodes,
+        StorageDevice: out.devices,
+        StoragePool: out.pools,
+        Node: out.workers
+      })[k].push(...stamped);
+    });
+    if (Object.keys(errs).length) WORLD_ERRORS[c.name] = errs;else delete WORLD_ERRORS[c.name];
+    return out;
+  })).then(parts => parts.reduce((a, p) => ({
+    clusters: a.clusters.concat(p.clusters),
+    nodes: a.nodes.concat(p.nodes),
+    devices: a.devices.concat(p.devices),
+    pools: a.pools.concat(p.pools),
+    workers: a.workers.concat(p.workers)
+  }), {
+    clusters: [],
+    nodes: [],
+    devices: [],
+    pools: [],
+    workers: []
   })).catch(e => {
     WORLD = null;
     throw e;
   });
   return WORLD;
 }
+const worldErrors = () => WORLD_ERRORS;
 const invalidateWorld = () => {
   WORLD = null;
 };
@@ -4841,6 +4998,7 @@ Object.assign(window, {
   api,
   world,
   invalidateWorld,
+  worldErrors,
   normCluster,
   normNode,
   normDevice,
@@ -8008,10 +8166,11 @@ async function podLogs(name, container, tail) {
 const agent = {
   // The control plane is one deployment across every cluster, so none of these
   // are scoped by cluster.
-  containers: () => upstreamOn("operator") ? areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer)) : k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {
+  // the pods of the operator's namespace and their logs, read from the Kubernetes API: the operator serves no HTTP API of its own
+  containers: () => k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {
     metrics: false
   }))),
-  containerLogs: (name, container) => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name, container),
+  containerLogs: (name, container) => podLogs(name, container),
   fdbBackups: () => areq(AGENT_BASE, "/control-plane/fdb/backups").then(r => r.map(normFdb)),
   fdbRestore: id => asend(AGENT_BASE, "POST", `/control-plane/fdb/backups/${id}/restore`),
   nodeLogs: (nid, stream) => areq(AGENT_BASE, `/nodes/${nid}/logs/${stream}`),
@@ -8663,16 +8822,24 @@ async function loadAccessK8s() {
 // the API server is asked for the caller's rules in each of them; a rule set
 // the operator's access view returned for a namespace is kept as is.
 async function loadStorageNamespaceRules() {
-  let nss = [NS()];
+  let targets = [{
+    ns: NS(),
+    ctx: LOCAL_CTX
+  }];
   try {
     const w = await world();
-    nss = nss.concat(w.clusters.map(c => c.metadata.namespace));
+    targets = targets.concat(w.clusters.map(c => ({
+      ns: c.metadata.namespace,
+      ctx: c.__ctx || LOCAL_CTX
+    })));
   } catch (e) {}
-  await Promise.all([...new Set(nss.filter(Boolean))].map(async ns => {
-    if (AC_STATE.rules.ns[ns]) return;
+  const keyOf = t => t.ctx !== LOCAL_CTX ? `${t.ctx}:${t.ns}` : t.ns;
+  const seen = new Set();
+  await Promise.all(targets.filter(t => t.ns && !seen.has(keyOf(t)) && seen.add(keyOf(t))).map(async t => {
+    if (AC_STATE.rules.ns[keyOf(t)]) return;
     try {
-      const r = await review.rules(ns);
-      AC_STATE.rules.ns[ns] = (r.resourceRules || []).map(x => ({
+      const r = await review.rules(t.ns, t.ctx);
+      AC_STATE.rules.ns[keyOf(t)] = (r.resourceRules || []).map(x => ({
         apiGroups: x.apiGroups || [""],
         resources: x.resources || [],
         verbs: x.verbs || [],
@@ -8737,7 +8904,9 @@ function nsOf(entity, o, op) {
   if (!o) return entity === "k8scluster" || entity === "binding" ? ["*"] : [];
   // an object read from the Kubernetes API is judged in its own namespace,
   // which is where the API server judges it too
-  const own = o.namespace || o.k8s && o.k8s.namespace;
+  // a namespace of another context is keyed by the context, since each API server has its own rules
+  const ownNs = o.namespace || o.k8s && o.k8s.namespace;
+  const own = ownNs && o.ctx && o.ctx !== LOCAL_CTX ? `${o.ctx}:${ownNs}` : ownNs;
   if (own && op !== "create" && !["k8scluster", "binding", "role", "labelrequest", "replicationpolicy", "drpolicy"].includes(entity)) return [own];
   if (entity === "k8scluster") {
     if (op === "create") return ["*"]; // create nodepoolallocations is cluster-scoped
@@ -9004,7 +9173,18 @@ function IdentityMenu({
       color: "var(--dim)",
       fontSize: 12
     }
-  }, here ? "No RoleBinding reaches this namespace — if you can see the object, you are reading it through a wider scope." : "No cluster-scoped binding.")), !!s.demoUsers.length && /*#__PURE__*/React.createElement("div", {
+  }, here ? "No RoleBinding reaches this namespace — if you can see the object, you are reading it through a wider scope." : "No cluster-scoped binding.")), (a.canAnywhere("read", "binding") || a.canAnywhere("read", "role")) && window.__nav && window.__nav.access && /*#__PURE__*/React.createElement("div", {
+    className: "idsec"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "idpick",
+    onClick: () => {
+      setOpen(false);
+      window.__nav.access();
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "lock",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", null, "Access control: roles and grants"))), !!s.demoUsers.length && /*#__PURE__*/React.createElement("div", {
     className: "idsec"
   }, /*#__PURE__*/React.createElement("h4", null, "View as ", /*#__PURE__*/React.createElement("span", {
     style: {
@@ -10625,10 +10805,12 @@ const afterOps = p => p.then(r => {
   return r;
 });
 const clusterOps = (o, action, params) => afterOps(submitOps("StorageCluster", o.name, action, params || null, {
-  namespace: o.namespace
+  namespace: o.namespace,
+  ctx: o.ctx
 }));
 const nodeOps = (o, action, params, extra) => afterOps(submitOps("StorageNode", o.name, action, params || null, {
-  namespace: o.namespace
+  namespace: o.namespace,
+  ctx: o.ctx
 }).then(created => {
   // force and reattachVolume sit beside the action, not in a parameter block
   const flags = Object.entries(extra || {}).filter(([, v]) => v);
@@ -10636,14 +10818,17 @@ const nodeOps = (o, action, params, extra) => afterOps(submitOps("StorageNode", 
   return k8s.patch("StorageNodeOps", created.metadata.name, {
     spec: Object.fromEntries(flags)
   }, {
-    namespace: o.namespace
+    namespace: o.namespace,
+    ctx: o.ctx
   });
 }));
 const deviceOps = (o, action) => afterOps(submitOps("StorageDevice", o.name, action, null, {
-  namespace: o.namespace
+  namespace: o.namespace,
+  ctx: o.ctx
 }));
 const poolOps = (o, action) => afterOps(submitOps("StoragePool", o.name, action, null, {
-  namespace: o.namespace
+  namespace: o.namespace,
+  ctx: o.ctx
 }));
 const ACTIONS = {
   deployconfig: o => [o.status === "Draft" ? {
@@ -10847,7 +11032,9 @@ const ACTIONS = {
         label: "spec.migrate.targetWorkerNode",
         type: "select",
         required: true,
-        load: () => k8s.list("Node").then(ns => ns.filter(n => n.metadata.name !== o.workerNode).map(n => ({
+        load: () => k8s.list("Node", {
+          ctx: o.ctx
+        }).then(ns => ns.filter(n => n.metadata.name !== o.workerNode).map(n => ({
           v: n.metadata.name,
           l: n.metadata.name
         }))),
@@ -15026,7 +15213,7 @@ function ControlPlaneView({
     }
   }, "One deployment manages every storage cluster. Its services, logs and state database are shared, so they live here rather than under any single cluster."))), /*#__PURE__*/React.createElement("div", {
     className: "tabs"
-  }, [["services", "Services"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
+  }, [["services", "Services"], ["clusters", "Managed clusters"]].map(function (t) {
     return /*#__PURE__*/React.createElement("button", {
       key: t[0],
       className: "tab" + (tab === t[0] ? " on" : ""),
@@ -15972,10 +16159,10 @@ const TASK_PHASE = {
   suspended: "Suspended",
   done: "Succeeded"
 };
-const wkey = (kind, ns, name) => `${kind}/${ns || ""}/${name}`;
+const wkey = (kind, ns, name, ctx) => `${ctx || LOCAL_CTX}/${kind}/${ns || ""}/${name}`;
 
 // ---- the objects the operation points at ---------------------------------------
-const vmByName = (kind, name, ns) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns)) || null;
+const vmByName = (kind, name, ns, ctx) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns) && (!ctx || (v.ctx || LOCAL_CTX) === ctx)) || null;
 const clusterByUUID = uuid => Object.values(REG).find(v => v.kind === "cluster" && v.id === uuid) || null;
 function targetOf(o) {
   const r = RESOURCES[o.kind] || {},
@@ -15987,7 +16174,7 @@ function targetOf(o) {
   };
   const raw = sp[r.ref];
   const name = raw && typeof raw === "object" ? raw.name : raw;
-  const vm = r.ops ? vmByName(r.ops, name, r.ops === "PersistentVolume" ? undefined : o.metadata.namespace) : null;
+  const vm = r.ops ? vmByName(r.ops, name, r.ops === "PersistentVolume" ? undefined : o.metadata.namespace, o.__ctx || LOCAL_CTX) : null;
   return {
     kind: r.ops,
     name: name || null,
@@ -16000,11 +16187,11 @@ function clusterIdOf(o, target) {
   if (st.migration && st.migration.clusterUUID) return clusterByUUID(st.migration.clusterUUID) ? st.migration.clusterUUID : null;
   if (st.relocate && st.relocate.sourceClusterUUID) return st.relocate.sourceClusterUUID;
   if (o.kind === "ClusterDeploymentConfig" && st.clusterRef) {
-    const c = vmByName("StorageCluster", st.clusterRef, o.metadata.namespace);
+    const c = vmByName("StorageCluster", st.clusterRef, o.metadata.namespace, o.__ctx || LOCAL_CTX);
     return c ? c.id : null;
   }
   if (o.kind === "StorageNode") {
-    const c = vmByName("StorageCluster", (o.spec || {}).clusterRef, o.metadata.namespace);
+    const c = vmByName("StorageCluster", (o.spec || {}).clusterRef, o.metadata.namespace, o.__ctx || LOCAL_CTX);
     return c ? c.id : null;
   }
   return null;
@@ -16079,11 +16266,12 @@ function normOpsItem(o) {
     reason: `step ${(st.step || {}).state || "unknown"} does not honor spec.abort; the graph for ${sp.action} aborts only at ${((graphOf(o.kind, sp.action) || {}).abortable || []).join(", ") || "no step"}`
   };
   return {
-    key: wkey(o.kind, o.metadata.namespace, o.metadata.name),
+    key: wkey(o.kind, o.metadata.namespace, o.metadata.name, o.__ctx),
     src: "ops",
     crKind: o.kind,
     name: o.metadata.name,
     ns: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
     uid: o.metadata.uid,
     clusterId: clusterIdOf(o, target),
     action: sp.action || null,
@@ -16122,13 +16310,14 @@ function normOpsItem(o) {
 function normNodeAddItem(n) {
   const st = n.status || {};
   const pos = stepPosition("StorageNode", null, (st.step || {}).state);
-  const vm = vmByName("StorageNode", n.metadata.name, n.metadata.namespace);
+  const vm = vmByName("StorageNode", n.metadata.name, n.metadata.namespace, n.__ctx || LOCAL_CTX);
   return {
-    key: wkey("StorageNode", n.metadata.namespace, n.metadata.name),
+    key: wkey("StorageNode", n.metadata.namespace, n.metadata.name, n.__ctx),
     src: "nodeadd",
     crKind: "StorageNode",
     name: n.metadata.name,
     ns: n.metadata.namespace,
+    ctx: n.__ctx || LOCAL_CTX,
     uid: n.metadata.uid,
     clusterId: clusterIdOf(n, {
       vm: null
@@ -16172,6 +16361,7 @@ function normTaskItem(t, cluster) {
     crKind: null,
     name: t.id,
     ns: cluster.namespace,
+    ctx: cluster.ctx,
     clusterId: cluster.id,
     action: t.type || null,
     target: {
@@ -16221,26 +16411,26 @@ function buildTree(items) {
   const ops = items.filter(i => i.src === "ops");
   ops.forEach(o => {
     // spec.creatorRef names the operation that created this one (a drain's migrations, the rebalancer's)
-    if (o.creatorRef && o.creatorRef.kind !== "StorageCluster") attach(o, byKey.get(wkey(o.creatorRef.kind, o.creatorRef.namespace, o.creatorRef.name)));
+    if (o.creatorRef && o.creatorRef.kind !== "StorageCluster") attach(o, byKey.get(wkey(o.creatorRef.kind, o.creatorRef.namespace, o.creatorRef.name, o.ctx)));
     // the drain-node label, for a mover that wrote no creatorRef
     else if (o.crKind === "PersistentVolumeOps" && o.labels["storage.simplyblock.io/drain-node"]) {
       const drain = ops.find(p => p.crKind === "StorageNodeOps" && p.action === "Remove" && p.target.vm && p.target.vm.id === o.labels["storage.simplyblock.io/drain-node"]);
       attach(o, drain);
     }
     // a controller owner that is itself an operation (the activation a deployment creates)
-    if (o.owner && WORK_KINDS.includes(o.owner.kind)) attach(o, byKey.get(wkey(o.owner.kind, o.ns, o.owner.name)));
+    if (o.owner && WORK_KINDS.includes(o.owner.kind)) attach(o, byKey.get(wkey(o.owner.kind, o.ns, o.owner.name, o.ctx)));
     // a discovery's document
-    if (o.crKind === "OperatorOps" && o.configRef) attach(byKey.get(wkey("ClusterDeploymentConfig", o.ns, o.configRef)), o);
+    if (o.crKind === "OperatorOps" && o.configRef) attach(byKey.get(wkey("ClusterDeploymentConfig", o.ns, o.configRef, o.ctx)), o);
   });
   // a node add under the document that created it (status.nodeRefs)
   items.filter(i => i.src === "nodeadd").forEach(n => {
-    const doc = ops.find(d => d.crKind === "ClusterDeploymentConfig" && d.ns === n.ns && ((d.raw.status || {}).nodeRefs || []).includes(n.name));
+    const doc = ops.find(d => d.crKind === "ClusterDeploymentConfig" && d.ns === n.ns && d.ctx === n.ctx && ((d.raw.status || {}).nodeRefs || []).includes(n.name));
     attach(n, doc);
   });
   // a child without a cluster takes its parent's; a creatorRef naming a StorageCluster is that cluster
   items.forEach(i => {
     if (!i.clusterId && i.creatorRef && i.creatorRef.kind === "StorageCluster") {
-      const c = vmByName("StorageCluster", i.creatorRef.name, i.creatorRef.namespace);
+      const c = vmByName("StorageCluster", i.creatorRef.name, i.creatorRef.namespace, i.ctx);
       if (c) i.clusterId = c.id;
     }
   });
@@ -16287,9 +16477,12 @@ const workStore = {
       // the nodes, devices, and pools go through the registry so an operation's target resolves
       await Promise.all(clusters.flatMap(c => [api.nodes(c.id), api.clusterDevices(c.id), api.pools(c.id)]));
       const w = await world();
-      const lists = await Promise.all(WORK_KINDS.map(k => k8s.list(k, {
-        allNamespaces: true
-      }).catch(() => [])));
+      const lists = await Promise.all(CONTEXTS.flatMap(c => WORK_KINDS.map(k => k8s.list(k, {
+        allNamespaces: true,
+        ctx: c.name
+      }).then(r => r.map(o => Object.assign(o, {
+        __ctx: c.name
+      }))).catch(() => []))));
       const ops = lists.flat().map(normOpsItem);
       const adds = w.nodes.filter(n => (n.status || {}).phase === "Provisioning" || (n.status || {}).phase === "Pending").map(normNodeAddItem);
       const tasks = clusters.flatMap(c => (c.tasks || []).map(t => normTaskItem(t, c)));
@@ -16349,7 +16542,8 @@ function cancelDialog(item) {
       run: () => submitOps("StorageCluster", c.name, "CancelTask", {
         taskID: item.name
       }, {
-        namespace: c.namespace
+        namespace: c.namespace,
+        ctx: c.ctx
       }).then(() => workStore.load()),
       done: "CancelTask created"
     };
@@ -16360,7 +16554,8 @@ function cancelDialog(item) {
     desc: `Sets spec.abort. The operator honors it at step ${item.step || "Pending"} and the operation lands in Aborted; past the abortable steps it emits AbortRefused and runs on.`,
     confirm: "Set spec.abort",
     run: () => abortOps(item.crKind, item.name, {
-      namespace: item.ns
+      namespace: item.ns,
+      ctx: item.ctx
     }).then(() => workStore.load()),
     done: "spec.abort set"
   };
@@ -16446,6 +16641,7 @@ function WorkRow({
     if (vm && vm.kind === "pool") return nav.openPool(vm.clusterId, vm.id);
     if (vm && vm.kind === "cluster") return nav.openCluster(vm.id);
     if (t.kind && t.name) return nav.openCR({
+      ctx: it.ctx,
       ns: t.kind === "PersistentVolume" ? undefined : it.ns,
       kind: t.kind,
       name: t.name
@@ -16480,7 +16676,7 @@ function WorkRow({
       fontSize: 10,
       color: "var(--dim2)"
     }
-  }, it.src === "task" ? `status.tasks[] id ${it.name}` : `${it.ns ? it.ns + "/" : ""}${it.name}`))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+  }, it.src === "task" ? `status.tasks[] id ${it.name}` : `${it.ns ? it.ns + "/" : ""}${it.name}`, window.MULTI_CTX ? ` · ${it.ctx}` : ""))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
     className: "badge"
   }, it.src === "task" ? "task" : it.crKind)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Phase, {
     p: it.phase
@@ -16847,6 +17043,7 @@ function WorkItemDetail({
   }), REG[it.clusterId].name), it.crKind && /*#__PURE__*/React.createElement("button", {
     className: "lab link",
     onClick: () => nav.openCR({
+      ctx: it.ctx,
       ns: it.ns,
       kind: it.crKind,
       name: it.name
@@ -16857,6 +17054,7 @@ function WorkItemDetail({
   }), it.crKind, " ", it.name), it.creatorRef && /*#__PURE__*/React.createElement("button", {
     className: "lab link",
     onClick: () => nav.openCR({
+      ctx: it.ctx,
       ns: it.creatorRef.namespace,
       kind: it.creatorRef.kind,
       name: it.creatorRef.name
@@ -17057,13 +17255,15 @@ const ALERT_RULES = {
         kind: "ControlPlane",
         id: cp.metadata.uid,
         name: cp.metadata.name,
-        namespace: cp.metadata.namespace
+        namespace: cp.metadata.namespace,
+        ctx: cp.__ctx
       }, null, `ControlPlane ${cp.metadata.name} is ${st.phase}`, st.message || `status.phase is ${st.phase}`, "status.phase"));
       (st.components || []).filter(c => (c.ready || 0) < (c.desired || 0)).forEach(c => out.push(inst("controlplane.phase", c.essential ? "critical" : "warning", {
         kind: "ControlPlane",
         id: cp.metadata.uid + "/" + c.name,
         name: cp.metadata.name,
-        namespace: cp.metadata.namespace
+        namespace: cp.metadata.namespace,
+        ctx: cp.__ctx
       }, null, `ControlPlane component ${c.name}: ${c.ready || 0} of ${c.desired} ready`, `status.components[] ${c.name} ready ${c.ready || 0}, desired ${c.desired}${c.essential ? ", essential" : ""}`, "status.components[]")));
       return out;
     })
@@ -17074,7 +17274,8 @@ const ALERT_RULES = {
       kind: "SimplyblockDriver",
       id: d.metadata.uid,
       name: d.metadata.name,
-      namespace: d.metadata.namespace
+      namespace: d.metadata.namespace,
+      ctx: d.__ctx
     }, null, `SimplyblockDriver ${d.metadata.name} is ${d.status.phase}`, d.status.message || `nodesReady ${d.status.nodesReady} of ${d.status.nodesTotal}`, "status.phase"))
   }
 };
@@ -17091,6 +17292,7 @@ function inst(rule, severity, obj, cluster, title, detail, field) {
       id: obj.id,
       name: obj.name,
       namespace: obj.namespace,
+      ctx: obj.ctx || (obj.metadata ? obj.__ctx : null) || LOCAL_CTX,
       clusterId: obj.clusterId || (cluster ? cluster.id : null),
       nodeId: obj.nodeId || null
     },
@@ -17136,11 +17338,13 @@ const alertStore = {
   },
   async evaluate() {
     try {
-      const [clusters, cps, drivers] = await Promise.all([api.clusters(), k8s.list("ControlPlane", {
-        allNamespaces: true
-      }).catch(() => []), k8s.list("SimplyblockDriver", {
-        allNamespaces: true
-      }).catch(() => [])]);
+      const perCtx = async kind => (await Promise.all(CONTEXTS.map(c => k8s.list(kind, {
+        allNamespaces: true,
+        ctx: c.name
+      }).then(r => r.map(o => Object.assign(o, {
+        __ctx: c.name
+      }))).catch(() => [])))).flat();
+      const [clusters, cps, drivers] = await Promise.all([api.clusters(), perCtx("ControlPlane"), perCtx("SimplyblockDriver")]);
       const nodes = (await Promise.all(clusters.map(c => api.nodes(c.id)))).flat();
       const devices = (await Promise.all(clusters.map(c => api.clusterDevices(c.id)))).flat();
       const pools = (await Promise.all(clusters.map(c => api.pools(c.id)))).flat();
@@ -17280,6 +17484,7 @@ function openAlertObject(a, nav) {
   if (vm && vm.kind === "device") return nav.openDevice(vm.clusterId, vm.nodeId, vm.id);
   if (vm && vm.kind === "pool") return nav.openPool(vm.clusterId, vm.id);
   if (o.kind && o.name && nav.openCR) return nav.openCR({
+    ctx: o.ctx,
     ns: o.namespace,
     kind: o.kind,
     name: o.name
@@ -21004,14 +21209,16 @@ const isImmutable = (schema, path) => {
 
 // ---- the object -------------------------------------------------------------
 function useCR(ref, rev) {
-  const key = ref ? `${ref.kind}|${ref.ns || ""}|${ref.name}|${rev || 0}` : "none";
+  const key = ref ? `${ref.ctx || ""}|${ref.kind}|${ref.ns || ""}|${ref.name}|${rev || 0}` : "none";
   return useResource("cr|" + key, () => ref ? k8s.get(ref.kind, ref.name, {
-    namespace: ref.ns
+    namespace: ref.ns,
+    ctx: ref.ctx
   }) : Promise.resolve(null), 6000);
 }
 const refOfVm = vm => {
   if (!vm) return null;
   if (vm.k8s && vm.k8s.kind) return {
+    ctx: vm.k8s.ctx || vm.ctx || LOCAL_CTX,
     ns: vm.k8s.namespace || undefined,
     kind: vm.k8s.kind,
     name: vm.k8s.name
@@ -21019,15 +21226,18 @@ const refOfVm = vm => {
   const kind = VM_CR_KIND[vm.kind];
   if (!kind) return null;
   return {
+    ctx: vm.ctx || LOCAL_CTX,
     ns: vm.namespace || undefined,
     kind,
     name: vm.name || vm.pvName
   };
 };
-const objKey = (ns, kind, name) => `${ns || ""}/${kind}/${name}`;
+// an object key names the context too, so a deep link lands on the right cluster
+const objKey = (ctx, ns, kind, name) => `${ctx || LOCAL_CTX}/${ns || ""}/${kind}/${name}`;
 const parseObjKey = key => {
-  const [ns, kind, ...rest] = String(key).split("/");
+  const [ctx, ns, kind, ...rest] = String(key).split("/");
   return {
+    ctx: ctx || LOCAL_CTX,
     ns: ns || undefined,
     kind,
     name: rest.join("/")
@@ -21049,10 +21259,12 @@ function useSpecPatch(ref, onDone) {
     try {
       await k8s.patch(ref.kind, ref.name, patch, {
         namespace: ref.ns,
+        ctx: ref.ctx,
         dryRun: "All"
       });
       await k8s.patch(ref.kind, ref.name, patch, {
-        namespace: ref.ns
+        namespace: ref.ns,
+        ctx: ref.ctx
       });
       if (window.invalidateWorld) invalidateWorld();
       window.__toast(`${path} updated`);
@@ -21195,7 +21407,7 @@ function DriftBanner({
   }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Status is behind the spec."), " metadata.generation is ", g, "; status.observedGeneration is ", og, ". What status says may predate the latest edit."));
 }
 // the view model in the registry that a CR name points at
-const vmByCR = (kind, name, ns) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns));
+const vmByCR = (kind, name, ns, ctx) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns) && (!ctx || (v.ctx || LOCAL_CTX) === ctx));
 function LinkValue({
   r,
   value,
@@ -21203,43 +21415,52 @@ function LinkValue({
   nav
 }) {
   if (!r.link || value === undefined || value === null || value === "") return null;
-  const ns = obj.metadata.namespace;
+  const ns = obj.metadata.namespace,
+    ctx = obj.__ctx || LOCAL_CTX;
   const go = () => {
     if (r.link === "cluster") {
-      const c = vmByCR("StorageCluster", value, ns);
+      const c = vmByCR("StorageCluster", value, ns, ctx);
       if (c) nav.openCluster(c.id);else nav.openCR({
+        ctx,
         ns,
         kind: "StorageCluster",
         name: value
       });
     } else if (r.link === "node") {
-      const n = vmByCR("StorageNode", value, getPath(obj, r.path.replace(/\.name$/, ".namespace")) || ns);
+      const n = vmByCR("StorageNode", value, getPath(obj, r.path.replace(/\.name$/, ".namespace")) || ns, ctx);
       if (n) nav.openNode(n.clusterId, n.id);else nav.openCR({
+        ctx,
         ns,
         kind: "StorageNode",
         name: value
       });
     } else if (r.link === "pool") {
-      const p = vmByCR("StoragePool", value, ns) || Object.values(REG).find(v => v.kind === "pool" && v.name === value);
+      const p = vmByCR("StoragePool", value, ns, ctx) || Object.values(REG).find(v => v.kind === "pool" && v.name === value && (v.ctx || LOCAL_CTX) === ctx);
       if (p) nav.openPool(p.clusterId, p.id);else nav.openCR({
+        ctx,
         ns,
         kind: "StoragePool",
         name: value
       });
     } else if (r.link === "worker") nav.openCR({
+      ctx,
       kind: "Node",
       name: value
     });else if (r.link === "storageclass") nav.openCR({
+      ctx,
       kind: "StorageClass",
       name: value
     });else if (r.link === "pvc") nav.openCR({
+      ctx,
       ns: getPath(obj, r.path.replace(/\.name$/, ".namespace")) || getPath(obj, "status.source.claimNamespace") || ns,
       kind: "PersistentVolumeClaim",
       name: value
     });else if (r.link === "pv") nav.openCR({
+      ctx,
       kind: "PersistentVolume",
       name: value
     });else if (r.link === "vsc") nav.openCR({
+      ctx,
       kind: "VolumeSnapshotContent",
       name: value
     });
@@ -21305,7 +21526,9 @@ function EssentialsTab({
     }, "unset") : shown(r, v)), /*#__PURE__*/React.createElement(LinkValue, {
       r: r,
       value: v,
-      obj: obj,
+      obj: Object.assign({
+        __ctx: ref.ctx
+      }, obj),
       nav: nav
     }))];
   });
@@ -21562,12 +21785,14 @@ function KubernetesTab({
   const m = obj.metadata || {};
   const {
     data: events
-  } = useResource("crev|" + m.uid, () => k8s.list("Event", {
+  } = useResource("crev|" + ref.ctx + "|" + m.uid, () => k8s.list("Event", {
     namespace: m.namespace || "default",
-    fieldSelector: `involvedObject.uid=${m.uid}`
+    fieldSelector: `involvedObject.uid=${m.uid}`,
+    ctx: ref.ctx
   }).catch(() => []), 10000);
   const evs = (events || []).slice().sort((a, b) => Date.parse(b.lastTimestamp || b.eventTime || 0) - Date.parse(a.lastTimestamp || a.eventTime || 0));
   const openRef = r => nav.openCR({
+    ctx: ref.ctx,
     ns: m.namespace,
     kind: r.kind,
     name: r.name
@@ -21610,7 +21835,7 @@ function KubernetesTab({
       style: {
         fontSize: 11
       }
-    }, m.uid)], ["resourceVersion", m.resourceVersion], ["generation", m.generation], ["creationTimestamp", fmtDate(m.creationTimestamp)], ["deletionTimestamp", m.deletionTimestamp ? fmtDate(m.deletionTimestamp) : null], ["finalizers", (m.finalizers || []).join(", ") || null]]
+    }, m.uid)], ["resourceVersion", m.resourceVersion], ["generation", m.generation], ["creationTimestamp", fmtDate(m.creationTimestamp)], ["deletionTimestamp", m.deletionTimestamp ? fmtDate(m.deletionTimestamp) : null], ["finalizers", (m.finalizers || []).join(", ") || null], ["context", ref.ctx]]
   })))), /*#__PURE__*/React.createElement("div", {
     className: "dcols",
     style: {
@@ -21735,7 +21960,7 @@ function CRPanel({
       color: "var(--dim2)",
       alignSelf: "center"
     }
-  }, obj.apiVersion, " ", ref.kind, " ", ref.ns ? ref.ns + "/" : "", ref.name)), tab === "essentials" && /*#__PURE__*/React.createElement(EssentialsTab, {
+  }, obj.apiVersion, " ", ref.kind, " ", ref.ns ? ref.ns + "/" : "", ref.name, window.MULTI_CTX ? ` · ${ref.ctx}` : "")), tab === "essentials" && /*#__PURE__*/React.createElement(EssentialsTab, {
     obj: obj,
     cref: ref,
     nav: nav,
@@ -21804,7 +22029,8 @@ function CRView({
   }, obj.apiVersion, " \xB7 ", obj.metadata.namespace ? `namespace ${obj.metadata.namespace}` : "cluster-scoped")), abortable && /*#__PURE__*/React.createElement("button", {
     className: "btn",
     onClick: () => abortOps(obj.kind, obj.metadata.name, {
-      namespace: ref.ns
+      namespace: ref.ns,
+      ctx: ref.ctx
     }).then(() => {
       window.__toast("spec.abort set");
       reload();
@@ -22934,6 +23160,1193 @@ Object.assign(window, {
   OpsRef,
   Derived,
   TaskWindowCard
+});
+})();
+// ---- dashboard.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// FLEET DASHBOARD: the root of the Clusters section
+//
+// One view for every deployment shape: a few sites with a cluster each, a
+// lifecycle ladder of contexts, tenants in namespaces, a dozen edge clusters
+// in one Kubernetes cluster, or one context per edge site. The grouping
+// switch picks the dimension, and every dimension is something the objects
+// or the console's configuration actually carry: the Kubernetes context, the
+// namespace, the site (a stretched cluster's spec.stretched.site, else the
+// topology.kubernetes.io/zone label of the workers the nodes run on, which is
+// what "sites are tagged nodes" means), the region label, any label on the
+// StorageCluster, or any label the administrator configured on a context.
+// Each group says where its value came from. Counts and capacity are the
+// derived values api.jsx documents; alerts and operations come from their
+// stores; the control planes are the ControlPlane objects of each context.
+// ---------------------------------------------------------------------------
+const SM = s => STATUS_META[s] || {
+  c: "var(--idle)",
+  rank: 1,
+  label: s || "unknown"
+};
+const FLEET_POLL = 10000;
+const NONE = "none";
+const BASE_GROUPINGS = {
+  context: {
+    label: "Context",
+    keysOf: c => [c.ctx],
+    from: () => "the Kubernetes context the object was read from"
+  },
+  namespace: {
+    label: "Namespace",
+    keysOf: c => [c.namespace],
+    from: () => "metadata.namespace"
+  },
+  site: {
+    label: "Site",
+    keysOf: c => c.sites.length ? c.sites.map(s => s.value) : [NONE],
+    from: c => (c.sites[0] || {}).from || "no site: the cluster is not stretched and no worker carries a zone label"
+  },
+  region: {
+    label: "Region",
+    keysOf: c => c.regions.length ? c.regions : [NONE],
+    from: () => "worker Node label topology.kubernetes.io/region"
+  },
+  flat: {
+    label: "Flat",
+    keysOf: () => [""],
+    from: () => null
+  }
+};
+// "label:<key>" groups by a StorageCluster label, "ctxlabel:<key>" by a label the console's configuration gives the context
+function groupingOf(key) {
+  if (BASE_GROUPINGS[key]) return BASE_GROUPINGS[key];
+  if (key.startsWith("label:")) {
+    const k = key.slice(6);
+    return {
+      label: k,
+      keysOf: c => [(c.labels || {})[k] || NONE],
+      from: () => `metadata.labels[${k}]`
+    };
+  }
+  if (key.startsWith("ctxlabel:")) {
+    const k = key.slice(9);
+    return {
+      label: k,
+      keysOf: c => [(ctxLabels(c.ctx) || {})[k] || NONE],
+      from: () => `the console's configuration of context ${k}`
+    };
+  }
+  return BASE_GROUPINGS.flat;
+}
+const groupBy = (clusters, key) => {
+  const g = groupingOf(key);
+  const map = new Map();
+  clusters.forEach(c => g.keysOf(c).forEach(k => {
+    if (!map.has(k)) map.set(k, {
+      key: k,
+      from: g.from(c),
+      rows: []
+    });
+    map.get(k).rows.push(c);
+  }));
+  const groups = Array.from(map.values());
+  groups.sort((a, b) => (a.key === NONE) - (b.key === NONE) || a.key.localeCompare(b.key));
+  return groups;
+};
+// the grouping keys on offer: the fixed ones, every label key a cluster carries, every label key a context declares
+const groupingKeys = clusters => {
+  const labelKeys = Array.from(new Set(clusters.flatMap(c => Object.keys(c.labels || {})))).sort();
+  const ctxKeys = window.ctxLabelKeys ? ctxLabelKeys() : [];
+  return [{
+    k: "context",
+    l: "Context",
+    on: window.MULTI_CTX
+  }, {
+    k: "namespace",
+    l: "Namespace",
+    on: true
+  }, {
+    k: "site",
+    l: "Site",
+    on: true
+  }, {
+    k: "region",
+    l: "Region",
+    on: clusters.some(c => c.regions.length)
+  }].filter(x => x.on).map(x => ({
+    k: x.k,
+    l: x.l
+  })).concat(ctxKeys.map(k => ({
+    k: "ctxlabel:" + k,
+    l: `context ${k}`
+  })), labelKeys.map(k => ({
+    k: "label:" + k,
+    l: `label ${k}`
+  })), [{
+    k: "flat",
+    l: "Flat"
+  }]);
+};
+
+// ---- the fleet -----------------------------------------------------------------
+async function loadFleet() {
+  const clusters = await api.clusters();
+  const cps = (await Promise.all(CONTEXTS.map(c => k8s.list("ControlPlane", {
+    allNamespaces: true,
+    ctx: c.name
+  }).then(r => r.map(o => Object.assign(o, {
+    __ctx: c.name
+  }))).catch(() => [])))).flat();
+  // the nodes at each site: a StorageNode belongs to the zone of its worker (or its stretched site)
+  const nodes = (await Promise.all(clusters.map(c => api.nodes(c.id).catch(() => [])))).flat();
+  const nodesAt = {};
+  nodes.forEach(n => {
+    const site = n.zone || (n.config || {}).site || NONE;
+    const a = nodesAt[site] || (nodesAt[site] = {
+      total: 0,
+      online: 0
+    });
+    a.total++;
+    if (n.phase === "Online") a.online++;
+  });
+  const rows = clusters.map(c => {
+    const th = c.thresholds || {};
+    const cap = c.capacity;
+    return Object.assign({}, c, {
+      utilPct: cap.total ? cap.used / cap.total * 100 : 0,
+      warnCap: (th.warn || {}).capacity,
+      critCap: (th.crit || {}).capacity,
+      controlPlane: cps.find(cp => cp.__ctx === c.ctx) || null
+    });
+  });
+  return {
+    rows,
+    controlPlanes: cps,
+    nodesAt
+  };
+}
+const NO_ALERTS = {
+    critical: 0,
+    warning: 0,
+    silenced: 0
+  },
+  NO_OPS = {
+    running: 0,
+    failed: 0
+  };
+function useFleet(rev) {
+  const r = useResource("fleet|" + rev, loadFleet, FLEET_POLL);
+  // the stores re-render this view as they evaluate, so the counts are read at render time
+  const al = window.useAlerts ? useAlerts() : null;
+  const wk = window.useWork ? useWork() : null;
+  const alertRev = al ? al.lastEval : 0,
+    workRev = wk ? wk.version : 0;
+  const clusters = React.useMemo(() => ((r.data || {}).rows || []).map(c => Object.assign({}, c, {
+    alerts: al && al.ready ? al.countsFor(c.id) : NO_ALERTS,
+    ops: wk && wk.ready ? wk.countsFor(c.id) : NO_OPS
+  })), [r.data, alertRev, workRev]);
+  const controlPlanes = (r.data || {}).controlPlanes || [];
+  const nodesAt = (r.data || {}).nodesAt || {};
+  const sites = React.useMemo(() => groupBy(clusters, "site").map(g => ({
+    id: g.key,
+    from: g.from,
+    clusters: g.rows,
+    nodes: (nodesAt[g.key] || {}).total || 0,
+    nodesOnline: (nodesAt[g.key] || {}).online || 0,
+    contexts: Array.from(new Set(g.rows.map(c => c.ctx))),
+    stretched: g.rows.filter(c => c.stretchedSpec),
+    capacity: {
+      used: g.rows.reduce((n, c) => n + (c.capacity.used || 0), 0),
+      total: g.rows.reduce((n, c) => n + (c.capacity.total || 0), 0)
+    },
+    alerts: g.rows.reduce((a, c) => ({
+      critical: a.critical + c.alerts.critical,
+      warning: a.warning + c.alerts.warning
+    }), {
+      critical: 0,
+      warning: 0
+    }),
+    worst: g.rows.reduce((w, c) => Math.max(w, SM(c.phase).rank), 0)
+  })), [clusters]);
+  return Object.assign({}, r, {
+    clusters,
+    controlPlanes,
+    sites,
+    errors: window.worldErrors ? worldErrors() : {}
+  });
+}
+
+// ---- primitives ----------------------------------------------------------------
+// a bar with the cluster's own threshold ticks when its spec states them
+function Meter({
+  pct,
+  warn,
+  crit,
+  mini,
+  title
+}) {
+  const p = Math.max(0, Number(pct) || 0);
+  const c = crit && p >= crit ? "var(--bad)" : warn && p >= warn ? "var(--warn)" : "var(--accent)";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "meter" + (mini ? " mini" : ""),
+    title: title || `${p.toFixed(0)}%${warn ? ` · spec.warningThreshold.capacity ${warn}%` : ""}${crit ? ` · spec.criticalThreshold.capacity ${crit}%` : ""}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bar"
+  }, /*#__PURE__*/React.createElement("i", {
+    style: {
+      width: Math.min(100, p) + "%",
+      "--bc": c
+    }
+  }), warn && /*#__PURE__*/React.createElement("span", {
+    className: "tick",
+    style: {
+      left: Math.min(100, warn) + "%"
+    }
+  }), crit && /*#__PURE__*/React.createElement("span", {
+    className: "tick",
+    style: {
+      left: Math.min(100, crit) + "%"
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "mono mp",
+    style: {
+      color: c
+    }
+  }, p.toFixed(0), "%"));
+}
+const SevCount = ({
+  critical,
+  warning,
+  onClick
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "sev" + (onClick ? " link" : ""),
+  onClick: onClick
+}, critical ? /*#__PURE__*/React.createElement("b", {
+  className: "crit"
+}, critical) : null, warning ? /*#__PURE__*/React.createElement("b", {
+  className: "warn"
+}, warning) : null, !critical && !warning ? /*#__PURE__*/React.createElement("span", {
+  className: "none"
+}, "0") : null);
+const OpsCount = ({
+  running,
+  failed,
+  onClick
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "sev" + (onClick ? " link" : ""),
+  onClick: onClick
+}, running ? /*#__PURE__*/React.createElement("b", {
+  className: "run"
+}, running) : null, failed ? /*#__PURE__*/React.createElement("b", {
+  className: "crit"
+}, failed) : null, !running && !failed ? /*#__PURE__*/React.createElement("span", {
+  className: "none"
+}, "0") : null);
+function VirtualList({
+  rows,
+  rowHeight,
+  render,
+  height,
+  overscan = 12
+}) {
+  const [top, setTop] = React.useState(0);
+  const h = height || 560;
+  const start = Math.max(0, Math.floor(top / rowHeight) - overscan);
+  const end = Math.min(rows.length, Math.ceil((top + h) / rowHeight) + overscan);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "vlist",
+    style: {
+      height: h
+    },
+    onScroll: e => setTop(e.target.scrollTop)
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: rows.length * rowHeight,
+      position: "relative"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      top: start * rowHeight,
+      left: 0,
+      right: 0
+    }
+  }, rows.slice(start, end).map((r, i) => render(r, start + i)))));
+}
+const Provenance = ({
+  from
+}) => from ? /*#__PURE__*/React.createElement("span", {
+  className: "prov",
+  title: from
+}, from.length > 38 ? from.slice(0, 36) + "…" : from) : null;
+const cpPhase = cp => cp ? (cp.status || {}).phase || "Pending" : null;
+
+// ---- the roll-up -----------------------------------------------------------------
+function FleetRollup({
+  clusters,
+  sites,
+  controlPlanes,
+  nav
+}) {
+  const n = clusters.length;
+  const byPhase = {};
+  clusters.forEach(c => {
+    byPhase[c.phase] = (byPhase[c.phase] || 0) + 1;
+  });
+  const online = byPhase.Online || 0;
+  const worst = clusters.reduce((w, c) => Math.max(w, SM(c.phase).rank), 0);
+  const nodes = clusters.reduce((a, c) => ({
+    t: a.t + c.counts.nodes,
+    o: a.o + c.counts.nodesOnline
+  }), {
+    t: 0,
+    o: 0
+  });
+  const devs = clusters.reduce((a, c) => ({
+    t: a.t + c.counts.devices,
+    o: a.o + c.counts.devicesOnline
+  }), {
+    t: 0,
+    o: 0
+  });
+  const cap = clusters.reduce((a, c) => ({
+    u: a.u + (c.capacity.used || 0),
+    t: a.t + (c.capacity.total || 0)
+  }), {
+    u: 0,
+    t: 0
+  });
+  const alerts = clusters.reduce((a, c) => ({
+    c: a.c + c.alerts.critical,
+    w: a.w + c.alerts.warning
+  }), {
+    c: 0,
+    w: 0
+  });
+  const ops = clusters.reduce((a, c) => ({
+    r: a.r + c.ops.running,
+    f: a.f + c.ops.failed
+  }), {
+    r: 0,
+    f: 0
+  });
+  const cpAvail = controlPlanes.filter(cp => cpPhase(cp) === "Available").length;
+  const others = Object.entries(byPhase).filter(([p]) => p !== "Online").map(([p, k]) => `${k} ${p}`).join(" · ");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "stats fleet"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Clusters Online",
+    v: `${online}/${n}`,
+    c: worst >= 3 ? "var(--bad)" : worst >= 2 ? "var(--warn)" : undefined,
+    s: others || "status.phase Online on every cluster"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Nodes Online",
+    v: `${nodes.o}/${nodes.t}`,
+    c: nodes.o < nodes.t ? "var(--warn)" : undefined,
+    s: `${sites.filter(s => s.id !== NONE).length} site${sites.filter(s => s.id !== NONE).length === 1 ? "" : "s"}`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Devices Online",
+    v: `${devs.o}/${devs.t}`,
+    c: devs.o < devs.t ? "var(--warn)" : undefined,
+    s: devs.t - devs.o ? `${devs.t - devs.o} not Online` : "all Online"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Capacity used ", /*#__PURE__*/React.createElement(Derived, {
+    formula: "sum of StorageNode.status.resources.capacity over every cluster"
+  })), /*#__PURE__*/React.createElement(Meter, {
+    pct: cap.t ? cap.u / cap.t * 100 : 0
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, fmtBytes(cap.u), " of ", fmtBytes(cap.t))), /*#__PURE__*/React.createElement("div", {
+    className: "stat link",
+    onClick: () => nav.alerts && nav.alerts()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Open alerts"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: alerts.c ? "var(--bad)" : alerts.w ? "var(--warn)" : "var(--ok)"
+    }
+  }, alerts.c), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, alerts.w, " warning")), /*#__PURE__*/React.createElement("div", {
+    className: "stat link",
+    onClick: () => nav.monitor && nav.monitor({
+      state: "running"
+    })
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Operations"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: ops.f ? "var(--bad)" : ops.r ? "var(--info)" : undefined
+    }
+  }, ops.r), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, "running \xB7 ", ops.f, " failed")), /*#__PURE__*/React.createElement("div", {
+    className: "stat link",
+    onClick: () => {
+      const el = document.getElementById("cplanes");
+      if (el) el.scrollIntoView({
+        behavior: "smooth"
+      });
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Control planes Available"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: cpAvail < controlPlanes.length ? "var(--warn)" : undefined
+    }
+  }, cpAvail, "/", controlPlanes.length), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, "ControlPlane.status.phase per context")));
+}
+
+// ---- the matrix --------------------------------------------------------------------
+const matrixCols = labelKey => ["", "Cluster", "Sites", labelKey ? labelKey.replace(/^(ctx)?label:/, "") : "Phase", "Namespace", "Alerts", "Ops", "Nodes", "Devices", "Capacity", "Step", "Control plane", ""];
+function ClusterRow({
+  r,
+  nav,
+  labelKey,
+  style
+}) {
+  const sm = SM(r.phase);
+  const bad = sm.rank >= 3 ? " bad" : sm.rank >= 2 ? " warn" : "";
+  const g = labelKey ? groupingOf(labelKey) : null;
+  const cp = r.controlPlane;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cmxr" + bad,
+    style: style,
+    onDoubleClick: () => nav.openCluster(r.id)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "c-st"
+  }, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: r.phase,
+    sm: true,
+    label: false
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "c-name"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "tlink",
+    onClick: () => nav.openCluster(r.id)
+  }, r.name), /*#__PURE__*/React.createElement("span", {
+    className: "c-sub mono"
+  }, window.MULTI_CTX ? r.ctx + " · " : "", r.status || r.phase)), /*#__PURE__*/React.createElement("span", {
+    className: "c-sites"
+  }, r.sites.length ? r.sites.slice(0, 2).map(s => /*#__PURE__*/React.createElement("span", {
+    key: s.value,
+    className: "lab sitelab",
+    title: s.from,
+    onClick: () => nav.openSite(s.value)
+  }, s.value)) : /*#__PURE__*/React.createElement("span", {
+    className: "none"
+  }, NONE), r.sites.length > 2 && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: r.sites.slice(2).map(s => s.value).join(", ")
+  }, "+", r.sites.length - 2), r.stretchedSpec && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    title: "spec.stretched"
+  }, "stretched")), /*#__PURE__*/React.createElement("span", {
+    className: "c-stage"
+  }, g ? /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    title: g.from(r)
+  }, g.keysOf(r)[0]) : /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    title: "status.phase"
+  }, r.phase)), /*#__PURE__*/React.createElement("span", {
+    className: "c-tenant mono",
+    title: "metadata.namespace"
+  }, r.namespace), /*#__PURE__*/React.createElement("span", {
+    className: "c-alerts"
+  }, /*#__PURE__*/React.createElement(SevCount, {
+    critical: r.alerts.critical,
+    warning: r.alerts.warning,
+    onClick: nav.alerts ? () => nav.alerts({
+      cluster: r.id
+    }) : null
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "c-ops"
+  }, /*#__PURE__*/React.createElement(OpsCount, {
+    running: r.ops.running,
+    failed: r.ops.failed,
+    onClick: nav.monitor ? () => nav.monitor({
+      cluster: r.id
+    }) : null
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "c-nodes mono",
+    title: "StorageNode.status.phase Online / all",
+    style: {
+      color: r.counts.nodesOnline < r.counts.nodes ? "var(--warn)" : undefined
+    }
+  }, r.counts.nodesOnline, "/", r.counts.nodes), /*#__PURE__*/React.createElement("span", {
+    className: "c-devs mono",
+    title: "StorageDevice.status.phase Online / all",
+    style: {
+      color: r.counts.devicesOnline < r.counts.devices ? "var(--warn)" : undefined
+    }
+  }, r.counts.devicesOnline, "/", r.counts.devices), /*#__PURE__*/React.createElement("span", {
+    className: "c-cap"
+  }, r.capacity.total ? /*#__PURE__*/React.createElement(Meter, {
+    mini: true,
+    pct: r.utilPct,
+    warn: r.warnCap,
+    crit: r.critCap,
+    title: `${fmtBytes(r.capacity.used)} of ${fmtBytes(r.capacity.total)} · ${r.capacity.derived}`
+  }) : /*#__PURE__*/React.createElement("span", {
+    className: "none"
+  }, "unset")), /*#__PURE__*/React.createElement("span", {
+    className: "c-iops mono",
+    style: {
+      fontSize: 10.5
+    },
+    title: r.activeOpsRef ? "status.activeOpsRef" : "status.step.state"
+  }, r.activeOpsRef ? r.activeOpsRef : r.step || "unset"), /*#__PURE__*/React.createElement("span", {
+    className: "c-cp",
+    title: cp ? `ControlPlane ${cp.metadata.name} status.phase` : "no ControlPlane object in this context"
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: cp ? SM(cpPhase(cp)).c : "var(--dim2)"
+  }), cp ? cpPhase(cp) : NONE), /*#__PURE__*/React.createElement("span", {
+    className: "c-act"
+  }, /*#__PURE__*/React.createElement(ActionBtn, {
+    obj: REG[r.id] || r
+  })));
+}
+function ClusterMatrix({
+  groups,
+  nav,
+  grouping
+}) {
+  const [collapsed, setCollapsed] = useLocal("sb.fleet.collapsed", {});
+  const labelKey = grouping.startsWith("label:") || grouping.startsWith("ctxlabel:") ? grouping : null;
+  const flat = [];
+  groups.forEach(g => {
+    if (grouping !== "flat") flat.push({
+      head: g
+    });
+    if (!collapsed[g.key]) g.rows.forEach(r => flat.push({
+      row: r
+    }));
+  });
+  const render = (it, i) => it.head ? /*#__PURE__*/React.createElement(GroupRow, {
+    key: "g" + it.head.key,
+    g: it.head,
+    grouping: grouping,
+    collapsed: !!collapsed[it.head.key],
+    onToggle: () => setCollapsed(Object.assign({}, collapsed, {
+      [it.head.key]: !collapsed[it.head.key]
+    })),
+    nav: nav
+  }) : /*#__PURE__*/React.createElement(ClusterRow, {
+    key: it.row.id + "|" + i,
+    r: it.row,
+    nav: nav,
+    labelKey: labelKey
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cmx"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "cmxh"
+  }, matrixCols(labelKey).map((c, i) => /*#__PURE__*/React.createElement("span", {
+    key: i
+  }, c))), flat.length > 80 ? /*#__PURE__*/React.createElement(VirtualList, {
+    rows: flat,
+    rowHeight: 36,
+    render: render
+  }) : flat.map(render));
+}
+function GroupRow({
+  g,
+  grouping,
+  collapsed,
+  onToggle,
+  nav
+}) {
+  const worst = g.rows.reduce((w, c) => Math.max(w, SM(c.phase).rank), 0);
+  const alerts = g.rows.reduce((a, c) => ({
+    c: a.c + c.alerts.critical,
+    w: a.w + c.alerts.warning
+  }), {
+    c: 0,
+    w: 0
+  });
+  const label = g.key === NONE ? `no ${groupingOf(grouping).label}` : g.key;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cmxg",
+    onClick: onToggle
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "gt"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: collapsed ? "chev" : "chevd",
+    s: 10
+  }), label, /*#__PURE__*/React.createElement(Provenance, {
+    from: g.from
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "gc"
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: worst >= 3 ? "var(--bad)" : worst >= 2 ? "var(--warn)" : "var(--ok)"
+  }), g.rows.length, " cluster", g.rows.length === 1 ? "" : "s"), /*#__PURE__*/React.createElement("span", {
+    className: "gc"
+  }, /*#__PURE__*/React.createElement(SevCount, {
+    critical: alerts.c,
+    warning: alerts.w
+  })), grouping === "site" && g.key !== NONE && /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: e => {
+      e.stopPropagation();
+      nav.openSite(g.key);
+    }
+  }, "Open site"));
+}
+
+// ---- control planes ---------------------------------------------------------------------
+function ControlPlanesCard({
+  controlPlanes,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    id: "cplanes",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Control planes \xB7 the ControlPlane object of each context"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, !CONTEXTS.length ? null : /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Context"), /*#__PURE__*/React.createElement("th", null, "ControlPlane"), /*#__PURE__*/React.createElement("th", null, "status.phase"), /*#__PURE__*/React.createElement("th", null, "status.version"), /*#__PURE__*/React.createElement("th", null, "status.endpoint"), /*#__PURE__*/React.createElement("th", null, "status.components"), /*#__PURE__*/React.createElement("th", null, "activeOpsRef"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, CONTEXTS.map(c => {
+    const cps = controlPlanes.filter(cp => cp.__ctx === c.name);
+    if (!cps.length) return /*#__PURE__*/React.createElement("tr", {
+      key: c.name
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "mono"
+    }, c.name), /*#__PURE__*/React.createElement("td", {
+      colSpan: 6,
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "no ControlPlane object"), /*#__PURE__*/React.createElement("td", null));
+    return cps.map(cp => {
+      const st = cp.status || {};
+      const comps = st.components || [];
+      const notReady = comps.filter(x => (x.ready || 0) < (x.desired || 0));
+      return /*#__PURE__*/React.createElement("tr", {
+        key: c.name + cp.metadata.name
+      }, /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, c.name), /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, cp.metadata.namespace, "/", cp.metadata.name), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+        status: cpPhase(cp),
+        sm: true
+      })), /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, st.version || "unset"), /*#__PURE__*/React.createElement("td", {
+        className: "mono",
+        style: {
+          fontSize: 11
+        }
+      }, st.endpoint || "unset"), /*#__PURE__*/React.createElement("td", {
+        className: "mono",
+        title: comps.map(x => `${x.name} ${x.ready || 0}/${x.desired}`).join("\n"),
+        style: {
+          color: notReady.length ? "var(--warn)" : undefined
+        }
+      }, comps.length ? `${comps.length - notReady.length}/${comps.length} ready` : "unset"), /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, st.activeOpsRef || ""), /*#__PURE__*/React.createElement("td", {
+        style: {
+          textAlign: "right",
+          whiteSpace: "nowrap"
+        }
+      }, /*#__PURE__*/React.createElement("button", {
+        className: "chip",
+        onClick: () => nav.openCR({
+          ctx: c.name,
+          ns: cp.metadata.namespace,
+          kind: "ControlPlane",
+          name: cp.metadata.name
+        })
+      }, "Resource"), c.local && nav.cp && /*#__PURE__*/React.createElement("button", {
+        className: "chip",
+        onClick: () => nav.cp()
+      }, "Pods and logs")));
+    });
+  })))));
+}
+
+// the top bar's pill: how many ControlPlane objects report status.phase Available, across the contexts
+function ControlPlanePill({
+  nav
+}) {
+  const r = useResource("cp-pill", () => Promise.all(CONTEXTS.map(c => k8s.list("ControlPlane", {
+    allNamespaces: true,
+    ctx: c.name
+  }).catch(() => []))).then(rs => rs.flat()), 15000);
+  const cps = r.data || [];
+  if (!cps.length) return /*#__PURE__*/React.createElement("span", {
+    className: "env",
+    title: "no ControlPlane object in any context"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pulse",
+    style: {
+      background: "var(--dim2)"
+    }
+  }), "no control plane");
+  const avail = cps.filter(cp => cpPhase(cp) === "Available").length;
+  const ok = avail === cps.length;
+  return /*#__PURE__*/React.createElement("span", {
+    className: "env",
+    style: {
+      cursor: "pointer"
+    },
+    title: cps.map(cp => `${cp.metadata.namespace}/${cp.metadata.name}: ${cpPhase(cp)}`).join("\n"),
+    onClick: () => {
+      nav.dashboard();
+      setTimeout(() => {
+        const el = document.getElementById("cplanes");
+        if (el) el.scrollIntoView({
+          behavior: "smooth"
+        });
+      }, 300);
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pulse",
+    style: ok ? undefined : {
+      background: "var(--warn)"
+    }
+  }), avail, "/", cps.length, " control plane", cps.length === 1 ? "" : "s", " Available");
+}
+
+// ---- sites ---------------------------------------------------------------------------
+function SiteCard({
+  s,
+  nav
+}) {
+  const c = s.worst >= 3 ? "var(--bad)" : s.worst >= 2 ? "var(--warn)" : "var(--ok)";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile sitecard",
+    style: {
+      "--sc": c
+    },
+    onDoubleClick: () => nav.openSite(s.id)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "th"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: s.worst >= 3 ? "Degraded" : s.worst >= 2 ? "Degraded" : "Online",
+    label: s.worst >= 2 ? "a cluster is not Online" : "every cluster Online"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tname"
+  }, s.id === NONE ? "No site" : s.id), /*#__PURE__*/React.createElement("div", {
+    className: "tsub"
+  }, /*#__PURE__*/React.createElement(Provenance, {
+    from: s.from
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "clusters"), s.clusters.length), /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "StorageNodes whose worker carries this zone"
+  }, /*#__PURE__*/React.createElement("i", null, "nodes Online"), s.nodesOnline, "/", s.nodes), /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "contexts"), s.contexts.join(", ")), s.stretched.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "stretched"), s.stretched.length)), s.capacity.total > 0 && /*#__PURE__*/React.createElement(Capacity, {
+    total: s.capacity.total,
+    used: s.capacity.used
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv",
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Alerts"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(SevCount, {
+    critical: s.alerts.critical,
+    warning: s.alerts.warning
+  })))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.openSite(s.id)
+    }]
+  }));
+}
+function SiteBoard({
+  sites,
+  nav
+}) {
+  if (!sites.length) return /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "zone",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "No sites"), /*#__PURE__*/React.createElement("span", null, "A site is a stretched cluster's spec.stretched.site or the topology.kubernetes.io/zone label of the workers the storage nodes run on."));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, sites.map(s => /*#__PURE__*/React.createElement(SiteCard, {
+    key: s.id,
+    s: s,
+    nav: nav
+  })));
+}
+function FleetSiteDetail({
+  seg,
+  nav,
+  rev
+}) {
+  const fleet = useFleet(rev);
+  const site = fleet.sites.find(s => s.id === seg.id) || null;
+  const {
+    data: nodes
+  } = useResource("sitenodes|" + seg.id + "|" + (site ? site.clusters.map(c => c.id).join(",") : ""), () => site ? Promise.all(site.clusters.map(c => api.nodes(c.id).catch(() => []))).then(rs => rs.flat()) : Promise.resolve([]), 15000);
+  if (fleet.loading && !fleet.data) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "loading\u2026"));
+  if (!site) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "zone",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "Site ", seg.id, " is not known"), /*#__PURE__*/React.createElement("span", null, "No stretched cluster names it and no worker carries it as a zone.")));
+  const nodeRows = (nodes || []).filter(n => site.id === NONE ? !n.zone && !(n.config || {}).site : n.zone === site.id || (n.config || {}).site === site.id);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, site.id === NONE ? "No site" : site.id), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, "Site ", /*#__PURE__*/React.createElement(Provenance, {
+    from: site.from
+  }), " \xB7 ", site.clusters.length, " cluster", site.clusters.length === 1 ? "" : "s", " across ", site.contexts.length, " context", site.contexts.length === 1 ? "" : "s"))), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Clusters",
+    v: site.clusters.length,
+    s: site.stretched.length ? `${site.stretched.length} stretched` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Nodes Online",
+    v: `${site.nodesOnline}/${site.nodes}`,
+    c: site.nodesOnline < site.nodes ? "var(--warn)" : undefined,
+    s: "StorageNodes at this site"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Capacity used ", /*#__PURE__*/React.createElement(Derived, {
+    formula: "sum of StorageNode.status.resources.capacity over the whole of every cluster with a node at this site"
+  })), /*#__PURE__*/React.createElement(Meter, {
+    pct: site.capacity.total ? site.capacity.used / site.capacity.total * 100 : 0
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, fmtBytes(site.capacity.used), " of ", fmtBytes(site.capacity.total))), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Open alerts"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, /*#__PURE__*/React.createElement(SevCount, {
+    critical: site.alerts.critical,
+    warning: site.alerts.warning
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Clusters at this site"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(ClusterMatrix, {
+    groups: [{
+      key: site.id,
+      from: site.from,
+      rows: site.clusters
+    }],
+    nav: nav,
+    grouping: "flat"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Storage nodes at this site"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, nodeRows.length)), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "StorageNode"), /*#__PURE__*/React.createElement("th", null, "spec.clusterRef"), /*#__PURE__*/React.createElement("th", null, "status.phase"), /*#__PURE__*/React.createElement("th", null, "zone"), /*#__PURE__*/React.createElement("th", null, "spec.workerNode"), /*#__PURE__*/React.createElement("th", null, "Context"))), /*#__PURE__*/React.createElement("tbody", null, nodeRows.map(n => /*#__PURE__*/React.createElement("tr", {
+    key: n.id
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+    className: "tlink",
+    onClick: () => nav.openNode(n.clusterId, n.id)
+  }, n.name)), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, n.clusterRef), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: n.phase,
+    sm: true
+  })), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    title: "topology.kubernetes.io/zone of the worker Node"
+  }, n.zone || (n.config || {}).site || "unset"), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, n.workerNode), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, n.ctx))))))));
+}
+function SitesView({
+  nav,
+  rev
+}) {
+  const fleet = useFleet(rev);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Sites"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, fleet.sites.length)), fleet.loading && !fleet.data ? /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, Array.from({
+    length: 4
+  }).map((_, i) => /*#__PURE__*/React.createElement("div", {
+    className: "skel",
+    key: i
+  }))) : /*#__PURE__*/React.createElement(SiteBoard, {
+    sites: fleet.sites,
+    nav: nav
+  }));
+}
+
+// ---- the view ----------------------------------------------------------------------------
+function DashboardView({
+  nav,
+  seg,
+  rev
+}) {
+  const p = seg.p || {};
+  const [group, setGroup] = useLocal("sb.fleet.group", window.MULTI_CTX ? "context" : "namespace");
+  const [view, setView] = useLocal("sb.fleet.view", "matrix");
+  const [q, setQ] = React.useState(p.q || "");
+  const [phases, setPhases] = React.useState(p.phase || []);
+  const [sort, setSort] = React.useState(p.sort || "health");
+  React.useEffect(() => {
+    if (p.group) setGroup(p.group);
+    if (p.view) setView(p.view);
+  }, [p.group, p.view]);
+  const fleet = useFleet(rev);
+  const all = fleet.clusters;
+  const counts = {};
+  all.forEach(c => {
+    counts[c.phase] = (counts[c.phase] || 0) + 1;
+  });
+  const keys = groupingKeys(all);
+  const groupKey = keys.some(k => k.k === group) ? group : (keys[0] || {
+    k: "flat"
+  }).k;
+  const filtered = React.useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const cmp = {
+      health: (a, b) => SM(b.phase).rank - SM(a.phase).rank || b.alerts.critical - a.alerts.critical || a.name.localeCompare(b.name),
+      name: (a, b) => a.name.localeCompare(b.name),
+      util: (a, b) => b.utilPct - a.utilPct,
+      capacity: (a, b) => (b.capacity.total || 0) - (a.capacity.total || 0),
+      alerts: (a, b) => b.alerts.critical - a.alerts.critical || b.alerts.warning - a.alerts.warning
+    }[sort] || ((a, b) => a.name.localeCompare(b.name));
+    return all.filter(c => (!phases.length || phases.includes(c.phase)) && (!s || [c.name, c.id, c.ctx, c.namespace, c.phase, c.status].concat(c.sites.map(x => x.value), Object.values(c.labels || {})).filter(Boolean).join(" ").toLowerCase().includes(s))).sort(cmp);
+  }, [all, q, phases, sort]);
+  const groups = React.useMemo(() => groupBy(filtered, groupKey), [filtered, groupKey]);
+  const ctxErrors = Object.entries(fleet.errors || {}).filter(([, e]) => e && Object.keys(e).length);
+  const phaseOrder = Object.keys(counts).sort((a, b) => SM(b).rank - SM(a).rank);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "toolbar"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "search"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    value: q,
+    placeholder: "Search name, namespace, context, site, label\u2026",
+    onChange: e => setQ(e.target.value)
+  }), q && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setQ(""),
+    style: {
+      display: "flex",
+      color: "var(--dim2)"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 11
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "chips"
+  }, phaseOrder.map(s => /*#__PURE__*/React.createElement("button", {
+    key: s,
+    className: "chip" + (phases.includes(s) ? " on" : ""),
+    title: "status.phase",
+    onClick: () => setPhases(phases.includes(s) ? phases.filter(x => x !== s) : phases.concat([s]))
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: SM(s).c
+  }), s, /*#__PURE__*/React.createElement("span", {
+    className: "n"
+  }, counts[s])))), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, filtered.length), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: groupKey,
+    onChange: e => setGroup(e.target.value),
+    title: "Group clusters by"
+  }, keys.map(k => /*#__PURE__*/React.createElement("option", {
+    key: k.k,
+    value: k.k
+  }, "by ", k.l))), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: sort,
+    onChange: e => setSort(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "health"
+  }, "Unhealthy first"), /*#__PURE__*/React.createElement("option", {
+    value: "alerts"
+  }, "Most alerts"), /*#__PURE__*/React.createElement("option", {
+    value: "name"
+  }, "Name (A\u2013Z)"), /*#__PURE__*/React.createElement("option", {
+    value: "util"
+  }, "Utilization \u2193"), /*#__PURE__*/React.createElement("option", {
+    value: "capacity"
+  }, "Capacity \u2193")), /*#__PURE__*/React.createElement("div", {
+    className: "seg",
+    title: "View"
+  }, [["matrix", "list"], ["tiles", "cluster"], ["sites", "zone"]].map(([k, ic]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    className: view === k ? "on" : "",
+    onClick: () => setView(k),
+    title: k
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: ic,
+    s: 12
+  })))), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: fleet.reload,
+    title: "Refresh"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 12
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, ctxErrors.map(([ctx, errs]) => /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    key: ctx
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Context ", ctx, " is partly unreachable."), " ", Object.entries(errs).map(([k, e]) => `${k}: ${e.message || e}`).join(" · ")))), fleet.error && /*#__PURE__*/React.createElement(ErrorState, {
+    error: fleet.error,
+    onRetry: fleet.reload
+  }), fleet.loading && !all.length ? /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, Array.from({
+    length: 7
+  }).map((_, i) => /*#__PURE__*/React.createElement("div", {
+    className: "skel",
+    key: i,
+    style: {
+      height: 62
+    }
+  }))) : /*#__PURE__*/React.createElement(FleetRollup, {
+    clusters: filtered,
+    sites: fleet.sites,
+    controlPlanes: fleet.controlPlanes,
+    nav: nav
+  }), !fleet.loading && !all.length && !fleet.error && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "cluster",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "No clusters"), /*#__PURE__*/React.createElement("span", null, "No StorageCluster in any configured context.")), all.length > 0 && !filtered.length && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 22
+  }), /*#__PURE__*/React.createElement("b", null, "No clusters match"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    style: {
+      marginTop: 6
+    },
+    onClick: () => {
+      setQ("");
+      setPhases([]);
+    }
+  }, "Reset filters")), filtered.length > 0 && view === "matrix" && /*#__PURE__*/React.createElement(ClusterMatrix, {
+    groups: groups,
+    nav: nav,
+    grouping: groupKey
+  }), filtered.length > 0 && view === "tiles" && groups.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.key
+  }, groupKey !== "flat" && /*#__PURE__*/React.createElement("div", {
+    className: "grouplbl"
+  }, g.key === NONE ? `no ${groupingOf(groupKey).label}` : g.key, /*#__PURE__*/React.createElement(Provenance, {
+    from: g.from
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, g.rows.map(c => /*#__PURE__*/React.createElement(ClusterTile, {
+    key: c.id,
+    c: REG[c.id] || c,
+    nav: nav
+  }))))), filtered.length > 0 && view === "sites" && /*#__PURE__*/React.createElement(SiteBoard, {
+    sites: fleet.sites.filter(s => s.clusters.some(c => filtered.includes(c))),
+    nav: nav
+  }), !fleet.loading && /*#__PURE__*/React.createElement(ControlPlanesCard, {
+    controlPlanes: fleet.controlPlanes,
+    nav: nav
+  })));
+}
+Object.assign(window, {
+  ControlPlanePill,
+  DashboardView,
+  SitesView,
+  SiteBoard,
+  FleetSiteDetail,
+  ClusterMatrix,
+  FleetRollup,
+  ControlPlanesCard,
+  Meter,
+  SevCount,
+  OpsCount,
+  VirtualList,
+  groupBy,
+  groupingOf,
+  groupingKeys,
+  useFleet,
+  loadFleet,
+  Provenance,
+  SM
 });
 })();
 // ---- dr.jsx ----
@@ -41736,6 +43149,18 @@ const LAYER_META = {
     label: "Alerts",
     icon: "bell"
   },
+  // the fleet dashboard's sites (dashboard.jsx) and the access page
+  sites: {
+    label: "Sites",
+    icon: "zone"
+  },
+  site: {
+    icon: "zone"
+  },
+  access: {
+    label: "Access",
+    icon: "lock"
+  },
   cp: {
     label: "Control plane",
     icon: "host"
@@ -42278,7 +43703,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconf
   id: o.id
 }];
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
-const segLabel = s => s.t === "work" ? String(s.id).split("/").pop() : s.t === "cr" ? String(s.id).split("/").slice(1).join(" ") : s.id ? REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id) : LAYER_META[s.t].label;
+const segLabel = s => s.t === "site" ? s.id === "none" ? "No site" : s.id : s.t === "work" ? String(s.id).split("/").pop() : s.t === "cr" ? String(s.id).split("/").slice(2).join(" ") : s.id ? REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id) : LAYER_META[s.t].label;
 const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain, o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`), o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest, o.rack, o.cabinet, o.hostClass, o.location, o.region, o.mode, o.namespace, o.planName, o.pathName, o.from, o.to, o.appName, o.targetName, o.currentCluster, o.action, o.phase, o.verdict, o.schedule, o.replication && o.replication.policyName, o.sourceClusterId && regName(o.sourceClusterId), o.targetClusterId && regName(o.targetClusterId)].filter(Boolean).join(" ").toLowerCase();
 const healthOf = o => (STATUS_META[o.status] || {
   rank: 9
@@ -43911,6 +45336,27 @@ function App() {
     }, p ? {
       p
     } : {})]),
+    dashboard: p => go([Object.assign({
+      t: "clusters"
+    }, p ? {
+      p
+    } : {})]),
+    sites: () => go([{
+      t: "clusters"
+    }, {
+      t: "sites"
+    }]),
+    openSite: name => go([{
+      t: "clusters"
+    }, {
+      t: "sites"
+    }, {
+      t: "site",
+      id: name
+    }]),
+    access: () => go([{
+      t: "access"
+    }]),
     // the operations monitor; a filter rides on the segment
     monitor: p => go(p && p.cluster ? [...pC(p.cluster), Object.assign({
       t: "monitor"
@@ -43935,7 +45381,7 @@ function App() {
     // any custom resource, as a child of wherever the user is
     openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {
       t: "cr",
-      id: objKey(ref.ns, ref.kind, ref.name)
+      id: objKey(ref.ctx, ref.ns, ref.kind, ref.name)
     }]),
     openHost: (cid, hid) => go(pH(cid, hid)),
     openNode: (cid, nid) => go(pN(cid, nid)),
@@ -44165,15 +45611,6 @@ function App() {
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
   }, "Operations")), /*#__PURE__*/React.createElement("button", {
-    className: section === "cp" ? "on" : "",
-    onClick: () => nav.cp(),
-    title: "Control plane"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "host",
-    s: 13
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "swlabel"
-  }, "Control plane")), /*#__PURE__*/React.createElement("button", {
     className: "sw-logs" + (section === "logs" ? " on" : ""),
     onClick: () => nav.logs(),
     title: "Logs"
@@ -44247,20 +45684,23 @@ function App() {
     className: "menu-item" + (ctxCluster && ctxCluster.id === c.id ? " on" : ""),
     onClick: () => nav.openCluster(c.id)
   }, /*#__PURE__*/React.createElement(Dot, {
-    c: STATUS_META[c.status].c
+    c: (STATUS_META[c.phase] || STATUS_META[c.status] || {}).c
   }), /*#__PURE__*/React.createElement("span", {
     style: {
       flex: 1
     }
   }, c.name), /*#__PURE__*/React.createElement("span", {
-    className: "badge"
-  }, c.siting === "edge" ? "edge" : "dc")))))), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10,
+      color: "var(--dim2)"
+    },
+    title: "context \xB7 metadata.namespace"
+  }, window.MULTI_CTX ? c.ctx + " · " : "", c.namespace)))))), /*#__PURE__*/React.createElement("div", {
     className: "spacer"
-  }), window.SB_CONFIG.mock && /*#__PURE__*/React.createElement(MockPanel, null), !DR_ONLY && /*#__PURE__*/React.createElement("span", {
-    className: "env"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "pulse"
-  }), "control plane healthy"), DR_ONLY && /*#__PURE__*/React.createElement("span", {
+  }), window.SB_CONFIG.mock && /*#__PURE__*/React.createElement(MockPanel, null), !DR_ONLY && window.ControlPlanePill && /*#__PURE__*/React.createElement(ControlPlanePill, {
+    nav: nav
+  }), DR_ONLY && /*#__PURE__*/React.createElement("span", {
     className: "env"
   }, /*#__PURE__*/React.createElement("span", {
     className: "pulse"
@@ -44323,7 +45763,38 @@ function App() {
   }, "Resolving your access\u2026")) : /*#__PURE__*/React.createElement(ViewBoundary, {
     routeKey: viewKey,
     onReset: () => nav.root()
-  }, cur.t === "cr" ? /*#__PURE__*/React.createElement(CRView, {
+  }, cur.t === "site" ? /*#__PURE__*/React.createElement(FleetSiteDetail, {
+    key: viewKey,
+    seg: cur,
+    nav: nav,
+    rev: rev
+  }) : cur.t === "sites" ? /*#__PURE__*/React.createElement(SitesView, {
+    key: viewKey,
+    nav: nav,
+    rev: rev
+  }) : cur.t === "access" ? /*#__PURE__*/React.createElement("div", {
+    className: "scroll",
+    key: viewKey
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, "Access"), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, "Roles, grants, and effective access of this console's users."))), /*#__PURE__*/React.createElement(AccessView, {
+    nav: nav
+  })) : cur.t === "clusters" && path.length === 1 && !DR_ONLY && window.DashboardView ? /*#__PURE__*/React.createElement(DashboardView, {
+    key: viewKey,
+    seg: cur,
+    nav: nav,
+    rev: rev
+  }) : cur.t === "cr" ? /*#__PURE__*/React.createElement(CRView, {
     key: viewKey,
     seg: cur,
     nav: nav
