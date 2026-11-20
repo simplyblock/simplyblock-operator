@@ -46,6 +46,9 @@ spec:
     metadata:
       labels:
         app: simplyblock-fluent-bit
+      annotations:
+        # Restarts fluent-bit when its config changes; it reads the config only at start.
+        checksum/config: {{ include (print $.Template.BasePath "/controlplane_configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: simplyblock-fluent-bit-sa
       # Runs on every node: the control plane, FoundationDB, and the monitoring
