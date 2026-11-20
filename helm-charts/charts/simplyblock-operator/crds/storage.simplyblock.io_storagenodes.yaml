@@ -580,6 +580,16 @@ spec:
                             - Alpine
                             - Arch
                           type: string
+                        version:
+                          description: |-
+                            Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+                            `2023`, `9.4`. It is what tells two releases of one distribution apart,
+                            such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+                            discovery run states it only when every worker it describes agrees, and a
+                            rolling distribution states none.
+                          maxLength: 63
+                          pattern: ^[a-z0-9][a-z0-9._-]*$
+                          type: string
                       type: object
                     journalManager:
                       description: |-

@@ -284,6 +284,8 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-193     | A fleet whose `os-release` no probe could read: the draft states none and says so                                                     | Boundary   | `TestHostOSForRefusesToStateOneNobodyRead`                                                                                      |
 | U-194     | A report carrying a distro and no family: the run concludes the family from the distro                                                | Positive   | `TestHostOSForStatesTheFamilyItCanConcludeWhenTheProbeDidNot`                                                                   |
 | U-195     | A distribution with no package manager: the distro is stated and the family is not                                                    | Boundary   | `TestHostOSForStatesNoFamilyForAHostThatHasNone`                                                                                |
+| U-261     | A fleet whose workers all report one release: the draft states its version and the note names it                                      | Positive   | `TestHostOSForStatesWhatEveryWorkerAgreesOn`                                                                                    |
+| U-262     | A fleet of one distribution in two releases: the draft states the distro and no version, and a note names which worker runs which     | Negative   | `TestHostOSForStatesTheDistroAndNoVersionForAFleetOfTwoReleases`                                                                |
 | U-196     | `spec.cluster.tolerations`: the cluster's storage nodes tolerate what the document states                                             | Positive   | `TestTheDocumentsTolerationsReachTheStorageNodes`                                                                               |
 | U-197     | A growth document: no tolerations are stated, because the cluster it names already carries its own                                    | Boundary   | `TestAGrowthDocumentStatesNoTolerations`                                                                                        |
 | U-198     | `spec.discover.tolerations`: every probe Job tolerates what the run states                                                            | Positive   | `TestDiscoverProbesTolerateWhatTheRunWasToldTo`                                                                                 |
@@ -659,11 +661,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 192       | 59      | 133         | 9         |
+| Unit        | 194       | 61      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **262**   | **62**  | **200**     | **12**    |
+| **Total**   | **264**   | **64**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

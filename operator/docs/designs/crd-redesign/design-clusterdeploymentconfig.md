@@ -304,8 +304,10 @@ field because it has a separate answer.** The distribution decides what
 Kubernetes does to a machine; the host OS decides what the machine itself
 offers. A fleet on OpenShift runs Red Hat Enterprise Linux CoreOS and a fleet on
 K3s runs whatever its administrator installed, so neither can be read off the
-other. It carries the os-release `distro` and the packaging `family` that places
-it, and the expansion spends the distro on
+other. It carries the os-release `distro`, the packaging `family` that places
+it, and the `version`, which tells two releases of one distribution apart:
+Amazon Linux 2 and Amazon Linux 2023 share the ID `amzn`. The expansion spends
+the distro on
 `StorageCluster.spec.storageNodes.ubuntuHost`: Ubuntu keeps the NVMe-oF modules
 in `linux-modules-extra` rather than in the base install, so a storage node on
 one installs the package for its running kernel before it starts.
@@ -964,7 +966,10 @@ which runs one storage-node DaemonSet, which carries one host OS for every
 worker it schedules, so a fleet whose workers run different distributions has no
 answer to state: the run states none and writes an event naming which worker
 runs what. The same is true of a fleet whose `os-release` nothing could read,
-which on a probe means its host's root filesystem was not mounted into it.
+which on a probe means its host's root filesystem was not mounted into it. The
+version follows the same rule one level down: a fleet of one distribution in two
+releases states the distribution and no version, with a note naming which worker
+runs which release.
 
 **`spec.discover.tolerations` is what the run may probe through, and what the
 draft then states.** A probe pod is pinned with `spec.nodeName`, which bypasses
@@ -1382,6 +1387,16 @@ type HostOSSpec struct {
 	// package manager.
 	// +optional
 	Family HostOSFamily `json:"family,omitempty"`
+
+	// Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+	// `2023`, `9.4`. It is what tells two releases of one distribution apart,
+	// such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+	// discovery run states it only when every worker it describes agrees, and a
+	// rolling distribution states none.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Version string `json:"version,omitempty"`
 }
 
 // ClusterDeploymentConfigStep is one step of the expansion path.

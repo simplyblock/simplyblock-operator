@@ -152,6 +152,16 @@ type HostOSSpec struct {
 	// package manager.
 	// +optional
 	Family HostOSFamily `json:"family,omitempty"`
+
+	// Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+	// `2023`, `9.4`. It is what tells two releases of one distribution apart,
+	// such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+	// discovery run states it only when every worker it describes agrees, and a
+	// rolling distribution states none.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Version string `json:"version,omitempty"`
 }
 
 // ClusterPortsSpec is where a cluster's storage nodes listen.

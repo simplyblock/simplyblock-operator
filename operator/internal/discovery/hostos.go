@@ -60,12 +60,34 @@ func HostOSFor(plan Plan) (*simplyblockv1alpha2.HostOSSpec, []string) {
 		}
 	}
 
+	byVersion := map[string][]string{}
+	for _, worker := range plan.Workers {
+		byVersion[worker.Report.HostOS.Version] = append(byVersion[worker.Report.HostOS.Version], worker.Name)
+	}
+
 	os := &simplyblockv1alpha2.HostOSSpec{Distro: distro, Family: familyOf(plan, distro)}
-	return os, []string{fmt.Sprintf(
-		"hostOS is %s%s, read from every worker's os-release. It is what ubuntuHost is "+
+	if len(byVersion) == 1 {
+		os.Version = slices.Collect(maps.Keys(byVersion))[0]
+	}
+	notes := []string{fmt.Sprintf(
+		"hostOS is %s%s%s, read from every worker's os-release. It is what ubuntuHost is "+
 			"decided by, and the one distribution that decides it is Ubuntu, whose NVMe-oF "+
 			"modules are in a package the base install does not carry",
-		distro, familyNote(os.Family))}
+		distro, versionNote(os.Version), familyNote(os.Family))}
+	if len(byVersion) > 1 {
+		notes = append(notes, fmt.Sprintf(
+			"the workers run more than one release of %s, so hostOS states no version: %s",
+			distro, workersBy(byVersion, "no version")))
+	}
+	return os, notes
+}
+
+// versionNote is the version the note names after the distro, when one is stated.
+func versionNote(version string) string {
+	if version == "" {
+		return ""
+	}
+	return " " + version
 }
 
 // familyOf is the family the probes reported, or the one the distro itself
@@ -91,21 +113,22 @@ func familyNote(family simplyblockv1alpha2.HostOSFamily) string {
 }
 
 // distroSplit is which workers run what, ordered so that two runs over one fleet
-// read the same.
+// read the same. A worker whose os-release nothing read is named as such, so that
+// a split between a distribution and a blank says which is which.
 func distroSplit(byDistro map[string][]string) string {
-	distros := slices.Sorted(maps.Keys(byDistro))
-
-	parts := make([]string, 0, len(distros))
-	for _, distro := range distros {
-		workers := slices.Clone(byDistro[distro])
-		slices.Sort(workers)
-		parts = append(parts, fmt.Sprintf("%s on %s", orUnread(distro), strings.Join(workers, ", ")))
-	}
-	return strings.Join(parts, "; ")
+	return workersBy(byDistro, "an unread os-release")
 }
 
-// orUnread names the worker whose os-release nothing read, so that a split
-// between a distribution and a blank says which is which.
-func orUnread(distro string) string {
-	return cmp.Or(distro, "an unread os-release")
+// workersBy is which workers read which value, ordered so that two runs over one
+// fleet read the same, naming an empty value as blank.
+func workersBy(byValue map[string][]string, blank string) string {
+	values := slices.Sorted(maps.Keys(byValue))
+
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		workers := slices.Clone(byValue[value])
+		slices.Sort(workers)
+		parts = append(parts, fmt.Sprintf("%s on %s", cmp.Or(value, blank), strings.Join(workers, ", ")))
+	}
+	return strings.Join(parts, "; ")
 }

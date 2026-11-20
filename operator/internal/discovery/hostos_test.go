@@ -51,8 +51,36 @@ func TestHostOSForStatesWhatEveryWorkerAgreesOn(t *testing.T) {
 	if os.Family != simplyblockv1alpha2.HostOSFamilyDebian {
 		t.Errorf("stated the family %q, want %q", os.Family, simplyblockv1alpha2.HostOSFamilyDebian)
 	}
-	if len(notes) != 1 || !strings.Contains(notes[0], "ubuntu") {
+	if os.Version != "22.04" {
+		t.Errorf("stated the version %q, want the 22.04 every worker read", os.Version)
+	}
+	if len(notes) != 1 || !strings.Contains(notes[0], "ubuntu") || !strings.Contains(notes[0], "22.04") {
 		t.Errorf("the notes are %v, and one of them has to name what was read", notes)
+	}
+}
+
+func TestHostOSForStatesTheDistroAndNoVersionForAFleetOfTwoReleases(t *testing.T) {
+	// Amazon Linux 2 and Amazon Linux 2023 share the ID amzn. The fleet agrees
+	// on the distribution, so that is stated, and disagrees on the release, so
+	// no version is, and a reviewer is told which workers run which.
+	plan := Plan{Workers: []Worker{
+		runningOS("worker-01", "amzn", "RedHat", "2"),
+		runningOS("worker-02", "amzn", "RedHat", "2023"),
+		runningOS("worker-03", "amzn", "RedHat", "2023"),
+	}}
+
+	os, notes := HostOSFor(plan)
+	if os == nil || os.Distro != "amzn" {
+		t.Fatalf("stated %+v, want amzn", os)
+	}
+	if os.Version != "" {
+		t.Errorf("stated the version %q for a fleet running two releases", os.Version)
+	}
+	joined := strings.Join(notes, "\n")
+	for _, want := range []string{"worker-01", "2023", "version"} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("the notes are %v, and none of them names %q", notes, want)
+		}
 	}
 }
 

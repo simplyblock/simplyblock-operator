@@ -152,9 +152,11 @@ Read from the host's `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`, `PRETTY_N
 )
 
 #v(4pt)
-The draft sets `hostOS` (distribution and family) only when every worker reports the same distribution.
+The draft sets `hostOS` (distribution, family, and version) only when every worker reports the same distribution.
 Workers on different distributions, or a worker whose os-release could not be read, leave it unset with a note
-naming the workers.
+naming the workers. The version (`VERSION_ID`) is set only when the workers also agree on it: a fleet of
+Amazon Linux 2 and Amazon Linux 2023 workers, which share the ID `amzn`, gets the distribution and no version,
+with a note naming which worker runs which release.
 
 == Kernel
 
