@@ -283,13 +283,31 @@ node, and overriding that answer gives the fleet a configuration it cannot run. 
 on a Vanilla document, they resolve as before: the kubelet configured, CPU
 topology off.
 
+**A group states its own environment when its workers are another provider's.**
+One control plane can run workers from several providers: Google Anthos joins
+EKS and OKE node groups to a GKE cluster. `spec.environment` is then the control
+plane's, which is what the cluster's flags are resolved from, and a group whose
+workers another provider built states that provider in its own `environment`.
+The cluster carries one value per flag for the whole storage-node DaemonSet, so
+the group's answer goes on its nodes instead: the expansion resolves the group's
+environment to `StorageNode.spec.config.enableKubeletConfiguration`, and the node
+carries it into its own per-node ConfigMap entry, as it does `reservedSystemCPU`.
+A document that states `spec.cluster.enableKubeletConfiguration` has decided it
+for the whole fleet, and no group's environment overrides that. `OpenShift` and
+`Talos` are refused for a group, and an `OpenShift` or a `Talos` document admits no
+group environment at all, because each of the two is what every worker of its
+cluster runs. The kubelet flag is the only thing a group environment changes,
+and the storage node acts on it only where CPU topology is enabled.
+
 **`spec.hostOS` is the other half of the same question, and it is a separate
 field because it has a separate answer.** The distribution decides what
 Kubernetes does to a machine; the host OS decides what the machine itself
 offers. A fleet on OpenShift runs Red Hat Enterprise Linux CoreOS and a fleet on
 K3s runs whatever its administrator installed, so neither can be read off the
-other. It carries the os-release `distro` and the packaging `family` that places
-it, and the expansion spends the distro on
+other. It carries the os-release `distro`, the packaging `family` that places
+it, and the `version`, which tells two releases of one distribution apart:
+Amazon Linux 2 and Amazon Linux 2023 share the ID `amzn`. The expansion spends
+the distro on
 `StorageCluster.spec.storageNodes.ubuntuHost`: Ubuntu keeps the NVMe-oF modules
 in `linux-modules-extra` rather than in the base install, so a storage node on
 one installs the package for its running kernel before it starts.
@@ -297,6 +315,19 @@ one installs the package for its running kernel before it starts.
 A document that states no `hostOS` states nothing about `ubuntuHost` either, and
 that is not the same as stating a host that is not Ubuntu. The cluster then
 falls back to its own default, which is what a hand-written cluster gets.
+
+**A group states its own host OS when its workers run another.** One cluster can
+run workers on several operating systems: an EKS cluster with Amazon Linux and
+Ubuntu node groups, an OKE cluster with Oracle Linux and Ubuntu pools, or one
+distribution in two releases. `spec.hostOS` is then the fleet's default, and a
+group whose workers run something else states it in its own `hostOS`, the same
+`HostOSSpec`. The cluster carries one `ubuntuHost` for the whole storage-node
+DaemonSet, so the group's answer goes on its nodes instead: the expansion gives
+the group's `hostOS` to each of its nodes whole, as
+`StorageNode.spec.config.hostOS`, and the node resolves it into its own per-node
+ConfigMap entry. The node carries the operating system rather than the flag, so
+a later decision on the family or the release reads the same field. A group
+that states none leaves its nodes on the fleet's value.
 
 **`spec.cluster.backup` is where the cluster's backups go, and it is on the
 document for the reason `kms` is.** The expansion creates the cluster and its own
@@ -926,15 +957,33 @@ boots. Discovery reads them together and writes the distribution it concluded,
 which is what makes the field a finding a reviewer corrects rather than a
 question a reviewer answers. §3.1 is what the answer then buys.
 
+**A fleet of several providers is concluded from its control plane.** Each
+worker is also concluded on its own, from its own markers, and a fleet whose
+workers agree is answered by the precedence as before. Workers that disagree are
+one control plane with workers from more than one provider, and there the
+precedence would name whichever provider it lists first, so the cluster's
+environment is concluded from the API server alone: its API groups, and the
+build suffix of its version, which is the one mark a managed control plane
+leaves because it runs no node a cluster can list. A worker whose own conclusion
+differs from the cluster's is drafted into a group stating its environment
+(§3.1), and the run raises `WorkerEnvironmentDiffers` naming the workers. A
+worker that carries no marker says nothing about itself and stays on the
+cluster's environment. Neither happens on an `OpenShift` or a `Talos` cluster, or
+toward either.
+
 **`spec.hostOS` is read the same way and stated only when the fleet agrees.**
 Each probe reads its own host's `os-release`, which is on the worker's root
 filesystem rather than in the trees the rest of the inventory comes from, and
-the run states what every worker reported. One document becomes one cluster,
-which runs one storage-node DaemonSet, which carries one host OS for every
-worker it schedules, so a fleet whose workers run different distributions has no
-answer to state: the run states none and writes an event naming which worker
-runs what. The same is true of a fleet whose `os-release` nothing could read,
-which on a probe means its host's root filesystem was not mounted into it.
+the run states what every worker reported. A fleet whose workers run different
+distributions has no host OS for the whole document, so the run states none
+there, and every worker that does not run exactly what the document states
+carries its own into its group key: identical machines on two operating systems
+become two groups, each stating its `hostOS`, and a note names which worker runs
+what. The same holds one level down for the version: a fleet of one distribution
+in two releases states the distribution and no version, and each group states
+its release. A worker whose `os-release` nothing could read, which on a probe
+means its host's root filesystem was not mounted into it, says nothing about
+itself and is drafted without a host OS of its own.
 
 **`spec.discover.tolerations` is what the run may probe through, and what the
 draft then states.** A probe pod is pinned with `spec.nodeName`, which bypasses
@@ -1352,6 +1401,16 @@ type HostOSSpec struct {
 	// package manager.
 	// +optional
 	Family HostOSFamily `json:"family,omitempty"`
+
+	// Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+	// `2023`, `9.4`. It is what tells two releases of one distribution apart,
+	// such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+	// discovery run states it only when every worker it describes agrees, and a
+	// rolling distribution states none.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Version string `json:"version,omitempty"`
 }
 
 // ClusterDeploymentConfigStep is one step of the expansion path.
@@ -1474,6 +1533,7 @@ type NetworkAttachmentSelection struct {
 // makes ten identical machines one entry rather than ten.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
+// +kubebuilder:validation:XValidation:rule="!has(self.environment) || !(self.environment in ['OpenShift', 'Talos'])",message="a group cannot run OpenShift or Talos, which each run a whole cluster"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -1544,6 +1604,29 @@ type NodeGroup struct {
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
+
+	// Environment is the Kubernetes distribution these workers run on, where
+	// it is not the one spec.environment names. That is a cluster whose workers
+	// come from more than one provider, such as Google Anthos joining EKS and
+	// OKE node groups to a GKE control plane: spec.environment is the control
+	// plane's, and each group of workers from another provider states its own.
+	// The expansion spends it on the group's nodes, as
+	// StorageNode.spec.config.enableKubeletConfiguration, and a document that
+	// states spec.cluster.enableKubeletConfiguration has decided that for every
+	// group already. Unset is the document's environment. OpenShift and Talos
+	// are refused, because each is what a whole cluster runs.
+	// +optional
+	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system these workers run, where it is not the
+	// one spec.hostOS names. That is a cluster whose workers run more than one,
+	// such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+	// distribution in two releases. The expansion gives it to each of the
+	// group's nodes as StorageNode.spec.config.hostOS, which decides what the
+	// storage node prepares on the worker before it starts. Unset is the
+	// document's host OS.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -1832,6 +1915,7 @@ type ClusterTemplate struct {
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block))) || self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group must name the same device class: all nvme or all block"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
+// +kubebuilder:validation:XValidation:rule="!has(self.environment) || !(self.environment in ['OpenShift', 'Talos']) || self.nodeSets.all(s, s.groups.all(g, !has(g.environment)))",message="every worker of an OpenShift or a Talos cluster runs it, so no group states an environment of its own"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -1845,6 +1929,9 @@ type ClusterDeploymentConfigSpec struct {
 	// produces, after which nothing reads it again. The worker's host OS is not
 	// among them and is stated in hostOS, because a distribution decides what
 	// Kubernetes does to a machine and not which packages the machine has.
+	// In a cluster whose workers come from more than one provider it is the
+	// control plane's, and a group of workers from another provider states its
+	// own in its environment.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
 

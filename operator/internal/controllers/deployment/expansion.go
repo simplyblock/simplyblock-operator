@@ -500,18 +500,8 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		if config.Spec.Cluster != nil {
 			workload.TalosMachineConfig = config.Spec.Cluster.TalosMachineConfig
 		}
-	case simplyblockv1alpha2.KubernetesEnvironmentEKS,
-		simplyblockv1alpha2.KubernetesEnvironmentGKE,
-		simplyblockv1alpha2.KubernetesEnvironmentAKS,
-		simplyblockv1alpha2.KubernetesEnvironmentOKE:
-		// A managed service owns the kubelet configuration and builds it again
-		// for every node it replaces, so an edit is lost on the next node. EKS,
-		// GKE, and AKS also keep it outside the path the storage node rewrites.
-		workload.EnableKubeletConfiguration = ptr.To(false)
-	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
-		simplyblockv1alpha2.KubernetesEnvironmentRancher,
-		simplyblockv1alpha2.KubernetesEnvironmentK3s:
-		workload.EnableKubeletConfiguration = ptr.To(true)
+	default:
+		workload.EnableKubeletConfiguration = kubeletConfigurationOf(config.Spec.Environment)
 	}
 
 	// What the environment decides above is the default, and a document that
@@ -531,6 +521,39 @@ func (r *ClusterDeploymentConfigReconciler) buildWorkload(
 		}
 	}
 	return workload
+}
+
+// kubeletConfigurationOf is whether a storage node may change the kubelet
+// configuration of a worker in an environment other than OpenShift and Talos,
+// nil for an environment that does not decide it.
+func kubeletConfigurationOf(environment simplyblockv1alpha2.KubernetesEnvironment) *bool {
+	switch environment {
+	case simplyblockv1alpha2.KubernetesEnvironmentEKS,
+		simplyblockv1alpha2.KubernetesEnvironmentGKE,
+		simplyblockv1alpha2.KubernetesEnvironmentAKS,
+		simplyblockv1alpha2.KubernetesEnvironmentOKE:
+		// A managed service owns the kubelet configuration and builds it again
+		// for every node it replaces, so an edit is lost on the next node. EKS,
+		// GKE, and AKS also keep it outside the path the storage node rewrites.
+		return ptr.To(false)
+	case simplyblockv1alpha2.KubernetesEnvironmentVanilla,
+		simplyblockv1alpha2.KubernetesEnvironmentRancher,
+		simplyblockv1alpha2.KubernetesEnvironmentK3s:
+		return ptr.To(true)
+	}
+	return nil
+}
+
+// groupKubeletConfiguration is what a group's own environment decides about its
+// nodes' kubelet configuration, nil where the group states none or the document
+// states the flag for the whole fleet.
+func groupKubeletConfiguration(
+	config *simplyblockv1alpha2.ClusterDeploymentConfig, group simplyblockv1alpha2.NodeGroup,
+) *bool {
+	if template := config.Spec.Cluster; template != nil && template.EnableKubeletConfiguration != nil {
+		return nil
+	}
+	return kubeletConfigurationOf(group.Environment)
 }
 
 // awaitCluster waits for the control plane to have created the cluster, which is
@@ -809,7 +832,15 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				// per-node value has somewhere to go: the pod's environment
 				// variable is one object's for every worker it schedules.
 				ReservedSystemCPU: group.ReservedSystemCPU,
-				JournalManager:    group.JournalManager,
+				// A group of workers from another provider than the control
+				// plane's, which the cluster's one flag cannot describe. It
+				// reaches the node's entry as the reserved CPUs do.
+				EnableKubeletConfiguration: groupKubeletConfiguration(config, group),
+				// A group of workers on another operating system than the
+				// document's. It goes to the node whole, which resolves it into
+				// its entry, so a group that states none leaves the fleet's.
+				HostOS:         group.HostOS.DeepCopy(),
+				JournalManager: group.JournalManager,
 				// The two SPDK slots of spec.images. They are the document's
 				// statement for the whole fleet and land per node, because the
 				// fields are per node so that a later rollout can walk it one

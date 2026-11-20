@@ -231,6 +231,30 @@ type StorageNodeConfig struct {
 	// +optional
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
+	// EnableKubeletConfiguration states, for this node alone, whether the
+	// storage node may change the kubelet configuration on its worker, which it
+	// does where CPU topology is enabled: the CPU manager policy and the CPUs
+	// held back for the system. It overrides
+	// StorageCluster.spec.storageNodes.enableKubeletConfiguration, which is the
+	// fleet's value, for a worker whose kubelet is configured differently from
+	// the rest. That is a cluster with workers from more than one provider: a
+	// managed service such as EKS, GKE, AKS, or OKE builds the kubelet
+	// configuration again for every node it replaces, so a change made on one
+	// of its nodes is lost, while a self-managed worker in the same cluster
+	// keeps it. Unset leaves the fleet's value to decide.
+	// +optional
+	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// HostOS is the operating system this node's worker runs, for a worker that
+	// runs a different one from the rest, such as an Ubuntu node group beside
+	// Amazon Linux ones. It decides what the host itself offers: on Ubuntu, the
+	// NVMe-oF kernel modules are in linux-modules-extra rather than in the base
+	// install, so the storage node installs that package for the running kernel
+	// before it starts. It overrides StorageCluster.spec.storageNodes.ubuntuHost,
+	// which is the fleet's value. Unset leaves the fleet's value to decide.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
+
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the
 	// devices were partitioned.

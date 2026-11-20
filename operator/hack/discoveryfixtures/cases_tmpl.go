@@ -9,6 +9,8 @@
 package main
 
 import (
+	corev1 "k8s.io/api/core/v1"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/nodeprobe"
 )
@@ -47,6 +49,33 @@ func templateCases() map[string]Case {
 
 	// A run whose name pushes the cluster it proposes past what a
 	// StorageCluster name may be.
+	// One control plane with workers from three providers: Google Anthos
+	// joining an EKS and an OKE node group to a GKE cluster. The run concluded
+	// the control plane's GKE, and each worker carries its own provider's
+	// node-pool label.
+	providers := plain()
+	pools := []nodeOpt{
+		labeled("cloud.google.com/gke-nodepool", "storage"),
+		labeled("eks.amazonaws.com/nodegroup", "storage"),
+		labeled("oke.oraclecloud.com/pool.name", "storage"),
+	}
+	providerNodes := make([]corev1.Node, 0, len(providers))
+	for i, report := range providers {
+		providerNodes = append(providerNodes,
+			kubeNode(report.Node, reachableAt(managementAddress(report.Node)), pools[i]))
+	}
+	cases["TMPL-09"] = Case{Family: "tmpl", Reports: providers, Nodes: providerNodes,
+		Environment: simplyblockv1alpha2.KubernetesEnvironmentGKE}
+
+	// One EKS cluster on two operating systems: an Ubuntu node group beside
+	// Amazon Linux 2023 ones, on otherwise identical machines.
+	systems := plain()
+	for i := 1; i < len(systems); i++ {
+		systems[i].HostOS = runningAmazonLinux()
+	}
+	cases["TMPL-10"] = Case{Family: "tmpl", Reports: systems, Nodes: kubeFleet(systems),
+		Environment: simplyblockv1alpha2.KubernetesEnvironmentEKS}
+
 	cases["TMPL-04"] = with(&simplyblockv1alpha2.DiscoverSpec{
 		ConfigName: "discovered-the-quarterly-storage-expansion-for-the-frankfurt-racks",
 	})
@@ -60,6 +89,8 @@ func templateCases() map[string]Case {
 		"TMPL-06": "a-two-socket-fleet-and-no-socket-layout",
 		"TMPL-07": "the-environment-is-copied-through",
 		"TMPL-08": "the-filter-is-resolved-and-not-carried",
+		"TMPL-09": "workers-on-three-providers",
+		"TMPL-10": "workers-on-two-operating-systems",
 	}
 	gaps := map[string]string{"TMPL-04": "G-11", "TMPL-06": "G-12"}
 	for id, slug := range slugs {

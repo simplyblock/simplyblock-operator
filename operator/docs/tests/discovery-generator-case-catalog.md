@@ -491,16 +491,18 @@ The question each unratified rung is really asking:
 
 ## 13. Document shape and the cluster template
 
-| ID      | Mutation                                                      | Expected                                                                                          | Harness |
-|---------|---------------------------------------------------------------|---------------------------------------------------------------------------------------------------|---------|
-| TMPL-01 | Any successful run                                            | `spec.approved` false, `enableDriveFormat` true, and the note about formatting                    | `CM`    |
-| TMPL-02 | Any successful run                                            | `maxSubsystemCount: 30` with the note saying it is not a reading                                  | `CM`    |
-| TMPL-03 | `spec.discover.configName` unset                              | The name is `discovered-<ops>` and the cluster `discovered-<ops>-cluster`                         | `CM`    |
-| TMPL-04 | An `OperatorOps` name long enough to push the cluster past 63 | **Contested.** The document is written and `CreatingCluster` can never succeed. See §14, gap G-11 | `CM`    |
-| TMPL-05 | `spec.discover.clusterRef` set                                | No `spec.cluster`, and `clusterRef` carried through with the growth note                          | `CM`    |
-| TMPL-06 | Any run on a two-socket fleet                                 | `socketsToUse` and `nodesPerSocket` unset, so one node per worker on socket 0. See §14, gap G-12  | `CM`    |
-| TMPL-07 | `spec.environment` from the run's status                      | Copied verbatim into the document                                                                 | `CM`    |
-| TMPL-08 | Any run                                                       | No `deviceFilter` anywhere in the document: the resolved list is the record                       | `CM`    |
+| ID      | Mutation                                                      | Expected                                                                                           | Harness |
+|---------|---------------------------------------------------------------|----------------------------------------------------------------------------------------------------|---------|
+| TMPL-01 | Any successful run                                            | `spec.approved` false, `enableDriveFormat` true, and the note about formatting                     | `CM`    |
+| TMPL-02 | Any successful run                                            | `maxSubsystemCount: 30` with the note saying it is not a reading                                   | `CM`    |
+| TMPL-03 | `spec.discover.configName` unset                              | The name is `discovered-<ops>` and the cluster `discovered-<ops>-cluster`                          | `CM`    |
+| TMPL-04 | An `OperatorOps` name long enough to push the cluster past 63 | **Contested.** The document is written and `CreatingCluster` can never succeed. See §14, gap G-11  | `CM`    |
+| TMPL-05 | `spec.discover.clusterRef` set                                | No `spec.cluster`, and `clusterRef` carried through with the growth note                           | `CM`    |
+| TMPL-06 | Any run on a two-socket fleet                                 | `socketsToUse` and `nodesPerSocket` unset, so one node per worker on socket 0. See §14, gap G-12   | `CM`    |
+| TMPL-07 | `spec.environment` from the run's status                      | Copied verbatim into the document                                                                  | `CM`    |
+| TMPL-08 | Any run                                                       | No `deviceFilter` anywhere in the document: the resolved list is the record                        | `CM`    |
+| TMPL-09 | Workers from three providers under a GKE control plane        | `spec.environment: GKE`, and the EKS and OKE workers each in a group stating its own `environment` | `CM`    |
+| TMPL-10 | An Ubuntu worker beside two Amazon Linux 2023 workers on EKS  | No `spec.hostOS`, and each operating system in a group stating its own `hostOS`, release included  | `CM`    |
 
 ## 13a. Captured fleets
 

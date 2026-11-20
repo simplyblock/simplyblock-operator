@@ -1526,6 +1526,29 @@ spec:
                                       - message: a device selection names NVMe addresses
                                           or block devices, not both
                                         rule: has(self.nvme) != has(self.block)
+                                    environment:
+                                      description: |-
+                                        Environment is the Kubernetes distribution these workers run on, where
+                                        it is not the one spec.environment names. That is a cluster whose workers
+                                        come from more than one provider, such as Google Anthos joining EKS and
+                                        OKE node groups to a GKE control plane: spec.environment is the control
+                                        plane's, and each group of workers from another provider states its own.
+                                        The expansion spends it on the group's nodes, as
+                                        StorageNode.spec.config.enableKubeletConfiguration, and a document that
+                                        states spec.cluster.enableKubeletConfiguration has decided that for every
+                                        group already. Unset is the document's environment. OpenShift and Talos
+                                        are refused, because each is what a whole cluster runs.
+                                      enum:
+                                      - Vanilla
+                                      - OpenShift
+                                      - Rancher
+                                      - K3s
+                                      - Talos
+                                      - EKS
+                                      - GKE
+                                      - AKS
+                                      - OKE
+                                      type: string
                                     failureDomain:
                                       description: |-
                                         FailureDomain is the label of the fault group every worker in this group
@@ -1537,6 +1560,48 @@ spec:
                                       maxLength: 63
                                       pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
                                       type: string
+                                    hostOS:
+                                      description: |-
+                                        HostOS is the operating system these workers run, where it is not the
+                                        one spec.hostOS names. That is a cluster whose workers run more than one,
+                                        such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+                                        distribution in two releases. The expansion gives it to each of the
+                                        group's nodes as StorageNode.spec.config.hostOS, which decides what the
+                                        storage node prepares on the worker before it starts. Unset is the
+                                        document's host OS.
+                                      properties:
+                                        distro:
+                                          description: |-
+                                            Distro is the distribution's os-release ID, lowercase and verbatim:
+                                            `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9][a-z0-9._-]*$
+                                          type: string
+                                        family:
+                                          description: |-
+                                            Family is the packaging tradition Distro belongs to. A discovery run
+                                            concludes it from the distribution itself, or from the distributions its
+                                            os-release says it is built on, which is what places a derivative this
+                                            product has never heard of. It is left unstated for a host with no
+                                            package manager.
+                                          enum:
+                                          - Debian
+                                          - RedHat
+                                          - SUSE
+                                          - Alpine
+                                          - Arch
+                                          type: string
+                                        version:
+                                          description: |-
+                                            Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+                                            `2023`, `9.4`. It is what tells two releases of one distribution apart,
+                                            such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+                                            discovery run states it only when every worker it describes agrees, and a
+                                            rolling distribution states none.
+                                          maxLength: 63
+                                          pattern: ^[a-z0-9][a-z0-9._-]*$
+                                          type: string
+                                      type: object
                                     journalManager:
                                       description: JournalManager tunes the journal
                                         managers on these nodes.
@@ -1646,6 +1711,10 @@ spec:
                                       or its network attachments, not both
                                     rule: '!has(self.networkAttachment) || (!has(self.mgmtInterface)
                                       && !has(self.dataInterfaces))'
+                                  - message: a group cannot run OpenShift or Talos,
+                                      which each run a whole cluster
+                                    rule: '!has(self.environment) || !(self.environment
+                                      in [''OpenShift'', ''Talos''])'
                                 maxItems: 64
                                 minItems: 1
                                 type: array
