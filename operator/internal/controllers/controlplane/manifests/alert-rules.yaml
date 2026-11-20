@@ -1,0 +1,110 @@
+# The alert rules the operator gives an external prometheus-operator as a
+# PrometheusRule (prometheus_external.go). They mirror the Grafana alerting
+# rules in the chart's controlplane_configmap.yaml, by alert name, so an alert
+# keeps its name when a deployment moves from Managed to External.
+- alert: Device_status_online_to_unavailable
+  expr: simplyblock_device_status{status="unavailable"} > 0
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule checks for device unavailability.
+    summary: >-
+      Device {{ $labels.device }} in storage node
+      {{ $labels.snode }} is unavailable.
+- alert: Device_status_online_to_read_only
+  expr: simplyblock_device_status{status="read_only"} > 0
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule checks for devices read-only state.
+    summary: >-
+      Device {{ $labels.device }} on snode
+      {{ $labels.snode }} is now read-only.
+- alert: Cluster_status_online_to_degraded
+  expr: simplyblock_cluster_status{status="degraded"} > 0
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts on cluster degraded state.
+    summary: Cluster {{ $labels.cluster }} is in degraded state.
+- alert: Cluster_status_online_to_suspended
+  expr: simplyblock_cluster_status{status="suspended"} > 0
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts for cluster suspended state.
+    summary: Cluster {{ $labels.cluster }} is in suspended state.
+- alert: StorageNode_status_online_to_unreachable
+  expr: simplyblock_snode_status{status="unreachable"} > 0
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts for unreachable storage nodes.
+    summary: >-
+      Storage node {{ $labels.snode }} in cluster
+      {{ $labels.cluster }} is unreachable.
+- alert: StorageNode_status_online_to_down
+  expr: simplyblock_snode_status{status="down"} > 0
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts for down storage nodes.
+    summary: >-
+      Storage node {{ $labels.snode }} in cluster
+      {{ $labels.cluster }} is down.
+- alert: StorageNode_health_check_false
+  expr: simplyblock_snode_health_check < 1
+  for: 2m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts for unhealthy storage nodes.
+    summary: >-
+      Storage node {{ $labels.snode }} in cluster
+      {{ $labels.cluster }} is unhealthy.
+- alert: Cluster_provisioned_capacity_reached
+  expr: >-
+    (simplyblock_cluster_size_provisioned_bytes / simplyblock_cluster_size_total_bytes)
+    / simplyblock_cluster_provisioned_capacity_critical_threshold_ratio > 1
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts about cluster provisioned capacity reached.
+    summary: Cluster {{ $labels.cluster }} provisioned capacity reached.
+- alert: Cluster_absolute_capacity_reached
+  expr: >-
+    (simplyblock_cluster_size_used_bytes / simplyblock_cluster_size_total_bytes)
+    / simplyblock_cluster_capacity_critical_threshold_ratio > 1
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts about cluster absolute capacity reached.
+    summary: Cluster {{ $labels.cluster }} absolute capacity reached.
+- alert: Lvol_status_online_to_offline
+  expr: simplyblock_lvol_status{status="offline"} > 0
+  for: 2m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts for offline lvols.
+    summary: >-
+      Lvol {{ $labels.lvol }} in cluster
+      {{ $labels.cluster }} is offline.
+- alert: RootFilesystemLowSpace
+  expr: >-
+    (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
+     / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 < 20
+  for: 1m
+  labels:
+    app: simplyblock
+  annotations:
+    description: The rule alerts when root filesystem space is critically low (below 20%).
+    summary: Root filesystem space is critically low on {{ $labels.instance }}.

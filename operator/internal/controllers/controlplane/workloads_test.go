@@ -727,34 +727,3 @@ func TestTheTwoNodeServicesNameWhatTheImageShips(t *testing.T) {
 		t.Errorf("the monitoring pod runs no %s", name)
 	}
 }
-
-// A bring-your-own prometheus-operator's Prometheus pod scrapes as its own
-// ServiceAccount. Without naming that account here, webappapi's TokenReview
-// rejects every one of its scrapes with a 401.
-func TestExtraMetricsServiceAccountsReachTheManagementAPI(t *testing.T) {
-	t.Setenv(extraMetricsAccountsEnv,
-		" system:serviceaccount:monitoring:kube-prometheus-stack-prometheus , not-an-account,"+
-			"system:serviceaccount:a:b:c,system:serviceaccount:monitoring:kube-prometheus-stack-prometheus")
-	cp := localControlPlane()
-
-	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
-	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
-
-	if want := "system:serviceaccount:monitoring:kube-prometheus-stack-prometheus"; env.Value != want {
-		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
-	}
-}
-
-// This chart deploys no Prometheus of its own, so without the operator's
-// variable there is no account to trust and every scrape gets a 401.
-func TestNoExtraMetricsServiceAccountsMeansNoneAreTrusted(t *testing.T) {
-	t.Setenv(extraMetricsAccountsEnv, "")
-	cp := localControlPlane()
-
-	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
-	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
-
-	if env.Value != "" {
-		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want empty", env.Value)
-	}
-}

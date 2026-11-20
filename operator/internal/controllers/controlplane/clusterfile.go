@@ -34,12 +34,10 @@ func (r *ControlPlaneReconciler) managementAPIStamped(
 ) ([]client.Object, error) {
 	objects := managementAPIObjects(cp)
 
-	scraped, err := prometheusScrapesTheManagementAPI(ctx, r.Client, r.RESTMapper(), cp.Namespace)
-	if err != nil {
-		return nil, err
-	}
-	if scraped {
-		objects = withoutPrometheus(objects)
+	if externalPrometheus(cp) {
+		if err := requireMonitoringCRDs(r.RESTMapper()); err != nil {
+			return nil, err
+		}
 	}
 
 	var file corev1.ConfigMap
