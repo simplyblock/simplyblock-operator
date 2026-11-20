@@ -147,11 +147,11 @@ const TaskWindowCard = ({tasks}) => (
 function ClusterDetail({o: c, nav}) {
   const [tab, setTab] = useState("overview");
   const cap = c.capacity, k = c.counts;
-  const items = [{k: "overview", label: "Overview", icon: "cluster"}, {k: "ops", label: "Operations", icon: "clock"}, {k: "eventlog", label: "Event log", icon: "list"}];
+  const items = [{k: "overview", label: "Overview", icon: "cluster"}, {k: "alerts", label: "Alerts", icon: "bell"}, {k: "ops", label: "Operations", icon: "clock"}, {k: "eventlog", label: "Event log", icon: "list"}];
   return (
     <div className="scroll">
       <DetailHead obj={Object.assign({}, c, {status: c.phase})} title={c.name}
-        sub={<><span className="lab mono" title="metadata.namespace"><i>ns</i>{c.namespace}</span>{c.status && <span className="lab mono" title="status.status"><i>status</i>{c.status}</span>}<StepTag step={c.step} /><OpsRef name={c.activeOpsRef} nav={nav} vm={c} /></>}
+        sub={<><span className="lab mono" title="metadata.namespace"><i>ns</i>{c.namespace}</span>{c.status && <span className="lab mono" title="status.status"><i>status</i>{c.status}</span>}<StepTag step={c.step} /><OpsRef name={c.activeOpsRef} nav={nav} vm={c} />{window.AlertBadge && <AlertBadge obj={c} nav={nav} />}</>}
         badge={c.message ? <span className="mdesc" title="status.message">{c.message}</span> : null} />
       <Tabs items={items} active={tab} onChange={setTab} />
       {tab === "overview" && <>
@@ -182,6 +182,7 @@ function ClusterDetail({o: c, nav}) {
         </div>}
         <CRSection vm={c} nav={nav} />
       </>}
+      {tab === "alerts" && (window.AlertsScoped ? <AlertsScoped cluster={c} nav={nav} /> : <ComingView name="The alert view" />)}
       {tab === "ops" && <OperationsPanel cluster={c} nav={nav} />}
       {tab === "eventlog" && <ClusterLogPanel cluster={c} />}
     </div>

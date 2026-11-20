@@ -284,7 +284,9 @@ function OpMachine({o, onAbort, nav}) {
   );
 }
 
+// The operations of one cluster: the monitor (tasks.jsx), scoped.
 function OperationsPanel({cluster, nav}) {
+  if (window.MonitorView) return <MonitorView scope={cluster} nav={nav} />;
   const [rev, setRev] = useState(0);
   const [q, setQ] = useState("");
   const [onlyRunning, setOnlyRunning] = useState(false);
@@ -700,13 +702,11 @@ function ControlPlaneView({nav}) {
         <div className="mdesc" style={{marginTop: 4}}>One deployment manages every storage cluster. Its services, logs and state database are shared, so they live here rather than under any single cluster.</div>
       </div></div>
       <div className="tabs">
-        {[["services", "Services"], ["alerts", "Alerts"], ["fdb", "State DB"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
+        {[["services", "Services"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
           return <button key={t[0]} className={"tab" + (tab === t[0] ? " on" : "")} onClick={() => setTab(t[0])}>{t[1]}</button>;
         })}
       </div>
       {tab === "services" && <ControlPlanePanel />}
-      {tab === "alerts" && <AlertsPanel cluster={null} nav={nav} />}
-      {tab === "fdb" && <FdbPanel />}
       {tab === "clusters" && <CpClusters nav={nav} />}
       {tab === "access" && showAccess && <AccessView nav={nav} />}
     </div>
