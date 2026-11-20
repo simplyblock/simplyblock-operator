@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -244,4 +245,22 @@ func (k *PathKeeper) Run(ctx context.Context, interval time.Duration) {
 			k.Tick(ctx)
 		}
 	}
+}
+
+// CheckFilesystems runs statfs on every kept export's mount point and returns
+// the first failure. A filesystem that shut down on an I/O error fails it.
+func (k *PathKeeper) CheckFilesystems(statfs func(path string) error) error {
+	k.mu.Lock()
+	paths := make([]string, 0, len(k.exports))
+	for path := range k.exports {
+		paths = append(paths, path)
+	}
+	k.mu.Unlock()
+	sort.Strings(paths)
+	for _, path := range paths {
+		if err := statfs(path); err != nil {
+			return fmt.Errorf("export %s: its filesystem does not answer: %w", path, err)
+		}
+	}
+	return nil
 }

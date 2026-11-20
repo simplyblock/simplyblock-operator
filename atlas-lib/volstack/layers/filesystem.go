@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/volstack"
@@ -42,6 +43,11 @@ type FilesystemOps interface {
 
 	// IsMountPoint reports whether anything is mounted at path.
 	IsMountPoint(ctx context.Context, path string) (bool, error)
+
+	// OtherMounts lists every mount point other than path that holds the
+	// filesystem mounted at path: a bind mount into a pod shares its
+	// superblock, so unmounting path alone does not let the filesystem go.
+	OtherMounts(ctx context.Context, path string) ([]string, error)
 
 	// Grow runs the filesystem's own resize tool, which the filesystem chose and
 	// pointed at whatever it resizes. It is a command rather than a device and a
@@ -315,6 +321,44 @@ func (f *Filesystem) clear(ctx context.Context) error {
 	}
 	if err := f.cfg.Ops.ForceUnmount(ctx, f.cfg.StagingPath); err != nil {
 		return fmt.Errorf("filesystem: unmount %s, including its force path: %w", f.cfg.StagingPath, err)
+	}
+	return nil
+}
+
+// Yield unmounts the filesystem so the layer below can heal under it, which a
+// heal asks for after the device lost every path while this mount held it. The
+// mount then carries what the outage did to it, an aborted ext4 journal or a
+// shut-down XFS log, and only a fresh mount replays its way out of that. The
+// rest of the heal finds the path unmounted and mounts it again.
+//
+// It refuses while any other mount holds the same filesystem. A pod's bind
+// mount shares the superblock, so unmounting the staging path under one leaves
+// the damaged filesystem alive, and the next mount of the device picks it up
+// again instead of reading it from the device. The refusal is
+// volstack.ErrHeldElsewhere: the publish that asked retries, and the old pod's
+// unpublish releases the bind in between.
+//
+// It unmounts the ordinary way only, and a refusal is the same wait. The lazy
+// unmount clear falls back to detaches the path and nothing else, so a
+// filesystem something still has open would outlive it, and the next mount of
+// the device would pick it up after the heal had re-pointed the mapping and
+// with that erased the interruption. The fallback is for a device that is gone,
+// and under the indirection this one is not.
+func (f *Filesystem) Yield(ctx context.Context, _, _ volstack.Artifact) error {
+	mounted, err := f.cfg.Ops.IsMountPoint(ctx, f.cfg.StagingPath)
+	if err == nil && !mounted {
+		return nil
+	}
+	others, err := f.cfg.Ops.OtherMounts(ctx, f.cfg.StagingPath)
+	if err != nil {
+		return fmt.Errorf("filesystem: find what else holds %s: %w", f.cfg.StagingPath, err)
+	}
+	if len(others) > 0 {
+		return fmt.Errorf("filesystem: %s is also mounted at %s: %w",
+			f.cfg.StagingPath, strings.Join(others, ", "), volstack.ErrHeldElsewhere)
+	}
+	if err := f.cfg.Ops.Unmount(ctx, f.cfg.StagingPath); err != nil {
+		return fmt.Errorf("filesystem: unmount %s: %w: %w", f.cfg.StagingPath, err, volstack.ErrHeldElsewhere)
 	}
 	return nil
 }

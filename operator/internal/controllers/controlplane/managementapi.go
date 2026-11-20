@@ -37,9 +37,10 @@ import (
 )
 
 // fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
-// metrics. It is upstream's rather than simplyblock's, and pinned for the same
-// reason the database's images are.
-const fdbExporterImage = "aikoven/foundationdb-exporter:3.1.0"
+// metrics. It is upstream's exporter mirrored to simplyblock's registry, named
+// with its registry like every other control-plane image, and pinned for the
+// same reason the database's images are.
+const fdbExporterImage = "quay.io/simplyblock-io/foundationdb-exporter:3.1.0"
 
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name
@@ -174,9 +175,9 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 	}
 }
 
-// podTeardownRole is the delete half of what the control plane does to pods,
-// and it is separate because it is the half that never leaves the install
-// namespace.
+// podTeardownRole is the delete half of what the control plane does to a
+// storage node's pod and Service, and it is separate because it is the half
+// that never leaves the install namespace.
 //
 // rbac-justified: a node add that fails after spdk_process_start has already
 // created snode-spdk-pod-<port>-<cluster> deletes it straight through the API
@@ -186,17 +187,23 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 // substitute. Left behind, the pod holds the host's hugepages, so every later
 // add on that host stays Pending on an "Insufficient hugepages-2Mi" event.
 //
-// Containment: delete on pods in one namespace, with no create beside it. The
-// account cannot replace what it removes, and the workloads it can remove are
-// recreated by their own controllers. It is capped by the manager's own
-// cluster-wide delete on pods, which the storage node and cluster Ops
-// reconcilers already hold.
+// A node on the pod network has a Service in front of that pod,
+// snode-spdk-svc-<port>-<cluster>, which the agent creates before the pod so
+// the pod can report the Service's address. The same abort, and a node removal,
+// delete it the same way (_delete_spdk_service_via_k8s), for the same reason.
+// Without the verb the teardown logs a 403 and the Service outlives the add.
+//
+// Containment: delete on pods and services in one namespace, with no create
+// beside it. The account cannot replace what it removes, and the workloads it
+// can remove are recreated by their own controllers. It is capped by the
+// manager's own cluster-wide delete on pods and services, which the storage
+// node and control plane reconcilers already hold.
 func podTeardownRole(namespace string) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: podTeardownRoleName, Namespace: namespace},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
-			Resources: []string{"pods"},
+			Resources: []string{"pods", "services"},
 			Verbs:     []string{"delete"},
 		}},
 	}

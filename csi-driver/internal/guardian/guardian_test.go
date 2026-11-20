@@ -4,6 +4,7 @@ package guardian
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -588,5 +589,86 @@ func TestRegisterPublish_TracksFilesystemVolume(t *testing.T) {
 	}
 	if _, tracked := st.PodUIDs[podUID]; !tracked {
 		t.Errorf("pod UID not recovered from the filesystem publish path; got %v", st.PodUIDs)
+	}
+}
+
+// A striped volume is one publish but N subsystems. The reconnect monitor
+// reports a member that lost every path under that member's own ID, so every
+// member has to be tracked for the pod, or the break is dropped as an unknown
+// lvol and the pod keeps running on a stripe with a hole in it.
+func TestRegisterPublishStriped_TracksEveryMember(t *testing.T) {
+	const (
+		podUID     = "0c8e1f3a-5b6d-4e7f-8a9b-0c1d2e3f4a5b"
+		targetPath = "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-s/mount"
+	)
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.RegisterPublishStriped("cid", "m0", []string{"m0", "m1", "m2"}, targetPath)
+
+	for _, id := range []string{"m0", "m1", "m2"} {
+		st := g.lvols[id]
+		if st == nil {
+			t.Fatalf("member %s not tracked", id)
+		}
+		if _, ok := st.PodUIDs[podUID]; !ok || st.ClusterID != "cid" {
+			t.Errorf("member %s: pods=%v cluster=%q", id, st.PodUIDs, st.ClusterID)
+		}
+	}
+	if g.lvols["m0"].StripeOf != "" || g.lvols["m1"].StripeOf != "m0" || g.lvols["m2"].StripeOf != "m0" {
+		t.Errorf("StripeOf: m0=%q m1=%q m2=%q", g.lvols["m0"].StripeOf, g.lvols["m1"].StripeOf, g.lvols["m2"].StripeOf)
+	}
+
+	g.MarkBrokenLvol("m2")
+	if g.lvols["m2"].BrokenAt.IsZero() {
+		t.Error("a member's break was discarded")
+	}
+}
+
+// NodeUnpublish only knows the first member (the volume handle's), so releasing
+// it has to release the other members of that volume, and nothing else the pod
+// holds.
+func TestRegisterUnpublish_ReleasesStripeMembers(t *testing.T) {
+	const podUID = "1d9f2a4b-6c7e-4f8a-9b0c-1d2e3f4a5b6c"
+	tp := "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-s/mount"
+	other := "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-o/mount"
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.RegisterPublishStriped("cid", "m0", []string{"m0", "m1", "m2"}, tp)
+	g.RegisterPublishStriped("cid", "n0", []string{"n0", "n1"}, other)
+	g.RegisterPublish("cid", "plain", other)
+
+	g.RegisterUnpublish("m0", tp)
+
+	for _, id := range []string{"m0", "m1", "m2"} {
+		if _, ok := g.lvols[id]; ok {
+			t.Errorf("member %s still tracked after its volume was unpublished", id)
+		}
+	}
+	for _, id := range []string{"n0", "n1", "plain"} {
+		if st := g.lvols[id]; st == nil {
+			t.Errorf("%s was wiped by unpublishing another volume of the same pod", id)
+		}
+	}
+}
+
+// The member link survives a restart of the node plugin, or an unpublish after
+// it would leave the members tracked for a pod that is gone.
+func TestStripeMembershipIsPersisted(t *testing.T) {
+	const podUID = "2e0a3b5c-7d8f-4a9b-8c1d-2e3f4a5b6c7d"
+	tp := "/var/lib/kubelet/pods/" + podUID + "/volumes/kubernetes.io~csi/pvc-s/mount"
+	state := filepath.Join(t.TempDir(), "state.json")
+
+	g := newTestGuardian(fake.NewSimpleClientset())
+	g.cfg.StatePath = state
+	g.RegisterPublishStriped("cid", "m0", []string{"m0", "m1"}, tp)
+
+	g2 := newTestGuardian(fake.NewSimpleClientset())
+	g2.cfg.StatePath = state
+	g2.loadState()
+	if st := g2.lvols["m1"]; st == nil || st.StripeOf != "m0" {
+		t.Fatalf("member link not restored: %+v", st)
+	}
+	g2.RegisterUnpublish("m0", tp)
+	if len(g2.lvols) != 0 {
+		t.Errorf("lvols left after unpublish: %v", g2.lvols)
 	}
 }

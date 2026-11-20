@@ -56,9 +56,6 @@ jobs:
       - name: KMS setup script
         run: helm-charts/scripts/test-setup-kms.sh
 
-      - name: Cleanup script
-        run: helm-charts/scripts/test-cleanup-simplyblock.sh
-
       - name: Support bundle script
         run: helm-charts/scripts/test-kubectl-simplyblock-bundle.sh
 

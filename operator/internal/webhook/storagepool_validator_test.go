@@ -23,6 +23,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -206,5 +208,229 @@ func TestAPoolOnASuperclusterIsAdmitted(t *testing.T) {
 
 	if !resp.Allowed {
 		t.Fatalf("a pool naming a supercluster was refused: %s", resp.Result.Message)
+	}
+}
+
+// storageNodesOf is n storage nodes of cluster, the first `removing` of them on
+// their way out.
+func storageNodesOf(cluster string, n, removing int) []client.Object {
+	objs := make([]client.Object, 0, n)
+	for i := range n {
+		node := &simplyblockv1alpha2.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: cluster + "-node-" + string(rune('a'+i)), Namespace: "simplyblock"},
+			Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: cluster},
+		}
+		if i < removing {
+			node.Status.Phase = simplyblockv1alpha2.StorageNodePhaseRemoving
+		}
+		objs = append(objs, node)
+	}
+	return objs
+}
+
+// stripedPool is a pool whose volumes are striped width wide.
+func stripedPool(width int32) *simplyblockv1alpha2.StoragePool {
+	pool := testStoragePool("simplyblock")
+	pool.Spec.VolumeDefaults = &simplyblockv1alpha2.VolumeDefaults{StripeWidth: &width}
+	return pool
+}
+
+// A striped pool is refused when its cluster cannot serve one of its volumes:
+// one with fewer storage nodes than members, or a stretched one. What the
+// cluster does not know yet, it does not hold against the pool.
+func TestStoragePoolValidatorChecksTheStripeAgainstTheCluster(t *testing.T) {
+	stretched := testStorageCluster("simplyblock", "a-uuid")
+	stretched.Spec.EnableSyncReplication = ptr.To(true)
+
+	supercluster := testStorageCluster("simplyblock", "a-uuid")
+	supercluster.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
+	supercluster.Status.Members = []simplyblockv1alpha2.SuperclusterMemberStatus{
+		{Name: "member-big", PlacementEligible: true},
+		{Name: "member-small", PlacementEligible: true},
+		{Name: "member-draining", PlacementEligible: false},
+	}
+
+	withNodes := func(cluster client.Object, nodes ...[]client.Object) []client.Object {
+		objs := []client.Object{cluster}
+		for _, n := range nodes {
+			objs = append(objs, n...)
+		}
+		return objs
+	}
+
+	tests := []struct {
+		name     string
+		existing []client.Object
+		pool     *simplyblockv1alpha2.StoragePool
+		allowed  bool
+		message  string
+	}{
+		{
+			name:     "a width the cluster's nodes cover",
+			existing: withNodes(testStorageCluster("simplyblock", "a-uuid"), storageNodesOf(testValidatorCluster, 3, 0)),
+			pool:     stripedPool(3),
+			allowed:  true,
+		},
+		{
+			name:     "wider than the cluster",
+			existing: withNodes(testStorageCluster("simplyblock", "a-uuid"), storageNodesOf(testValidatorCluster, 3, 0)),
+			pool:     stripedPool(4),
+			message:  "has 3 storage nodes",
+		},
+		{
+			name:     "a node on its way out is not counted",
+			existing: withNodes(testStorageCluster("simplyblock", "a-uuid"), storageNodesOf(testValidatorCluster, 3, 1)),
+			pool:     stripedPool(3),
+			message:  "has 2 storage nodes",
+		},
+		{
+			name:     "a cluster with no nodes yet says nothing",
+			existing: withNodes(testStorageCluster("simplyblock", "")),
+			pool:     stripedPool(8),
+			allowed:  true,
+		},
+		{
+			name:     "a width of 1 is not striped and is not checked",
+			existing: withNodes(stretched),
+			pool:     stripedPool(1),
+			allowed:  true,
+		},
+		{
+			name:     "a stretched cluster",
+			existing: withNodes(stretched, storageNodesOf(testValidatorCluster, 4, 0)),
+			pool:     stripedPool(2),
+			message:  "synchronously replicated",
+		},
+		{
+			name: "a supercluster member that may take volumes is too small",
+			existing: withNodes(supercluster, storageNodesOf("member-big", 4, 0),
+				storageNodesOf("member-small", 2, 0), storageNodesOf("member-draining", 1, 0)),
+			pool:    stripedPool(3),
+			message: "member-small",
+		},
+		{
+			name: "a member that takes no new volumes is not held against the pool",
+			existing: withNodes(supercluster, storageNodesOf("member-big", 4, 0),
+				storageNodesOf("member-small", 3, 0), storageNodesOf("member-draining", 1, 0)),
+			pool:    stripedPool(3),
+			allowed: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newPoolScheme(t)
+			validator := &StoragePoolValidator{
+				Client:  fake.NewClientBuilder().WithScheme(s).WithObjects(tc.existing...).Build(),
+				Decoder: admission.NewDecoder(s),
+			}
+			response := validator.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create,
+					Namespace: tc.pool.Namespace,
+					Object:    poolRaw(t, tc.pool),
+				},
+			})
+			if response.Allowed != tc.allowed {
+				t.Fatalf("allowed = %t, want %t (%s)", response.Allowed, tc.allowed, response.Result.Message)
+			}
+			if tc.message != "" && !strings.Contains(response.Result.Message, tc.message) {
+				t.Errorf("the refusal %q does not mention %q", response.Result.Message, tc.message)
+			}
+		})
+	}
+}
+
+// Regression: 2026-11-17-pool-stripe-on-update (PR #922 review). The checks a
+// striped pool is held to ran on CREATE only, and spec.volumeDefaults may be
+// set by an update on a pool created without it, so a pool could gain a stripe
+// wider than its cluster, or on a stretched one, unchecked. An update that
+// introduces the stripe is checked as a create is; one that leaves it as it
+// was is not, so a pool whose cluster shrank or went away stays editable.
+func TestAnUpdateThatStripesAPoolIsChecked(t *testing.T) {
+	small := append([]client.Object{testStorageCluster("simplyblock", "a-uuid")},
+		storageNodesOf(testValidatorCluster, 3, 0)...)
+
+	unstriped := testStoragePool("simplyblock")
+	tests := []struct {
+		name     string
+		existing []client.Object
+		old, new *simplyblockv1alpha2.StoragePool
+		allowed  bool
+	}{
+		{"the update stripes the pool wider than its cluster", small, unstriped, stripedPool(4), false},
+		{"the update stripes the pool within its cluster", small, unstriped, stripedPool(3), true},
+		{"the stripe was already there", small, stripedPool(4), stripedPool(4), true},
+		{"the cluster is gone and the stripe is unchanged", nil, stripedPool(4), stripedPool(4), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newPoolScheme(t)
+			validator := &StoragePoolValidator{
+				Client:  fake.NewClientBuilder().WithScheme(s).WithObjects(tc.existing...).Build(),
+				Decoder: admission.NewDecoder(s),
+			}
+			response := validator.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Update,
+					Namespace: tc.new.Namespace,
+					Object:    poolRaw(t, tc.new),
+					OldObject: poolRaw(t, tc.old),
+				},
+			})
+			if response.Allowed != tc.allowed {
+				t.Errorf("allowed = %t, want %t (%s)", response.Allowed, tc.allowed, response.Result.Message)
+			}
+		})
+	}
+}
+
+// Regression: 2026-11-17-pool-stripe-on-update. On a supercluster only the
+// supercluster's own replication flags were read, and a striped volume is
+// placed in one member and striped there, so a sync-replicated member that
+// takes new volumes was admitted. Each such member is checked; one that takes
+// none is not held against the pool.
+func TestAStripedPoolIsRefusedOnASyncReplicatedSuperclusterMember(t *testing.T) {
+	supercluster := testStorageCluster("simplyblock", "a-uuid")
+	supercluster.Spec.Supercluster = &simplyblockv1alpha2.SuperclusterSpec{}
+	member := func(name string, sync bool) *simplyblockv1alpha2.StorageCluster {
+		c := testStorageCluster("simplyblock", "m-uuid")
+		c.Name = name
+		c.Spec.EnableSyncReplication = ptr.To(sync)
+		return c
+	}
+	for _, tc := range []struct {
+		name     string
+		eligible bool
+		allowed  bool
+	}{
+		{"a sync member that takes new volumes", true, false},
+		{"a sync member that takes none", false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sc := supercluster.DeepCopy()
+			sc.Status.Members = []simplyblockv1alpha2.SuperclusterMemberStatus{
+				{Name: "member-plain", PlacementEligible: true},
+				{Name: "member-sync", PlacementEligible: tc.eligible},
+			}
+			s := newPoolScheme(t)
+			validator := &StoragePoolValidator{
+				Client: fake.NewClientBuilder().WithScheme(s).
+					WithObjects(sc, member("member-plain", false), member("member-sync", true)).Build(),
+				Decoder: admission.NewDecoder(s),
+			}
+			pool := stripedPool(2)
+			response := validator.Handle(context.Background(), admission.Request{
+				AdmissionRequest: admissionv1.AdmissionRequest{
+					Operation: admissionv1.Create, Namespace: pool.Namespace, Object: poolRaw(t, pool),
+				},
+			})
+			if response.Allowed != tc.allowed {
+				t.Fatalf("allowed = %t, want %t (%s)", response.Allowed, tc.allowed, response.Result.Message)
+			}
+			if !tc.allowed && !strings.Contains(response.Result.Message, "member-sync") {
+				t.Errorf("the refusal %q does not name the member", response.Result.Message)
+			}
+		})
 	}
 }

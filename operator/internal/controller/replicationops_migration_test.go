@@ -677,3 +677,82 @@ func TestMigration_ClusterScope_RetiresAFinishedSlotOfTheSamePolicy(t *testing.T
 		t.Errorf("subphase = %q, want %s", got.Status.Subphase, replOpsSubphaseEnrolling)
 	}
 }
+
+// bf13 2026-11-05: a cluster migration's plan failed, a cleanup deleted its
+// slots, the policy annotation the enrollment had added stayed on the claims,
+// and the PVC watcher recreated the slots with an empty status. The next
+// round, under the opposite policy, skipped every volume as following the old
+// policy and had nothing left to migrate. A slot that never attached does not
+// hold its claim: the new plan supersedes it, re-pointing the annotation, on
+// which the watcher replaces the slot. A slot that is live under another
+// policy still holds its claim, and one that never attached under
+// spec.policyRef itself is this plan's own enrollment and joins the scope.
+func TestMigration_ClusterScope_SupersedesANeverAttachedSlotOfAnotherPolicy(t *testing.T) {
+	ps := &planServer{}
+	ops := migrationOps(utils.ReplicationOpsScopeCluster, testClusterName)
+	ops.Spec.PolicyRef = testMigPolicyName
+	src := testClusterUUID + ":pool:"
+	slotOf := func(name, policy, pvc, state string) *simplyblockv1alpha1.ReplicationSlot {
+		return &simplyblockv1alpha1.ReplicationSlot{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "default"},
+			Spec:       simplyblockv1alpha1.ReplicationSlotSpec{PolicyRef: policy, PVCRef: pvc, VolumeID: src + "vol-" + pvc},
+			Status:     simplyblockv1alpha1.ReplicationSlotStatus{State: state},
+		}
+	}
+	r, cl := newOpsReplReconciler(t, readyPairForOps(), migrationPolicy(), ops,
+		// The bf13 claim: annotated by the failed round, its slot recreated and never attached.
+		migBoundPVC("pvc-s", "pv-s", map[string]string{utils.AnnotationReplicationPolicy: "old"}),
+		csiPV("pv-s", src+"vol-pvc-s"), slotOf("old-pvc-s", "old", "pvc-s", ""),
+		// A slot attaching under another policy is live and keeps its claim.
+		migBoundPVC("pvc-t", "pv-t", map[string]string{utils.AnnotationReplicationPolicy: "old"}),
+		csiPV("pv-t", src+"vol-pvc-t"), slotOf("old-pvc-t", "old", "pvc-t", string(simplyblockv1alpha1.ReplicationSlotStateAttaching)),
+		// This plan's own enrollment, whose slot the watcher just created.
+		migBoundPVC("pvc-u", "pv-u", map[string]string{utils.AnnotationReplicationPolicy: testMigPolicyName}),
+		csiPV("pv-u", src+"vol-pvc-u"), slotOf("mig-pvc-u", testMigPolicyName, "pvc-u", ""),
+	)
+	srv := newAPIServer(t, ps.handler)
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+
+	reconcileOps(t, r)
+
+	annotation := func(name string) string {
+		pvc := &corev1.PersistentVolumeClaim{}
+		_ = cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: name}, pvc)
+		return pvc.Annotations[utils.AnnotationReplicationPolicy]
+	}
+	if got := annotation("pvc-s"); got != testMigPolicyName {
+		t.Errorf("pvc-s policy = %q, want %s: its slot never attached and must give way", got, testMigPolicyName)
+	}
+	if got := annotation("pvc-t"); got != "old" {
+		t.Errorf("pvc-t policy = %q, want it left alone: its slot is live", got)
+	}
+	if got := annotation("pvc-u"); got != testMigPolicyName {
+		t.Errorf("pvc-u policy = %q, want %s", got, testMigPolicyName)
+	}
+	if err := cl.Get(context.Background(), types.NamespacedName{Namespace: "default", Name: "mig-pvc-u"},
+		&simplyblockv1alpha1.ReplicationSlot{}); err != nil {
+		t.Errorf("pvc-u's own slot is gone: %v", err)
+	}
+	if len(ps.posts) != 0 {
+		t.Fatalf("created a plan while a claim was still enrolling")
+	}
+
+	got := getOps(t, cl)
+	if got.Status.Subphase != replOpsSubphaseEnrolling {
+		t.Errorf("subphase = %q, want %s", got.Status.Subphase, replOpsSubphaseEnrolling)
+	}
+	byPVC := map[string]simplyblockv1alpha1.ReplicationOpsResult{}
+	for _, res := range got.Status.Results {
+		byPVC[res.PVCRef] = res
+	}
+	if res := byPVC["pvc-s"]; res.Status == string(simplyblockv1alpha1.ReplicationOpsResultSkipped) {
+		t.Errorf("pvc-s skipped: %s", res.Detail)
+	}
+	if res := byPVC["pvc-t"]; res.Status != string(simplyblockv1alpha1.ReplicationOpsResultSkipped) ||
+		!strings.Contains(res.Detail, "follows replication policy") {
+		t.Errorf("pvc-t result = %+v, want skipped as following its policy", res)
+	}
+	if res := byPVC["pvc-u"]; res.Status != string(simplyblockv1alpha1.ReplicationOpsResultPending) {
+		t.Errorf("pvc-u result = %+v, want pending on its own slot", res)
+	}
+}

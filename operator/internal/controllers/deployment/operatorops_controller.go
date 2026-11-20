@@ -788,6 +788,7 @@ func (r *OperatorOpsReconciler) draftFor(
 			Approved:    false,
 			Environment: ops.Status.Environment,
 			NodeSets:    plan.NodeSets,
+			Images:      spec.Images.DeepCopy(),
 		},
 	}
 
@@ -828,7 +829,9 @@ func (r *OperatorOpsReconciler) draftFor(
 
 		template, err := discoverypkg.ClusterTemplateFor(clusterName, *plan,
 			discoverypkg.TemplateOptions{
-				ForceJournalDevice: ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+				ForceJournalDevice:   ptr.BoolFromOrFalse(spec.ForceJournalDevice),
+				Network:              spec.Network,
+				EnableFailureDomains: spec.EnableFailureDomains,
 			})
 		if err != nil {
 			return nil, notes, err

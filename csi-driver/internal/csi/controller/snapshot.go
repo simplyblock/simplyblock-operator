@@ -108,6 +108,9 @@ func (cs *Server) CreateSnapshot(
 		klog.Errorf("failed to get spdk volume, volumeID: %s err: %v", volumeID, err)
 		return nil, status.Errorf(codes.InvalidArgument, "invalid source volume ID %q: %v", volumeID, err)
 	}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		return cs.createStripedSnapshot(ctx, req, spdkVol, width)
+	}
 	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		klog.Errorf("failed to create spdk client: %v", err)
@@ -175,6 +178,13 @@ func (cs *Server) DeleteSnapshot(
 	unlock := cs.volumeLocks.Lock(csiSnapshotID)
 	defer unlock()
 
+	// A striped snapshot's id is its first member's with the width appended.
+	if base, width, ok := lvol.SplitStripeMarker(csiSnapshotID); ok && width > 1 {
+		if first, err := parseSnapshotID(base); err == nil {
+			return cs.deleteStripedSnapshot(ctx, csiSnapshotID, first, width)
+		}
+	}
+
 	sbSnapshot, err := parseSnapshotID(csiSnapshotID)
 	if err != nil {
 		// Invalid format means the snapshot was never created by this driver, so treat
@@ -237,8 +247,12 @@ func (cs *Server) ListSnapshots(
 	}
 
 	var all []*csi.ListSnapshotsResponse_Entry
-	for _, entry := range entries {
-		snapshotID := fmt.Sprintf("%s:%s:%s", entry.ClusterID, entry.PoolID, entry.UUID)
+	// A striped snapshot is one entry, under its first member snapshot, and
+	// the others are not listed as snapshots of their own.
+	for _, view := range foldStripedSnapshots(entries) {
+		entry := view.entry
+		snapshotID := lvol.WithStripeMarker(
+			fmt.Sprintf("%s:%s:%s", entry.ClusterID, entry.PoolID, entry.UUID), view.width)
 		sourceVolumeID := lvolIDFromURL(entry.LvolURL)
 
 		if req.GetSnapshotId() != "" && req.GetSnapshotId() != snapshotID {
@@ -251,7 +265,7 @@ func (cs *Server) ListSnapshots(
 		createdAt, _ := time.Parse(time.RFC3339Nano, entry.CreatedAt)
 		all = append(all, &csi.ListSnapshotsResponse_Entry{
 			Snapshot: &csi.Snapshot{
-				SizeBytes:      entry.Size,
+				SizeBytes:      view.size,
 				SnapshotId:     snapshotID,
 				SourceVolumeId: sourceVolumeID,
 				CreationTime:   timestamppb.New(createdAt),

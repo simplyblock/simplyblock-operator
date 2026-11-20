@@ -238,8 +238,10 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 
 	// The source worker keeps its storage-plane labels while any other node still
 	// runs there, and loses them when none does. Removing them from a worker that
-	// still hosts a node would unschedule it.
-	err = r.Workload.ReleaseWorker(ctx, node.Namespace, node.Spec.ClusterRef, node.Name)
+	// still hosts a node would unschedule it. The node goes in as this pass holds
+	// it, re-pointed, because the release must not learn where it is from a cache
+	// that may predate the re-point.
+	err = r.Workload.ReleaseWorker(ctx, node.Namespace, node.Spec.ClusterRef, node)
 	return err == nil, err
 }
 

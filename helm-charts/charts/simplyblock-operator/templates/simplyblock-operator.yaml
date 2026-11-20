@@ -26,7 +26,7 @@ spec:
       serviceAccountName: simplyblock-operator
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
-        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
       {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
@@ -68,6 +68,11 @@ spec:
             # The CA in the operator's own TLS volume is the one that issued
             # the CSI plugins' client certificates.
             - --csi-link-client-ca-file=/etc/simplyblock/tls/ca.crt
+            {{- end }}
+            {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+            - --cert-manager-ca-chain
+            - --cert-manager-root-issuer={{ index .Values.tls "cert-manager" "cluster-issuer" }}
+            - --cert-manager-create-root-issuer={{ index .Values.tls "cert-manager" "createSelfSignedIssuer" }}
             {{- end }}
             {{- if .Values.volumeMigration.legacy }}
             # An upgrade turns this on so the migrations already raised against

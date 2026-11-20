@@ -94,6 +94,17 @@ type TemplateOptions struct {
 	// fleet's disks do not say which one. journalDeviceFor is what it does, and
 	// what it does not.
 	ForceJournalDevice bool
+
+	// Network is the network the discovery run itself states, in its
+	// spec.discover.network. It overrides both the seed's and the one the plan
+	// would propose.
+	Network *simplyblockv1alpha2.StorageNetworkSpec
+
+	// EnableFailureDomains is the run's spec.discover.enableFailureDomains, which
+	// overrides the run's own decision whether to propose failure-domain mode:
+	// false off, true on, nil the auto decision. It takes precedence over the
+	// seed's value.
+	EnableFailureDomains *bool
 }
 
 // ClusterTemplateFor proposes the cluster for a plan.
@@ -116,6 +127,11 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 	}
 
 	switch {
+	case opts.Network != nil:
+		out.Template.Network = opts.Network.DeepCopy()
+		out.Notes = append(out.Notes, "network is the one this run states in spec.discover.network, "+
+			"rather than the one derived from the workers' interfaces. A cluster's network is fixed when it "+
+			"is created, so this is the line to correct now or never")
 	case seed.Network != nil:
 		out.Template.Network = seed.Network.DeepCopy()
 		out.Notes = append(out.Notes, statedNote("network", "the one the installation stated"))
@@ -125,8 +141,8 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"draft have a data interface. Each group names its own NICs. A cluster's network is fixed when it is "+
 			"created, so this is the line to correct now or never")
 	case plan.Unattached:
-		out.Template.Network = podNetworkOnly()
-		out.Notes = append(out.Notes, "network is the pod network, because no worker has a data interface of its own. "+
+		out.Template.Network = hostNetwork()
+		out.Notes = append(out.Notes, "network runs the SPDK pods on the host network, on the primary NIC, because no worker has a data interface of its own. "+
 			"A cluster's network is fixed when it is created, so this is the line to correct now or never")
 	}
 
@@ -143,7 +159,7 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 				"alone.")
 	}
 
-	// A stated count is taken as stated. Otherwise the count is a share of the
+	// A stated count is taken as stated. Otherwise, the count is a share of the
 	// smallest worker's socket, because the control plane assumes it uniform
 	// across a cluster's nodes.
 	if seed.VCPUCount != nil {
@@ -205,17 +221,26 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		out.Notes = append(out.Notes, note)
 	}
 
-	// The two integrity settings are stated or absent. Discovery proposes neither:
-	// nothing a probe reports says whether a deployment wants its I/O checked, and
-	// an absent setting leaves the cluster's own default to decide rather than
-	// having the run invent one.
-	if seed.EnableChecksumValidation != nil {
-		out.Template.EnableChecksumValidation = seed.EnableChecksumValidation
-		out.Notes = append(out.Notes, statedNote("enableChecksumValidation",
-			enabled(*seed.EnableChecksumValidation))+
-			" The backend bakes the checksum method into each device when the cluster "+
-			"is created and never re-applies it, so a cluster created without this is "+
-			"one nobody can turn it on for.")
+	// Decided after the stripe, because the default follows from it: a 1+1
+	// stripe is a mirror, so a read can be served from a copy on the local node
+	// before crossing the network. Other schemes get no proposal, and a stated
+	// value is taken under any scheme.
+	switch {
+	case seed.EnableNodeAffinity != nil:
+		out.Template.EnableNodeAffinity = seed.EnableNodeAffinity
+		out.Notes = append(out.Notes, statedNote("enableNodeAffinity",
+			enabled(*seed.EnableNodeAffinity))+
+			" The control plane takes it at cluster create and never re-applies it.")
+	case erasurecoding.SchemeOf(out.Template.Stripe) == erasurecoding.Scheme{DataChunks: 1, ParityChunks: 1}:
+		out.Template.EnableNodeAffinity = ptr.To(true)
+		out.Notes = append(out.Notes, "enableNodeAffinity is set, because a 1+1 stripe is a "+
+			"mirror and reads are served from the local node's copy first. The control plane "+
+			"takes it at cluster create and never re-applies it, so this is the line to "+
+			"remove now if reads should not prefer the local node")
+	}
+
+	if err := integritySettingsFor(&out, seed, plan); err != nil {
+		return ClusterTemplate{}, err
 	}
 	if len(seed.SocketsToUse) > 0 {
 		out.Template.SocketsToUse = slices.Clone(seed.SocketsToUse)
@@ -225,10 +250,30 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 		out.Template.NodesPerSocket = seed.NodesPerSocket
 		out.Notes = append(out.Notes, statedNote("nodesPerSocket", fmt.Sprintf("%d", *seed.NodesPerSocket)))
 	}
-	if seed.EnableFailureDomains != nil {
-		out.Template.EnableFailureDomains = seed.EnableFailureDomains
-		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(*seed.EnableFailureDomains)))
-	} else if plan.FailureDomains {
+	// The run's own flag wins over the installation's seed, and either is a
+	// statement the auto decision gives way to.
+	forced := opts.EnableFailureDomains
+	if forced == nil {
+		forced = seed.EnableFailureDomains
+	}
+	switch {
+	case forced != nil && !*forced:
+		out.Template.EnableFailureDomains = ptr.To(false)
+		out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(false))+
+			" No failure domains are read, so the fleet is grouped by hardware alone.")
+	case forced != nil && *forced:
+		// Stated on, but the layout still has to be one the control plane
+		// activates: a run that forces the mode onto a topology too flat for it
+		// (one shared zone is one domain) gets the mode and a note that it will
+		// not activate until the topology provides enough domains.
+		out.Template.EnableFailureDomains = ptr.To(true)
+		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
+			out.Notes = append(out.Notes, "enableFailureDomains is on as the run states, but the control "+
+				"plane will refuse to activate the cluster until the topology provides enough domains: "+refused)
+		} else {
+			out.Notes = append(out.Notes, statedNote("enableFailureDomains", enabled(true)))
+		}
+	case plan.FailureDomains:
 		if refused := failureDomainLayoutRefusal(plan, erasurecoding.SchemeOf(out.Template.Stripe)); refused != "" {
 			out.Notes = append(out.Notes, "enableFailureDomains is off although every worker carries "+
 				"a failure domain, because the control plane would refuse to activate the cluster: "+
@@ -239,7 +284,56 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 				"failure domain, and each group names its workers' domain")
 		}
 	}
-	if seed.EnableAtomicity4K != nil {
+
+	return out, nil
+}
+
+// integritySettingsFor fills in the three integrity settings.
+//
+// Checksum validation is stated or left to the reviewer: nothing a probe
+// reports says whether a deployment wants its I/O checked. The metadata journal
+// and atomicity are derived from the devices where nothing stated them, and a
+// stated value is kept with a note on any device it leaves exposed.
+//
+// A stated checksum validation over a device it cannot check is an error,
+// because that device is a node add the control plane refuses.
+func integritySettingsFor(out *ClusterTemplate, seed *simplyblockv1alpha2.ClusterTemplate, plan Plan) error {
+	findings := integrityOf(plan, ptr.BoolFromOrFalse(out.Template.EnableDriveFormat))
+
+	switch {
+	case seed.EnableMetadataJournal != nil:
+		out.Template.EnableMetadataJournal = seed.EnableMetadataJournal
+		note := statedNote("enableMetadataJournal", enabled(*seed.EnableMetadataJournal))
+		if !*seed.EnableMetadataJournal && len(findings.journal) > 0 {
+			note += fmt.Sprintf(" It leaves %s exposed to a torn metadata write, which are "+
+				"not known to complete a 4K write whole.", listOf(findings.journal))
+		}
+		out.Notes = append(out.Notes, note)
+	case findings.devices > 0:
+		out.Template.EnableMetadataJournal = ptr.To(len(findings.journal) > 0)
+		out.Notes = append(out.Notes, journalNote(findings))
+	}
+
+	checksums := ptr.BoolFromOrFalse(seed.EnableChecksumValidation)
+	if seed.EnableChecksumValidation != nil {
+		out.Template.EnableChecksumValidation = seed.EnableChecksumValidation
+		out.Notes = append(out.Notes, statedNote("enableChecksumValidation",
+			enabled(*seed.EnableChecksumValidation))+
+			" The backend bakes the checksum method into each device when the cluster "+
+			"is created and never re-applies it, so a cluster created without this is "+
+			"one nobody can turn it on for.")
+		if checksums && len(findings.cannotCheck) > 0 {
+			return fmt.Errorf("enableChecksumValidation is stated, and the control plane "+
+				"cannot check %s: no metadata format, blocks under 4K, and an atomic write "+
+				"unit under 4K. Format them to 4K, leave them out, or state checksum "+
+				"validation off", listOf(findings.cannotCheck))
+		}
+	} else if findings.devices > 0 {
+		out.Notes = append(out.Notes, checksumFeasibility(findings))
+	}
+
+	switch {
+	case seed.EnableAtomicity4K != nil:
 		out.Template.EnableAtomicity4K = seed.EnableAtomicity4K
 		out.Notes = append(out.Notes, statedNote("enableAtomicity4K",
 			enabled(*seed.EnableAtomicity4K))+
@@ -247,9 +341,19 @@ func ClusterTemplateFor(name string, plan Plan, opts TemplateOptions) (ClusterTe
 			"keep the guarantee, a torn write becomes a checksum that silently "+
 			"disagrees with it. The device reports in this run are what to check it "+
 			"against.")
+	case !checksums:
+	case len(findings.checkUnknown) > 0:
+		out.Notes = append(out.Notes, fmt.Sprintf("enableAtomicity4K is unset, and the "+
+			"control plane refuses %s without it unless they turn out to carry a metadata "+
+			"format or 4K blocks. Nothing in this run says they complete a 4K write whole, "+
+			"which is what setting it asserts.", listOf(findings.checkUnknown)))
+	case len(findings.needsAtomicity) > 0:
+		out.Template.EnableAtomicity4K = ptr.To(true)
+		out.Notes = append(out.Notes, fmt.Sprintf("enableAtomicity4K is on, because checksum "+
+			"validation is, and %s have no metadata format and blocks under 4K, and report "+
+			"an atomic write unit that covers 4K.", listOf(findings.needsAtomicity)))
 	}
-
-	return out, nil
+	return nil
 }
 
 // statedNote accounts for a value this installation decided, so that a reviewer
@@ -787,7 +891,7 @@ func journalDeviceFor(plan Plan, force bool) (bool, string, error) {
 // worker with a single disk, such as one RAID-protected LUN of a storage array.
 //
 // ForceJournalDevice asks for the smallest disk of every node to be dedicated
-// to the journal instead. It is honoured only where every worker hands over at
+// to the journal instead. It is honored only where every worker hands over at
 // least two disks of known size; otherwise the draft keeps the split and says
 // which worker could not give up a disk.
 func blockJournalDeviceFor(plan Plan, force bool) (bool, string, error) {
@@ -895,11 +999,6 @@ func plural(n int, one, many string) string {
 		return one
 	}
 	return many
-}
-
-// podNetworkOnly is the network of a cluster that serves data on the pod network.
-func podNetworkOnly() *simplyblockv1alpha2.StorageNetworkSpec {
-	return &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}
 }
 
 // hostNetwork is the network of a cluster whose SPDK pods bind host NICs. The NICs

@@ -96,6 +96,13 @@ csiConfig:
     # -- Name of the StorageClass rendered for `csiConfig.simplybk.pool`. Empty uses
     # `simplyblock-<pool>`.
     storageClassName:
+    # -- Stripes each volume of the rendered StorageClass across this many storage nodes of the
+    # cluster, 2 to 128 (`stripe_width`). Empty, 0, or 1 is an ordinary volume. See
+    # csi-driver/docs/striped-volumes.md.
+    stripeWidth:
+    # -- Chunk each member of a striped volume takes, a power of two from `4Ki` to `1Mi`
+    # (`stripe_size`). Empty uses the driver's 64Ki. Requires stripeWidth of 2 or more.
+    stripeSize:
 
 # Configuration for the csiSecret
 csiSecret:
@@ -107,15 +114,17 @@ multiCluster:
   # -- Writes one entry per item in `multiCluster.clusters` instead of the single cluster above.
   enable: false
   # -- Storage clusters the CSI driver connects to, when `multiCluster.enable` is `true`. Each entry
-  # has `cluster_id`, `secret`, `workers`, `pool`, and `storageClassName`, with the same meaning as
-  # the matching `csiConfig` and `csiSecret` values.
+  # has `cluster_id`, `secret`, `workers`, `pool`, `storageClassName`, `stripeWidth`, and
+  # `stripeSize`, with the same meaning as the matching `csiConfig` and `csiSecret` values.
   clusters:
   - cluster_id:
     secret:
     workers:
-    # As csiConfig.simplybk.pool and storageClassName, for this cluster.
+    # As csiConfig.simplybk.pool, storageClassName, stripeWidth, and stripeSize, for this cluster.
     pool:
     storageClassName:
+    stripeWidth:
+    stripeSize:
       
 deployment:
   # One of: standalone, managed, empty.
@@ -289,6 +298,27 @@ discovery:
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
 
+  # Override whether the draft proposes failure-domain mode, which the run
+  # otherwise decides from the workers' topology: on when every worker carries a
+  # failure-domain label in a layout the control plane accepts, off otherwise.
+  #
+  # Set false to turn the mode off and read no failure domains at all, so a fleet
+  # spread over zones it does not want treated as failure domains is grouped by
+  # hardware alone into one cluster. Set true to propose the mode on; the layout
+  # must still pass the control plane's activation rules. Left out (the default),
+  # the run decides.
+  #   enableFailureDomains: false
+  # -- Overrides whether the draft proposes failure-domain mode. `false` reads no failure domains and
+  # groups the fleet as one cluster; `true` proposes the mode on. Omitted leaves the decision to the run.
+
+  # The cluster network the draft proposes. With neither set, the SPDK pods run on
+  # the host network. The two are exclusive.
+  network:
+    # -- Runs the SPDK pods on the host network. The default when neither is set.
+    spdkOnHostNetwork: false
+    # -- Runs the SPDK pods on the pod network instead of the host network.
+    podNetwork: false
+
   # Attach the proposed storage nodes through Multus NetworkAttachmentDefinitions
   # instead of host networking. Both are names of definitions in the run's
   # namespace. With neither set, the storage nodes stay on host networking. With
@@ -364,9 +394,11 @@ discovery:
     # -- Size range a device must fall in, for example, `1T-16T`. Applies to either device class.
     driveSizeRange: ""
 
-  # The values below are accepted and not used. The operator no longer seeds the
-  # draft from the chart, so edit the draft before approving it. They stay so that
-  # a values file written for an earlier release still installs.
+  # Of the values below, only images is used: it reaches the discovery run's
+  # spec.discover.images, which the operator copies into the draft. The rest are
+  # accepted and not used, because the operator no longer seeds the draft from
+  # the chart, so edit the draft before approving it. They stay so that a values
+  # file written for an earlier release still installs.
   # What the draft proposes, for the parts no probe can read.
   #
   # Every field here is one discovery would otherwise guess at, and the guesses
@@ -397,10 +429,12 @@ discovery:
     # about it.
     # edgeCluster: true
 
-    # Images the draft pins, as full repository:tag references. Empty leaves each
-    # to its own default, which is the pairing this release was tested as. The
-    # node agent is not here: a draft that pins none takes the ControlPlane
-    # object's image, which this chart already writes.
+    # Images the draft pins, as full repository:tag references, carried by the
+    # discovery run into the draft's spec.images and from there onto every
+    # StorageNode. Empty leaves each to its own default, which is the pairing
+    # this release was tested as. The node agent is not here: a draft that pins
+    # none takes the ControlPlane object's image, which this chart already
+    # writes.
     #
     #   images:
     #     spdk: quay.io/simplyblock-io/spdk:v26.2.6
@@ -521,6 +555,17 @@ driver:
   nodeSelector: {}
   # -- Tolerations for the CSI node plugin.
   tolerations: []
+
+  # Workers running Ubuntu often lack nvme-tcp until linux-modules-extra for
+  # the running kernel is installed. True adds a privileged init container to
+  # the node plugin that loads the module, installs that package with apt when
+  # the module is missing, and adds nvme-tcp to /etc/modules-load.d. It reads
+  # each host's /etc/os-release and leaves any host that is not Ubuntu as it is,
+  # so a mixed fleet can turn it on.
+  # -- Loads the `nvme-tcp` kernel module on the workers running the CSI node plugin, installing
+  # `linux-modules-extra-$(uname -r)` with apt on Ubuntu hosts when the module is missing. Other
+  # distributions are left unchanged.
+  enableNVMeTCPModuleInstall: false
 
   # Where the controller plugin runs. This is ordinary pod placement for one
   # workload, unlike the pair above.
@@ -1237,7 +1282,7 @@ prometheus:
     # -- Path of the simplyblock Prometheus configuration.
     configPath: /etc/simplyblock-config/prometheus.yml
     # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS client certificate and CA.
+    # configuration, and the TLS CA.
     extraVolumes:
       - name: simplyblock-prometheus-config
         configMap:
@@ -1245,14 +1290,8 @@ prometheus:
       - name: objstore-config
         configMap:
           name: simplyblock-objstore-config
-      - name: prometheus-client-tls
-        secret:
-          secretName: simplyblock-prometheus-client-tls
-          optional: true
-      # The CA the control plane's certificate is verified against. It is its
-      # own volume because the client certificate above is issued only for
-      # mutual TLS, and a scrape that encrypts without verifying is one an
-      # in-cluster impersonator answers.
+      # The CA the control plane's certificate is verified against: a scrape
+      # that encrypts without verifying is one an in-cluster impersonator answers.
       - name: prometheus-ca-tls
         secret:
           secretName: simplyblock-ca-bundle-tls
@@ -1261,9 +1300,6 @@ prometheus:
     extraVolumeMounts:
       - name: simplyblock-prometheus-config
         mountPath: /etc/simplyblock-config
-      - name: prometheus-client-tls
-        mountPath: /etc/prometheus/certs
-        readOnly: true
       - name: prometheus-ca-tls
         mountPath: /etc/prometheus/ca
         readOnly: true
@@ -1678,19 +1714,13 @@ tls:
   # Required if provider == cert-manager. Names a ClusterIssuer used to mint
   # the chart's own CA Certificate.
   cert-manager:
-    # When true, the chart creates a self-signed ClusterIssuer whose name is
+    # When true, the operator creates a self-signed ClusterIssuer whose name is
     # given by cluster-issuer. Set to false to use an issuer you created yourself.
     # -- Creates a self-signed ClusterIssuer named by `cluster-issuer`. `false` uses an existing
     # issuer.
     createSelfSignedIssuer: true
     # -- ClusterIssuer the chart mints its CA certificate from.
     cluster-issuer: selfsigned
-    # Namespace where cert-manager is installed. The chart's CA secret is placed
-    # here so that the ClusterIssuer can locate it (ClusterIssuers always read CA
-    # secrets from the cert-manager controller namespace).
-    # -- Namespace cert-manager runs in. The chart places its CA Secret there so the ClusterIssuer can
-    # read it.
-    namespace: cert-manager
 
   # Mutual TLS (clients present and verify certificates). Only allowed when
   # provider == cert-manager. On by default, with tls.enabled: the chart issues a

@@ -295,6 +295,12 @@ and `operator/internal/controllers/deployment/operatorops_discover_test.go`
 | U-241     | A non-Vanilla document stating either flag is refused by the schema, and the same document as Vanilla is not                    | Negative   | `TestTheKubeletAndTopologyFlagsNeedAVanillaEnvironment`           |
 | U-237     | A worker whose taint the run tolerates is inspected (regression 2026-10-24-discovery-ignores-tolerations)                       | Regression | `TestDiscoverInspectsAWorkerWhoseTaintTheRunTolerates`            |
 | U-238     | A worker with a tolerated and an untolerated taint is declined, and the event names the untolerated one                         | Regression | `TestDiscoverDeclinesAWorkerWithATaintTheRunDoesNotTolerate`      |
+| U-242     | Workers on one subnet for each zone are all drafted (regression 2026-11-11-discovery-multi-az-management-subnets)               | Regression | `TestWorkersManagedOnTheirNodeAddressesAreKeptAcrossSubnets`      |
+| U-243     | A worker whose interface was ranked, on no network the cluster reaches the others on, is refused by name                        | Negative   | `TestARankedWorkerOffEveryNetworkTheClusterReachesIsRefused`      |
+| U-244     | `enableFailureDomains` false reads no topology, so a fleet in several zones is one group with no failure domain                 | Positive   | `TestFailureDomainsDisabledGroupsTheFleetAsOne`                   |
+| U-245     | `enableFailureDomains` false states an explicit false on the draft, not an unset value                                          | Positive   | `TestFailureDomainsDisabledWritesFalseOnTheDraft`                 |
+| U-246     | `enableFailureDomains` true reads the topology and proposes the mode on                                                         | Positive   | `TestFailureDomainsForcedOnReadsTheTopology`                      |
+| U-247     | `enableFailureDomains` true on too few domains writes the mode on with a note the control plane will refuse to activate         | Boundary   | `TestFailureDomainsForcedOnWithoutEnoughDomainsIsNoted`           |
 | U-202     | A cluster that states no tolerations: the Job placement carries none, which is what it carried before                           | Boundary   | `TestJobPlacementOfAClusterThatTakesNoTaint`                      |
 | U-203     | The latency baseline Job: it tolerates what the storage nodes of its cluster tolerate                                           | Positive   | `TestTheBaselineJobToleratesWhatTheStorageNodesDo`                |
 | U-204     | `spec.cluster.containerResources`: the cluster's storage-node container is sized as the document states                         | Positive   | `TestTheDocumentsContainerResourcesReachTheStorageNodes`          |
@@ -463,7 +469,8 @@ strings invites and the reason each slot is a pointer.
 
 Files: `operator/internal/controllers/deployment/erasurecoding_test.go`,
 `operator/internal/erasurecoding/scheme_test.go`,
-`operator/internal/discovery/template_stripe_test.go`
+`operator/internal/discovery/template_stripe_test.go`,
+`operator/internal/discovery/template_affinity_test.go`
 
 | #     | Scenario                                                                                                                                                                                                                                                                        | Type     | Test                                                                               |
 |-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------|
@@ -486,6 +493,7 @@ Files: `operator/internal/controllers/deployment/erasurecoding_test.go`,
 | U-247 | `spec.cluster.raidDevices` reaches the cluster the document creates, stated or unstated                                                                                                                                                                                         | Positive | `TestTheRaidDevicesDeclarationReachesTheCluster`                                   |
 | U-162 | A fleet of one or two is proposed 1+0, and the note says what a third worker would allow                                                                                                                                                                                        | Boundary | `TestAFleetTooSmallForRedundancyIsSaidSo`                                          |
 | U-163 | A fleet of four or more is proposed 2+1, with the alternatives named                                                                                                                                                                                                            | Positive | `TestTheDraftAccountsForTheSchemeItProposed`                                       |
+| U-248 | A draft whose stripe is 1+1 sets `enableNodeAffinity` unless the seed states it; other schemes leave it unset unless stated                                                                                                                                                     | Positive | `TestNodeAffinityIsOnByDefaultForOnePlusOneOnly`                                   |
 
 `U-157` is the row that makes the minimum mean what it says. The count is of
 storage nodes, and a fleet that reaches it by running several nodes on one worker
@@ -645,11 +653,11 @@ first config.
 
 | Class       | Scenarios | Covered | Not covered | Withdrawn |
 |-------------|-----------|---------|-------------|-----------|
-| Unit        | 174       | 41      | 133         | 9         |
+| Unit        | 180       | 47      | 133         | 9         |
 | Integration | 56        | 3       | 53          | 1         |
 | E2E         | 12        | 0       | 12          | 2         |
 | Manual      | 2         | 0       | 2           | 0         |
-| **Total**   | **244**   | **44**  | **200**     | **12**    |
+| **Total**   | **250**   | **50**  | **200**     | **12**    |
 
 A withdrawn row is one whose behavior the design removed. Its identifier stays in
 the matrix, struck through, because identifiers are never reused. It counts as

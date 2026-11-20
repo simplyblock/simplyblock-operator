@@ -2,8 +2,9 @@
 The one discovery run a fresh standalone install performs.
 
 This chart is the only thing that creates it: the operator raises no run of its
-own. A managed or empty install, and `discovery.enabled=false`, render none. The
-`draft` values are accepted and unused.
+own. A managed or empty install, and `discovery.enabled=false`, render none. Of
+the `draft` values, the images reach the run, which copies them into the draft
+it writes; the rest are accepted and unused.
 
 Rendered into the simplyblock-bootstrap-objects ConfigMap rather than as a
 release resource, for the reason _bootstrap_controlplane.tpl gives. The
@@ -36,6 +37,10 @@ spec:
     # they are at their default, which keeps an empty PCI filter from reaching a
     # logical-block-device run that refuses one.
     enablePartitionedDevices: {{ if hasKey $d "enablePartitionedDevices" }}{{ $d.enablePartitionedDevices }}{{ else }}true{{ end }}
+    {{- /* Tri-state: rendered only when stated, so an unset value leaves the run's own auto decision. */}}
+    {{- if hasKey $d "enableFailureDomains" }}
+    enableFailureDomains: {{ $d.enableFailureDomains }}
+    {{- end }}
     {{- with $d.nodeSelector }}
     nodeSelector:
       {{- toYaml . | nindent 6 }}
@@ -47,6 +52,15 @@ spec:
     {{- range $field := list "enableControlPlaneNodes" "enableLogicalBlockDevices" "forceJournalDevice" }}
     {{- if index $d $field }}
     {{ $field }}: true
+    {{- end }}
+    {{- end }}
+    {{- with $d.network }}
+    {{- if and .podNetwork .spdkOnHostNetwork }}
+    {{- fail "discovery.network.podNetwork and discovery.network.spdkOnHostNetwork are exclusive; set one." }}
+    {{- end }}
+    {{- if or .podNetwork .spdkOnHostNetwork }}
+    network:
+      {{ if .podNetwork }}podNetwork{{ else }}spdkOnHostNetwork{{ end }}: true
     {{- end }}
     {{- end }}
     {{- /* Host networking unless management names an attachment; data alone describes nothing deployable. */}}
@@ -68,6 +82,15 @@ spec:
     {{- end }}
     {{- with $filter }}
     deviceFilter:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- $images := dict }}
+    {{- with ($d.draft).images }}
+    {{- with .spdk }}{{ $_ := set $images "spdk" (dict "image" .) }}{{ end }}
+    {{- with .spdkProxy }}{{ $_ := set $images "spdkProxy" (dict "image" .) }}{{ end }}
+    {{- end }}
+    {{- with $images }}
+    images:
       {{- toYaml . | nindent 6 }}
     {{- end }}
 {{- end }}

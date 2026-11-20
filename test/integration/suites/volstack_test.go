@@ -67,8 +67,12 @@ const (
 	stackVolumeUUID = "3f6c1d84-95ab-4e27-b0d3-7c8e2a4f6b19"
 	stackNQN        = "nqn.2023-04.io.simplyblock:integration:" + stackVolumeUUID
 	stackNQN2       = "nqn.2023-04.io.simplyblock:integration:" + stackVolumeUUID + ":m2"
+	stackNQN3       = "nqn.2023-04.io.simplyblock:integration:" + stackVolumeUUID + ":m3"
+	stackNQN4       = "nqn.2023-04.io.simplyblock:integration:" + stackVolumeUUID + ":m4"
 	stackPort       = 4430
 	stackPort2      = 4431
+	stackPort3      = 4432
+	stackPort4      = 4433
 	stackRemotePath = "/tmp/volstack.test"
 )
 
@@ -94,13 +98,16 @@ func TestVolumeStackOnNode(t *testing.T) {
 
 	// Two namespaces, because the striped plan is the one shape whose bottom
 	// layer takes more than one and the composite's ordering is what the record
-	// has to preserve.
+	// has to preserve. Two more, because a clone of a striped volume staged on
+	// the host that stages its source needs a second set to copy the first onto.
 	// The port IDs are this suite's own. An nvmet port is a directory named after
 	// its ID, so two specs sharing a node and an ID would be configuring one port
 	// between them, and whichever finished first would take it away from the
 	// other. Ports and IDs are handed out per suite for that reason.
 	first := publishNamespace(ctx, t, sh, stackNQN, ip, stackPort, 20)
 	second := publishNamespace(ctx, t, sh, stackNQN2, ip, stackPort2, 21)
+	third := publishNamespace(ctx, t, sh, stackNQN3, ip, stackPort3, 22)
+	fourth := publishNamespace(ctx, t, sh, stackNQN4, ip, stackPort4, 23)
 
 	binary := buildOnNodeSuite(ctx, t)
 	if copyErr := c.CopyTo(ctx, fabric.Namespace, sh.Pod(), binary, stackRemotePath); copyErr != nil {
@@ -118,6 +125,14 @@ func TestVolumeStackOnNode(t *testing.T) {
 		"SB_TARGET2_ADDR": ip,
 		"SB_TARGET2_PORT": strconv.Itoa(stackPort2),
 		"SB_TARGET2_NSID": "1",
+		"SB_TARGET3_NQN":  third.NQN(),
+		"SB_TARGET3_ADDR": ip,
+		"SB_TARGET3_PORT": strconv.Itoa(stackPort3),
+		"SB_TARGET3_NSID": "1",
+		"SB_TARGET4_NQN":  fourth.NQN(),
+		"SB_TARGET4_ADDR": ip,
+		"SB_TARGET4_PORT": strconv.Itoa(stackPort4),
+		"SB_TARGET4_NSID": "1",
 	}
 	if !withLVM {
 		env["SB_NO_LVM"] = "1"

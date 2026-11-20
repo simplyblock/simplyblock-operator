@@ -97,23 +97,23 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
-      path: /validate-v1-pod-eviction-foundationdb
-  failurePolicy: Ignore
+      path: /validate-storage-k8s-io-v1-storageclass
+  failurePolicy: Fail
   matchConditions:
-  - expression: request.name.startsWith('simplyblock-fdb-cluster-')
-    name: is-foundationdb-pod
-  name: foundationdb-eviction.simplyblock.io
+  - expression: has(object.metadata.labels) && 'storage.simplyblock.io/pool' in object.metadata.labels
+    name: has-storage-pool-label
+  name: storageclass-validator.simplyblock.io
   rules:
   - apiGroups:
-    - ""
+    - storage.k8s.io
     apiVersions:
     - v1
     operations:
     - CREATE
+    - UPDATE
     resources:
-    - pods/eviction
-  sideEffects: NoneOnDryRun
-  timeoutSeconds: 5
+    - storageclasses
+  sideEffects: None
 - admissionReviewVersions:
   - v1
   clientConfig:
@@ -466,6 +466,7 @@ webhooks:
     - v1alpha2
     operations:
     - CREATE
+    - UPDATE
     resources:
     - storagepools
   sideEffects: None

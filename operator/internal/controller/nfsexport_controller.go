@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -391,14 +392,62 @@ func (r *NFSExportReconciler) reconcileHealth(
 	host link.PeerID,
 ) (ctrl.Result, error) {
 	if host.Zero() || r.Assembler == nil || !r.Assembler.HasSession(host) {
+		msg := fmt.Sprintf("no session with the metadata server %s", host)
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonMDSUnreachable, msg); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 	}
 	if err := r.Assembler.CheckExport(ctx, r.exportHost(ctx, export, host), export); err != nil {
-		r.event(export, corev1.EventTypeWarning, "MDSUnhealthy",
-			fmt.Sprintf("export on %s failed its health check: %v", host, err))
+		msg := fmt.Sprintf("export on %s failed its health check: %v", host, err)
+		r.event(export, corev1.EventTypeWarning, "MDSUnhealthy", msg)
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonHealthCheckFailed, msg); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: nfsExportUnhealthyRequeue}, nil
 	}
+	if err := r.setMDSReady(ctx, export, metav1.ConditionTrue,
+		simplyblockv1alpha2.NFSExportReasonServing, fmt.Sprintf("served by %s", host)); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{RequeueAfter: nfsExportHealthCheckInterval}, nil
+}
+
+// setMDSReady writes the MDSReady condition when it changed, and announces a
+// change of its status. An unchanged condition is not written, so the steady
+// health poll costs no status update.
+func (r *NFSExportReconciler) setMDSReady(
+	ctx context.Context,
+	export *simplyblockv1alpha2.NFSExport,
+	status metav1.ConditionStatus,
+	reason, message string,
+) error {
+	prev := meta.FindStatusCondition(export.Status.Conditions, simplyblockv1alpha2.NFSExportConditionMDSReady)
+	if prev != nil && prev.Status == status && prev.Reason == reason && prev.Message == message {
+		return nil
+	}
+	cond := metav1.Condition{
+		Type:               simplyblockv1alpha2.NFSExportConditionMDSReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: export.Generation,
+	}
+	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
+		meta.SetStatusCondition(&s.Conditions, cond)
+	}); err != nil {
+		return fmt.Errorf("record %s=%s: %w", cond.Type, status, err)
+	}
+	if prev == nil || prev.Status != status {
+		eventType := corev1.EventTypeNormal
+		if status != metav1.ConditionTrue {
+			eventType = corev1.EventTypeWarning
+		}
+		r.event(export, eventType, "MDSReady"+string(status), message)
+	}
+	return nil
 }
 
 // reconcileDelete tears the export down and drops the finalizer, on every

@@ -452,6 +452,36 @@ spec:
                         run in Default. A volume whose class the cluster does not define is not
                         created.
                       type: string
+                    stripeSize:
+                      description: |-
+                        StripeSize is how much of a striped volume each member takes before the
+                        next one does. Omitted, the CSI driver uses 64Ki. Requires a StripeWidth of
+                        2 or more. Written into the class as stripe_size.
+                      enum:
+                        - 4Ki
+                        - 8Ki
+                        - 16Ki
+                        - 32Ki
+                        - 64Ki
+                        - 128Ki
+                        - 256Ki
+                        - 512Ki
+                        - 1Mi
+                      type: string
+                    stripeWidth:
+                      description: |-
+                        StripeWidth stripes each volume across this many storage nodes of the
+                        cluster: the CSI driver creates that many logical volumes of equal size,
+                        each on a different node, and the node consuming the volume stripes them
+                        into one device with LVM. Omitted, 0, or 1 is an ordinary volume. It has to
+                        be no more than the cluster's storage nodes, or every claim is refused, and
+                        it cannot be combined with client-side compression or deduplication or with
+                        replication. Written into the class as stripe_width
+                        (csi-driver/docs/striped-volumes.md).
+                      format: int32
+                      maximum: 128
+                      minimum: 0
+                      type: integer
                     throughput:
                       description: Throughput is each volume's throughput ceiling, in megabytes per second.
                       properties:
@@ -485,6 +515,12 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                    - message: stripeSize requires a stripeWidth of 2 or more
+                      rule: '!has(self.stripeSize) || (has(self.stripeWidth) && self.stripeWidth >= 2)'
+                    - message: a striped volume (stripeWidth of 2 or more) cannot use client-side compression or deduplication
+                      rule: '!has(self.stripeWidth) || self.stripeWidth < 2 || !((has(self.enableClientCompression) && self.enableClientCompression) || (has(self.enableClientDeduplication) && self.enableClientDeduplication))'
+                    - message: a striped volume (stripeWidth of 2 or more) cannot be replicated
+                      rule: '!has(self.stripeWidth) || self.stripeWidth < 2 || !(has(self.enableReplication) && self.enableReplication)'
               required:
                 - clusterRef
               type: object

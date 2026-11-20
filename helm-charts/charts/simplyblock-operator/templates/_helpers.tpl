@@ -89,8 +89,10 @@ Caller pipes through `nindent N`.
 - name: tls
   secret:
     # cert-manager populates the client cert secret with tls.crt, tls.key, and
-    # ca.crt, so a projected volume is not needed.
+    # ca.crt. Optional because the operator creates the CA chain that issues
+    # it; the files are read per use and land once cert-manager issues them.
     secretName: {{ $clientSecret }}
+    optional: true
 {{- end -}}
 {{- end -}}
 {{- end -}}

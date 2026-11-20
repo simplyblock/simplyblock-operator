@@ -49,7 +49,7 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 		CRName: "prod", CRNamespace: "sb", CRPlural: "storageclusters", DeviceMode: "nvme",
 		WorkloadNames: prodWorkloadNames(),
 		Backup:        &ClusterBackup{Endpoint: "http://minio:9000", AccessKeyID: "AKID", SecretAccessKey: "SK"},
-		VaultBaseURL:  "https://vault:8200",
+		KMS:           &ClusterKMS{VaultEndpoint: "https://vault:8200"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -70,9 +70,9 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 	if backup["endpoint"] != "http://minio:9000" || credentials["access_key_id"] != "AKID" {
 		t.Errorf("backup_config = %v", body["backup_config"])
 	}
-	vault, _ := body["hashicorp_vault_settings"].(map[string]any)
-	if vault["base_url"] != "https://vault:8200" {
-		t.Errorf("hashicorp_vault_settings = %v", body["hashicorp_vault_settings"])
+	kms, _ := body["kms_settings"].(map[string]any)
+	if kms["base_url"] != "https://vault:8200" || kms["provider"] != "vault" {
+		t.Errorf("kms_settings = %v", body["kms_settings"])
 	}
 
 	if got.ID != testCluster || got.Secret != "s3cret" || got.NDCS != 2 || got.NPCS != 1 || !got.Shrinking {
@@ -80,6 +80,46 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 	}
 	if got.WorkloadNames != prodWorkloadNames() {
 		t.Errorf("WorkloadNames = %+v, want %+v", got.WorkloadNames, prodWorkloadNames())
+	}
+}
+
+// Checksum validation and atomicity are sent when on and left out when off,
+// which is the control plane's own default for both. The metadata journal is
+// the other way about: the control plane journals unless told not to, so off
+// has to be said.
+func TestClientCreateClusterSendsTheIntegritySettings(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		var body map[string]any
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Errorf("decode the body: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(clusterDTO))
+		})
+
+		_, err := c.CreateCluster(context.Background(), CreateClusterParams{
+			Name: "prod", MaxSubsys: 20, SpdkVCPUCount: 8,
+			InlineChecksum: on, Atomic4K: on, MetadataJournal: on,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, key := range []string{"inline_checksum", "atomic_4k"} {
+			value, sent := body[key]
+			if on && value != true {
+				t.Errorf("on: body[%q] = %v, want true", key, value)
+			}
+			if !on && sent {
+				t.Errorf("off: body[%q] = %v, want it left out", key, value)
+			}
+		}
+		if value, sent := body["md_journal"]; !sent || value != on {
+			t.Errorf("body[md_journal] = %v (sent %v), want %v stated", value, sent, on)
+		}
 	}
 }
 

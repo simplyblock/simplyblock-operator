@@ -1,5 +1,5 @@
 # Root Makefile orchestrating build & test across the monorepo components:
-#   atlas-lib (shared library), csi-driver, operator, fleet-manager, support-tool
+#   atlas-lib (shared library), csi-driver, operator, fleet-manager, support-tool, gateway
 #
 # Each target delegates to the relevant component's own Makefile.
 
@@ -8,6 +8,7 @@ CSI_DIR         := csi-driver
 OPERATOR_DIR    := operator
 FLEET_DIR       := fleet
 SUPPORT_DIR     := support-tool
+GATEWAY_DIR     := gateway
 HELM_DIR        := helm-charts
 INTEGRATION_DIR := test/integration
 
@@ -54,21 +55,22 @@ SBCLI_REQUIREMENTS := $(wildcard $(SBCLI_DIR)/requirements.txt)
         operator operator-manifests operator-build-installer operator-build operator-test operator-lint operator-fmt operator-vet \
         fleet fleet-manifests fleet-build fleet-test fleet-lint fleet-fmt fleet-vet \
         support-tool support-tool-build support-tool-run support-tool-test support-tool-lint support-tool-fmt support-tool-vet \
+        gateway gateway-build gateway-test gateway-lint gateway-fmt gateway-vet \
         helm-sync \
         configure openapi-sync openapi-diff openapi-ref openapi-checkout
 
 # ─── Aggregate ──────────────────────────────────────────────────────────────
 all: build test ## Build and test every component.
 
-build: atlas-build csi-build operator-build-installer operator-build fleet-build support-tool-build helm-sync ## Build every component.
+build: atlas-build csi-build operator-build-installer operator-build fleet-build support-tool-build gateway-build helm-sync ## Build every component.
 
-test: atlas-test csi-test operator-test fleet-test support-tool-test ## Test every component.
+test: atlas-test csi-test operator-test fleet-test support-tool-test gateway-test ## Test every component.
 
-lint: atlas-lint csi-lint operator-lint fleet-lint support-tool-lint ## Lint every component.
+lint: atlas-lint csi-lint operator-lint fleet-lint support-tool-lint gateway-lint ## Lint every component.
 
-fmt: atlas-fmt csi-fmt operator-fmt fleet-fmt support-tool-fmt ## Format every component.
+fmt: atlas-fmt csi-fmt operator-fmt fleet-fmt support-tool-fmt gateway-fmt ## Format every component.
 
-vet: atlas-vet csi-vet operator-vet fleet-vet support-tool-vet ## Vet every component.
+vet: atlas-vet csi-vet operator-vet fleet-vet support-tool-vet gateway-vet ## Vet every component.
 
 # ─── atlas ────────────────────────────────────────────────────────────────
 atlas: atlas-build atlas-test ## Build and test atlas.
@@ -180,6 +182,27 @@ support-tool-fmt: ## Format the support tool.
 
 support-tool-vet: ## Vet the support tool.
 	$(MAKE) -C $(SUPPORT_DIR) vet
+
+# ─── gateway ────────────────────────────────────────────────────────────────
+# The S3 gateway: an embedded versitygw (github.com/versity/versitygw/embedgw)
+# over its own posix backend. No manifests step: unlike fleet, this component
+# carries no CRDs of its own.
+gateway: gateway-build gateway-test ## Build and test the gateway.
+
+gateway-build: ## Build the gateway binary.
+	$(MAKE) -C $(GATEWAY_DIR) build
+
+gateway-test: ## Test the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) test
+
+gateway-lint: ## Lint the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) lint
+
+gateway-fmt: ## Format the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) fmt
+
+gateway-vet: ## Vet the gateway.
+	$(MAKE) -C $(GATEWAY_DIR) vet
 
 # ─── helm ─────────────────────────────────────────────────────────────────
 # Sync the operator's generated CRDs and RBAC roles into the Helm chart. Depends

@@ -180,6 +180,9 @@ func stagingServer(t *testing.T, reading blockdev.Reading, script []scriptedResu
 	*Server, *[][]string, *k8smount.FakeMounter,
 ) {
 	t.Helper()
+	// These tests are about the format decision on the plain shape, which the
+	// default-on dm indirection would wrap in a dmsetup the fake does not run.
+	t.Setenv("SPDKCSI_DM_INDIRECTION", "false")
 
 	fe, calls := scriptedExec(script)
 	fm := k8smount.NewFakeMounter(nil)

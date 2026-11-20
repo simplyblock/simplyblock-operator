@@ -454,6 +454,9 @@
         "tolerations": {
           "type": "array"
         },
+        "enableNVMeTCPModuleInstall": {
+          "type": "boolean"
+        },
         "controllerNodeSelector": {
           "type": "object"
         },
@@ -603,6 +606,14 @@
         },
         "forceJournalDevice": {
           "type": "boolean"
+        },
+        "network": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "spdkOnHostNetwork": { "type": "boolean" },
+            "podNetwork": { "type": "boolean" }
+          }
         },
         "networkAttachment": {
           "type": "object",

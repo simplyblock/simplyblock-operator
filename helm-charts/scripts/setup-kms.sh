@@ -37,6 +37,8 @@ Env vars:
   STORAGE_CLASS     StorageClass for data PVC   (default: local-path)
   UNSEAL_KEYS_FILE  File to save init output    (default: stdout only)
   BAO_TOKEN         Skip init/unseal, use token (default: run init)
+  ISSUER_WAIT_TIMEOUT   Seconds to wait for the ClusterIssuer (default: 300)
+  ISSUER_POLL_INTERVAL  Seconds between issuer lookups        (default: 5)
 EOF
   exit 0
 fi
@@ -44,9 +46,17 @@ fi
 command -v kubectl &>/dev/null || die "kubectl not found"
 command -v helm    &>/dev/null || die "helm not found"
 
-info "Checking for ClusterIssuer simplyblock-certificate-authority-issuer..."
-kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null \
-  || die "ClusterIssuer 'simplyblock-certificate-authority-issuer' not found — ensure cert-manager is installed, the issuer exists, and the ControlPlane is installed with TLS enabled"
+# The operator creates the issuer after it starts, so a run right after its
+# install has to wait for it.
+ISSUER_WAIT_TIMEOUT="${ISSUER_WAIT_TIMEOUT:-300}"
+ISSUER_POLL_INTERVAL="${ISSUER_POLL_INTERVAL:-5}"
+info "Waiting up to ${ISSUER_WAIT_TIMEOUT}s for ClusterIssuer simplyblock-certificate-authority-issuer..."
+deadline=$(( SECONDS + ISSUER_WAIT_TIMEOUT ))
+until kubectl get clusterissuer simplyblock-certificate-authority-issuer &>/dev/null; do
+  (( SECONDS < deadline )) \
+    || die "ClusterIssuer 'simplyblock-certificate-authority-issuer' not found after ${ISSUER_WAIT_TIMEOUT}s — ensure cert-manager is installed, the issuer exists, and the ControlPlane is installed with TLS enabled"
+  sleep "$ISSUER_POLL_INTERVAL"
+done
 
 # ── Install ────────────────────────────────────────────────────────────────────
 info "Installing OpenBao..."

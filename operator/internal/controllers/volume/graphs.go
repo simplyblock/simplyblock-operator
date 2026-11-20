@@ -39,6 +39,7 @@ const (
 const (
 	actionMigrate  = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionMigrate)
 	actionRelocate = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionRelocate)
+	actionJoin     = statemachine.Action(simplyblockv1alpha2.PersistentVolumeOpsActionJoinConsistencyGroup)
 )
 
 // How long each step may take before the operation is reported as stuck.
@@ -97,6 +98,39 @@ const (
 	// proceeds alone two minutes into the wait, so the step ends well inside
 	// it unless the cutover itself is stuck.
 	proceedingDeadline = 10 * time.Minute
+)
+
+// The bounds of a JoinConsistencyGroup's steps. The steps inside the suspend
+// window carry the shortest: the window itself is enforced by the deadline in
+// status, which every host and the control plane are given, and these are
+// only the backstop for a pass that never comes back to it.
+const (
+	joinPlanningDeadline = 15 * time.Minute
+
+	// joinMigratingDeadline bounds the wait for the child migration, which
+	// carries its own per-step bounds and fails by itself when one of them
+	// passes. This one only catches a child nothing reconciles.
+	joinMigratingDeadline = 24 * time.Hour
+
+	joinJoiningDeadline = 10 * time.Minute
+	// joinLeavingDeadline bounds the leave's own calls: recording the split
+	// and detaching the volume from the group it leaves. The swap that splits
+	// it runs in the steps after SelectingSubsystem, under their deadlines.
+	joinLeavingDeadline = 10 * time.Minute
+
+	// joinSelectingDeadline covers waiting for another operation to release
+	// a volume the move touches, which can be a migration of hours.
+	joinSelectingDeadline = 6 * time.Hour
+
+	joinPreparingDeadline = 10 * time.Minute
+	joinAttachingDeadline = 10 * time.Minute
+	joinWindowDeadline    = 2 * time.Minute
+
+	// joinCommittingDeadline is reported but not acted on: the namespaces
+	// are in the target, so the commit is retried until it lands.
+	joinCommittingDeadline = time.Hour
+
+	joinReleasingDeadline = 10 * time.Minute
 )
 
 // replicatingDeadline is the bound on a Relocate's initial sync.
@@ -192,6 +226,75 @@ func graphs(members int32) statemachine.MultiConfig[step] {
 					OnEnter: deadline(proceedingDeadline),
 				},
 				stepVerifying: {OnEnter: deadline(verifyingDeadline)},
+			},
+		},
+		actionJoin: {
+			Initial: stepPlanning,
+			States: map[step]statemachine.StateDef[step]{
+				// Abortable until the swap starts: before it, nothing is on a
+				// host's data path, and what the operation reserved or created
+				// can be released.
+				stepPlanning: {
+					To:        []step{stepJoinMigrating, stepJoining, stepLeaving},
+					Abortable: true,
+					OnEnter:   deadline(joinPlanningDeadline),
+				},
+				// A volume in another group leaves it first. The step is
+				// entered before the swap that splits the volume out of that
+				// group's subsystem and again after it, and it detaches the
+				// volume, which is one-way, so an abort cannot be honored here.
+				stepLeaving: {
+					To:      []step{stepSelectingSubsystem, stepJoinMigrating, stepJoining},
+					OnEnter: deadline(joinLeavingDeadline),
+				},
+				stepJoinMigrating: {
+					To:        []step{stepJoining},
+					Abortable: true,
+					OnEnter:   deadline(joinMigratingDeadline),
+				},
+				// A join is one call, and membership is one-way: once it is
+				// asked for there is nothing an abort could take back.
+				stepJoining: {
+					To:      []step{stepSelectingSubsystem},
+					OnEnter: deadline(joinJoiningDeadline),
+				},
+				stepSelectingSubsystem: {
+					To:        []step{stepPreparingTarget, stepLeaving},
+					Abortable: true,
+					OnEnter:   deadline(joinSelectingDeadline),
+				},
+				stepPreparingTarget: {
+					To:        []step{stepJoinAttachingPaths, stepMovingNamespaces, stepReleasingPaths},
+					Abortable: true,
+					OnEnter:   deadline(joinPreparingDeadline),
+				},
+				stepJoinAttachingPaths: {
+					To:        []step{stepSuspending, stepReleasingPaths},
+					Abortable: true,
+					OnEnter:   deadline(joinAttachingDeadline),
+				},
+				// From the first hold on, the window is bounded by its own
+				// deadline, and the operation finishes or rolls back by itself.
+				stepSuspending: {
+					To:      []step{stepMovingNamespaces, stepJoinResuming, stepReleasingPaths},
+					OnEnter: deadline(joinWindowDeadline),
+				},
+				stepMovingNamespaces: {
+					To:      []step{stepJoinResuming, stepJoinCommitting, stepReleasingPaths},
+					OnEnter: deadline(joinWindowDeadline),
+				},
+				stepJoinResuming: {
+					To:      []step{stepJoinCommitting, stepReleasingPaths},
+					OnEnter: deadline(joinWindowDeadline),
+				},
+				stepJoinCommitting: {
+					To:      []step{stepReleasingPaths, stepLeaving},
+					OnEnter: deadline(joinCommittingDeadline),
+				},
+				stepReleasingPaths: {
+					To:      []step{stepLeaving},
+					OnEnter: deadline(joinReleasingDeadline),
+				},
 			},
 		},
 	}
