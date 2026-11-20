@@ -36,8 +36,9 @@ data:
         Kube_URL            https://kubernetes.default.svc:443
         Kube_CA_File        /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
         Kube_Token_File     /var/run/secrets/kubernetes.io/serviceaccount/token
-        Merge_Log           On
-        Merge_Log_Key       log
+        # Off: merging into "log" turns a JSON line into a map, and the GELF
+        # output drops it. Graylog's extractor parses the JSON instead.
+        Merge_Log           Off
         K8S-Logging.Parser  On
         K8S-Logging.Exclude Off
         Buffer_Size         0
@@ -67,8 +68,8 @@ data:
         Time_Keep   On
 
     # CRI log line: "<time> <stream> <logtag> <message>". The message is captured
-    # as "log" (rather than the upstream "message") so that the kubernetes filter's
-    # Merge_Log and the GELF output's Gelf_Short_Message_Key keep working unchanged.
+    # as "log" (rather than the upstream "message") so that the GELF output's
+    # Gelf_Short_Message_Key keeps working unchanged.
     [PARSER]
         Name        cri
         Format      regex
