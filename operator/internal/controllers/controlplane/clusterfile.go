@@ -33,6 +33,9 @@ func (r *ControlPlaneReconciler) managementAPIStamped(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) ([]client.Object, error) {
 	objects := managementAPIObjects(cp)
+	if r.OpenShift {
+		objects = withAnyUIDSCC(cp.Namespace, objects)
+	}
 
 	var file corev1.ConfigMap
 	key := client.ObjectKey{Namespace: cp.Namespace, Name: clusterFileConfigMapName}
