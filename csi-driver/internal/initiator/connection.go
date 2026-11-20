@@ -49,6 +49,7 @@ func ConnectionFrom(
 			Port:              response.Port,
 			NrIOQueues:        response.NrIoQueues,
 			ReconnectDelaySec: response.ReconnectDelay,
+			KeepAliveTMOSec:   stagedKeepAlive(response),
 			CtrlLossTMOSec:    ptr.To(DefaultCtrlLossTmo),
 			HostIface:         response.HostIface,
 			TLS:               tls,
@@ -57,6 +58,16 @@ func ConnectionFrom(
 		})
 	}
 	return connection, hostNQN
+}
+
+// stagedKeepAlive is the keep-alive a staged path is connected with, zero
+// meaning the kernel's default. Only a shortened keep-alive is passed (see
+// shortenedKeepAlive); a two-node path is staged exactly as before.
+func stagedKeepAlive(response *controlplane.LvolConnectResp) int {
+	if response.TwoNode {
+		return 0
+	}
+	return shortenedKeepAlive(response)
 }
 
 // connectAuth reads the host identity and the DHCHAP key material out of the
