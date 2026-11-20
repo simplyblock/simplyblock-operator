@@ -249,8 +249,8 @@ func (s *Simulator) onGraphSuccess(d ResourceDef, obj map[string]any) {
 	action := getStr(obj, "spec.action")
 	switch d.Resource {
 	case "storagenodeops":
-		nd, _ := s.st.LookupResource(sbGroup, "storagenodes")
-		node, err := s.st.Get(nd, ns, getStr(obj, "spec.nodeRef"))
+		nodesRes, _ := s.st.LookupResource(sbGroup, "storagenodes")
+		node, err := s.st.Get(nodesRes, ns, getStr(obj, "spec.nodeRef"))
 		if err != nil {
 			return
 		}
@@ -276,7 +276,7 @@ func (s *Simulator) onGraphSuccess(d ResourceDef, obj map[string]any) {
 			setPath(node, "spec.workerNode", getStr(obj, "spec.migrate.targetWorkerNode"))
 			setPath(node, "status.hostname", getStr(obj, "spec.migrate.targetWorkerNode"))
 		}
-		s.st.Update(nd, ns, node)
+		s.st.Update(nodesRes, ns, node)
 	case "storagedeviceops":
 		dd, _ := s.st.LookupResource(sbGroup, "storagedevices")
 		dev, err := s.st.Get(dd, ns, getStr(obj, "spec.deviceRef"))
@@ -367,13 +367,13 @@ func (s *Simulator) dropTask(ns, typ string) {
 // is through: Online when every remaining node is, Degraded otherwise.
 func (s *Simulator) setClusterPhase(ns, cluster string) {
 	cd, _ := s.st.LookupResource(sbGroup, "storageclusters")
-	nd, _ := s.st.LookupResource(sbGroup, "storagenodes")
+	nodesRes, _ := s.st.LookupResource(sbGroup, "storagenodes")
 	c, err := s.st.Get(cd, ns, cluster)
 	if err != nil {
 		return
 	}
 	phase, status := "Online", "active"
-	for _, n := range mustList(s.st, nd) {
+	for _, n := range mustList(s.st, nodesRes) {
 		if getStr(n, "spec.clusterRef") != cluster || getStr(n, "status.phase") == "Removed" {
 			continue
 		}

@@ -20,20 +20,20 @@ func tickUntil(t *testing.T, sim *Simulator, n int, pred func() bool) {
 
 // seedNode creates the StorageNode an operation acts on, online.
 func seedNode(st *Store, ns, name string) ResourceDef {
-	nd, _ := st.LookupResource(sbGroup, "storagenodes")
-	st.Create(nd, ns, map[string]any{
+	nodesRes, _ := st.LookupResource(sbGroup, "storagenodes")
+	st.Create(nodesRes, ns, map[string]any{
 		"metadata": map[string]any{"name": name},
 		"spec":     map[string]any{"clusterRef": "cluster1", "workerNode": "worker-1", "config": map[string]any{"sizing": map[string]any{"vcpuCount": float64(8)}}},
 		"status":   map[string]any{"status": "online", "phase": "Online", "uuid": "n-1"},
 	})
-	return nd
+	return nodesRes
 }
 
 func TestOpProgressesToSucceeded(t *testing.T) {
 	st := newTestStore()
 	sim := NewSimulator(st, "sb", 0 /* never fail */, 1)
 	d := testDef()
-	nd := seedNode(st, "sb", "sn-01")
+	nodesRes := seedNode(st, "sb", "sn-01")
 
 	st.Create(d, "sb", map[string]any{
 		"metadata": map[string]any{"name": "op-restart"},
@@ -49,7 +49,7 @@ func TestOpProgressesToSucceeded(t *testing.T) {
 		obj, _ := st.Get(d, "sb", "op-restart")
 		if phase() == "Running" {
 			sawRunning = true
-			node, _ := st.Get(nd, "sb", "sn-01")
+			node, _ := st.Get(nodesRes, "sb", "sn-01")
 			if getStr(node, "status.activeOpsRef") == "op-restart" {
 				sawLock = true
 			}
@@ -69,7 +69,7 @@ func TestOpProgressesToSucceeded(t *testing.T) {
 	if getStr(obj, "status.step.state") != "Completed" {
 		t.Fatalf("a succeeded operation rests in step Completed: %v", obj["status"])
 	}
-	node, _ := st.Get(nd, "sb", "sn-01")
+	node, _ := st.Get(nodesRes, "sb", "sn-01")
 	if getStr(node, "status.activeOpsRef") != "" {
 		t.Fatalf("the lock was not released: %v", node["status"])
 	}
