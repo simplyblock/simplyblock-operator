@@ -128,11 +128,11 @@ spec:
         # More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
         resources:
           limits:
+            cpu: 800m
+            memory: 512Mi
+          requests:
             cpu: 500m
             memory: 256Mi
-          requests:
-            cpu: 10m
-            memory: 64Mi
       serviceAccountName: controller-manager
       volumes:
       - name: tls
