@@ -15,6 +15,7 @@ package node
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -299,6 +300,46 @@ func TestANodeWithNoKubeletConfigurationWritesNoLine(t *testing.T) {
 	if _, stated := got["SKIP_KUBELET_CONFIGURATION"]; stated {
 		t.Errorf("the entry carries SKIP_KUBELET_CONFIGURATION=%q with nothing stated",
 			got["SKIP_KUBELET_CONFIGURATION"])
+	}
+}
+
+// The operating system is a fact about the worker in a cluster whose workers
+// run more than one, so a node that states it overrides the fleet's value
+// through its own entry, in both directions. The agent reads it as the one flag
+// it acts on, and only the distribution decides that flag.
+func TestTheNodesHostOSReachesItsOwnEntry(t *testing.T) {
+	for _, c := range []struct {
+		os   simplyblockv1alpha2.HostOSSpec
+		want bool
+	}{
+		{simplyblockv1alpha2.HostOSSpec{Distro: simplyblockv1alpha2.DistroUbuntu, Family: simplyblockv1alpha2.HostOSFamilyDebian}, true},
+		{simplyblockv1alpha2.HostOSSpec{Distro: "amzn", Family: simplyblockv1alpha2.HostOSFamilyRedHat}, false},
+		{simplyblockv1alpha2.HostOSSpec{Distro: "rocky"}, false},
+	} {
+		node := &simplyblockv1alpha2.StorageNode{
+			Spec: simplyblockv1alpha2.StorageNodeSpec{
+				Config: simplyblockv1alpha2.StorageNodeConfig{HostOS: &c.os},
+			},
+		}
+
+		got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, node))
+		if want := strconv.FormatBool(c.want); got["UBUNTU_HOST"] != want {
+			t.Errorf("hostOS.distro=%q wrote UBUNTU_HOST=%q, want %q", c.os.Distro, got["UBUNTU_HOST"], want)
+		}
+	}
+}
+
+// A node that states no distribution writes no line, so the fleet's value on
+// the pod decides: a family alone does not say which kernel packages exist.
+func TestANodeWithNoHostOSDistroWritesNoLine(t *testing.T) {
+	for _, os := range []*simplyblockv1alpha2.HostOSSpec{nil, {Family: simplyblockv1alpha2.HostOSFamilyDebian}} {
+		node := &simplyblockv1alpha2.StorageNode{
+			Spec: simplyblockv1alpha2.StorageNodeSpec{Config: simplyblockv1alpha2.StorageNodeConfig{HostOS: os}},
+		}
+		got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, node))
+		if _, stated := got["UBUNTU_HOST"]; stated {
+			t.Errorf("hostOS=%+v wrote UBUNTU_HOST=%q with no distribution stated", os, got["UBUNTU_HOST"])
+		}
 	}
 }
 

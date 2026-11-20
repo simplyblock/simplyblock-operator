@@ -402,13 +402,15 @@ func BuildStorageNodeDaemonSet(
 							// exported. Only those: exporting the entry wholesale
 							// would put the device lists and the class flag into
 							// the agent's environment, where nothing asked for
-							// them. An entry that states neither leaves the pod's
-							// own RESERVED_SYSTEM_CPUS and
-							// SKIP_KUBELET_CONFIGURATION, which are the fleet's.
+							// them. An entry that states none of them leaves the
+							// pod's own RESERVED_SYSTEM_CPUS,
+							// SKIP_KUBELET_CONFIGURATION, and UBUNTU_HOST, which
+							// are the fleet's.
 							Command: []string{"sh", "-c",
 								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
 [ -n "${RESERVED_SYSTEM_CPUS}" ] && export RESERVED_SYSTEM_CPUS
 [ -n "${SKIP_KUBELET_CONFIGURATION}" ] && export SKIP_KUBELET_CONFIGURATION
+[ -n "${UBUNTU_HOST}" ] && export UBUNTU_HOST
 exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
 							// node_webapp.py needs root for device access, so the

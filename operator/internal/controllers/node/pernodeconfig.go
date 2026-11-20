@@ -261,6 +261,13 @@ func renderNodeConfig(
 	if config.EnableKubeletConfiguration != nil {
 		fmt.Fprintf(&entry, "SKIP_KUBELET_CONFIGURATION=%t\n", !*config.EnableKubeletConfiguration)
 	}
+	// So is the operating system, of which the agent acts on one fact: whether
+	// the worker is Ubuntu, which keeps the NVMe-oF modules in a package of its
+	// own. Only a stated distribution decides it, because a family alone does
+	// not say which kernel packages exist.
+	if os := config.HostOS; os != nil && os.Distro != "" {
+		fmt.Fprintf(&entry, "UBUNTU_HOST=%t\n", os.Distro == simplyblockv1alpha2.DistroUbuntu)
+	}
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
 	// The journal share leaves through the variable its class is read by, for

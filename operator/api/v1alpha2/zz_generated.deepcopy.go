@@ -4906,6 +4906,11 @@ func (in *StorageNodeConfig) DeepCopyInto(out *StorageNodeConfig) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.HostOS != nil {
+		in, out := &in.HostOS, &out.HostOS
+		*out = new(HostOSSpec)
+		**out = **in
+	}
 	if in.JournalManager != nil {
 		in, out := &in.JournalManager, &out.JournalManager
 		*out = new(JournalManagerSpec)

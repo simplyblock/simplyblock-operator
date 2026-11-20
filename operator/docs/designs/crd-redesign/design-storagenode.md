@@ -327,7 +327,18 @@ because that is the variable the agent reads, and the agent exports it. A node
 that states none writes no line, and the cluster's value decides. A
 `ClusterDeploymentConfig` writes it from a group's `environment`
 ([`design-clusterdeploymentconfig.md`](design-clusterdeploymentconfig.md)).
-`ubuntuHost` and `enableCpuTopology` are uniform and stay where they went.
+
+**The host OS comes back as well, as the operating system rather than a flag.**
+An EKS cluster may run Amazon Linux node groups beside Ubuntu ones, and an OKE
+cluster Oracle Linux pools beside Ubuntu ones, so which operating system a worker
+runs is a fact about the worker. The node states it as `spec.config.hostOS`, the
+same `HostOSSpec` a `ClusterDeploymentConfig` states, rather than as the one
+boolean the agent reads today: a later decision that depends on the family or the
+version reads the same field. The agent acts on one fact of it, whether the
+worker runs Ubuntu, so the node's entry states `UBUNTU_HOST`, and only when the
+node states a distribution, because a family alone does not say which kernel
+packages exist. A node that states none writes no line, and the cluster's
+`ubuntuHost` decides. `enableCpuTopology` is uniform and stays where it went.
 
 #### A device is named by a PCI address or by a device path
 
@@ -2706,6 +2717,16 @@ type StorageNodeConfig struct {
 	// keeps it. Unset leaves the fleet's value to decide.
 	// +optional
 	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
+
+	// HostOS is the operating system this node's worker runs, for a worker that
+	// runs a different one from the rest, such as an Ubuntu node group beside
+	// Amazon Linux ones. It decides what the host itself offers: on Ubuntu, the
+	// NVMe-oF kernel modules are in linux-modules-extra rather than in the base
+	// install, so the storage node installs that package for the running kernel
+	// before it starts. It overrides StorageCluster.spec.storageNodes.ubuntuHost,
+	// which is the fleet's value. Unset leaves the fleet's value to decide.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the

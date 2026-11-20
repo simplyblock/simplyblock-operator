@@ -159,6 +159,9 @@ func TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse(t *testing.T) {
 		{"spec.config.enableKubeletConfiguration", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.Config.EnableKubeletConfiguration = ptr.To(true)
 		}},
+		{"spec.config.hostOS", func(n *simplyblockv1alpha2.StorageNode) {
+			n.Spec.Config.HostOS = &simplyblockv1alpha2.HostOSSpec{Distro: simplyblockv1alpha2.DistroUbuntu}
+		}},
 		{"spec.config.spdkImage", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.Config.SpdkImage = "spdk:rebuilt"
 		}},

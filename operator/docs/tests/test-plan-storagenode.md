@@ -370,6 +370,10 @@ File: `operator/internal/controllers/node/pernodeconfig_test.go`
 | U-535 | A node stating `enableKubeletConfiguration`: its entry carries the inverted `SKIP_KUBELET_CONFIGURATION` | Positive | `TestTheNodesKubeletConfigurationReachesItsOwnEntry`   |
 | U-536 | A node stating no kubelet flag: no line is written, so the pod's fleet-wide value decides                | Boundary | `TestANodeWithNoKubeletConfigurationWritesNoLine`      |
 | U-537 | A user edit of `spec.config.enableKubeletConfiguration` is refused, naming the field                     | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`    |
+| U-538 | A node stating `hostOS` with a distribution: its entry carries `UBUNTU_HOST`, true for `ubuntu` only     | Positive | `TestTheNodesHostOSReachesItsOwnEntry`                 |
+| U-539 | A node stating no `hostOS`, or one with a family and no distribution: no line is written                 | Boundary | `TestANodeWithNoHostOSDistroWritesNoLine`              |
+| U-540 | The agent's container exports `UBUNTU_HOST` out of the entry it sources                                  | Positive | `TestTheMainContainerExportsTheNodesReservedCPUs`      |
+| U-541 | A user edit of `spec.config.hostOS` is refused, naming the field                                         | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`    |
 | U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                                      | Positive | —                                                      |
 | U-245 | A `deviceNames` entry that is a device path reaches the node as one                                      | Positive | —                                                      |
 | U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given                                | Boundary | —                                                      |

@@ -245,6 +245,16 @@ type StorageNodeConfig struct {
 	// +optional
 	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
 
+	// HostOS is the operating system this node's worker runs, for a worker that
+	// runs a different one from the rest, such as an Ubuntu node group beside
+	// Amazon Linux ones. It decides what the host itself offers: on Ubuntu, the
+	// NVMe-oF kernel modules are in linux-modules-extra rather than in the base
+	// install, so the storage node installs that package for the running kernel
+	// before it starts. It overrides StorageCluster.spec.storageNodes.ubuntuHost,
+	// which is the fleet's value. Unset leaves the fleet's value to decide.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
+
 	// JournalManager tunes the journal manager count and per-device capacity
 	// share for this node. Immutable: both are on-disk layout, fixed when the
 	// devices were partitioned.

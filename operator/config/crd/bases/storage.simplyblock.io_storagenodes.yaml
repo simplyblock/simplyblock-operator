@@ -549,6 +549,38 @@ spec:
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
+                    hostOS:
+                      description: |-
+                        HostOS is the operating system this node's worker runs, for a worker that
+                        runs a different one from the rest, such as an Ubuntu node group beside
+                        Amazon Linux ones. It decides what the host itself offers: on Ubuntu, the
+                        NVMe-oF kernel modules are in linux-modules-extra rather than in the base
+                        install, so the storage node installs that package for the running kernel
+                        before it starts. It overrides StorageCluster.spec.storageNodes.ubuntuHost,
+                        which is the fleet's value. Unset leaves the fleet's value to decide.
+                      properties:
+                        distro:
+                          description: |-
+                            Distro is the distribution's os-release ID, lowercase and verbatim:
+                            `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+                          maxLength: 63
+                          pattern: ^[a-z0-9][a-z0-9._-]*$
+                          type: string
+                        family:
+                          description: |-
+                            Family is the packaging tradition Distro belongs to. A discovery run
+                            concludes it from the distribution itself, or from the distributions its
+                            os-release says it is built on, which is what places a derivative this
+                            product has never heard of. It is left unstated for a host with no
+                            package manager.
+                          enum:
+                            - Debian
+                            - RedHat
+                            - SUSE
+                            - Alpine
+                            - Arch
+                          type: string
+                      type: object
                     journalManager:
                       description: |-
                         JournalManager tunes the journal manager count and per-device capacity

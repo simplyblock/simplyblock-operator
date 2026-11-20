@@ -246,6 +246,10 @@ func TestTheMainContainerExportsTheNodesReservedCPUs(t *testing.T) {
 		t.Errorf("the container does not export the node's own kubelet configuration "+
 			"flag, so a worker whose kubelet differs from the fleet's never reaches the agent: %s", command)
 	}
+	if !strings.Contains(command, "export UBUNTU_HOST") {
+		t.Errorf("the container does not export the node's own Ubuntu host flag, "+
+			"so a worker whose operating system differs from the fleet's never reaches the agent: %s", command)
+	}
 	// Only those. Exporting the entry wholesale would put the device lists
 	// and the class flag into the agent's environment, where nothing asked for
 	// them and a name could collide.
