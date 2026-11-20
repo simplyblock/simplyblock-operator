@@ -32,6 +32,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/simplyblock/atlas/lvol"
 
@@ -226,7 +227,7 @@ func (r *PersistentVolumeOpsReconciler) startValidationJobs(
 
 	started := make([]simplyblockv1alpha2.ValidationJob, 0, len(missing))
 	for _, node := range missing {
-		job := r.pathJob(ops, subject, node, placement, modeValidate)
+		job := r.pathJob(ops, subject, node, placement, modeValidate, r.jobHostNQN(ctx, node))
 		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
 			return 0, fmt.Errorf("start the validation on node %s: %w", node, err)
 		}
@@ -517,8 +518,9 @@ func (r *PersistentVolumeOpsReconciler) pathJob(
 	node string,
 	placement vmigration.JobPlacement,
 	mode string,
+	hostNQN string,
 ) *batchv1.Job {
-	return r.modeJob(ops, subject.namespace(), node, placement, mode, 0)
+	return r.modeJob(ops, subject.namespace(), node, placement, mode, 0, hostNQN)
 }
 
 // releaseJob is the cleanup counterpart, retried where the check is not:
@@ -529,7 +531,8 @@ func (r *PersistentVolumeOpsReconciler) releaseJob(
 	namespace, node string,
 	placement vmigration.JobPlacement,
 ) *batchv1.Job {
-	return r.modeJob(ops, namespace, node, placement, modeRelease, 2)
+	// A release disconnects and presents no host.
+	return r.modeJob(ops, namespace, node, placement, modeRelease, 2, "")
 }
 
 func (r *PersistentVolumeOpsReconciler) modeJob(
@@ -538,9 +541,10 @@ func (r *PersistentVolumeOpsReconciler) modeJob(
 	placement vmigration.JobPlacement,
 	mode string,
 	backoffLimit int32,
+	hostNQN string,
 ) *batchv1.Job {
 	migration := ops.Status.Migration
-	connections, _ := json.Marshal(hostConnections(migration.Connections))
+	connections, _ := json.Marshal(vmigration.WithHostNQN(hostConnections(migration.Connections), hostNQN))
 
 	env := []corev1.EnvVar{
 		{Name: "VMIG_CONNECTIONS", Value: string(connections)},
@@ -662,4 +666,17 @@ func labelSafe(s string) string {
 		s = s[:20]
 	}
 	return s
+}
+
+// jobHostNQN is the host NQN a Job pinned to node connects as (see
+// vmigration.HostNQNOfNode). A node that cannot be read leaves it empty, which
+// connects as the kernel default as before, and is reported: the Job is pinned
+// to that node, so it is not expected to be missing.
+func (r *PersistentVolumeOpsReconciler) jobHostNQN(ctx context.Context, node string) string {
+	hostNQN, err := vmigration.HostNQNOfNode(ctx, r.Client, node)
+	if err != nil {
+		logf.FromContext(ctx).Info("connecting the migration paths without the node's host NQN", "node", node, "error", err.Error())
+		return ""
+	}
+	return hostNQN
 }

@@ -589,7 +589,15 @@ func (r *PersistentVolumeOpsReconciler) startPathJobs(
 func (r *PersistentVolumeOpsReconciler) createPathJob(
 	ctx context.Context, subject *subject, h lvol.VolumeHandle, job simplyblockv1alpha2.ValidationJob,
 ) error {
-	conn, err := r.API.Connection(ctx, h)
+	// The paths are connected as the node's own host, the identity the CSI
+	// staged the volume with, and the control plane is asked for them as that
+	// host so it answers with what it authorizes for it.
+	hostNQN := r.jobHostNQN(ctx, job.Node)
+	var opts []lvol.ConnectionOption
+	if hostNQN != "" {
+		opts = append(opts, lvol.ForHost(hostNQN))
+	}
+	conn, err := r.API.Connection(ctx, h, opts...)
 	if err != nil {
 		return fmt.Errorf("paths of volume %s: %w", h, err)
 	}
@@ -602,6 +610,7 @@ func (r *PersistentVolumeOpsReconciler) createPathJob(
 			FastIOFailTmo: intOr(e.FastIOFailTMOSec), KeepAliveTmo: e.KeepAliveTMOSec,
 		})
 	}
+	connections = vmigration.WithHostNQN(connections, hostNQN)
 	encoded, err := json.Marshal(connections)
 	if err != nil {
 		return err

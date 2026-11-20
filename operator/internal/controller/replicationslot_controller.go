@@ -727,6 +727,7 @@ func (r *ReplicationSlotReconciler) reconcileCutoverPending(
 		log.Error(err, "Cannot resolve rebalancer placement for preconnect", "slot", slot.Name)
 		return ctrl.Result{RequeueAfter: replSlotRequeueError}, nil
 	}
+	conns = r.withNodeHostNQN(ctx, conns, node)
 
 	connsJSON, err := json.Marshal(conns)
 	if err != nil {
@@ -902,6 +903,7 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 		log.Error(err, "Preconnect: cannot resolve rebalancer placement", "slot", slot.Name)
 		return
 	}
+	conns = r.withNodeHostNQN(ctx, conns, node)
 	connsJSON, err := json.Marshal(conns)
 	if err != nil {
 		return
@@ -932,6 +934,24 @@ func (r *ReplicationSlotReconciler) reconcilePreconnect(
 		"job", jobName, "node", node, "connections", len(conns))
 	r.Recorder.Eventf(slot, nil, corev1.EventTypeWarning, "LatePreconnect", "LatePreconnect",
 		"Connecting target NVMe paths after ANA flip on node %s (preconnect window was missed)", node)
+}
+
+// withNodeHostNQN makes a preconnect Job attach its paths as the node's own
+// host NQN, the identity the CSI staged and reconnects the volume with. Without
+// it the Job's nvme connect used the kernel default (/etc/nvme/hostnqn), so one
+// client was two hosts to the control plane: on bed bf29 (2026-11-19) every
+// replication cutover's freeze guard saw the client on the source as both
+// NQNs and on the target as only the kernel one, and held the freeze. A node
+// that cannot be read keeps today's behaviour and is logged.
+func (r *ReplicationSlotReconciler) withNodeHostNQN(
+	ctx context.Context, conns []vmigration.Connection, node string,
+) []vmigration.Connection {
+	hostNQN, err := vmigration.HostNQNOfNode(ctx, r.apiReader, node)
+	if err != nil {
+		logf.FromContext(ctx).Error(err, "Preconnect: connecting with the kernel's default host NQN", "node", node)
+		return conns
+	}
+	return vmigration.WithHostNQN(conns, hostNQN)
 }
 
 // replSlotPreconnectJobName returns a stable, unique Job name for a volume's preconnect Job.
