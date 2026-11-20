@@ -239,11 +239,17 @@ func renderNodeConfig(
 			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
 			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
 		}
-		// By default the configure carves each node's journal partition from
-		// its smallest device (the journal split). enableJournalDevice asks for
-		// the smallest device to be dedicated to the journal instead.
-		if workload := cluster.Spec.StorageNodes; workload != nil &&
-			ptr.BoolFromOrFalse(workload.EnableJournalDevice) {
+		// A multi-attach node's data device is the LUN the control plane
+		// creates on the array when the node is added, so the one device the
+		// node names is its journal, whole. Otherwise, the configure carves each
+		// node's journal partition from its smallest device (the journal
+		// split), and enableJournalDevice asks for the smallest device to be
+		// dedicated to the journal instead. The two flags exclude each other.
+		switch {
+		case cluster.Spec.MultiAttach != nil:
+			entry.WriteString("LBLK_JOURNAL_ONLY=true\n")
+		case cluster.Spec.StorageNodes != nil &&
+			ptr.BoolFromOrFalse(cluster.Spec.StorageNodes.EnableJournalDevice):
 			entry.WriteString("LBLK_JOURNAL_DEVICE=true\n")
 		}
 	} else {

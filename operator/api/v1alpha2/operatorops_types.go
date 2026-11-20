@@ -137,6 +137,7 @@ type DeviceFilter struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
 // +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 // +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
+// +kubebuilder:validation:XValidation:rule="!has(self.multiAttach) || (has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices && !has(self.clusterRef))",message="multiAttach drafts a new cluster on logical block devices: it requires enableLogicalBlockDevices and cannot be combined with clusterRef"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -289,6 +290,16 @@ type DiscoverSpec struct {
 	// it boots from, which is what the approval gate then has to catch.
 	// +optional
 	DeviceFilter *DeviceFilter `json:"deviceFilter,omitempty"`
+
+	// MultiAttach drafts a cluster on LUNs of an external storage array. The
+	// LUNs do not exist yet: the control plane creates each node's LUN on the
+	// array and presents it when the node is added, which needs the array's
+	// address and login, so they are stated here, before discovery, and go
+	// into the draft as its cluster's multiAttach. The run then names one
+	// local device per storage node, its journal, and reports every worker
+	// that has no initiator for the array's protocol.
+	// +optional
+	MultiAttach *MultiAttachSpec `json:"multiAttach,omitempty"`
 
 	// ClusterRef names an existing StorageCluster the draft grows rather than
 	// creates. It is copied to the draft's own clusterRef, so that re-running

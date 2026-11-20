@@ -17,7 +17,7 @@ import (
 // selected devices and clears their partitions, and emitting the longer
 // spelling made every block deployment that asked to format its drives fail
 // before a node was added.
-func TestTheForceFlagIsSpeltAsNodeConfigureDeclaresIt(t *testing.T) {
+func TestTheForceFlagIsSpelledAsNodeConfigureDeclaresIt(t *testing.T) {
 	_, generator := scripts(t)
 
 	if strings.Contains(generator, "--force-format") {
@@ -41,7 +41,7 @@ func TestEveryFlagTheGeneratorPassesIsOneNodeConfigureAccepts(t *testing.T) {
 		"--max-lvol": true, "--max-size": true, "--model": true,
 		"--nodes-per-socket": true, "--nvme-devices": true, "--pci-allowed": true,
 		"--pci-blocked": true, "--size-range": true, "--sockets-to-use": true,
-		"--upgrade": true, "--lblk-journal-device": true,
+		"--upgrade": true, "--lblk-journal-device": true, "--lblk-journal-only": true,
 	}
 
 	for _, field := range strings.Fields(generator) {
@@ -54,5 +54,14 @@ func TestEveryFlagTheGeneratorPassesIsOneNodeConfigureAccepts(t *testing.T) {
 		if !accepted[flag] {
 			t.Errorf("the generator passes %s, which node_configure.py does not declare", flag)
 		}
+	}
+}
+
+// A multi-attach node names its journal device only, and the generator says
+// so when the per-node entry asks for it.
+func TestTheGeneratorPassesJournalOnlyWhenAsked(t *testing.T) {
+	_, generator := scripts(t)
+	if !strings.Contains(generator, `[ "${LBLK_JOURNAL_ONLY}" = "true" ] && ARGS="${ARGS} --lblk-journal-only"`) {
+		t.Error("the generator never passes --lblk-journal-only, so a multi-attach node splits its journal device")
 	}
 }

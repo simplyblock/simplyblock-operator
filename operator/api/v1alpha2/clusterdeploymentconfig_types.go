@@ -653,6 +653,15 @@ type ClusterTemplate struct {
 	// +optional
 	RaidDevices *bool `json:"raidDevices,omitempty"`
 
+	// MultiAttach runs the cluster on LUNs of an external storage array, as
+	// StorageCluster.spec.multiAttach describes. The groups then name one
+	// local device per storage node, its journal: the node's data device is
+	// the LUN created on the array when the node is added, so no device of it
+	// is there to discover beforehand. It requires raidDevices and block
+	// devices, and is carried to the cluster's spec.multiAttach.
+	// +optional
+	MultiAttach *MultiAttachSpec `json:"multiAttach,omitempty"`
+
 	// ClusterMode is how many storage nodes the cluster is built for: Single
 	// runs every erasure-coding scheme on exactly one storage node, each chunk of
 	// a stripe on its own device, so the node needs dataChunks+parityChunks
@@ -840,6 +849,7 @@ type DeploymentImages struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval cannot be withdrawn"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.block)) || s.groups.all(g, !has(g.devices) || !has(g.devices.nvme)))",message="every group of a node set must name the same device class: all nvme or all block"
 // +kubebuilder:validation:XValidation:rule="self.nodeSets.all(s, s.groups.all(g, has(g.networkAttachment))) || self.nodeSets.all(s, s.groups.all(g, !has(g.networkAttachment)))",message="every group must use the same networking: all host networking or all network attachments"
+// +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.multiAttach) || (has(self.cluster.raidDevices) && self.cluster.raidDevices && !(has(self.cluster.clusterMode) && self.cluster.clusterMode == 'Single') && !(has(self.cluster.enableJournalDevice) && self.cluster.enableJournalDevice) && self.nodeSets.all(s, s.groups.all(g, !has(g.devices) || !has(g.devices.nvme))))",message="multiAttach requires raidDevices, block devices, a cluster mode other than Single, and no dedicated journal device"
 // +kubebuilder:validation:XValidation:rule="size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s, !has(s.cluster))",message="a node set overrides the cluster template only when the document has more than one node set or names a cluster in clusterRef"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"

@@ -54,6 +54,10 @@ const (
 	StripeBelowMinimumWorkers = "StripeBelowMinimumWorkers"
 	StripeSingleNodeCount     = "StripeSingleNodeCount"
 	StripeBelowMinimumDevices = "StripeBelowMinimumDevices"
+	// MultiAttachJournalDevice is a group of a multi-attach document that does
+	// not name exactly one local device per storage node: that device is the
+	// node's journal, and its data device is the LUN created on the array.
+	MultiAttachJournalDevice = "MultiAttachJournalDevice"
 	// StripeBelowMinimumFailureDomains is a document whose groups declare
 	// failure domains, fewer distinct ones than the stripe has chunks.
 	StripeBelowMinimumFailureDomains = "StripeBelowMinimumFailureDomains"
