@@ -17,7 +17,7 @@
 package main
 
 import (
-	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
@@ -32,11 +32,13 @@ func main() {
 	var (
 		listen      = flag.String("listen", ":8080", "listen address")
 		dataset     = flag.String("dataset", "auto", "test data set: auto | "+datasetNames())
+		contexts    = flag.String("contexts", "", "several Kubernetes contexts, name=dataset[:label=value;...] separated by commas; the first is the local one and --dataset is ignored")
 		seed        = flag.Uint64("seed", 0, "rng seed; 0 = random. Same seed + dataset = same world")
 		namespace   = flag.String("namespace", "simplyblock", "namespace the simplyblock objects live in")
 		simInterval = flag.Duration("sim-interval", 4*time.Second, "simulator tick interval; 0 disables the simulator")
 		failRate    = flag.Float64("fail-rate", 0.1, "probability that a simulated operation fails")
 		serveUI     = flag.String("serve-ui", "", "directory with the console's index.html; serves the UI and mounts the proxied paths (/k8s, /operator, /prometheus) so no nginx is needed")
+		crdDir      = flag.String("crd-dir", "../../operator/config/crd/bases", "directory with the operator's CRD YAMLs, served as apiextensions objects; empty or missing serves none")
 		fixtures    = flag.String("operator-fixtures", "", "directory of JSON fixtures for the operator API (see mock/README.md)")
 		viewer      = flag.String("viewer", "global", "authorization stand-in for the impersonated user: global | none | <sb:role>@<namespace>[,...] (see PARADIGM.md)")
 	)
@@ -55,16 +57,32 @@ func main() {
 		os.Exit(2)
 	}
 
-	srv := newServer(sc, *seed, *namespace, *fixtures, *viewer)
-	log.Printf("dataset=%s seed=%d systemNamespace=%s viewer=%s (%s)", sc.Name, *seed, *namespace, *viewer, sc.Description)
+	var srv *server
+	if *contexts != "" {
+		specs, err := parseContexts(*contexts)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+		srv = newFleetServer(specs, *seed, *namespace, *fixtures, *viewer)
+		log.Printf("contexts=%s seed=%d systemNamespace=%s viewer=%s", *contexts, *seed, *namespace, *viewer)
+	} else {
+		srv = newServer(sc, *seed, *namespace, *fixtures, *viewer)
+		log.Printf("dataset=%s seed=%d systemNamespace=%s viewer=%s (%s)", sc.Name, *seed, *namespace, *viewer, sc.Description)
+	}
 
+	srv.startSimulators(*simInterval, *failRate)
 	if *simInterval > 0 {
-		sim := NewSimulator(srv.store, *namespace, *failRate, *seed)
-		srv.sim = sim
-		go sim.Run(context.Background(), *simInterval)
 		log.Printf("simulator: every %s, fail-rate %.0f%%", *simInterval, *failRate*100)
 	}
 
+	if *crdDir != "" {
+		if n, err := srv.loadCRDs(*crdDir); err != nil {
+			log.Printf("CRDs not served: %v", err)
+		} else {
+			log.Printf("serving %d CRDs from %s", n, *crdDir)
+		}
+	}
 	mux := srv.routes(*serveUI)
 	log.Printf("listening on %s", *listen)
 	log.Fatal(http.ListenAndServe(*listen, mux))
@@ -78,7 +96,9 @@ func datasetNames() string {
 	return strings.Join(names, " | ")
 }
 
-// server ties the store and the three API impersonations together.
+// server ties the worlds (worlds.go) and the API impersonations together.
+// `store`, `k8s`, `prom`, `sim`, and `authz` are the local world's, which the root
+// routes and the admin endpoints act on.
 type server struct {
 	store    *Store
 	k8s      *K8sAPI
@@ -91,26 +111,25 @@ type server struct {
 	seed      uint64
 	namespace string
 	fixtures  string
+
+	worlds map[string]*world
+	order  []string
 }
 
+// newServer builds a one-context server for a plain scenario.
 func newServer(sc Scenario, seed uint64, namespace, fixtures, viewer string) *server {
-	st := NewStore(seed)
-	st.Register(allResourceDefs()...)
-	Generate(st, sc, seed, namespace)
-	authz := &AuthZ{store: st, viewer: parseViewer(viewer)}
-	op := NewOperatorAPI(fixtures)
-	op.authz = authz
-	return &server{
-		store:     st,
-		k8s:       &K8sAPI{store: st, authz: authz},
-		prom:      &PromAPI{store: st, seed: seed},
-		operator:  op,
-		authz:     authz,
-		dataset:   sc.Name,
-		seed:      seed,
-		namespace: namespace,
-		fixtures:  fixtures,
+	return newFleetServer([]contextSpec{{Name: "local", Dataset: sc.Name, Labels: map[string]string{}}}, seed, namespace, fixtures, viewer)
+}
+
+func newFleetServer(specs []contextSpec, seed uint64, namespace, fixtures, viewer string) *server {
+	s := &server{operator: NewOperatorAPI(fixtures), seed: seed, namespace: namespace, fixtures: fixtures, worlds: map[string]*world{}}
+	for i, spec := range specs {
+		s.addWorld(spec, i == 0, viewer)
 	}
+	local := s.worlds[s.order[0]]
+	s.store, s.k8s, s.prom, s.authz, s.dataset = local.store, local.k8s, local.prom, local.authz, local.scenario.Name
+	s.operator.authz = local.authz
+	return s
 }
 
 func (s *server) routes(serveUI string) *http.ServeMux {
@@ -127,7 +146,7 @@ func (s *server) routes(serveUI string) *http.ServeMux {
 
 	// upstream impersonation at the root, for the console pod's env overrides
 	mux.Handle("/v1/", s.operator)   // SB_OPERATOR_URL / SB_HELM_URL
-	mux.Handle("/helm/", s.operator) // in case a deployment routes helm separately
+	mux.Handle("/helm/", s.operator) // in case a deployment routes Helm separately
 	// Prometheus paths take precedence over the core K8s API by being the more
 	// specific patterns: /api/v1/query is Prometheus, /api/v1/pods is Kubernetes.
 	for _, p := range []string{"query", "query_range", "series", "labels", "rules", "alerts"} {
@@ -141,18 +160,21 @@ func (s *server) routes(serveUI string) *http.ServeMux {
 	mux.Handle("/apis/", s.k8s)
 	mux.Handle("/version", s.k8s)
 
-	// same-origin paths the console uses when the mock serves the UI itself
-	mux.Handle("/k8s/", http.StripPrefix("/k8s", s.k8s))
+	// same-origin paths the console uses when the mock serves the UI itself:
+	// each context under `/k8s/<name>/`, the local one also directly under `/k8s/`
+	mux.Handle("/k8s/", s.contextHandler("/k8s", func(wd *world) http.Handler { return wd.k8s }))
 	mux.Handle("/operator/", http.StripPrefix("/operator", s.operator))
 	mux.Handle("/prometheus/api/v1/", http.StripPrefix("/prometheus", s.prom))
 
 	if serveUI != "" {
 		mux.HandleFunc("GET /config.js", func(w http.ResponseWriter, _ *http.Request) {
+			contexts, _ := json.Marshal(s.consoleContexts())
 			w.Header().Set("Content-Type", "application/javascript")
 			w.Header().Set("Cache-Control", "no-store")
 			fmt.Fprintf(w, `// Generated by sb-mock for local development.
 window.SB_CONFIG = {
   k8sBase: "/k8s",
+  contexts: %s,
   operatorBase: "/operator/v1",
   helmBase: "/helm/v1",
   promBase: "/prometheus/api/v1",
@@ -163,7 +185,7 @@ window.SB_CONFIG = {
   token: "",
   mock: false
 };
-`, s.namespace)
+`, contexts, s.namespace)
 		})
 		mux.Handle("/", http.FileServer(http.Dir(serveUI)))
 		log.Printf("serving console UI from %s", serveUI)
@@ -183,6 +205,7 @@ func (s *server) handleInfo(w http.ResponseWriter, _ *http.Request) {
 		"dataset":   s.dataset,
 		"seed":      fmt.Sprint(s.seed),
 		"namespace": s.namespace,
+		"contexts":  s.order,
 		"objects":   counts,
 		// distinct operator-API requests with no fixture behind them — the
 		// to-do list for new fixture files

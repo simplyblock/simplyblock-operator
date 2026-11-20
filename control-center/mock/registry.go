@@ -47,40 +47,52 @@ func allResourceDefs() []ResourceDef {
 		def("snapshot.storage.k8s.io", "v1", "volumesnapshotcontents", "VolumeSnapshotContent", false),
 		def("snapshot.storage.k8s.io", "v1", "volumesnapshotclasses", "VolumeSnapshotClass", false),
 
-		// ---- simplyblock: CRDs that exist in helm-charts/.../crds ----
-		def(sbGroup, "v1alpha1", "storageclusters", "StorageCluster", true),
-		def(sbGroup, "v1alpha1", "storagenodes", "StorageNode", true),
-		def(sbGroup, "v1alpha1", "storagenodesets", "StorageNodeSet", true),
-		def(sbGroup, "v1alpha1", "storagedevices", "StorageDevice", true),
-		def(sbGroup, "v1alpha1", "storagepools", "StoragePool", true),
-		def(sbGroup, "v1alpha1", "storagebackups", "StorageBackup", true),
+		// ---- simplyblock: the operator's CRDs on main, at their storage version.
+		// The kinds that moved to v1alpha2 are served there only; the API
+		// server would also serve v1alpha1 through conversion, but the console
+		// never asks for it.
+		def(sbGroup, "v1alpha2", "storageclusters", "StorageCluster", true),
+		def(sbGroup, "v1alpha2", "storagenodes", "StorageNode", true),
+		def(sbGroup, "v1alpha2", "storagedevices", "StorageDevice", true),
+		def(sbGroup, "v1alpha2", "storagepools", "StoragePool", true),
+		def(sbGroup, "v1alpha2", "storagebackups", "StorageBackup", true),
+		def(sbGroup, "v1alpha2", "storagebackuppolicies", "StorageBackupPolicy", true),
+		def(sbGroup, "v1alpha2", "storagegroupbackups", "StorageGroupBackup", true),
+		def(sbGroup, "v1alpha2", "controlplanes", "ControlPlane", true),
+		def(sbGroup, "v1alpha2", "simplyblockdrivers", "SimplyblockDriver", true),
+		def(sbGroup, "v1alpha2", "clusterdeploymentconfigs", "ClusterDeploymentConfig", true),
+		def(sbGroup, "v1alpha2", "stretchedclusters", "StretchedCluster", true),
+		def(sbGroup, "v1alpha2", "storagesitedeployments", "StorageSiteDeployment", true),
+		def(sbGroup, "v1alpha2", "nfsexports", "NFSExport", true),
+		def(sbGroup, "v1alpha2", "objectstores", "ObjectStore", true),
+		def(sbGroup, "v1alpha2", "s3buckets", "S3Bucket", true),
+		def(sbGroup, "v1alpha2", "storagefenceremediations", "StorageFenceRemediation", true),
+		def(sbGroup, "v1alpha2", "storagefenceremediationtemplates", "StorageFenceRemediationTemplate", true),
+		def(sbGroup, "v1alpha2", "testfailovers", "TestFailover", true),
+		// one-shot operations
+		def(sbGroup, "v1alpha2", "storageclusterops", "StorageClusterOps", true),
+		def(sbGroup, "v1alpha2", "storagenodeops", "StorageNodeOps", true),
+		def(sbGroup, "v1alpha2", "storagedeviceops", "StorageDeviceOps", true),
+		def(sbGroup, "v1alpha2", "storagepoolops", "StoragePoolOps", true),
+		def(sbGroup, "v1alpha2", "storagebackupops", "StorageBackupOps", true),
+		def(sbGroup, "v1alpha2", "controlplaneops", "ControlPlaneOps", true),
+		def(sbGroup, "v1alpha2", "persistentvolumeops", "PersistentVolumeOps", false), // a PersistentVolume has no namespace
+		def(sbGroup, "v1alpha2", "operatorops", "OperatorOps", true),
+		def(sbGroup, "v1alpha2", "volumegroupsnapshotops", "VolumeGroupSnapshotOps", true),
+		// the kinds that only exist in v1alpha1
 		def(sbGroup, "v1alpha1", "backuppolicies", "BackupPolicy", true),
 		def(sbGroup, "v1alpha1", "backuprestores", "BackupRestore", true),
 		def(sbGroup, "v1alpha1", "backupimports", "BackupImport", true),
-		def(sbGroup, "v1alpha1", "controlplanes", "ControlPlane", true),
 		def(sbGroup, "v1alpha1", "replicationpairs", "ReplicationPair", true),
 		def(sbGroup, "v1alpha1", "replicationpolicies", "ReplicationPolicy", true),
 		def(sbGroup, "v1alpha1", "replicationslots", "ReplicationSlot", true),
+		def(sbGroup, "v1alpha1", "replicationops", "ReplicationOps", true),
 		def(sbGroup, "v1alpha1", "volumemigrations", "VolumeMigration", true),
 		def(sbGroup, "v1alpha1", "tasks", "Task", true),
-		def(sbGroup, "v1alpha1", "storageclusterops", "StorageClusterOps", true),
-		def(sbGroup, "v1alpha1", "storagenodeops", "StorageNodeOps", true),
-		def(sbGroup, "v1alpha1", "replicationops", "ReplicationOps", true),
-		def(sbGroup, "v1alpha2", "clusterdeploymentconfigs", "ClusterDeploymentConfig", true),
-		def(sbGroup, "v1alpha2", "operatorops", "OperatorOps", true),
+		def(sbGroup, "v1alpha1", "storagenodesets", "StorageNodeSet", true),
+		// the CRDs themselves (crds.go)
+		def(apiextGroup, "v1", "customresourcedefinitions", "CustomResourceDefinition", false),
 
-		// ---- simplyblock: proposed kinds (console RBAC, no CRD yet) ----
-		def(sbGroup, "v1alpha1", "storagedeviceops", "StorageDeviceOps", true),
-		def(sbGroup, "v1alpha1", "storagepoolops", "StoragePoolOps", true),
-		def(sbGroup, "v1alpha1", "storagebackupops", "StorageBackupOps", true),
-		def(sbGroup, "v1alpha1", "controlplaneops", "ControlPlaneOps", true),
-		def(sbGroup, "v1alpha1", "persistentvolumeops", "PersistentVolumeOps", true),
-		def(sbGroup, "v1alpha1", "simplyblockdrivers", "SimplyblockDriver", true),
-
-		// ---- multi-cluster / multi-tenant paradigm (design-only; see PARADIGM.md) ----
-		// Hub tenancy + RBAC surface from the multi-cluster RBAC design. None of
-		// these exist on main; they are modelled here so the console's access,
-		// hub/agent and drift views can be exercised.
 		def(sbGroup, "v1alpha1", "managedclusters", "ManagedCluster", false),         // hub registration (cluster-scoped)
 		def(sbGroup, "v1alpha1", "nodepoolallocations", "NodePoolAllocation", false), // privileged-op envelope (cluster-scoped)
 		def(sbGroup, "v1alpha1", "storageclusterclasses", "StorageClusterClass", false),

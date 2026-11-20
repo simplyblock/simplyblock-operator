@@ -47,27 +47,20 @@ func TestTenancyLayout(t *testing.T) {
 		t.Errorf("sb-tenant-a scope-kind = %q, want %q", kinds["sb-tenant-a"], scopeTenant)
 	}
 
-	// StorageCluster exists both user-facing (sb-sc-*) and as a transport projection (sb-mc-*)
-	scDef, _ := st.Lookup(sbGroup, "v1alpha1", "storageclusters")
+	// the StorageCluster lives in the tenant namespace and nowhere else: a hub
+	// projection is not something the operator on main has
+	scDef, _ := st.LookupResource(sbGroup, "storageclusters")
 	all, _ := st.List(scDef, "", "", "")
-	var userFacing, projected int
+	var userFacing, elsewhere int
 	for _, c := range all {
-		ns := getStr(c, "metadata.namespace")
-		switch {
-		case ns == "sb-tenant-a":
+		if getStr(c, "metadata.namespace") == "sb-tenant-a" {
 			userFacing++
-		case strings.HasPrefix(ns, "sb-mc-"):
-			projected++
-			if labelOf(c, labManagedBy) != "hub" {
-				t.Errorf("projected StorageCluster missing managed-by=hub")
-			}
-			if getStr(c, "status.lastSyncTime") == "" {
-				t.Errorf("projected StorageCluster missing agent-authored status.lastSyncTime")
-			}
+		} else {
+			elsewhere++
 		}
 	}
-	if userFacing != 1 || projected != 1 {
-		t.Fatalf("want 1 user-facing + 1 projected StorageCluster, got %d/%d", userFacing, projected)
+	if userFacing != 1 || elsewhere != 0 {
+		t.Fatalf("want exactly one StorageCluster, in sb-tenant-a, got %d there and %d elsewhere", userFacing, elsewhere)
 	}
 
 	// RBAC vocabulary
@@ -92,7 +85,7 @@ func TestObservedGenerationStamped(t *testing.T) {
 	Generate(st, sc, 3, "simplyblock-system")
 
 	for _, res := range []string{"storageclusters", "storagenodes", "storagedevices", "storagepools", "managedclusters"} {
-		d, _ := st.Lookup(sbGroup, "v1alpha1", res)
+		d, _ := st.LookupResource(sbGroup, res)
 		items, _ := st.List(d, "", "", "")
 		if len(items) == 0 {
 			t.Errorf("%s: none generated", res)
@@ -107,33 +100,30 @@ func TestObservedGenerationStamped(t *testing.T) {
 	}
 }
 
-// The simulator heals drift: observedGeneration catches up to a bumped spec
-// generation, flipping Applied from Pending to Applied.
+// The simulator heals drift: after a spec edit bumps metadata.generation,
+// status.observedGeneration catches up on the next tick, which is what lets
+// the console tell "applied" from "pending" on a StorageNode.
 func TestDriftHeals(t *testing.T) {
 	st := NewStore(9)
 	st.Register(allResourceDefs()...)
-	sc, _ := scenarioByName("medium-degraded") // driftPresent() true (offline node)
+	sc, _ := scenarioByName("medium-degraded")
 	Generate(st, sc, 9, "simplyblock-system")
 	sim := NewSimulator(st, "simplyblock-system", 0, 9)
 
-	scDef, _ := st.Lookup(sbGroup, "v1alpha1", "storageclusters")
-	projNs := ""
-	all, _ := st.List(scDef, "", "", "")
-	for _, c := range all {
-		if strings.HasPrefix(getStr(c, "metadata.namespace"), "sb-mc-") {
-			projNs = getStr(c, "metadata.namespace")
-		}
-	}
-	if projNs == "" {
-		t.Fatal("no projected StorageCluster")
-	}
-	proj, _ := st.Get(scDef, projNs, "cluster1")
-	if obsGenOf(proj) >= genOf(proj) {
-		t.Skip("no drift seeded in this world; nothing to heal")
+	nodeDef, _ := st.LookupResource(sbGroup, "storagenodes")
+	nodes, _ := st.List(nodeDef, "sb-tenant-a", "", "")
+	node := nodes[0]
+	setPath(node, "spec.config.reservedSystemCPU", "0-1")
+	setPath(node, "metadata.generation", float64(genOf(node)+1))
+	st.Update(nodeDef, "sb-tenant-a", node)
+	name := getStr(node, "metadata.name")
+	fresh, _ := st.Get(nodeDef, "sb-tenant-a", name)
+	if obsGenOf(fresh) >= genOf(fresh) {
+		t.Fatal("the edit did not open a drift window")
 	}
 	tickUntil(t, sim, 10, func() bool {
-		p, _ := st.Get(scDef, projNs, "cluster1")
-		return obsGenOf(p) >= genOf(p)
+		n, _ := st.Get(nodeDef, "sb-tenant-a", name)
+		return obsGenOf(n) >= genOf(n)
 	})
 }
 

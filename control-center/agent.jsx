@@ -111,10 +111,9 @@ async function podLogs(name, container, tail) {
 const agent = {
   // The control plane is one deployment across every cluster, so none of these
   // are scoped by cluster.
-  containers: () => upstreamOn("operator")
-    ? areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer))
-    : k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {metrics: false}))),
-  containerLogs: (name, container) => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name, container),
+  // the pods of the operator's namespace and their logs, read from the Kubernetes API: the operator serves no HTTP API of its own
+  containers: () => k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {metrics: false}))),
+  containerLogs: (name, container) => podLogs(name, container),
   fdbBackups: () => areq(AGENT_BASE, "/control-plane/fdb/backups").then(r => r.map(normFdb)),
   fdbRestore: id => asend(AGENT_BASE, "POST", `/control-plane/fdb/backups/${id}/restore`),
   nodeLogs: (nid, stream) => areq(AGENT_BASE, `/nodes/${nid}/logs/${stream}`),

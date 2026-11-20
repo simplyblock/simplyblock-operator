@@ -35,10 +35,16 @@ type genCtx struct {
 	workerNames []string
 	nodeUUIDs   []string
 	poolNames   []string
+	poolUUIDs   []string
 	pvcRefs     []pvcRef // every generated PVC, for snapshots/backups/slots
 	clusterUUID string
 	clusterName string
 	drCluster   string
+
+	// the storage objects as created, for the ones that reference them
+	cluster      map[string]any
+	deployConfig map[string]any
+	nodes        []genNode
 }
 
 type pvcRef struct {
@@ -70,14 +76,11 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 	g.k8sNodes()
 	g.tenancyScaffold() // ManagedCluster, NodePoolAllocation, StorageClusterClass
 	g.storageCluster()
-	g.projectStorageCluster() // transport copy in sb-mc-* (hub→agent, drift)
 	g.nodesAndDevices()
 	g.poolsAndClasses()
 	g.volumes()
 	g.snapshots()
 	g.backups()
-	g.tasks()
-	g.opsHistory()
 	if sc.WithDR {
 		g.replicationChain()
 		g.drApplications()
@@ -87,6 +90,7 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 	g.platformPods()
 	g.secrets()
 	g.controlPlaneObjects()
+	g.opsHistory()
 	g.accessControl() // sb:* ClusterRoles, RoleBindings, AccessGrants
 	g.events()
 }
@@ -94,15 +98,7 @@ func Generate(st *Store, sc Scenario, seed uint64, systemNs string) {
 // ---- helpers ------------------------------------------------------------------
 
 func (g *genCtx) def(group, resource string) ResourceDef {
-	version := "v1alpha1"
-	switch group {
-	case "", ocmGroup, kvGroup, rbacGroup, "apps", "storage.k8s.io", "snapshot.storage.k8s.io", "networking.k8s.io":
-		version = "v1"
-	}
-	if resource == "clusterdeploymentconfigs" || resource == "operatorops" {
-		version = "v1alpha2"
-	}
-	d, ok := g.st.Lookup(group, version, resource)
+	d, ok := g.st.LookupResource(group, resource)
 	if !ok {
 		panic("generator uses unregistered resource " + group + "/" + resource)
 	}
@@ -131,10 +127,8 @@ func (g *genCtx) add(group, resource, ns, name string, spec, status map[string]a
 			obj[k] = v
 		}
 	}
-	// Paradigm stamping: every simplyblock kind carries the drift primitives
-	// the design mandates (design-crd-model.md §7.9) — actor provenance,
-	// managed-by, and status.observedGeneration — so the mock's world matches
-	// the target model even though main sets these on almost nothing.
+	// status.observedGeneration is the one drift primitive every simplyblock
+	// kind on main carries; nothing else is stamped onto a storage object.
 	if group == sbGroup {
 		g.stampParadigm(obj, resource)
 	}
@@ -145,41 +139,40 @@ func (g *genCtx) add(group, resource, ns, name string, spec, status map[string]a
 	return created
 }
 
-// stampParadigm adds actor annotations, the managed-by label, and
-// status.observedGeneration (= generation 1 at create) to a hub-authored
-// simplyblock object, plus a standard Ready/Synced condition for entity kinds.
+// stampParadigm sets status.observedGeneration (= generation 1 at create) on a
+// simplyblock object that has a status: observedGeneration == generation means
+// that the reported status is current. The hub-only kinds of the tenancy
+// scaffold (tenancy.go) additionally carry the managed-by label and a Ready
+// condition, which no storage kind on main has.
 func (g *genCtx) stampParadigm(obj map[string]any, resource string) {
 	meta := obj["metadata"].(map[string]any)
-	stampActor(meta, "admin@simplyblock.io", g.uuid(), "sb-infra-admins,platform-eng", g.past(240))
-	labels, _ := meta["labels"].(map[string]any)
-	if labels == nil {
-		labels = map[string]any{}
-		meta["labels"] = labels
-	}
-	if _, ok := labels[labManagedBy]; !ok {
-		labels[labManagedBy] = "hub"
+	if isHubKind(resource) {
+		stampActor(meta, "admin@simplyblock.io", g.uuid(), "sb-infra-admins,platform-eng", g.past(240))
+		labels, _ := meta["labels"].(map[string]any)
+		if labels == nil {
+			labels = map[string]any{}
+			meta["labels"] = labels
+		}
+		if _, ok := labels[labManagedBy]; !ok {
+			labels[labManagedBy] = "hub"
+		}
 	}
 	st, _ := obj["status"].(map[string]any)
 	if st == nil {
 		return
 	}
-	// observedGeneration == generation means "the reported status is current"
-	// (design §7.9: without it a stale status and a disagreeing one look the same).
 	if _, ok := st["observedGeneration"]; !ok {
 		st["observedGeneration"] = float64(1)
 	}
-	// Entity kinds (not *ops, not tasks) get a standardized conditions surface;
-	// ops kinds keep their phase model, replication kinds already carry conditions.
-	if _, has := st["conditions"]; !has && isEntityKind(resource) {
+	if _, has := st["conditions"]; !has && isHubKind(resource) {
 		st["conditions"] = readyCondition("Ready", "True", "Reconciled", "resource reconciled", g.recent(30), 1)
 	}
 }
 
-func isEntityKind(resource string) bool {
+// isHubKind is the mock's hub-only scaffold: kinds with no CRD on main.
+func isHubKind(resource string) bool {
 	switch resource {
-	case "storageclusters", "storagenodes", "storagenodesets", "storagedevices",
-		"storagepools", "controlplanes", "managedclusters", "storageclusterclasses",
-		"nodepoolallocations", "protectedapplications":
+	case "managedclusters", "storageclusterclasses", "nodepoolallocations":
 		return true
 	}
 	return false
@@ -193,6 +186,11 @@ func (g *genCtx) pick(ss []string) string { return ss[g.rng.IntN(int(len(ss)))] 
 func (g *genCtx) past(maxHours int) string {
 	d := time.Duration(g.rng.IntN(int(maxHours)*3600)) * time.Second
 	return g.now.Add(-d).Format(time.RFC3339)
+}
+
+// future is a timestamp a few minutes ahead, for a claim lease or a deadline.
+func (g *genCtx) future(minutes int) string {
+	return g.now.Add(time.Duration(minutes) * time.Minute).Format(time.RFC3339)
 }
 
 func (g *genCtx) recent(maxMinutes int) string {
@@ -237,7 +235,7 @@ func (g *genCtx) namespaces() {
 		}
 		mk(nsTenant(t), labels)
 	}
-	// application namespaces (k8s workloads the recipe editor discovers)
+	// application namespaces (Kubernetes workloads the recipe editor discovers)
 	for _, n := range g.sc.AppNamespaces {
 		mk(n, map[string]any{labScopeKind: scopeApplication})
 	}
@@ -281,158 +279,8 @@ func (g *genCtx) k8sNodes() {
 	}
 }
 
-func (g *genCtx) storageCluster() {
-	g.add(sbGroup, "storageclusters", g.ns, g.clusterName,
-		map[string]any{
-			"stripe":               map[string]any{"dataChunks": 2, "parityChunks": 1},
-			"fabricType":           "tcp",
-			"maxSubsystemCount":    500,
-			"warningThreshold":     map[string]any{"capacity": 75, "provisionedCapacity": 180},
-			"criticalThreshold":    map[string]any{"capacity": 90, "provisionedCapacity": 220},
-			"enableFailureDomains": g.sc.Workers >= 6,
-		},
-		map[string]any{
-			"uuid":                g.clusterUUID,
-			"clusterName":         g.clusterName,
-			"phase":               "Active",
-			"status":              "active",
-			"configured":          true,
-			"storageNodes":        float64(g.sc.Workers),
-			"mgmtNodes":           float64(g.sc.MgmtNodes),
-			"maxFaultTolerance":   float64(1),
-			"erasureCodingScheme": "2+1",
-			"nqn":                 "nqn.2023-02.io.simplyblock:" + g.clusterUUID,
-			"created":             g.past(2400),
-			"lastUpdated":         g.recent(10),
-		}, nil)
-}
 
-func (g *genCtx) nodesAndDevices() {
-	offline := map[int]bool{}
-	for len(offline) < g.sc.OfflineNodes {
-		offline[int(g.rng.IntN(int(g.sc.Workers)))] = true
-	}
-	degradedLeft := g.sc.DegradedDevices
 
-	var setNodes []any
-	for i, worker := range g.workerNames {
-		nodeUUID := g.uuid()
-		g.nodeUUIDs = append(g.nodeUUIDs, nodeUUID)
-		name := fmt.Sprintf("sn-%02d", i+1)
-		status := "online"
-		health := true
-		if offline[i] {
-			status, health = "offline", false
-		}
-		total := int64(0)
-
-		model := nvmeModels[g.rng.IntN(int(len(nvmeModels)))]
-		for d := 0; d < g.sc.DevicesPerNode; d++ {
-			devTotal := int64(model.SizeTB * 1e12)
-			used := int64(float64(devTotal) * (0.2 + g.rng.Float64()*0.5))
-			total += devTotal
-			phase, devStatus := "Online", "online"
-			if degradedLeft > 0 && g.pct(30) {
-				phase, devStatus = "Degraded", "unavailable"
-				degradedLeft--
-			}
-			if !health {
-				phase, devStatus = "Unknown", "offline"
-			}
-			role := "Storage"
-			if d == 0 && g.sc.DevicesPerNode > 1 {
-				role = "Journal"
-			}
-			serial := fmt.Sprintf("%s%07d", model.SerialPfx, g.rng.UintN(9999999))
-			g.add(sbGroup, "storagedevices", g.ns, fmt.Sprintf("%s-nvme%d", name, d),
-				map[string]any{"deviceID": serial, "nodeRef": name},
-				map[string]any{
-					"clusterID": g.clusterUUID, "nodeID": nodeUUID,
-					"phase": phase, "deviceStatus": devStatus, "role": role,
-					"capacity": map[string]any{"totalBytes": float64(devTotal), "usedBytes": float64(used)},
-					"hardware": map[string]any{
-						"model": model.Model, "serialNumber": serial,
-						"pciAddress":     fmt.Sprintf("0000:%02x:00.0", 0x17+d),
-						"nvmeController": fmt.Sprintf("nvme%d", d),
-					},
-				}, nil)
-		}
-
-		used := int64(float64(total) * (0.25 + g.rng.Float64()*0.4))
-		nodeStatus := map[string]any{
-			"uuid": nodeUUID, "hostname": worker, "status": status, "health": health,
-			"failureDomain": float64(i % 3),
-			"ports": map[string]any{
-				"management": fmt.Sprintf("10.10.%d.%d:5000", i/250, 2+i%250),
-				"nvmeof":     float64(4420), "rpc": float64(8080), "lvol": float64(9110 + i),
-			},
-			"resources": map[string]any{
-				"cpu": float64(8 + 4*g.rng.UintN(3)), "memory": gib(32 + 32*int(g.rng.UintN(3))),
-				"devices": fmt.Sprint(g.sc.DevicesPerNode),
-				"volumes": float64(g.rng.IntN(int(1 + g.sc.Volumes/max(1, g.sc.Workers)*2))),
-				"capacity": map[string]any{
-					"totalBytes": float64(total), "usedBytes": float64(used), "sampledAt": g.recent(5),
-				},
-			},
-			"uptime":   fmt.Sprintf("%dd%dh", 1+g.rng.UintN(90), g.rng.UintN(24)),
-			"postedAt": g.recent(2),
-			"latencyMetrics": map[string]any{
-				"nodeUUID": nodeUUID, "baselineMeasuredAt": g.past(48),
-				"baselineP50NS": float64(80000 + g.rng.UintN(40000)),
-				"baselineP99NS": float64(400000 + g.rng.UintN(300000)),
-			},
-		}
-		g.add(sbGroup, "storagenodes", g.ns, name,
-			map[string]any{
-				"workerNode": worker, "nodeIndex": float64(i),
-				"storageNodeSetRef": "sb-primary-nodes",
-			}, nodeStatus, nil)
-
-		setNodes = append(setNodes, map[string]any{
-			"uuid": nodeUUID, "hostname": worker, "status": status, "health": health,
-			"failureDomain": float64(i % 3), "devices": fmt.Sprint(g.sc.DevicesPerNode),
-			"nvmfPort": float64(4420), "rpcPort": float64(8080), "lvolPort": float64(9110 + i),
-			"mgmtIp": fmt.Sprintf("10.10.%d.%d", i/250, 2+i%250),
-		})
-	}
-
-	g.add(sbGroup, "storagenodesets", g.ns, "sb-primary-nodes",
-		map[string]any{
-			"clusterName": g.clusterName, "workerNodes": toAny(g.workerNames),
-			"mgmtIfname": "eth0", "dataIfname": []any{"eth1"},
-			"maxParallelNodeAdds": float64(2),
-		},
-		map[string]any{
-			"totalNodes":   float64(g.sc.Workers),
-			"onlineNodes":  float64(g.sc.Workers - g.sc.OfflineNodes),
-			"offlineNodes": float64(g.sc.OfflineNodes),
-			"nodes":        setNodes,
-		}, nil)
-}
-
-func (g *genCtx) poolsAndClasses() {
-	for i := 0; i < g.sc.Pools; i++ {
-		pool := []string{"vol-store", "db-tier", "bulk", "scratch"}[i%4]
-		g.poolNames = append(g.poolNames, pool)
-		g.add(sbGroup, "storagepools", g.ns, pool,
-			map[string]any{
-				"clusterName":            g.clusterName,
-				"capacityLimit":          gib(4096 * (i + 1)),
-				"qos":                    map[string]any{"iops": float64(200000)},
-				"storageClassParameters": map[string]any{"filesystem": "xfs", "fabric": "tcp"},
-			},
-			map[string]any{"uuid": g.uuid(), "status": "active"}, nil)
-		g.add("storage.k8s.io", "storageclasses", "", "simplyblock-"+pool, nil, nil, map[string]any{
-			"provisioner":          "csi.simplyblock.io",
-			"reclaimPolicy":        "Delete",
-			"allowVolumeExpansion": true,
-			"volumeBindingMode":    "Immediate",
-			"parameters": map[string]any{
-				"pool_name": pool, "distr_ndcs": "2", "distr_npcs": "1",
-			},
-		})
-	}
-}
 
 func (g *genCtx) volumes() {
 	for i := 0; i < g.sc.Volumes; i++ {
@@ -521,146 +369,9 @@ func (g *genCtx) snapshots() {
 	}
 }
 
-func (g *genCtx) backups() {
-	if g.sc.Backups == 0 {
-		return
-	}
-	var attached []any
-	for i := 0; i < min(3, len(g.pvcRefs)); i++ {
-		p := g.pvcRefs[i]
-		attached = append(attached, map[string]any{
-			"lvolID": p.VolumeID, "pvcName": p.Name, "pvcNamespace": p.Namespace,
-		})
-	}
-	g.add(sbGroup, "backuppolicies", g.ns, "nightly",
-		map[string]any{
-			"clusterName": g.clusterName, "schedule": "0 2 * * *",
-			"maxVersions": float64(7), "maxAge": "168h",
-		},
-		map[string]any{
-			"phase": "Active", "policyID": g.uuid(), "clusterUUID": g.clusterUUID,
-			"attachedLvols": attached,
-		}, nil)
 
-	for i := 0; i < g.sc.Backups; i++ {
-		p := g.pvcRefs[g.rng.IntN(int(len(g.pvcRefs)))]
-		phase := "Done"
-		if i == 0 && g.sc.RunningOps {
-			phase = "Running"
-		}
-		g.add(sbGroup, "storagebackups", g.ns, fmt.Sprintf("backup-%s-%d", p.Name, i),
-			map[string]any{
-				"clusterName": g.clusterName,
-				"pvcRef":      map[string]any{"name": p.Name, "namespace": p.Namespace},
-			},
-			map[string]any{
-				"phase": phase, "backupID": g.uuid(), "clusterUUID": g.clusterUUID,
-				"lvolID": p.VolumeID, "lvolName": p.Name,
-				"size":      float64(p.SizeGi) * float64(1<<30) * 0.6,
-				"createdAt": g.past(96), "completedAt": g.past(90),
-				"poolName": g.poolNames[0], "pvcNamespace": p.Namespace,
-			}, nil)
-	}
-}
 
-func (g *genCtx) tasks() {
-	var entries []any
-	n := 4 + int(g.rng.UintN(6))
-	for i := 0; i < n; i++ {
-		status := "done"
-		result := "success"
-		if g.sc.RunningOps && i == 0 {
-			status, result = "running", ""
-		}
-		if g.sc.FailedOps > 0 && i == 1 {
-			result = "failed: device unreachable"
-		}
-		entries = append(entries, map[string]any{
-			"uuid": g.uuid(), "taskType": g.pick(taskTypes),
-			"taskStatus": status, "taskResult": result,
-			"startedAt": g.past(24), "retried": float64(g.rng.UintN(3)),
-			"canceled": false,
-		})
-	}
-	g.add(sbGroup, "tasks", g.ns, "cluster-tasks",
-		map[string]any{"clusterName": g.clusterName, "subtasks": true},
-		map[string]any{"tasks": entries}, nil)
-}
 
-// opsHistory seeds completed and failed Ops plus — when the scenario says so —
-// in-flight ones the simulator will carry forward.
-func (g *genCtx) opsHistory() {
-	mkStatus := func(phase string, hoursAgo int) map[string]any {
-		st := map[string]any{"phase": phase, "startedAt": g.past(hoursAgo)}
-		switch phase {
-		case "Succeeded":
-			st["completedAt"] = g.past(hoursAgo - 1)
-			st["message"] = "completed"
-		case "Failed":
-			st["completedAt"] = g.past(hoursAgo - 1)
-			st["message"] = "timed out waiting for node to come back online"
-		case "Running":
-			st["message"] = "in progress"
-		}
-		return st
-	}
-
-	g.add(sbGroup, "storageclusterops", g.ns, "activate-initial",
-		map[string]any{"action": "activate", "clusterRef": g.clusterName},
-		mkStatus("Succeeded", 200), nil)
-
-	failed := g.sc.FailedOps
-	for i := 0; i < failed; i++ {
-		g.add(sbGroup, "storagenodeops", g.ns, fmt.Sprintf("restart-sn-%02d-failed-%d", 1+int(g.rng.IntN(int(g.sc.Workers))), i),
-			map[string]any{"action": "restart", "storageNodeRef": fmt.Sprintf("sn-%02d", 1+g.rng.IntN(int(g.sc.Workers)))},
-			mkStatus("Failed", 24+i*10), nil)
-	}
-
-	if g.sc.RunningOps {
-		st := mkStatus("Running", 1)
-		st["subPhase"] = "Restarting"
-		g.add(sbGroup, "storagenodeops", g.ns, "restart-sn-02",
-			map[string]any{"action": "restart", "storageNodeRef": "sn-02"}, st, nil)
-
-		g.add(sbGroup, "storageclusterops", g.ns, "rolling-restart",
-			map[string]any{"action": "node-rolling-restart", "clusterRef": g.clusterName},
-			map[string]any{
-				"phase": "Running", "startedAt": g.recent(30),
-				"nodeRollingRestartStatus": map[string]any{
-					"nodePhase":      "Running",
-					"processedNodes": []any{"sn-01"},
-					"pendingNodes":   toAny(nodeNames(3, g.sc.Workers)),
-				},
-			}, nil)
-
-		if len(g.pvcRefs) > 0 && len(g.nodeUUIDs) >= 2 {
-			p := g.pvcRefs[0]
-			g.add(sbGroup, "volumemigrations", g.ns, "migrate-"+p.Name,
-				map[string]any{"pvName": "pvc-" + p.VolumeID, "targetNodeUUID": g.nodeUUIDs[1]},
-				map[string]any{
-					"phase": "Running", "startedAt": g.recent(10),
-					"clusterUUID": g.clusterUUID, "volumeUUID": p.VolumeID,
-					"sourceNodeUUID": g.nodeUUIDs[0], "migrationUUID": g.uuid(),
-				}, nil)
-		}
-	}
-
-	g.add(sbGroup, "operatorops", g.ns, "discover-initial",
-		map[string]any{"action": "Discover", "discover": map[string]any{"configName": "sb-primary-config"}},
-		map[string]any{
-			"phase": "Succeeded", "startedAt": g.past(240), "completedAt": g.past(239),
-			"configRef": "sb-primary-config", "environment": "Vanilla",
-			"workers": toAny(g.workerNames),
-		}, nil)
-}
-
-func nodeNames(from, to int) []string {
-	var out []string
-	for i := from; i <= to; i++ {
-		out = append(out, fmt.Sprintf("sn-%02d", i))
-	}
-	return out
-}
 
 func (g *genCtx) replicationChain() {
 	cond := func(typ, reason, msg string) []any {
@@ -928,7 +639,7 @@ func (g *genCtx) secrets() {
 	zw := gzip.NewWriter(&gz)
 	zw.Write(raw)
 	zw.Close()
-	// Helm double-encodes: the Secret's data value is base64(gzip(json)), and
+	// Helm double-encodes: the Secret's data value is base64(gzip(JSON)), and
 	// the API then serves data values base64-encoded again.
 	inner := base64.StdEncoding.EncodeToString(gz.Bytes())
 	outer := base64.StdEncoding.EncodeToString([]byte(inner))
@@ -949,33 +660,6 @@ func (g *genCtx) secrets() {
 	})
 }
 
-func (g *genCtx) controlPlaneObjects() {
-	g.add(sbGroup, "controlplanes", g.sysNs, "simplyblock",
-		map[string]any{"image": "quay.io/simplyblock-io/simplyblock:26.3.0"},
-		map[string]any{"phase": "Ready", "lastChecked": g.recent(2), "message": "control plane healthy"}, nil)
-
-	var groups []any
-	groups = append(groups, map[string]any{
-		"name": "default", "workers": toAny(g.workerNames),
-		"mgmtInterface": "eth0", "dataInterfaces": []any{"eth1"},
-	})
-	// The deployment config targets a managed cluster, so it lives in the
-	// transport namespace (Kubernetes > cluster > Discovery & deployment).
-	g.add(sbGroup, "clusterdeploymentconfigs", g.mcNs, "sb-primary-config",
-		map[string]any{
-			"approved":    true,
-			"environment": "Vanilla",
-			"cluster": map[string]any{
-				"name": g.clusterName, "fabricType": "tcp",
-				"stripe": map[string]any{"dataChunks": 2, "parityChunks": 1},
-			},
-			"nodeSets": []any{map[string]any{"name": "sb-primary-nodes", "groups": groups}},
-		},
-		map[string]any{
-			"phase": "Expanded", "clusterRef": g.clusterName,
-			"nodeRefs": toAny(nodeNames(1, g.sc.Workers)),
-		}, nil)
-}
 
 func (g *genCtx) events() {
 	n := 25
@@ -987,15 +671,15 @@ func (g *genCtx) events() {
 		if !g.sc.EventStorm && ev.Type == "Warning" && g.pct(50) {
 			ev = eventReasons[0]
 		}
-		nodeIdx := int(g.rng.IntN(int(g.sc.Workers)))
+		node := g.nodes[g.rng.IntN(int(len(g.nodes)))]
 		ts := g.recent(600)
-		g.add("", "events", g.ns, fmt.Sprintf("sn-%02d.%s", nodeIdx+1, randSuffixLocal(g.rng)),
+		g.add("", "events", g.ns, fmt.Sprintf("%s.%s", node.name, randSuffixLocal(g.rng)),
 			nil, nil, map[string]any{
 				"type": ev.Type, "reason": ev.Reason,
 				"message": ev.Message,
 				"involvedObject": map[string]any{
-					"kind": "StorageNode", "name": fmt.Sprintf("sn-%02d", nodeIdx+1),
-					"namespace": g.ns, "apiVersion": sbGroup + "/v1alpha1",
+					"kind": "StorageNode", "name": node.name,
+					"namespace": g.ns, "apiVersion": sbGroup + "/v1alpha2",
 				},
 				"source":         map[string]any{"component": "simplyblock-operator"},
 				"firstTimestamp": ts, "lastTimestamp": ts,
@@ -1052,56 +736,6 @@ func (g *genCtx) tenancyScaffold() {
 		map[string]any{"phase": "Ready"}, nil)
 }
 
-// projectStorageCluster writes the transport-namespace projection of the
-// StorageCluster (§1.3, §2.1): the same kind, placed in sb-mc-* by the hub
-// controller, whose STATUS is authored by the agent (connectivity, last sync,
-// drift, observedGeneration) — a projection, not a byte copy.
-func (g *genCtx) projectStorageCluster() {
-	drift := g.driftPresent()
-	appliedGen, observedGen := 1, 1
-	if drift {
-		appliedGen = 2 // hub advanced spec; agent has not applied it yet (pending)
-	}
-	obj := map[string]any{
-		"metadata": map[string]any{
-			"name":       g.clusterName,
-			"uid":        g.uuid(),
-			"generation": float64(appliedGen),
-			"labels": map[string]any{
-				labManagedBy:      "hub",
-				labManagedCluster: g.mcName,
-				labStorageCluster: g.clusterName,
-				labTenant:         g.tenant,
-			},
-			"annotations": map[string]any{
-				"simplyblock.io/projection-of": g.ns + "/" + g.clusterName,
-			},
-		},
-		// hub-owned spec projection (allocation ref, DR pairing carried here)
-		"spec": map[string]any{
-			"stripe":                map[string]any{"dataChunks": 2, "parityChunks": 1},
-			"fabricType":            "tcp",
-			"nodePoolAllocationRef": g.clusterName + "-alloc",
-		},
-		// agent-authored status
-		"status": map[string]any{
-			"uuid":               g.clusterUUID,
-			"phase":              "Active",
-			"observedGeneration": float64(observedGen),
-			"lastSyncTime":       g.recent(2),
-			"agentConnected":     true,
-			"conditions": []any{
-				map[string]any{"type": "AgentConnected", "status": "True", "reason": "Heartbeat", "message": "agent pulling intent from " + g.mcNs, "lastTransitionTime": g.past(48), "observedGeneration": float64(observedGen)},
-				map[string]any{"type": "Applied", "status": boolStr(!drift), "reason": ternStr(drift, "Pending", "Applied"), "message": ternStr(drift, fmt.Sprintf("spec generation %d not yet applied (observed %d)", appliedGen, observedGen), "spec applied on the managed cluster"), "lastTransitionTime": g.recent(20), "observedGeneration": float64(observedGen)},
-			},
-		},
-	}
-	stampActor(obj["metadata"].(map[string]any), "hub-controller", g.uuid(), "system", g.past(240))
-	d := g.def(sbGroup, "storageclusters")
-	if _, err := g.st.Create(d, g.mcNs, obj); err != nil {
-		panic(fmt.Sprintf("projection create failed: %v", err))
-	}
-}
 
 // drApplications creates the DR-application main object (one per app namespace)
 // in the tenant namespace, plus a completed ApplicationFailover for the app
@@ -1169,14 +803,14 @@ func (g *genCtx) accessControl() {
 		if r.Name == "sb:infra-admin" {
 			apiGroups = []any{sbGroup, "", rbacGroup}
 		}
-		// aggregated role (rules filled by the controller from labelled children)
+		// aggregated role (rules filled by the controller from labeled children)
 		g.add(rbacGroup, "clusterroles", "", r.Name, nil, nil, map[string]any{
 			"aggregationRule": map[string]any{
 				"clusterRoleSelectors": []any{map[string]any{"matchLabels": map[string]any{r.AggLabel: "true"}}},
 			},
 			"rules": []any{},
 		})
-		// rules-carrying child, labelled to aggregate into the role above
+		// rules-carrying child, labeled to aggregate into the role above
 		g.add(rbacGroup, "clusterroles", "", r.Name+"-rules", nil, nil, map[string]any{
 			"labels": map[string]any{r.AggLabel: "true"},
 			"rules": []any{map[string]any{
