@@ -46,6 +46,9 @@ type ArrayRegistration struct {
 	// JournalOptions are plugin settings for the journal LUNs, applied over
 	// Options (a faster pool).
 	JournalOptions map[string]string
+	// AllowLocalKeyStore opts in (or out) of keeping Credentials in the local
+	// key store of a cluster without an external KMS; nil leaves it as it is.
+	AllowLocalKeyStore *bool
 }
 
 // Array is the control plane's record of a registered array. It carries no
@@ -168,6 +171,10 @@ func (c *Client) RegisterArray(ctx context.Context, clusterID string, reg ArrayR
 		}
 	}
 	body.Journal = &journal
+	if reg.AllowLocalKeyStore != nil {
+		allow := *reg.AllowLocalKeyStore
+		body.AllowLocalKmsCredentials = &allow
+	}
 	what := fmt.Sprintf("register array %s for cluster %s", reg.Plugin, clusterID)
 	resp, err := c.api.ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse(ctx, cluster, body)
 	if err != nil {
@@ -201,4 +208,40 @@ func (c *Client) ListArrays(ctx context.Context, clusterID string) ([]Array, err
 		out = append(out, arrayFromDTO(d))
 	}
 	return out, nil
+}
+
+// LUNGrowth is the outcome of growing a cluster's LUNs to a size.
+type LUNGrowth struct {
+	// Grown reports whether the cluster's devices grew; false with no
+	// errors means nothing was left to grow.
+	Grown bool
+	// Errors names what could not be grown, by device id; empty when every
+	// LUN has the size and every device took it over.
+	Errors map[string]string
+	// Reason is the control plane's explanation when nothing grew.
+	Reason string
+}
+
+// GrowLUNs grows every LUN the array plugin created for the cluster to
+// sizeBytes at the array, waits until every node sees the size, and grows the
+// cluster's devices onto it. A LUN already that large is left alone, so a call
+// that failed half-way is simply repeated. Nodes added later get LUNs of the
+// size.
+func (c *Client) GrowLUNs(ctx context.Context, clusterID string, sizeBytes int64) (LUNGrowth, error) {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return LUNGrowth{}, err
+	}
+	size := int(sizeBytes)
+	params := &cpapi.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams{LunSize: &size}
+	what := fmt.Sprintf("grow the LUNs of cluster %s to %d bytes", clusterID, sizeBytes)
+	resp, err := c.api.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx, cluster, params)
+	if err != nil {
+		return LUNGrowth{}, fmt.Errorf("%s: %w", what, err)
+	}
+	d, err := payload(what, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return LUNGrowth{}, err
+	}
+	return LUNGrowth{Grown: d.Grown, Errors: d.Errors, Reason: d.Reason}, nil
 }

@@ -73,7 +73,9 @@ type StorageArraySpec struct {
 	Protocol StorageArrayProtocol `json:"protocol,omitempty"`
 
 	// LunSize is the size of the LUN created for each storage node. All
-	// nodes' LUNs are created at this size and grown together.
+	// nodes' LUNs are created at this size and grown together: raising it
+	// grows every LUN at the array and the cluster's devices onto it, online
+	// (status.array.lunSize follows). It cannot be lowered.
 	// +kubebuilder:validation:Required
 	LunSize resource.Quantity `json:"lunSize"`
 
@@ -176,6 +178,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="(self.source == 'Secret') == has(self.secretRef)",message="secretRef is set exactly when source is Secret"
 // +kubebuilder:validation:XValidation:rule="(self.source == 'VaultKV') == has(self.vaultKV)",message="vaultKV is set exactly when source is VaultKV"
 // +kubebuilder:validation:XValidation:rule="(self.source == 'KMIPSecret') == has(self.kmipSecret)",message="kmipSecret is set exactly when source is KMIPSecret"
+// +kubebuilder:validation:XValidation:rule="!has(self.allowLocalKeyStore) || self.source == 'Secret'",message="allowLocalKeyStore applies to the source Secret only"
 type StorageArrayCredentials struct {
 	// Source selects where the login is kept: None, Secret, VaultKV, or
 	// KMIPSecret.
@@ -194,6 +197,14 @@ type StorageArrayCredentials struct {
 	// KMIPSecret names the KMIP secret-data object holding the login.
 	// +optional
 	KMIPSecret *StorageArrayKMIPSecret `json:"kmipSecret,omitempty"`
+
+	// AllowLocalKeyStore lets a cluster without an external key management
+	// service keep a Secret's login in its local key store, where it is
+	// effectively unencrypted. It is meant for test environments; without it
+	// such a registration is refused. Omitted, the control plane's setting is
+	// left as it is.
+	// +optional
+	AllowLocalKeyStore *bool `json:"allowLocalKeyStore,omitempty"`
 }
 
 // StorageArrayVaultKVSecret is a Vault KV v2 secret.
@@ -235,6 +246,12 @@ type StorageArrayKMIPSecret struct {
 
 // StorageArrayStatus is the array registration as the control plane holds it.
 type StorageArrayStatus struct {
+	// LunSize is the size every LUN of the cluster has been grown to. Raising
+	// spec.multiAttach.array.lunSize above it grows every LUN at the array and
+	// the cluster's devices onto it; LunSize follows once that succeeded.
+	// +optional
+	LunSize *resource.Quantity `json:"lunSize,omitempty"`
+
 	// ID is the control plane's id of the registered array.
 	// +optional
 	ID string `json:"id,omitempty"`

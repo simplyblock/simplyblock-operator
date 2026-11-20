@@ -102,6 +102,16 @@ func TestStorageClusterCELValidatesMultiAttach(t *testing.T) {
 			s.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{
 				Placement: simplyblockv1alpha2.StorageArrayJournalLocal, Options: map[string]string{"pool": "fast"}}
 		}, wantDenied: "size and options apply to the placement LUN only"},
+		{name: "local key store for a Secret", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+			s.MultiAttach.Array.Credentials.AllowLocalKeyStore = ptr.To(true)
+		}},
+		{name: "local key store for a Vault login", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+			s.MultiAttach.Array.Credentials = simplyblockv1alpha2.StorageArrayCredentials{
+				Source:             simplyblockv1alpha2.StorageArrayCredentialsSourceVaultKV,
+				VaultKV:            &simplyblockv1alpha2.StorageArrayVaultKVSecret{Mount: "secret", Path: "p"},
+				AllowLocalKeyStore: ptr.To(true),
+			}
+		}, wantDenied: "allowLocalKeyStore applies to the source Secret only"},
 		{name: "unknown journal placement", mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
 			s.MultiAttach.Array.Journal = &simplyblockv1alpha2.StorageArrayJournal{Placement: "NVRAM"}
 		}, wantDenied: "placement"},

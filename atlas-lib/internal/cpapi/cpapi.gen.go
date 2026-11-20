@@ -1244,6 +1244,9 @@ type ArrayDTO struct {
 
 // ArrayParams defines model for ArrayParams.
 type ArrayParams struct {
+	// AllowLocalKmsCredentials Opt in (true) or out (false) of keeping the credentials in the cluster's local key store, effectively unencrypted, when it has no external KMS (test environments); omitted, unchanged
+	AllowLocalKmsCredentials *bool `json:"allow_local_kms_credentials,omitempty"`
+
 	// CredentialRef Instead of credentials: a secret kept outside simplyblock, {"kind": "vault-kv", "mount": ..., "path": ..., "version": ...} or {"kind": "kmip-secret", "uid": ..., "field": ...}
 	CredentialRef *map[string]interface{} `json:"credential_ref,omitempty"`
 	Credentials   *map[string]string      `json:"credentials,omitempty"`
@@ -1755,10 +1758,23 @@ type DeviceDTO struct {
 
 // DeviceGrowthDTO defines model for DeviceGrowthDTO.
 type DeviceGrowthDTO struct {
-	Devices   []map[string]interface{} `json:"devices"`
-	Errors    map[string]string        `json:"errors"`
-	Rebalance *DeviceRebalanceDTO      `json:"rebalance,omitempty"`
-	Uniform   bool                     `json:"uniform"`
+	Devices []DeviceGrowthEntryDTO             `json:"devices"`
+	Errors  map[string]string                  `json:"errors"`
+	Factor  float32                            `json:"factor"`
+	Grown   bool                               `json:"grown"`
+	Luns    *map[string]map[string]interface{} `json:"luns,omitempty"`
+	Reason  string                             `json:"reason"`
+	Shrunk  *[]string                          `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthEntryDTO defines model for DeviceGrowthEntryDTO.
+type DeviceGrowthEntryDTO struct {
+	BackendSize   int    `json:"backend_size"`
+	DeviceId      string `json:"device_id"`
+	NewSize       int    `json:"new_size"`
+	OldSize       int    `json:"old_size"`
+	PlacementSize int    `json:"placement_size"`
+	UnusedSize    int    `json:"unused_size"`
 }
 
 // DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
@@ -1827,13 +1843,6 @@ type DevicePerformanceAssessmentDTO struct {
 
 // DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
 type DevicePerformanceAssessmentDTOVerdict string
-
-// DeviceRebalanceDTO defines model for DeviceRebalanceDTO.
-type DeviceRebalanceDTO struct {
-	Reason         string `json:"reason"`
-	Started        bool   `json:"started"`
-	WeightsUpdated bool   `json:"weights_updated"`
-}
 
 // DeviceResizeDTO defines model for DeviceResizeDTO.
 type DeviceResizeDTO struct {
@@ -3166,7 +3175,8 @@ type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGrou
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
 type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
-	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
+	LunFactor *float32 `form:"lun_factor,omitempty" json:"lun_factor,omitempty"`
+	LunSize   *int     `form:"lun_size,omitempty" json:"lun_size,omitempty"`
 }
 
 // ClustersIostatsApiV2ClustersClusterIdIostatsGetParams defines parameters for ClustersIostatsApiV2ClustersClusterIdIostatsGet.
@@ -4992,11 +5002,20 @@ type ClientInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after the LUNs of the cluster
-	// were grown on the storage array. If they have grown unevenly, the device
-	// weights are set to the new sizes and the cluster is rebalanced, unless
-	// ``rebalance`` is false.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
+	//
+	// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+	// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+	// that large is left alone, so the call can be repeated after a failure;
+	// nodes added later get LUNs of that size).
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
 	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -7892,11 +7911,20 @@ func (c *Client) ClustersExpandApiV2ClustersClusterIdExpandPost(ctx context.Cont
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after the LUNs of the cluster
-// were grown on the storage array. If they have grown unevenly, the device
-// weights are set to the new sizes and the cluster is rebalanced, unless
-// “rebalance“ is false.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
+//
+// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+// that large is left alone, so the call can be repeated after a failure;
+// nodes added later get LUNs of that size).
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
 func (c *Client) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -13832,9 +13860,21 @@ func NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(server s
 		// per the OpenAPI spec (e.g. "color=blue,black,brown").
 		var rawQueryFragments []string
 
-		if params.Rebalance != nil {
+		if params.LunFactor != nil {
 
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "rebalance", *params.Rebalance, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "lun_factor", *params.LunFactor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.LunSize != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "lun_size", *params.LunSize, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -21372,11 +21412,20 @@ type ClientWithResponsesInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after the LUNs of the cluster
-	// were grown on the storage array. If they have grown unevenly, the device
-	// weights are set to the new sizes and the cluster is rebalanced, unless
-	// ``rebalance`` is false.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
+	//
+	// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+	// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+	// that large is left alone, so the call can be repeated after a failure;
+	// nodes added later get LUNs of that size).
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -32498,11 +32547,20 @@ func (c *ClientWithResponses) ClustersExpandApiV2ClustersClusterIdExpandPostWith
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after the LUNs of the cluster
-// were grown on the storage array. If they have grown unevenly, the device
-// weights are set to the new sizes and the cluster is rebalanced, unless
-// “rebalance“ is false.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
+//
+// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+// that large is left alone, so the call can be repeated after a failure;
+// nodes added later get LUNs of that size).
 //
 // Returns a wrapper object for the known response body format(s).
 //

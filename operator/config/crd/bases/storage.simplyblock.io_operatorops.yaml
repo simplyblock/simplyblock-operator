@@ -275,6 +275,14 @@ spec:
                             description: Credentials says where the array's login
                               comes from.
                             properties:
+                              allowLocalKeyStore:
+                                description: |-
+                                  AllowLocalKeyStore lets a cluster without an external key management
+                                  service keep a Secret's login in its local key store, where it is
+                                  effectively unencrypted. It is meant for test environments; without it
+                                  such a registration is refused. Omitted, the control plane's setting is
+                                  left as it is.
+                                type: boolean
                               kmipSecret:
                                 description: KMIPSecret names the KMIP secret-data
                                   object holding the login.
@@ -358,6 +366,10 @@ spec:
                               rule: (self.source == 'VaultKV') == has(self.vaultKV)
                             - message: kmipSecret is set exactly when source is KMIPSecret
                               rule: (self.source == 'KMIPSecret') == has(self.kmipSecret)
+                            - message: allowLocalKeyStore applies to the source Secret
+                                only
+                              rule: '!has(self.allowLocalKeyStore) || self.source
+                                == ''Secret'''
                           endpoint:
                             description: |-
                               Endpoint is the array's management URL, e.g.
@@ -409,7 +421,9 @@ spec:
                             - type: string
                             description: |-
                               LunSize is the size of the LUN created for each storage node. All
-                              nodes' LUNs are created at this size and grown together.
+                              nodes' LUNs are created at this size and grown together: raising it
+                              grows every LUN at the array and the cluster's devices onto it, online
+                              (status.array.lunSize follows). It cannot be lowered.
                             pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                             x-kubernetes-int-or-string: true
                           options:

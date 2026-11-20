@@ -110,6 +110,9 @@ func TestTheArrayIsRegisteredWithTheSecretsLogin(t *testing.T) {
 		reg.LunSizeBytes != 1<<40 || reg.Credentials["api_token"] != "T0KEN" || reg.CredentialRef != nil {
 		t.Errorf("registration = %+v", reg)
 	}
+	if reg.AllowLocalKeyStore != nil {
+		t.Errorf("allowLocalKeyStore sent though the spec leaves it out: %v", *reg.AllowLocalKeyStore)
+	}
 	if reg.Options["protocol"] != "iscsi" || reg.Options["ca_bundle"] != "-----BEGIN CERTIFICATE-----x" ||
 		reg.Options["eradicate"] != "true" {
 		t.Errorf("options = %v", reg.Options)
@@ -295,5 +298,109 @@ func TestAClusterWithoutAnArrayRegistersNone(t *testing.T) {
 	cluster = reconcileCluster(t, newClusterReconciler(t, api, &recorder{}, noArray), 1)
 	if cluster.Status.Array != nil {
 		t.Errorf("status.array without an array = %+v", cluster.Status.Array)
+	}
+}
+
+// Raising lunSize grows every LUN to it, once; a failed growth is reported
+// and repeated; lowering it is refused without a call.
+func TestRaisingTheLunSizeGrowsEveryLUN(t *testing.T) {
+	var grown []int64
+	fail := true
+	api := &fakeControlPlane{
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
+		registerArray: func(_ string, reg atlascp.ArrayRegistration) (atlascp.Array, error) {
+			return registeredArray(reg)
+		},
+		growLUNs: func(id string, size int64) (atlascp.LUNGrowth, error) {
+			if id != testClusterUUID {
+				t.Errorf("grew the LUNs of cluster %s", id)
+			}
+			grown = append(grown, size)
+			if fail {
+				fail = false
+				return atlascp.LUNGrowth{Errors: map[string]string{"dev-1": "array resize failed"}}, nil
+			}
+			return atlascp.LUNGrowth{Grown: true}, nil
+		},
+	}
+	rec := &recorder{}
+	r := newClusterReconciler(t, api, rec,
+		newTestCluster(withArray(simplyblockv1alpha2.StorageArrayCredentialsSourceSecret)), arraySecret("T0KEN"))
+
+	// The first registration records the size the LUNs are created at.
+	cluster := reconcileCluster(t, r, 1)
+	if st := cluster.Status.Array; st == nil || st.LunSize == nil || st.LunSize.Value() != 1<<40 {
+		t.Fatalf("status.array.lunSize = %+v, want 1Ti", cluster.Status.Array)
+	}
+	if len(grown) != 0 {
+		t.Fatalf("grown %v at the first registration", grown)
+	}
+
+	setLunSize(t, r, "1536Gi")
+	cluster = reconcileCluster(t, r, 1)
+	if len(grown) != 1 || grown[0] != 1536<<30 {
+		t.Fatalf("grown = %v, want one growth to 1536Gi", grown)
+	}
+	if st := cluster.Status.Array; st.LunSize.Value() != 1<<40 || !strings.Contains(st.Message, "array resize failed") {
+		t.Errorf("after a failed growth: lunSize %s, message %q", st.LunSize, st.Message)
+	}
+	if !rec.has(ArrayLUNGrowthFailed) {
+		t.Error("no ArrayLUNGrowthFailed event")
+	}
+
+	// Repeated, and it succeeds.
+	cluster = reconcileCluster(t, r, 1)
+	if len(grown) != 2 || cluster.Status.Array.LunSize.Value() != 1536<<30 || cluster.Status.Array.Message != "" {
+		t.Fatalf("grown = %v, status.array = %+v", grown, cluster.Status.Array)
+	}
+	if !rec.has(ArrayLUNsGrown) {
+		t.Error("no ArrayLUNsGrown event")
+	}
+
+	// Nothing more to grow.
+	reconcileCluster(t, r, 1)
+	if len(grown) != 2 {
+		t.Errorf("grown again at an unchanged size: %v", grown)
+	}
+
+	// Lowered: refused without a call.
+	setLunSize(t, r, "1Ti")
+	cluster = reconcileCluster(t, r, 1)
+	if len(grown) != 2 || !strings.Contains(cluster.Status.Array.Message, "never shrunk") {
+		t.Errorf("a lowered size: grown %v, message %q", grown, cluster.Status.Array.Message)
+	}
+}
+
+func setLunSize(t *testing.T, r *StorageClusterReconciler, size string) {
+	t.Helper()
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := types.NamespacedName{Namespace: testNamespace, Name: testClusterName}
+	if err := r.Get(context.Background(), key, &cluster); err != nil {
+		t.Fatal(err)
+	}
+	cluster.Spec.MultiAttach.Array.LunSize = resource.MustParse(size)
+	if err := r.Update(context.Background(), &cluster); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// The opt-in to the local key store travels with the registration.
+func TestTheLocalKeyStoreOptInIsRegistered(t *testing.T) {
+	var sent []atlascp.ArrayRegistration
+	api := &fakeControlPlane{
+		cluster: func(string) (atlascp.Cluster, error) { return activeCluster(), nil },
+		registerArray: func(_ string, reg atlascp.ArrayRegistration) (atlascp.Array, error) {
+			sent = append(sent, reg)
+			return registeredArray(reg)
+		},
+	}
+	cluster := newTestCluster(withArray(simplyblockv1alpha2.StorageArrayCredentialsSourceSecret),
+		func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.MultiAttach.Array.Credentials.AllowLocalKeyStore = ptr.To(true)
+		})
+	r := newClusterReconciler(t, api, &recorder{}, cluster, arraySecret("T0KEN"))
+	reconcileCluster(t, r, 1)
+	if len(sent) != 1 || sent[0].AllowLocalKeyStore == nil || !*sent[0].AllowLocalKeyStore {
+		t.Fatalf("registrations = %+v, want the opt-in", sent)
 	}
 }

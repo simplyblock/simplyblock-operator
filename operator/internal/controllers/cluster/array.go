@@ -13,20 +13,98 @@ package cluster
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	atlascp "github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 // reconcileArray registers the cluster's array when the registration in
-// status does not match the spec generation and login it was made from. It
-// returns the status to record, nil for a cluster without an array.
+// status does not match the spec generation and login it was made from, then
+// grows its LUNs when spec.multiAttach.array.lunSize was raised. It returns
+// the status to record, nil for a cluster without an array.
 func (r *StorageClusterReconciler) reconcileArray(
+	ctx, readCtx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
+) *simplyblockv1alpha2.StorageArrayStatus {
+	status := r.registerArray(ctx, readCtx, cluster)
+	if status == nil {
+		return nil
+	}
+	status = status.DeepCopy()
+	if previous := cluster.Status.Array; previous != nil && status.LunSize == nil {
+		status.LunSize = previous.LunSize
+	}
+	r.growLUNs(readCtx, cluster, status)
+	return status
+}
+
+// growLUNs grows every LUN to spec.multiAttach.array.lunSize once the array
+// is registered and the size was raised above status.lunSize. The first
+// registration records the size the LUNs are created at. A failed growth is
+// repeated on the next pass: LUNs that already have the size are left alone.
+func (r *StorageClusterReconciler) growLUNs(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, status *simplyblockv1alpha2.StorageArrayStatus,
+) {
+	if !status.Registered {
+		return
+	}
+	// A registered array carries no registration message, so what is left
+	// is the last growth's, which this pass decides anew.
+	status.Message = ""
+	want := cluster.Spec.MultiAttach.Array.LunSize
+	if status.LunSize == nil {
+		status.LunSize = ptr.To(want.DeepCopy())
+		return
+	}
+	switch cmp := want.Cmp(*status.LunSize); {
+	case cmp == 0:
+		return
+	case cmp < 0:
+		status.Message = fmt.Sprintf("lunSize %s is below the size the LUNs have, %s; a LUN is never shrunk",
+			want.String(), status.LunSize.String())
+		return
+	}
+	growth, err := r.API.GrowLUNs(ctx, cluster.Status.UUID, want.Value())
+	if err == nil && len(growth.Errors) > 0 {
+		err = fmt.Errorf("%s", joinGrowthErrors(growth.Errors))
+	}
+	if err != nil {
+		status.Message = fmt.Sprintf("growing the LUNs to %s: %v", want.String(), err)
+		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning, ArrayLUNGrowthFailed, ArrayLUNGrowthFailed,
+			"The LUNs were not all grown to %s, and the growth is repeated: %v", want.String(), err)
+		return
+	}
+	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, ArrayLUNsGrown, ArrayLUNsGrown,
+		"Every LUN was grown from %s to %s at the array, and the cluster's devices with them",
+		status.LunSize.String(), want.String())
+	status.LunSize = ptr.To(want.DeepCopy())
+}
+
+// joinGrowthErrors renders the control plane's per-device errors in a stable
+// order.
+func joinGrowthErrors(errors map[string]string) string {
+	keys := make([]string, 0, len(errors))
+	for k := range errors {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+": "+errors[k])
+	}
+	return strings.Join(parts, "; ")
+}
+
+// registerArray registers the cluster's array when the registration in
+// status does not match the spec generation and login it was made from.
+func (r *StorageClusterReconciler) registerArray(
 	ctx, readCtx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
 ) *simplyblockv1alpha2.StorageArrayStatus {
 	ma := cluster.Spec.MultiAttach
@@ -118,6 +196,7 @@ func (r *StorageClusterReconciler) arrayRegistration(
 	}
 
 	creds := spec.Credentials
+	reg.AllowLocalKeyStore = creds.AllowLocalKeyStore
 	switch creds.Source {
 	case simplyblockv1alpha2.StorageArrayCredentialsSourceSecret:
 		if creds.SecretRef == nil || creds.SecretRef.Name == "" {

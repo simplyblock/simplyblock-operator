@@ -239,6 +239,7 @@ type fakeControlPlane struct {
 	serviceClasses    func(string) (ServiceClassConfig, error)
 	setServiceClasses func(string, ServiceClassConfig) error
 	registerArray     func(string, atlascp.ArrayRegistration) (atlascp.Array, error)
+	growLUNs          func(string, int64) (atlascp.LUNGrowth, error)
 
 	// The counters the write-ahead tests read. Each is the number of times the
 	// control plane was actually asked to do something, which is the only way
@@ -441,6 +442,13 @@ func (f *fakeControlPlane) RegisterArray(
 		f.t.Fatal("the control plane was asked to register an array and the test did not script it")
 	}
 	return f.registerArray(clusterID, reg)
+}
+
+func (f *fakeControlPlane) GrowLUNs(_ context.Context, clusterID string, sizeBytes int64) (atlascp.LUNGrowth, error) {
+	if f.growLUNs == nil {
+		f.t.Fatal("the control plane was asked to grow the LUNs and the test did not script it")
+	}
+	return f.growLUNs(clusterID, sizeBytes)
 }
 
 var _ ControlPlane = (*fakeControlPlane)(nil)
