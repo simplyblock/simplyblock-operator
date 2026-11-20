@@ -708,3 +708,44 @@ func TestTheTwoNodeServicesNameWhatTheImageShips(t *testing.T) {
 		t.Errorf("the monitoring pod runs no %s", name)
 	}
 }
+
+// Regression (#947): every image the control plane runs names its registry. A
+// bare name such as "aikoven/foundationdb-exporter:3.1.0" is resolved by the
+// container runtime's own search list, which an OpenShift install that pulls
+// through a caching proxy registry does not have, so the pod sits in
+// ImagePullBackOff and the control plane never reports ready.
+func TestEveryControlPlaneImageNamesItsRegistry(t *testing.T) {
+	cp := localControlPlane()
+
+	objects := append(foundationDBObjects(cp),
+		append(datastoreObjects(cp),
+			append(prometheusObjects(cp), managementAPIObjects(cp)...)...)...)
+	checked := 0
+	for _, obj := range objects {
+		spec := podSpecOf(obj)
+		if spec == nil {
+			continue
+		}
+		for _, container := range append(spec.InitContainers, spec.Containers...) {
+			checked++
+			if !namesARegistry(container.Image) {
+				t.Errorf("%s/%s runs %q, which names no registry",
+					obj.GetName(), container.Name, container.Image)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no container was checked")
+	}
+}
+
+// namesARegistry reports whether an image reference starts with a registry host,
+// by the rule the container runtimes use: the first path component is a host
+// when it holds a dot or a port, or is localhost.
+func namesARegistry(image string) bool {
+	first, _, found := strings.Cut(image, "/")
+	if !found {
+		return false
+	}
+	return strings.ContainsAny(first, ".:") || first == "localhost"
+}
