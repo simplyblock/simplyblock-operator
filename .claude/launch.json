@@ -4,7 +4,22 @@
     {
       "name": "sb-mock",
       "runtimeExecutable": "C:/Users/Michael/go/pkg/mod/golang.org/toolchain@v0.0.1-go1.26.2.windows-amd64/bin/go.exe",
-      "runtimeArgs": ["-C", "C:/Users/Michael/simplyblock-operator/control-center/mock", "run", ".", "--serve-ui", "..", "--dataset", "fleet-stages", "--seed", "42", "--listen", ":8081"],
+      "runtimeArgs": [
+        "-C",
+        "C:/Users/Michael/simplyblock-operator/control-center/mock",
+        "run",
+        ".",
+        "--serve-ui",
+        "..",
+        "--dataset",
+        "medium-degraded",
+        "--seed",
+        "42",
+        "--listen",
+        ":8081",
+        "--crd-dir",
+        "C:/Users/Michael/simplyblock-operator/operator/config/crd/bases"
+      ],
       "port": 8081
     }
   ]

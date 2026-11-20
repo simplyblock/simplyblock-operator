@@ -92,6 +92,15 @@ func (s *Store) Lookup(group, version, resource string) (ResourceDef, bool) {
 	return d, true
 }
 
+// LookupResource resolves a group+resource at whichever version the mock
+// serves it, which is the one the generator writes.
+func (s *Store) LookupResource(group, resource string) (ResourceDef, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.byGR[group+"/"+resource]
+	return d, ok
+}
+
 func (s *Store) Defs() []ResourceDef {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

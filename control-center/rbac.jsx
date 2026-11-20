@@ -98,6 +98,21 @@ async function loadAccessK8s() {
     rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: [], k8sRules: true});
 }
 
+// The storage objects live in whatever namespaces hold StorageClusters, so
+// the API server is asked for the caller's rules in each of them; a rule set
+// the operator's access view returned for a namespace is kept as is.
+async function loadStorageNamespaceRules() {
+  let nss = [NS()];
+  try { const w = await world(); nss = nss.concat(w.clusters.map(c => c.metadata.namespace)); } catch (e) {}
+  await Promise.all([...new Set(nss.filter(Boolean))].map(async ns => {
+    if (AC_STATE.rules.ns[ns]) return;
+    try {
+      const r = await review.rules(ns);
+      AC_STATE.rules.ns[ns] = (r.resourceRules || []).map(x => ({apiGroups: x.apiGroups || [""], resources: x.resources || [], verbs: x.verbs || [], resourceNames: x.resourceNames}));
+      if (r.incomplete) AC_STATE.incomplete = true;
+    } catch (e) {}
+  }));
+}
 async function loadAccess() {
   try {
     if (DR_MODE()) { await loadAccessK8s(); acNotify(); return; }
@@ -110,6 +125,7 @@ async function loadAccess() {
     try { await loadAccessK8s(); }
     catch (e2) { Object.assign(AC_STATE, {ready: true, error: e, user: null, rules: {cluster: [], ns: {}}, grants: [], scopes: null}); }
   }
+  await loadStorageNamespaceRules();
   acNotify();
 }
 
@@ -118,6 +134,10 @@ const clusterIdsOf = o => [...new Set([o.kind === "cluster" ? o.id : null, o.clu
 function nsOf(entity, o, op) {
   const N = AC_STATE.ns;
   if (!o) return entity === "k8scluster" || entity === "binding" ? ["*"] : [];
+  // an object read from the Kubernetes API is judged in its own namespace,
+  // which is where the API server judges it too
+  const own = o.namespace || (o.k8s && o.k8s.namespace);
+  if (own && op !== "create" && !["k8scluster", "binding", "role", "labelrequest", "replicationpolicy", "drpolicy"].includes(entity)) return [own];
   if (entity === "k8scluster") {
     if (op === "create") return ["*"];                                   // create nodepoolallocations is cluster-scoped
     const ids = o.kind === "k8sc" ? [o.id] : (o.k8sClusterIds || (o.k8sClusterId ? [o.k8sClusterId] : []));
@@ -149,7 +169,9 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*"))
+// the operator's group is storage.simplyblock.io; the bare simplyblock.io is the
+// legacy spelling some grants still carry
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "storage.simplyblock.io") || (!group && (r.apiGroups || []).includes("simplyblock.io")) || (r.apiGroups || []).includes("*"))
   && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*"))
   && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {

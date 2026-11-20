@@ -111,29 +111,27 @@ const send = (method, path, payload) => req(path, {method, body: JSON.stringify(
 // whose spec.action names it. spec.abort is the only stop, so a cancel is a
 // patch, never a DELETE.
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1).replace(/-(\w)/g, (_, c) => c.toUpperCase());
+// The verbs are the CRDs' action enums (k8s-client.jsx RESOURCES[kind].actions);
+// a verb the operator does not have is not offered.
 const OPS_VERBS = {
-  clusters: {kind: "StorageCluster", verbs: {suspend: "Suspend", activate: "Activate",
-    restart: "Activate", rebalance: "Rebalance", "storage-nodes": "Expand"}},
-  "storage-nodes": {kind: "StorageNode", verbs: {restart: "Restart", shutdown: "Shutdown",
-    migrate: "Migrate", devices: "AddDevice"}},
-  devices: {kind: "StorageDevice", verbs: {restart: "Restart", fail: "Fail",
-    "health-check": "HealthCheck", remove: "Remove"}},
-  pools: {kind: "StoragePool", verbs: {enable: "Enable", disable: "Disable"}},
-  lvols: {kind: "PersistentVolume", verbs: {resize: "Resize", snapshot: "Snapshot",
-    clone: "Clone", migrate: "Migrate", backup: "Backup"}},
-  backups: {kind: "StorageBackup", verbs: {merge: "Merge", restore: "Restore", export: "Export"}}
+  clusters: {kind: "StorageCluster", verbs: {activate: "Activate", expand: "Expand", shutdown: "Shutdown",
+    start: "Start", restart: "Restart", "rolling-restart": "RollingRestart", "cancel-task": "CancelTask"}},
+  "storage-nodes": {kind: "StorageNode", verbs: {shutdown: "Shutdown", restart: "Restart", suspend: "Suspend",
+    resume: "Resume", remove: "Remove", migrate: "Migrate", "host-maintenance": "HostMaintenance"}},
+  devices: {kind: "StorageDevice", verbs: {restart: "Restart", fail: "Fail", "check-health": "CheckHealth"}},
+  pools: {kind: "StoragePool", verbs: {rebalance: "Rebalance"}},
+  lvols: {kind: "PersistentVolume", verbs: {migrate: "Migrate", relocate: "Relocate", "join-group": "JoinConsistencyGroup"}},
+  backups: {kind: "StorageBackup", verbs: {restore: "Restore"}}
 };
-// DELETE on an entity is also an operation, not a raw delete
-const DELETE_VERB = {"storage-nodes": ["StorageNode", "Remove"], devices: ["StorageDevice", "Remove"],
-  backups: ["StorageBackup", "Delete"]};
+// DELETE on a storage node is its Remove operation, never a raw delete
+const DELETE_VERB = {"storage-nodes": ["StorageNode", "Remove"]};
 
 // entities are addressed by uuid inside the console and by name on the API
 async function k8sNameOf(kind, id) {
-  const items = await k8s.list(kind);
+  const items = await k8s.list(kind, {allNamespaces: true});
   const hit = items.find(o => {
-    const s = o.status || {};
-    return [s.clusterId, s.nodeId, s.deviceId, s.poolId, s.backupId,
-      s.simplyblock && s.simplyblock.volumeId, o.metadata.uid].includes(id);
+    const s = o.status || {}, sp = o.spec || {};
+    return [s.uuid, sp.deviceID, o.metadata.uid, o.metadata.name].includes(id);
   });
   // Read from the control plane but not a CRD here: the object belongs to a
   // site, and its operations are that site's Ops objects.
@@ -168,6 +166,20 @@ async function mutate(method, path, payload) {
 
 // ---- status vocabulary -----------------------------------------------------
 const STATUS_META = {
+  // the operator's status.phase values (storage.simplyblock.io/v1alpha2), spelled as the CRDs spell them
+  Online: {c: "var(--ok)", rank: 0, label: "Online"}, Ready: {c: "var(--ok)", rank: 0, label: "Ready"}, Available: {c: "var(--ok)", rank: 0, label: "Available"},
+  Expanded: {c: "var(--ok)", rank: 0, label: "Expanded"}, Succeeded: {c: "var(--ok)", rank: 0, label: "Succeeded"},
+  Pending: {c: "var(--idle)", rank: 2, label: "Pending"}, Draft: {c: "var(--idle)", rank: 2, label: "Draft"}, Unknown: {c: "var(--idle)", rank: 2, label: "Unknown"},
+  Creating: {c: "var(--info)", rank: 1, label: "Creating", blink: true}, Provisioning: {c: "var(--info)", rank: 1, label: "Provisioning", blink: true},
+  Activating: {c: "var(--info)", rank: 1, label: "Activating", blink: true}, Installing: {c: "var(--info)", rank: 1, label: "Installing", blink: true},
+  Expanding: {c: "var(--info)", rank: 1, label: "Expanding", blink: true}, Running: {c: "var(--info)", rank: 1, label: "Running", blink: true},
+  Rebalancing: {c: "var(--info)", rank: 1, label: "Rebalancing", blink: true}, Shrinking: {c: "var(--info)", rank: 1, label: "Shrinking", blink: true},
+  Removing: {c: "var(--alert)", rank: 2, label: "Removing", blink: true}, Deleting: {c: "var(--warn)", rank: 3, label: "Deleting", blink: true},
+  Degraded: {c: "var(--warn)", rank: 3, label: "Degraded"}, Aborted: {c: "var(--warn)", rank: 3, label: "Aborted"},
+  Removed: {c: "var(--dim2)", rank: 2, label: "Removed"}, Migrated: {c: "var(--dim2)", rank: 2, label: "Migrated"},
+  Offline: {c: "var(--bad)", rank: 4, label: "Offline"}, Unavailable: {c: "var(--bad)", rank: 4, label: "Unavailable"},
+  Suspended: {c: "var(--bad)", rank: 4, label: "Suspended"}, Failed: {c: "var(--bad)", rank: 4, label: "Failed"},
+  // the control plane's own status strings, as status.status and status.deviceStatus carry them
   online: {c: "var(--ok)", rank: 0, label: "online"},
   active: {c: "var(--ok)", rank: 0, label: "active"},
   paired: {c: "var(--ok)", rank: 0, label: "paired"},
@@ -265,45 +277,105 @@ const ioOf = s => ({r: (s || {}).read_io_ps || 0, w: (s || {}).write_io_ps || 0}
 const bwOf = s => ({r: (s || {}).read_bytes_ps || 0, w: (s || {}).write_bytes_ps || 0});
 const histOf = h => ({iops: (h || {}).iops || [], bw: (h || {}).bytes || []});
 
-const normCluster = c => reg({
-  kind: "cluster", id: c.uuid, name: c.name,
-  mode: c.device_class === "nvme" ? "nvme" : "blockdev",
-  siting: c.location_type === "edge" ? "edge" : "datacenter",
-  status: c.status, rebalancing: !!c.rebalancing,
-  capacity: {total: c.size_total, used: c.size_util},
-  iops: ioOf(c.io_stats), bw: bwOf(c.io_stats), hist: histOf(c.io_history),
-  counts: {hosts: c.hosts_count, hostsAvailable: c.hosts_available, nodes: c.storage_nodes_count,
-    nodesOnline: c.storage_nodes_online, devices: c.devices_count, devicesOnline: c.devices_online,
-    pools: c.pools_count, volumes: c.lvols_count, snapshots: c.snapshots_count,
-    backups: c.backups_count, policies: c.backup_policies_count,
-    cgroups: c.consistency_groups_count || 0, encrypted: c.encrypted_lvols_count || 0,
-    migrations: c.migrations_count || 0, migrationTargets: c.migration_targets_count || 0,
-    buckets: c.buckets_count || 0, rwxPvcs: c.rwx_pvcs_count || 0,
-    k8sClusters: (c.k8s_cluster_ids || []).length, pvcs: c.pvcs_count || 0,
-    reduced: c.reduced_lvols_count || 0,
-    rpolicies: c.replication_policies_count || 0, pairsOut: c.pairs_out_count || 0,
-    pairsIn: c.pairs_in_count || 0, replicated: c.replicated_lvols_count || 0,
-    zones: (c.zone_ids || []).length},
-  zoneIds: c.zone_ids || [], regions: c.regions || [], stretched: !!c.stretched, drEligible: !!c.dr_target_eligible,
-  k8sClusterIds: c.k8s_cluster_ids || [],
-  backupEnabled: !!c.backup_enabled, s3: c.s3 || null,
-  syncReplication: !!c.sync_replication_enabled,
-  kms: c.kms || null, logicalUsed: c.logical_used || 0,
-  fileStorage: c.file_storage || {enabled: false},
-  objectStorage: c.object_storage || {enabled: false},
-  multipathing: !!c.multipathing_enabled, multipathNodes: c.multipath_nodes_count || 0,
-  autoRebalance: {enabled: !!(c.auto_rebalance || {}).enabled,
-    moved1h: (c.auto_rebalance || {}).moved_1h || 0, moved24h: (c.auto_rebalance || {}).moved_24h || 0},
-  nodeAffinity: c.node_affinity || "none", podAffinity: !!c.pod_affinity_enabled,
+// ---- the storage kinds, from their custom resources ------------------------
+// storage.simplyblock.io/v1alpha2 on main. A view model carries the object's
+// identity (k8s), the fields the pages read under the CRD's own names, and
+// the object itself (raw). Nothing here is a field the CRD does not have; a
+// derived value says what it was derived from.
+const k8sOf = o => ({name: o.metadata.name, namespace: o.metadata.namespace, kind: o.kind, uid: o.metadata.uid,
+  labels: o.metadata.labels || {}, annotations: o.metadata.annotations || {}, generation: o.metadata.generation,
+  observedGeneration: (o.status || {}).observedGeneration, creationTimestamp: o.metadata.creationTimestamp});
+const sameNs = (a, b) => (a.metadata.namespace || "") === (b.metadata.namespace || "");
+const nodesOfCluster = (w, c) => w.nodes.filter(n => (n.spec || {}).clusterRef === c.metadata.name && sameNs(n, c));
+const devicesOfNode = (w, n) => w.devices.filter(d => (d.spec || {}).nodeRef === n.metadata.name && sameNs(d, n));
+const poolsOfCluster = (w, c) => w.pools.filter(x => (x.spec || {}).clusterRef === c.metadata.name && sameNs(x, c));
+const clusterOfRef = (w, o, ref) => w.clusters.find(c => c.metadata.name === ref && sameNs(c, o)) || null;
+const idOf = o => (o.status || {}).uuid || o.metadata.uid;
 
-  fd: {enabled: !!c.failure_domain_enabled, scope: c.failure_domain_scope || null,
-    domains: c.failure_domains || [], unassigned: c.fd_unassigned || 0,
-    min: c.fd_min || 0, max: c.fd_max || 0, balanced: c.fd_balanced !== false, thin: c.fd_thin || []},
-  caps: c.capabilities || {},
-  faultBudget: c.fault_budget || {kind: "nodes", tolerated: c.distr_npcs || 1, lost: (c.storage_nodes_count || 0) - (c.storage_nodes_online || 0)},
-  haType: c.ha_type, distrNpcs: c.distr_npcs, distrNdcs: c.distr_ndcs, version: c.cluster_version, mgmt: c.mgmt_endpoint,
-  mgmtKind: c.mgmt_endpoint_kind || "control plane API", createdAt: c.created_at
-});
+const normCluster = (o, w) => {
+  const s = o.status || {}, sp = o.spec || {};
+  const nodes = nodesOfCluster(w, o);
+  const devices = nodes.flatMap(n => devicesOfNode(w, n));
+  const phaseCount = (list, phase) => list.filter(x => (x.status || {}).phase === phase).length;
+  const cap = nodes.reduce((a, n) => { const c = ((n.status || {}).resources || {}).capacity || {}; return {total: a.total + (c.totalBytes || 0), used: a.used + (c.usedBytes || 0)}; }, {total: 0, used: 0});
+  return reg({
+    kind: "cluster", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    phase: s.phase || "Pending", status: s.status || null, message: s.message || "", step: (s.step || {}).state || null, stepClaim: (s.step || {}).claim || null,
+    activeOpsRef: s.activeOpsRef || null, configured: !!s.configured, nqn: s.nqn || null, erasureCodingScheme: s.erasureCodingScheme || null,
+    maxFaultTolerance: s.maxFaultTolerance, rebalancing: !!s.rebalancing, tasks: s.tasks || [], provisioningSlots: s.provisioningSlots || [],
+    failureDomains: s.failureDomains || [], role: s.role || null, members: s.members || [], stretched: s.stretched || null, arbitration: s.arbitration || null,
+    rebalancingMetrics: s.rebalancingMetrics || null, volumeMoveGeneration: s.volumeMoveGeneration, realignedGeneration: s.realignedGeneration,
+    lastDataRealignmentAt: s.lastDataRealignmentAt || null, workloadNames: s.workloadNames || null,
+    spec: sp, stripe: sp.stripe || null, clusterMode: sp.clusterMode || null, deviceClass: sp.deviceClass || null, fabricType: sp.fabricType || null,
+    thresholds: {warn: sp.warningThreshold || null, crit: sp.criticalThreshold || null},
+    counts: {nodes: nodes.length, nodesOnline: phaseCount(nodes, "Online"), nodesProvisioning: phaseCount(nodes, "Provisioning"), nodesOffline: phaseCount(nodes, "Offline"),
+      nodesDegraded: phaseCount(nodes, "Degraded"), nodesRemoving: phaseCount(nodes, "Removing"), devices: devices.length, devicesOnline: phaseCount(devices, "Online"),
+      pools: poolsOfCluster(w, o).length},
+    // the cluster carries status.capacity only as a supercluster; otherwise it is its nodes' sum
+    capacity: s.capacity ? {total: s.capacity.totalBytes || 0, used: s.capacity.usedBytes || 0, provisioned: s.capacity.provisionedBytes || 0, derived: "status.capacity (supercluster)"}
+      : Object.assign(cap, {derived: "sum of StorageNode.status.resources.capacity over the cluster's nodes"}),
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+const normNode = (o, w) => {
+  const s = o.status || {}, sp = o.spec || {}, res = s.resources || {}, cap = res.capacity || {};
+  const cluster = clusterOfRef(w, o, sp.clusterRef);
+  return reg({
+    kind: "node", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    hostname: s.hostname || sp.workerNode || o.metadata.name, clusterRef: sp.clusterRef, clusterId: cluster ? idOf(cluster) : null,
+    workerNode: sp.workerNode || null, slot: sp.slot, socketId: sp.socketId, nodeIndex: sp.nodeIndex, nodeSet: sp.nodeSet || null, config: sp.config || {}, stretchedRemote: !!(sp.stretched || {}).remote,
+    phase: s.phase || "Pending", status: s.status || null, health: s.health, message: s.message || "", step: (s.step || {}).state || null, stepClaim: (s.step || {}).claim || null,
+    activeOpsRef: s.activeOpsRef || null, failureDomain: s.failureDomain || null, uptime: s.uptime || null, nodeAddTaskID: s.nodeAddTaskID || null,
+    ports: s.ports || {}, resources: res, capacity: {total: cap.totalBytes || 0, used: cap.usedBytes || 0, sampledAt: cap.sampledAt || null},
+    network: s.network || [], remediation: s.remediation || null, latencyMetrics: s.latencyMetrics || null,
+    counts: {devices: devicesOfNode(w, o).length, devicesOnline: (res.devices || {}).online, volumes: res.volumes},
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+const normDevice = (o, w) => {
+  const s = o.status || {}, sp = o.spec || {};
+  const node = w.nodes.find(n => n.metadata.name === sp.nodeRef && sameNs(n, o)) || null;
+  return reg({
+    kind: "device", id: sp.deviceID || o.metadata.uid, name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    nodeRef: sp.nodeRef, nodeId: s.nodeID || (node ? idOf(node) : null), clusterId: s.clusterID || (node ? (node.status || {}).uuid : null) || null,
+    phase: s.phase || "Unknown", deviceStatus: s.deviceStatus || null, role: s.role || null, message: s.message || "", activeOpsRef: s.activeOpsRef || null,
+    capacity: {total: (s.capacity || {}).totalBytes || 0}, hardware: s.hardware || {}, health: s.health || {}, site: s.site || null, remote: s.remote,
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+const normPool = (o, w) => {
+  const s = o.status || {}, sp = o.spec || {};
+  const cluster = clusterOfRef(w, o, sp.clusterRef);
+  return reg({
+    kind: "pool", id: idOf(o), name: o.metadata.name, namespace: o.metadata.namespace, k8s: k8sOf(o), raw: o,
+    clusterRef: sp.clusterRef, clusterId: cluster ? idOf(cluster) : null,
+    phase: s.phase || "Pending", status: s.status || null, message: s.message || "", activeOpsRef: s.activeOpsRef || null,
+    limits: sp.limits || {}, volumeDefaults: sp.volumeDefaults || {}, allowedNodes: sp.allowedNodes || [],
+    statusLimits: s.limits || {}, storageClassNames: s.storageClassNames || [], defaultStorageClassName: s.defaultStorageClassName || null, members: s.members || [],
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+
+// One read of the four kinds across every namespace, shared by every getter
+// for a few seconds, so a page that asks for a cluster, its nodes, and their
+// devices lists each kind once.
+let WORLD = null, WORLD_AT = 0;
+const WORLD_TTL = 4000;
+function world() {
+  if (WORLD && Date.now() - WORLD_AT < WORLD_TTL) return WORLD;
+  WORLD_AT = Date.now();
+  WORLD = Promise.all(["StorageCluster", "StorageNode", "StorageDevice", "StoragePool"].map(k => k8s.list(k, {allNamespaces: true})))
+    .then(([clusters, nodes, devices, pools]) => ({clusters, nodes, devices, pools}))
+    .catch(e => { WORLD = null; throw e; });
+  return WORLD;
+}
+const invalidateWorld = () => { WORLD = null; };
+const notFound = (kind, id) => new ApiError(404, `${kind} ${id} not found`, "/" + id, "NotFound");
+const findCluster = (w, id) => w.clusters.find(c => idOf(c) === id) || w.clusters.find(c => c.metadata.name === id) || null;
+const findNode = (w, id) => w.nodes.find(n => idOf(n) === id) || w.nodes.find(n => n.metadata.name === id) || null;
+const findDevice = (w, id) => w.devices.find(d => (d.spec || {}).deviceID === id || d.metadata.uid === id) || w.devices.find(d => d.metadata.name === id) || null;
+const findPool = (w, id) => w.pools.find(x => idOf(x) === id) || w.pools.find(x => x.metadata.name === id) || null;
+
 const normHost = h => reg({
   kind: "host", id: h.uuid, clusterId: h.cluster_id, hostname: h.hostname, mgmtIp: h.mgmt_ip,
   zoneId: h.zone_id || null, zone: h.zone || null, region: h.region || null,
@@ -386,48 +458,6 @@ const normDeployConfig = o => {
       maxSubsystems: groups.length ? groups[0].maxSubsystems : null}
   });
 };
-const normNode = n => reg({
-  kind: "node", id: n.uuid, clusterId: n.cluster_id, hostId: n.host_id, zoneId: n.zone_id || null, hostname: n.hostname,
-  ip: (n.data_nics && n.data_nics[0] ? n.data_nics[0].ip : null), port: (n.data_nics && n.data_nics[0] ? n.data_nics[0].port : 4420),
-  // null: the source did not report the node's NICs (not "none")
-  dataNics: n.data_nics ? n.data_nics.map(x => ({name: x.name, ip: x.ip, port: x.port, socket: x.numa_socket, state: x.state, trtype: x.trtype})) : null,
-  // simplyblock multipathing is ANA: this node plus its secondary (and
-  // tertiary) serve the same volumes; extra data NICs add paths per node
-  anaPaths: n.ana_paths || null, secondaryId: n.secondary_node_id || null, tertiaryId: n.tertiary_node_id || null,
-  multipath: (n.ana_paths || 0) > 1 || (n.data_nics || []).length > 1,
-  op: n.op ? {kind: n.op.kind, phase: n.op.phase, phaseIndex: n.op.phase_index || 0, phases: n.op.phases || [],
-    volumesMoved: n.op.volumes_moved || 0, targetHostname: n.op.target_hostname || null, sourceHostname: n.op.source_hostname || null,
-    startedAt: n.op.started_at, taskId: n.op.task_id} : null,
-  mgmtIp: n.mgmt_ip, failureDomain: n.failure_domain, physicalLabel: n.physical_label, status: n.status,
-  capacity: {total: n.size_total, used: n.size_util},
-  iops: ioOf(n.io_stats), bw: bwOf(n.io_stats), hist: histOf(n.io_history),
-  counts: {devices: n.devices_count || 0, devicesOnline: n.devices_online || 0},
-  cpuCount: n.cpu_count, cpuReserved: n.vcpu_reserved, maxSubsystems: n.max_subsystem_count || null,
-  memory: {total: n.memory_total, reserved: n.memory_reserved, used: n.memory_used},
-  hugepages: {total: n.hugepages_total, used: n.hugepages_used},
-  spdk: n.spdk_version
-});
-const normDevice = d => reg({
-  kind: "device", id: d.uuid, nodeId: d.node_id, clusterId: d.cluster_id, hostId: d.host_id,
-  mode: d.cluster_device_class === "nvme" ? "nvme" : "blockdev", socket: d.numa_socket,
-  serial: d.serial_number, pcie: d.pcie_address, blockdev: d.device_name,
-  model: d.model_number, firmware: d.firmware_revision,
-  status: d.status, health: d.health_check, lastHealthCheck: d.last_health_check,
-  capacity: {total: d.size_total, used: d.size_util},
-  iops: ioOf(d.io_stats), bw: bwOf(d.io_stats), hist: histOf(d.io_history),
-  temp: d.temperature_c, wear: d.percentage_used, poweronHours: d.power_on_hours
-});
-const normPool = p => reg({
-  kind: "pool", id: p.uuid, clusterId: p.cluster_id, name: p.pool_name, dhchap: !!p.dhchap_bidirectional,
-  // a pool is never offline: it is enabled or disabled. Disabled keeps serving I/O
-  // but refuses new volume provisioning.
-  status: p.enabled === false ? "disabled" : "enabled", enabled: p.enabled !== false, qos: p.qos,
-  capacity: {total: p.size_prov, used: p.size_util},
-  lvolBytes: p.lvols_bytes || 0, snapshotBytes: p.snapshots_bytes || 0,
-  storageClasses: p.storage_classes || [], k8sClusterId: p.k8s_cluster_id || null,
-  counts: {volumes: p.lvols_count, volumesOnline: p.lvols_online, snapshots: p.snapshots_count,
-    backups: p.backups_count, storageClasses: p.storage_classes_count || 0}
-});
 const normVolume = v => reg({
   kind: "volume", id: v.uuid, poolId: v.pool_id, poolName: v.pool_name, clusterId: v.cluster_id,
   name: v.lvol_name, status: v.status, nodes: v.nodes || {},
@@ -885,19 +915,31 @@ const OPS_KINDS = ["StorageClusterOps", "StorageNodeOps", "StorageDeviceOps", "S
   "PersistentVolumeOps", "StorageBackupOps", "ControlPlaneOps", "OperatorOps"];
 const OPS_TARGET_LABEL = {StorageCluster: "cluster", StorageNode: "node", StorageDevice: "device",
   StoragePool: "pool", PersistentVolume: "volume", StorageBackup: "backup", ControlPlane: "control plane", Operator: "operator"};
+// The step list and the abort points are the operator's graphs (ops-model.jsx);
+// the object carries only the current step, its claim, and its deadline.
 const normOperation = o => {
-  const st = o.status || {}, step = st.step || {};
+  const st = o.status || {}, step = st.step || {}, spec = o.spec || {};
+  const r = window.RESOURCES[o.kind] || {};
+  const target = r.ref ? spec[r.ref] : null;
+  const pos = window.stepPosition ? stepPosition(o.kind, spec.action, step.state) : {index: -1, steps: [], abortable: false};
   return {
-    id: o.metadata.uid, name: o.metadata.name, kind: o.kind,
-    action: (o.spec || {}).action, clusterId: st.clusterId || null,
-    targetKind: st.targetKind || (window.RESOURCES[o.kind] || {}).ops || null,
-    targetName: ((o.spec || {}).targetRef || {}).name || null,
+    id: o.metadata.uid, name: o.metadata.name, namespace: o.metadata.namespace || null, kind: o.kind,
+    action: spec.action, clusterId: null,
+    targetKind: r.ops || null,
+    targetName: target && typeof target === "object" ? target.name : (target || null),
     phase: st.phase, message: st.message || "",
-    step: step.label || step.state, stepKey: step.state,
-    steps: step.labels || step.steps || [], stepIndex: step.index || 0,
-    abortable: !!step.abortable, aborting: !!(o.spec || {}).abort,
+    step: step.state, stepKey: step.state, stepClaim: step.claim || null, stepDeadline: step.deadline || null,
+    steps: pos.steps, stepIndex: pos.index,
+    abortable: pos.abortable, aborting: !!spec.abort,
     startedAt: st.startedAt, completedAt: st.completedAt || null,
-    events: st.events || [],
+    observedGeneration: st.observedGeneration, generation: o.metadata.generation,
+    // per-action progress, as the CRD names it
+    rollingRestart: st.rollingRestart || null, drain: st.drain || null, removal: st.removal || null,
+    migration: st.migration || null, relocate: st.relocate || null, deviceStatusBefore: st.deviceStatusBefore || null,
+    configRef: st.configRef || null, creatorRef: spec.creatorRef || null, raw: o,
+    // no Ops kind carries events in its status; the Kubernetes Events of the
+    // object are read by the monitor, not here
+    events: [],
     running: !["Succeeded", "Failed", "Aborted"].includes(st.phase)
   };
 };
@@ -907,16 +949,18 @@ const normRole = r => ({kind: "role", id: r.uuid || r.name, name: r.name, boundA
 
 // ---- endpoints -------------------------------------------------------------
 const api = {
-  clusters: () => req("/clusters").then(r => r.map(normCluster)),
-  cluster: id => req(`/clusters/${id}`).then(r => normCluster(r[0])),
+  // ---- the storage kinds: their custom resources, every namespace ----
+  clusters: () => world().then(w => w.clusters.map(c => normCluster(c, w))),
+  cluster: id => world().then(w => { const c = findCluster(w, id); if (!c) throw notFound("StorageCluster", id); return normCluster(c, w); }),
   hosts: cid => req(`/clusters/${cid}/hosts`).then(r => r.map(normHost)),
   host: id => req(`/hosts/${id}`).then(r => normHost(r[0])),
-  nodes: cid => req(`/clusters/${cid}/storage-nodes`).then(r => r.map(normNode)),
-  node: id => req(`/storage-nodes/${id}`).then(r => normNode(r[0])),
-  devices: nid => req(`/storage-nodes/${nid}/devices`).then(r => r.map(normDevice)),
-  device: id => req(`/devices/${id}`).then(r => normDevice(r[0])),
-  pools: cid => req(`/clusters/${cid}/pools`).then(r => r.map(normPool)),
-  pool: id => req(`/pools/${id}`).then(r => normPool(r[0])),
+  nodes: cid => world().then(w => { const c = findCluster(w, cid); return c ? nodesOfCluster(w, c).map(n => normNode(n, w)) : []; }),
+  node: id => world().then(w => { const n = findNode(w, id); if (!n) throw notFound("StorageNode", id); return normNode(n, w); }),
+  devices: nid => world().then(w => { const n = findNode(w, nid); return n ? devicesOfNode(w, n).map(d => normDevice(d, w)) : []; }),
+  clusterDevices: cid => world().then(w => { const c = findCluster(w, cid); return c ? nodesOfCluster(w, c).flatMap(n => devicesOfNode(w, n)).map(d => normDevice(d, w)) : []; }),
+  device: id => world().then(w => { const d = findDevice(w, id); if (!d) throw notFound("StorageDevice", id); return normDevice(d, w); }),
+  pools: cid => world().then(w => { const c = findCluster(w, cid); return c ? poolsOfCluster(w, c).map(x => normPool(x, w)) : []; }),
+  pool: id => world().then(w => { const x = findPool(w, id); if (!x) throw notFound("StoragePool", id); return normPool(x, w); }),
   poolVolumes: pid => req(`/pools/${pid}/lvols`).then(r => r.map(normVolume)),
   poolStorageClasses: pid => req(`/pools/${pid}/storage-classes`).then(r => r.map(normSc)),
   clusterVolumes: cid => req(`/clusters/${cid}/lvols`).then(r => r.map(normVolume)),
@@ -1289,7 +1333,7 @@ function useResource(key, loader, pollMs) {
   return {...s, reload: () => load(false)};
 }
 
-Object.assign(window, {api, API, ApiError, STATUS_META, REG, GETTER, resolve, useResource,
+Object.assign(window, {api, world, invalidateWorld, normCluster, normNode, normDevice, normPool, API, ApiError, STATUS_META, REG, GETTER, resolve, useResource,
   normCluster, normHost, normNode, normDevice, normPool, normVolume, normSnapshot, normBackup, normPolicy,
   normTask, normLog, normAlert, normOperation, OPS_TARGET_LABEL, normPlan, normSite, normMethod, normLeg, normGeneration,
   normReplPair, normReplPolicy, normReplSlot, normReplOps, ivMinutes, normPair, normDrPolicy, normZone, normCg, normCgSnap, normMigration, normK8s, normSc, normPvc, normBucket, normDrCluster, normApp});

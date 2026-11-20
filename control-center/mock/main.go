@@ -37,6 +37,7 @@ func main() {
 		simInterval = flag.Duration("sim-interval", 4*time.Second, "simulator tick interval; 0 disables the simulator")
 		failRate    = flag.Float64("fail-rate", 0.1, "probability that a simulated operation fails")
 		serveUI     = flag.String("serve-ui", "", "directory with the console's index.html; serves the UI and mounts the proxied paths (/k8s, /operator, /prometheus) so no nginx is needed")
+		crdDir      = flag.String("crd-dir", "../../operator/config/crd/bases", "directory with the operator's CRD YAMLs, served as apiextensions objects; empty or missing serves none")
 		fixtures    = flag.String("operator-fixtures", "", "directory of JSON fixtures for the operator API (see mock/README.md)")
 		viewer      = flag.String("viewer", "global", "authorization stand-in for the impersonated user: global | none | <sb:role>@<namespace>[,...] (see PARADIGM.md)")
 	)
@@ -65,6 +66,13 @@ func main() {
 		log.Printf("simulator: every %s, fail-rate %.0f%%", *simInterval, *failRate*100)
 	}
 
+	if *crdDir != "" {
+		if n, err := srv.loadCRDs(*crdDir); err != nil {
+			log.Printf("CRDs not served: %v", err)
+		} else {
+			log.Printf("serving %d CRDs from %s", n, *crdDir)
+		}
+	}
 	mux := srv.routes(*serveUI)
 	log.Printf("listening on %s", *listen)
 	log.Fatal(http.ListenAndServe(*listen, mux))
@@ -127,7 +135,7 @@ func (s *server) routes(serveUI string) *http.ServeMux {
 
 	// upstream impersonation at the root, for the console pod's env overrides
 	mux.Handle("/v1/", s.operator)   // SB_OPERATOR_URL / SB_HELM_URL
-	mux.Handle("/helm/", s.operator) // in case a deployment routes helm separately
+	mux.Handle("/helm/", s.operator) // in case a deployment routes Helm separately
 	// Prometheus paths take precedence over the core K8s API by being the more
 	// specific patterns: /api/v1/query is Prometheus, /api/v1/pods is Kubernetes.
 	for _, p := range []string{"query", "query_range", "series", "labels", "rules", "alerts"} {

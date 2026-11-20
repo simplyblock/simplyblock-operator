@@ -58,7 +58,7 @@ func (p *PromAPI) metricNames() []string {
 // instances returns the identities series are labeled with, from the store's
 // actual topology so charts and tables cross-reference.
 func (p *PromAPI) instances() []map[string]string {
-	d, ok := p.store.Lookup(sbGroup, "v1alpha1", "storagenodes")
+	d, ok := p.store.LookupResource(sbGroup, "storagenodes")
 	if !ok {
 		return nil
 	}

@@ -569,6 +569,20 @@ const newClusterDialog = () => ({
   }))
 });
 
+// ---- the Ops helpers the storage menus call ------------------------------
+// Every one creates the Ops object in the target's namespace with the CRD's
+// own field names, then drops the cached world so the lock shows at once.
+const afterOps = p => p.then(r => { if (window.invalidateWorld) invalidateWorld(); return r; });
+const clusterOps = (o, action, params) => afterOps(submitOps("StorageCluster", o.name, action, params || null, {namespace: o.namespace}));
+const nodeOps = (o, action, params, extra) => afterOps(submitOps("StorageNode", o.name, action, params || null, {namespace: o.namespace}).then(created => {
+  // force and reattachVolume sit beside the action, not in a parameter block
+  const flags = Object.entries(extra || {}).filter(([, v]) => v);
+  if (!flags.length) return created;
+  return k8s.patch("StorageNodeOps", created.metadata.name, {spec: Object.fromEntries(flags)}, {namespace: o.namespace});
+}));
+const deviceOps = (o, action) => afterOps(submitOps("StorageDevice", o.name, action, null, {namespace: o.namespace}));
+const poolOps = (o, action) => afterOps(submitOps("StoragePool", o.name, action, null, {namespace: o.namespace}));
+
 const ACTIONS = {
   deployconfig: o => [
     o.status === "Draft" ? {label: "Approve and deploy", icon: "check", op: "create",
@@ -583,61 +597,113 @@ const ACTIONS = {
       : {label: "Deployed — document is immutable", icon: "lock", disabled: true,
           hint: "approval is one-way"},
   ].filter(Boolean),
-  cluster: o => [
-    o.caps.rebalancing ? {label: "Rebalance front storage now", icon: "gauge", dialog: {
-      title: `Rebalance ${o.name}?`,
-      desc: "Evens out volume placement across the online storage nodes using instant migration — the primary role is handed over without copying data. Each move files an lvol_migration task, which is where it can be followed. Volumes pinned by node affinity are left where they are.",
-      confirm: "Rebalance now", run: () => api.clusterRebalance(o.id)}} : null,
-    o.caps.rebalancing ? {label: o.autoRebalance.enabled ? "Turn off automatic rebalancing" : "Turn on automatic rebalancing", icon: "clock", dialog: {
-      title: `${o.autoRebalance.enabled ? "Turn off" : "Turn on"} automatic rebalancing for ${o.name}?`,
-      desc: o.autoRebalance.enabled
-        ? "Volumes stay where they are until you rebalance the cluster by hand or move one yourself."
-        : "The control plane evens out volume placement across the online storage nodes on its own, by instant migration. Every move files an lvol_migration task.",
-      fields: [{k: "n74", type: "note", label: `${o.autoRebalance.moved24h} volume(s) moved in the last 24 hours, ${o.autoRebalance.moved1h} in the last hour.`}],
-      confirm: o.autoRebalance.enabled ? "Turn off" : "Turn on",
-      run: () => api.clusterSetRebalance(o.id, !o.autoRebalance.enabled)}} : null,
-    o.type === "kubernetes"
-      ? {label: "File storage (RWX)…", icon: "folder", dialog: fileStorageDialog(o)}
-      : {label: "File storage (RWX)…", icon: "folder", disabled: true, hint: "Kubernetes deployments only"},
-    {label: "Object storage (S3)…", icon: "cloud", dialog: objectStorageDialog(o)},
-    o.objectStorage && o.objectStorage.enabled
-      ? {label: "Create bucket…", icon: "plus", dialog: newBucketDialog(o)} : null,
-    {label: "KMS — external key management…", icon: "lock", dialog: kmsDialog(o)},
-    o.kms ? {label: "Test KMS connection", icon: "gauge", run: () => api.clusterTestKms(o.id), toast: "Vault connection tested"} : null,
-    o.status !== "suspended" && {label: "Shut down cluster", icon: "power", danger: true, dialog: {
-      title: `Shut down ${o.name}?`, danger: true,
-      desc: "All storage nodes are stopped and the cluster is suspended. Connected volumes lose their NVMe-oF targets until the cluster is restarted.",
-      confirm: "Suspend cluster", run: () => api.clusterSuspend(o.id)}},
-    o.status === "suspended" && {label: "Restart cluster", icon: "refresh", dialog: {
-      title: `Restart ${o.name}?`,
-      desc: "The control plane re-activates every storage node in sequence. The cluster reports in_activation until all nodes are online.",
-      confirm: "Restart", run: () => api.clusterActivate(o.id)}},
-    {label: "Expand — add storage node", icon: "plus", dialog: {
-      title: "Add a storage node",
-      desc: "Pick a prepared host. Its unassigned devices are claimed by the new node, then existing data is rebalanced onto it — the expansion runs asynchronously through adding node, rebalancing data and complete.",
-      fields: [{k: "host_id", label: "Target host", type: "select", required: true,
-        load: () => api.hosts(o.id).then(hs => {
-          const ok = hs.filter(h => h.status === "available" && h.counts.nodes < 2 && h.counts.free > 0
-            && (!(o.zoneIds || []).length || (o.zoneIds || []).includes(h.zoneId)));
-          if (!o.fd || !o.fd.enabled) return ok.map(h => ({v: h.id, l: `${h.hostname} · ${regName(h.zoneId, "zone")} · ${h.counts.free} free devices`}));
-          const fdOf = h => o.fd.scope === "zone" ? regName(h.zoneId, null) : o.fd.scope === "cabinet" ? h.cabinet : h.rack;
-          const counts = {};
-          (o.fd.domains || []).forEach(f => counts[f.name] = f.nodes);
-          const min = o.fd.domains.length ? Math.min(...o.fd.domains.map(f => f.nodes)) : 0;
-          return ok.filter(h => { const f = fdOf(h); return f && (counts[f] === undefined || counts[f] <= min); })
-            .map(h => ({v: h.id, l: `${h.hostname} · ${o.fd.scope} ${fdOf(h)} · ${h.counts.free} free devices`}));
-        }),
-        empty: "No eligible host. A host must be in one of the cluster's zones, carry a failure-domain taint, and sit in a domain that is not already ahead of the others."},
-        o.fd && o.fd.enabled ? {k: "failure_domain", label: "Failure domain", desc: `Scope: ${o.fd.scope}.`, type: "text", required: true,
-          def: (o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name) || "",
-          hint: (o.fd.domains || []).length ? "Existing: " + o.fd.domains.map(f => f.name).join(", ") + "." : null} : null,
-        o.fd && o.fd.enabled ? {k: "n71", type: "note", label: "The failure domain is assigned once, now. It is fixed for the node's lifetime — moving a node between domains means removing it and adding it again."} : null,
-        {k: "n13", type: "note", label: o.fd && o.fd.enabled
-          ? `Nodes can only be started on hosts in the cluster's zones. Each ${o.fd.scope} must carry at least two storage nodes and counts may differ by at most one, so expand in pairs` + ((o.fd.domains || []).length ? ` — currently ${o.fd.domains.filter(f => f.name !== "unassigned").map(f => f.name + ": " + f.nodes).join(", ")}.` : ".")
-          : "Storage nodes can only be started on hosts in the zones assigned when the cluster was created."}].filter(Boolean),
-      confirm: "Add node", run: v => api.clusterAddNode(o.id, v.host_id, v.failure_domain)}}
+  // ---- the storage kinds: every action is an Ops object with one of the CRD's
+  // actions (OPERATIONS.md). A kind whose status.activeOpsRef is set is locked:
+  // the menu says so and offers the lock holder instead of a second operation.
+  cluster: o => o.activeOpsRef ? [
+    {label: `${o.activeOpsRef} holds the lock`, icon: "clock", disabled: true, hint: "status.activeOpsRef: a second StorageClusterOps stays Pending until it finishes"}
+  ] : [
+    o.status !== "active" && o.phase !== "Online" && {label: "Activate", icon: "power", dialog: {
+      title: `StorageClusterOps Activate on ${o.name}?`,
+      desc: "Requesting posts the activation to the control plane; Awaiting completes when status.status is active. The operator retries from Requesting for thirty minutes if the cluster falls back to unready or suspended.",
+      confirm: "Create StorageClusterOps", run: () => clusterOps(o, "Activate")}},
+    {label: "Expand", icon: "plus", dialog: {
+      title: `StorageClusterOps Expand on ${o.name}?`,
+      desc: "Requesting posts the expansion to the control plane; Awaiting completes when status.status is active again. The control plane's cluster_expand and new_device_migration tasks appear in status.tasks meanwhile.",
+      confirm: "Create StorageClusterOps", run: () => clusterOps(o, "Expand")}},
+    {label: "RollingRestart", icon: "refresh", dialog: {
+      title: `StorageClusterOps RollingRestart on ${o.name}?`,
+      desc: "One node at a time: CheckingPeers (every other node must be online), ShuttingDownNode, RestartingNode, Rebalancing. status.rollingRestart records the walk. Only CheckingPeers and Rebalancing honor spec.abort.",
+      fields: [{k: "refreshSNodeAPI", label: "spec.rollingRestart.refreshSNodeAPI", desc: "Also delete each node's storage-node DaemonSet pod between shutdown and restart (RefreshingPod, AwaitingPod).", type: "checkbox"}],
+      confirm: "Create StorageClusterOps", run: v => clusterOps(o, "RollingRestart", {refreshSNodeAPI: !!v.refreshSNodeAPI})}},
+    {label: "Restart", icon: "refresh", danger: true, dialog: {
+      title: `StorageClusterOps Restart on ${o.name}?`, danger: true,
+      desc: "ShuttingDown posts a cluster shutdown, Starting posts a start once it is down. Every volume loses its NVMe-oF targets in between. Neither step honors spec.abort.",
+      confirm: "Create StorageClusterOps", run: () => clusterOps(o, "Restart")}},
+    {label: "Shutdown", icon: "power", danger: true, dialog: {
+      title: `StorageClusterOps Shutdown on ${o.name}?`, danger: true,
+      desc: "Requesting posts the shutdown; Awaiting completes when the cluster is no longer active. Connected volumes lose their NVMe-oF targets until a Start.",
+      fields: [{k: "confirmName", label: "Type the cluster name to confirm", type: "text", match: o.name, required: true}],
+      confirm: "Create StorageClusterOps", run: () => clusterOps(o, "Shutdown")}},
+    {label: "Start", icon: "power", dialog: {
+      title: `StorageClusterOps Start on ${o.name}?`,
+      desc: "Requesting posts the start; Awaiting completes when status.status is active.",
+      confirm: "Create StorageClusterOps", run: () => clusterOps(o, "Start")}},
+    (o.tasks || []).length > 0 && {label: "CancelTask", icon: "x", dialog: {
+      title: `StorageClusterOps CancelTask on ${o.name}`,
+      desc: "The control plane is asked to cancel one of the tasks in status.tasks; Awaiting completes when the task leaves the window. A task the control plane no longer knows counts as canceled.",
+      fields: [{k: "taskID", label: "spec.cancelTask.taskID", type: "select", required: true,
+        load: () => Promise.resolve((o.tasks || []).map(t => ({v: t.id, l: `${t.type} · ${t.status} · retry ${t.retry || 0} · ${t.id}`})))}],
+      confirm: "Create StorageClusterOps", run: v => clusterOps(o, "CancelTask", {taskID: v.taskID})}}
   ].filter(Boolean),
 
+  node: o => o.activeOpsRef ? [
+    {label: `${o.activeOpsRef} holds the lock`, icon: "clock", disabled: true, hint: "status.activeOpsRef: a second StorageNodeOps stays Pending until it finishes"}
+  ] : [
+    o.status !== "offline" && o.status !== "in_shutdown" && {label: "Shutdown", icon: "power", danger: true, dialog: {
+      title: `StorageNodeOps Shutdown on ${o.name}?`, danger: true,
+      desc: "Requesting posts the shutdown to the control plane; Awaiting completes when status.status is offline. Nothing is migrated off the node first.",
+      fields: [{k: "force", label: "spec.force", desc: "Pass the control plane's force flag.", type: "checkbox"}],
+      confirm: "Create StorageNodeOps", run: v => nodeOps(o, "Shutdown", null, {force: !!v.force})}},
+    {label: "Restart", icon: "refresh", dialog: {
+      title: `StorageNodeOps Restart on ${o.name}?`,
+      desc: "Requesting posts the restart (fatal unless the node is offline or spec.force is set); Departing completes when the node has left online; Awaiting when it is back. Only Requesting honors spec.abort.",
+      fields: [{k: "force", label: "spec.force", type: "checkbox"}, {k: "reattachVolume", label: "spec.reattachVolume", desc: "Reattach this node's volumes as part of the restart.", type: "checkbox"}],
+      confirm: "Create StorageNodeOps", run: v => nodeOps(o, "Restart", null, {force: !!v.force, reattachVolume: !!v.reattachVolume})}},
+    o.status === "online" && {label: "Suspend", icon: "pause", dialog: {
+      title: `StorageNodeOps Suspend on ${o.name}?`, desc: "Requesting posts the suspend; Awaiting completes when status.status is suspended.",
+      confirm: "Create StorageNodeOps", run: () => nodeOps(o, "Suspend")}},
+    o.status === "suspended" && {label: "Resume", icon: "power", dialog: {
+      title: `StorageNodeOps Resume on ${o.name}?`, desc: "Requesting posts the resume; Awaiting completes when status.status is online.",
+      confirm: "Create StorageNodeOps", run: () => nodeOps(o, "Resume")}},
+    {label: "Migrate", icon: "move", dialog: {
+      title: `StorageNodeOps Migrate ${o.name} to another worker`,
+      desc: "Preparing labels the target worker and waits for its pod; Relocating restarts the node on it; AwaitingNode waits for online; Promoting asks the control plane to promote the target's devices, fail and migrate the origin's, and re-home the volumes. Only Preparing honors spec.abort.",
+      fields: [{k: "targetWorkerNode", label: "spec.migrate.targetWorkerNode", type: "select", required: true,
+        load: () => k8s.list("Node").then(ns => ns.filter(n => n.metadata.name !== o.workerNode).map(n => ({v: n.metadata.name, l: n.metadata.name}))),
+        empty: "No other Kubernetes Node."},
+        {k: "newSsdPcie", label: "spec.migrate.newSsdPcie", desc: "Additional NVMe PCI addresses to bind on the target, comma-separated.", type: "text"}],
+      confirm: "Create StorageNodeOps", run: v => nodeOps(o, "Migrate", Object.assign({targetWorkerNode: v.targetWorkerNode}, v.newSsdPcie ? {newSsdPcie: String(v.newSsdPcie).split(",").map(s => s.trim()).filter(Boolean)} : {}))}},
+    {label: "HostMaintenance", icon: "host", dialog: {
+      title: `StorageNodeOps HostMaintenance on ${o.name}?`,
+      desc: "Holding waits for the worker's drain, ShuttingDown takes the node down, Releasing hands the host over, AwaitingHost waits for it to come back, Restarting brings the node up, Cleanup. Only Holding honors spec.abort.",
+      confirm: "Create StorageNodeOps", run: () => nodeOps(o, "HostMaintenance")}},
+    {label: "Remove", icon: "trash", danger: true, removes: true, dialog: {
+      title: `StorageNodeOps Remove ${o.name}?`, danger: true,
+      desc: "Validating classifies the volumes and asks the control plane's removal admission; ShuttingDown takes the node down; MigratingDevices runs the control plane's device migration (status.removal); MigratingVolumes creates one PersistentVolumeOps per subsystem (status.drain); Verifying, Removing, AwaitingRemoval. Only Validating honors spec.abort.",
+      fields: [
+        {k: "systemVolumeFilterRegex", label: "spec.remove.systemVolumeFilterRegex", type: "text", def: "^sb-fio-baseline-.*"},
+        {k: "confirmName", label: "Type the node name to confirm", type: "text", match: o.name, required: true}
+      ],
+      confirm: "Create StorageNodeOps", run: v => nodeOps(o, "Remove", {systemVolumeFilterRegex: v.systemVolumeFilterRegex || "^sb-fio-baseline-.*"})}}
+  ].filter(Boolean),
+
+  device: o => o.activeOpsRef ? [
+    {label: `${o.activeOpsRef} holds the lock`, icon: "clock", disabled: true, hint: "status.activeOpsRef: a second StorageDeviceOps stays Pending until it finishes"}
+  ] : [
+    {label: "Restart", icon: "refresh", dialog: {
+      title: `StorageDeviceOps Restart on ${o.name}?`,
+      desc: "Requesting posts the restart to the control plane; Awaiting completes when status.deviceStatus is online. Only Requesting honors spec.abort.",
+      confirm: "Create StorageDeviceOps", run: () => deviceOps(o, "Restart")}},
+    {label: "CheckHealth", icon: "gauge", dialog: {
+      title: `StorageDeviceOps CheckHealth on ${o.name}?`,
+      desc: "One read of the device's health log; status.health.smart is rewritten from it.",
+      confirm: "Create StorageDeviceOps", run: () => deviceOps(o, "CheckHealth")}},
+    {label: "Fail", icon: "alert", danger: true, dialog: {
+      title: `StorageDeviceOps Fail ${o.name}?`, danger: true,
+      desc: "Removing takes the device out of the data path, Failing marks it failed, Awaiting completes when status.deviceStatus is failed or failed_and_migrated. The control plane rebuilds its chunks elsewhere; nothing reverses a failure. Only Removing honors spec.abort.",
+      fields: [{k: "confirmName", label: "Type the device name to confirm", type: "text", match: o.name, required: true}],
+      confirm: "Create StorageDeviceOps", run: () => deviceOps(o, "Fail")}}
+  ],
+
+  pool: o => o.activeOpsRef ? [
+    {label: `${o.activeOpsRef} holds the lock`, icon: "clock", disabled: true, hint: "status.activeOpsRef"}
+  ] : [
+    {label: "Rebalance", icon: "gauge", dialog: {
+      title: `StoragePoolOps Rebalance on ${o.name}?`,
+      desc: "The one action StoragePoolOps has: Validating, Migrating. The reconciler on main does not implement it yet and fails the operation.",
+      confirm: "Create StoragePoolOps", run: () => poolOps(o, "Rebalance")}}
+  ],
   host: o => o.status === "discovered" ? [
     {label: "Prepare this worker node", icon: "plus", dialog: {
       title: `Prepare ${o.hostname}?`,
@@ -682,275 +748,6 @@ const ACTIONS = {
         {k: "n9", type: "note", label: `Rack and cabinet come from the worker node's taints and may be absent. Device class is derived from the installed hardware: this host is ${o.hostClass || "not yet inspected"}.`}
       ],
       confirm: "Apply", run: v => api.hostSetPlacement(o.id, v)}}
-  ],
-  node: o => o.op ? [
-    {label: `${OP_LABEL[o.op.kind]} in progress…`, icon: "clock", disabled: true,
-      hint: `${o.op.phase} · phase ${o.op.phaseIndex + 1} of ${o.op.phases.length}`}
-  ] : [
-    o.status === "online" || o.status === "in_restart" ? {label: "Shut down node", icon: "power", danger: true, dialog: {
-      title: `Shut down ${o.hostname}?`, danger: true,
-      desc: "The node reports in shutdown and then offline. Nothing is migrated off it — volumes whose primary sits here fail over to their secondaries, and the cluster runs at reduced redundancy until the node is back. A forced shutdown stops the node without waiting for it to close cleanly.",
-      fields: [{k: "force", label: "Force", desc: "Does not wait for a clean stop.", type: "checkbox"}],
-      confirm: "Shut down", run: v => api.nodeShutdown(o.id, v.force)}} : null,
-    o.status !== "online" && o.status !== "in_restart" ? {label: "Restart node", icon: "refresh", dialog: {
-      title: `Restart ${o.hostname}?`,
-      desc: "The node reports in restart and then online. It re-registers with the control plane, re-attaches its devices, and its chunks resynchronise from the surviving copies.",
-      confirm: "Restart", run: () => api.nodeRestart(o.id)}} : null,
-    {label: "Migrate to another host", icon: "move", dialog: {
-      title: `Migrate ${o.hostname}`,
-      desc: "The node is restarted on a different, already prepared host. Prepare and label the target host first.",
-      fields: [{k: "host_id", label: "Target host", type: "select", required: true,
-        load: () => Promise.all([api.hosts(o.clusterId), api.cluster(o.clusterId)]).then(([hs, c]) =>
-          hs.filter(h => h.status === "available" && h.id !== o.hostId && h.counts.nodes === 0
-              && (!(c.zoneIds || []).length || (c.zoneIds || []).includes(h.zoneId)))
-            .map(h => ({v: h.id, l: `${h.hostname} · ${regName(h.zoneId, "zone")} · ${h.counts.free} free devices`}))),
-        empty: "No prepared, empty host in this cluster's zones."}],
-      confirm: "Queue migration", run: v => api.nodeMigrate(o.id, v.host_id)}},
-    {label: "Add device", icon: "plus", dialog: {
-      title: "Add a device to this node",
-      desc: (REG[o.clusterId] || {}).mode === "nvme" ? "NVMe cluster — identify the drive by PCIe address." : "Block device cluster — identify the drive by block device name.",
-      fields: (REG[o.clusterId] || {}).mode === "nvme"
-        ? [{k: "pcie_address", label: "PCIe address", type: "text", example: "0000:5e:00.0", required: true}]
-        : [{k: "device_name", label: "Block device", type: "text", example: "/dev/sdb", required: true}],
-      confirm: "Add device", run: v => api.nodeAddDevice(o.id, v)}},
-    {label: "Remove node", icon: "trash", danger: true, removes: true, dialog: {
-      title: `Remove ${o.hostname}?`, danger: true,
-      desc: "The node is drained first: every volume whose primary sits here is moved off by instant migration, without copying data. The node and its device records are then deleted and its host devices released back to the host pool.",
-      fields: [
-        {k: "n26", type: "note", label: "Blocked if a volume is pinned to this node by affinity, if there is no other online node to move to, or if the removal would leave failure domains more than one node apart."},
-        {k: "confirmName", label: "Type the node hostname to confirm", type: "text", match: o.hostname, required: true}
-      ],
-      confirm: "Drain & remove", run: () => api.nodeRemove(o.id),
-      done: "Node removal started — this runs asynchronously and may take a while"}}
-  ].filter(Boolean),
-
-  // Two different things can happen to a bad device, and the difference matters:
-  //   Remove — takes it out of service. Reversible: the cluster still knows the
-  //            device and a restart adds it back.
-  //   Fail   — excludes it permanently and rebuilds its chunks onto the
-  //            remaining devices, restoring fault tolerance without it. Only
-  //            from removed or unavailable, and there is no way back.
-  device: o => {
-    const stopped = o.status === "unavailable" || o.status === "removed";
-    const live = o.status === "online" || o.status === "read_only";
-    const busy = o.status === "in_removal" || o.status === "in_failure" || o.status === "in_restart";
-    const name = o.mode === "nvme" ? o.serial : (o.blockdev || o.serial);
-    if (busy) return [{label: `${STATUS_META[o.status].label}…`, icon: "clock", disabled: true,
-      hint: "follow it under the cluster's Operations tab"}];
-    if (o.status === "failed") return [{label: "Permanently failed", icon: "alert", disabled: true,
-      hint: "its chunks were rebuilt onto the remaining devices; this device cannot be re-added"}];
-    return [
-      stopped && {label: o.status === "removed" ? "Add device back" : "Restart device", icon: "refresh", dialog: {
-        title: o.status === "removed" ? `Add ${name} back?` : `Restart ${name}?`,
-        desc: o.status === "removed"
-          ? "Removal is reversible. The node re-attaches the drive, re-admits it to the distribution layer, and its chunks are resynchronised from the surviving copies."
-          : "The node re-attaches the drive and re-admits it to the distribution layer. Its chunks are resynchronised from the surviving copies.",
-        confirm: o.status === "removed" ? "Add back" : "Restart", run: () => api.deviceRestart(o.id)}},
-      {label: "Run health check", icon: "gauge", disabled: !live,
-        hint: !live ? "the drive is not attached, so its SMART log cannot be read" : null,
-        dialog: {title: `Run a health check on ${name}?`,
-          desc: "nvme-cli re-reads the drive's SMART log on the node. The report is stored on the device and the health traffic light is rewritten from its verdict — available spare against the 10% threshold, media and integrity errors, and the critical warning bit.",
-          confirm: "Run check", run: () => api.deviceHealthCheck(o.id),
-          done: "Health check running — the report and the health status update when it finishes"}},
-      live && {label: "Remove device", icon: "power", danger: true, dialog: {
-        title: `Remove ${name}?`, danger: true,
-        desc: "The device is taken out of service. This is a temporary state — the cluster keeps the device and you can add it back at any time. Redundancy is reduced while it is out.",
-        fields: [{k: "n73", type: "note", label: "Use this to pull a drive for inspection or replacement. If the drive is not coming back, fail it afterwards so its chunks are rebuilt and fault tolerance is restored without it."}],
-        confirm: "Remove", run: () => api.deviceRemove(o.id),
-        done: "Device removal started — follow it under the cluster's Operations tab"}},
-      stopped && {label: "Fail device (permanent)", icon: "alert", danger: true, removes: true, dialog: {
-        title: `Permanently fail ${name}?`, danger: true,
-        desc: "The device is excluded from the cluster for good and every chunk that lived on it is rebuilt onto the remaining devices, which restores fault tolerance without this drive. It cannot be added back afterwards.",
-        fields: [
-          {k: "n72", type: "note", label: `Redundancy is currently reduced because this device is ${STATUS_META[o.status].label}. The rebuild moves ${fmtBytes(o.capacity.used)} and restores it. Only fail the device once you are sure the drive will not come back — a removed device can simply be added again.`},
-          {k: "confirmName", label: "Type the device name to confirm", type: "text", match: name, required: true}
-        ],
-        confirm: "Fail permanently", run: () => api.deviceFail(o.id),
-        done: "Failure migration started — follow the rebuild under the cluster's Operations tab"}}
-    ].filter(Boolean);
-  },
-
-  volume: o => [
-    {label: "Expand…", icon: "move", dialog: {
-      title: `Expand ${o.name}`,
-      desc: o.pvc
-        ? "Logical volumes can only grow. Expanding here also raises the request on the PVC bound to this volume; the filesystem is extended on the next mount."
-        : "Logical volumes can only grow — shrinking is refused. The filesystem must be extended inside the guest afterwards.",
-      fields: [
-        {k: "size", label: "Provisioned size", type: "number", unit: "GB", def: gb(o.capacity.total), min: gb(o.capacity.total), required: true},
-        {k: "n36", type: "note", label: `Currently ${fmtBytes(o.capacity.total)}.` + (o.pvc ? ` Bound to PVC ${o.pvc.namespace}/${o.pvc.name}.` : "")}
-      ],
-      confirm: "Expand", run: v => api.volumeResize(o.id, Number(v.size) * GBn)}},
-    {label: "Take snapshot", icon: "camera", dialog: {
-      title: `Snapshot ${o.name}`, desc: "A copy-on-write snapshot is taken immediately and chained onto the existing snapshot chain. It consumes space only as the volume diverges.",
-      fields: [{k: "name", label: "Snapshot name", type: "text", def: `${o.name}-snap`, required: true}],
-      confirm: "Create snapshot", run: v => api.volumeSnapshot(o.id, v.name)}},
-    {label: "Clone", icon: "copy", dialog: {
-      title: `Clone ${o.name}`, desc: "Creates a new thin volume in the same pool, backed by a snapshot of this one.",
-      fields: [{k: "name", label: "New volume name", type: "text", def: `${o.name}-clone`, required: true}],
-      confirm: "Clone", run: v => api.volumeClone(o.id, v.name)}},
-    {label: "Migrate instantly…", icon: "move", dialog: {
-      title: `Move ${o.name} to another node`,
-      desc: "Instant volume migration moves the primary role to another storage node without copying data, so the move completes immediately. Use it to follow a workload or to relieve a hot node.",
-      fields: [
-        {k: "node_id", label: "Target primary node", type: "select", required: true,
-          load: () => api.nodes(o.clusterId).then(ns => ns.filter(n => n.status === "online" && (!o.nodes.primary || n.id !== o.nodes.primary.uuid))
-            .map(n => ({v: n.id, l: `${n.hostname} · ${n.ip}`}))),
-          empty: "No other online node in this cluster."},
-        {k: "reason", label: "Reason", type: "select", def: "manual",
-          options: [{v: "manual", l: "Manual move"}, {v: "follow_workload", l: "Follow the workload"}, {v: "rebalance", l: "Relieve a hot node"}]},
-        o.affinity && o.affinity.mode === "node"
-          ? {k: "n23", type: "note", label: `This volume is pinned to ${o.affinity.pinned_node}. Moving it re-pins the affinity to the new node.`} : null
-      ].filter(Boolean),
-      confirm: "Move now", run: v => api.volumeMigrate(o.id, v)}},
-    {label: "Rebalance this volume", icon: "gauge", dialog: {
-      title: `Rebalance ${o.name}?`,
-      desc: "Moves the volume to the least loaded online node in the cluster using instant migration. Nothing is copied.",
-      confirm: "Rebalance", run: () => api.volumeRebalance(o.id)}},
-    {label: "Affinity…", icon: "link", dialog: {
-      title: `Affinity for ${o.name}`,
-      desc: "Node affinity pins the volume's primary to one node. Pod affinity keeps front storage on whichever node the workload pod runs on, moving it instantly when the pod is rescheduled.",
-      fields: v2 => [
-        {k: "mode", label: "Affinity", type: "select", def: o.affinity ? o.affinity.mode : "none",
-          options: [{v: "none", l: "None — the control plane places it freely"},
-            {v: "node", l: "Node affinity — pin to a storage node"},
-            {v: "pod", l: "Pod affinity — follow the workload"}]},
-        v2.mode === "node" ? {k: "node_id", label: "Pin to node", type: "select",
-          load: () => api.nodes(o.clusterId).then(ns => ns.filter(n => n.status === "online")
-            .map(n => ({v: n.id, l: `${n.hostname}${o.nodes.primary && n.id === o.nodes.primary.uuid ? " (current primary)" : ""}`})))} : null,
-        v2.mode === "pod" ? {k: "workload", label: "Workload pod", type: "text",
-          def: o.affinity && o.affinity.workload ? o.affinity.workload : `${o.name}-0`} : null,
-        v2.mode === "pod" ? {k: "n24", type: "note", label: "Requires pod affinity to be enabled on the cluster."} : null
-      ].filter(Boolean),
-      confirm: "Apply", run: v => api.volumeSetAffinity(o.id, v)}},
-    {label: "Snapshot & back up now", icon: "cloud", dialog: {
-      title: `Back up ${o.name}`,
-      desc: "Backups are always taken from a snapshot. This takes a snapshot now and appends a version to the volume\u2019s backup chain — the first version is a full copy, every later one a delta.",
-      fields: [
-        {k: "bucket", label: "Bucket location", type: "text", def: `s3://sb-backup-eu/${o.name}/`, required: true},
-        {k: "n11", type: "note", label: "Snapshot and backup version become independent objects: deleting the online snapshot later leaves the backup version untouched."}
-      ], confirm: "Snapshot & back up", run: v => api.volumeBackup(o.id, v)}},
-    {label: "Compression-dedup…", icon: "move", dialog: {
-      title: `Compression-dedup for ${o.name}`,
-      desc: "Compression-dedup is a single per-volume switch. Turning it on or off only affects data written from now on — blocks already on disk keep their current form.",
-      fields: [
-        {k: "compression_dedup_enabled", label: "Compression-dedup", type: "checkbox", def: o.dataReduction},
-        {k: "n20", type: "note", label: "Costs CPU on the storage node and hugepage memory for the fingerprint table."}
-      ], confirm: "Apply", run: v => api.volumeSetDataReduction(o.id, v)}},
-    {label: "QoS limits…", icon: "gauge", dialog: {
-      title: `QoS limits for ${o.name}`,
-      desc: "Caps applied by the storage node to this volume. They override the pool defaults.",
-      fields: qosFields(o.qos), confirm: "Apply limits", run: v => api.volumeSetQos(o.id, v)}},
-    {label: "Backup policy…", icon: "clock", dialog: {
-      title: `Backup policy for ${o.name}`, desc: "Link this volume to a cluster backup policy, or detach it.",
-      fields: [{k: "policy_id", label: "Policy", type: "select", def: o.backupPolicy ? o.backupPolicy.uuid : "",
-        load: () => api.policies(o.clusterId).then(ps => [{v: "", l: "— none —"}].concat(ps.map(p => ({v: p.id, l: `${p.name} · window ${p.window}`}))))}],
-      confirm: "Apply", run: v => api.volumeSetPolicy(o.id, v.policy_id)}},
-    o.replication
-      ? {label: "Detach from replication", icon: "link", danger: true, dialog: {
-          title: `Stop replicating ${o.name}?`,
-          desc: `The volume leaves ${o.replication.policyName}. Data already replicated to the target is kept, but no further generations are shipped.`,
-          confirm: "Detach", run: () => api.rpolicyRemoveVolume(o.replication.policyId, o.id)}}
-      : {label: "Attach to replication policy…", icon: "shield", dialog: {
-          title: `Replicate ${o.name}`,
-          desc: "Pick a replication policy in this cluster. Asynchronous policies ship deltas over a cluster pair; synchronous policies acknowledge writes at every zone of a stretched cluster.",
-          fields: [{k: "policy", label: "Replication policy", type: "select", required: true,
-            load: () => api.rpolicies(o.clusterId).then(ps => ps.map(p => ({
-              v: p.id, l: p.mode === "synchronous"
-                ? `${p.name} · synchronous · ${(p.zoneIds || []).length} zones`
-                : `${p.name} · every ${p.frequency} min → ${regName(p.targetClusterId)}`}))).catch(() => []),
-            empty: "No replication policy in this cluster. Create one under Disaster recovery."}],
-          confirm: "Attach", run: v => api.rpolicyAddVolumes(v.policy, [o.id])}},
-    {label: "Consistency group…", icon: "link",
-      hint: (o.consistencyGroups || []).length ? `in ${o.consistencyGroups.map(g => g.name).join(", ")}` : null,
-      dialog: {title: `Add ${o.name} to a consistency group`,
-        desc: "Members of a consistency group are snapshotted together, at one common point in time. A volume can belong to several groups; a group whose protection is already active cannot take new members.",
-        fields: [{k: "cg", label: "Consistency group", type: "select", required: true,
-          load: () => api.cgroups(o.clusterId).then(gs => gs.filter(g => !g.locked && !(o.consistencyGroups || []).some(x => x.uuid === g.id))
-            .map(g => ({v: g.id, l: `${g.name} · ${g.counts.volumes} volumes`}))),
-          empty: "No group in this cluster can take this volume — every one either already has it or carries an active policy."}],
-        confirm: "Add", run: v => api.cgroupAddVolumes(v.cg, [o.id])}},
-    {label: "Delete volume", icon: "trash", danger: true, removes: true, dialog: {
-      title: `Delete ${o.name}?`, danger: true,
-      desc: "The volume and all of its snapshots are destroyed. Backups in object storage are kept.",
-      fields: [{k: "confirmName", label: `Type the volume name to confirm`, type: "text", match: o.name, required: true}],
-      confirm: "Delete", run: () => api.volumeDelete(o.id)}}
-  ],
-
-  snapshot: o => [
-    o.backupVersionId
-      ? {label: "Already backed up", icon: "cloud", disabled: true, hint: `version ${o.backupVersionId} was taken from this snapshot`}
-      : {label: "Back up this snapshot", icon: "cloud", dialog: {
-          title: `Back up ${o.name}`,
-          desc: "Appends a version to the volume\u2019s backup chain from this snapshot. Afterwards the snapshot and the backup version are independent — deleting the snapshot leaves the version in the bucket.",
-          fields: [{k: "bucket", label: "Bucket location", type: "text", def: `s3://sb-backup-eu/${o.volumeName}/`, required: true}],
-          confirm: "Back up", run: v => api.snapshotBackup(o.id, v.bucket)}},
-    {label: "Restore to new volume…", icon: "refresh", op: "create", dialog: {
-      title: `Restore ${o.name}`,
-      desc: "Creates a new volume from this snapshot. The target can be this cluster or any other cluster the control plane manages.",
-      fields: [
-        {k: "cluster_id", label: "Target cluster", type: "select", required: true, def: o.clusterId,
-          load: () => api.clusters().then(cs => cs.map(c => ({v: c.id, l: `${c.name}${c.id === o.clusterId ? " (source)" : ""} · ${c.siting}`})))},
-        {k: "name", label: "New volume name", type: "text", def: `${o.volumeName}-restored`, required: true}
-      ], confirm: "Restore", run: v => api.snapshotRestore(o.id, v)}},
-    {label: "Clone to new volume", icon: "copy", dialog: {
-      title: `Clone ${o.name}`, desc: "Creates a thin volume from this snapshot in the same pool.",
-      fields: [{k: "name", label: "New volume name", type: "text", def: `${o.volumeName}-from-snap`, required: true}],
-      confirm: "Clone", run: v => api.snapshotClone(o.id, v.name)}},
-    {label: "Delete snapshot", icon: "trash", danger: true, removes: true, dialog: {
-      title: `Delete ${o.name}?`, danger: true,
-      desc: o.backupVersionId
-        ? `Only the online snapshot is removed. Backup version ${o.backupVersionId} stays in the bucket unchanged, and volumes cloned from this snapshot keep their data.`
-        : "No backup was taken from this snapshot, so this point in time is lost. Volumes cloned from it keep their data.",
-      confirm: "Delete", run: () => api.snapshotDelete(o.id)}}
-  ],
-
-  backup: o => {
-    const vs = o.versions || [];
-    const opts = vs.slice().reverse().map(v => ({v: v.id, l: `${v.id} · ${v.type} · ${fmtDate(v.createdAt)}`}));
-    return [
-      {label: "Restore to new volume…", icon: "refresh", op: "restore", dialog: {
-        title: `Restore ${o.chainId}`,
-        desc: "Rebuilds a new logical volume from the full version plus every delta up to the version you pick — that version is the point in time you get back.",
-        fields: [
-          {k: "version_id", label: "Restore to version", type: "select", required: true, options: opts,
-            empty: "This chain holds no versions."},
-          {k: "name", label: "New volume name", type: "text", def: `${o.volumeName}-restored`, required: true}
-        ], confirm: "Restore", run: v => api.backupRestore(o.id, v.name, v.version_id)}},
-      {label: "Merge oldest delta into full", icon: "move",
-        disabled: vs.length < 2, hint: vs.length < 2 ? "chain holds a single full version" : null,
-        dialog: {title: `Merge the earliest delta of ${o.chainId}?`, danger: true,
-          desc: "The second-earliest version is folded into the full version, which then covers both, and the delta is removed. This is how older retention is aged out — points in time before the merged version become unrecoverable.",
-          confirm: "Merge", run: () => api.backupMerge(o.id)}},
-      {label: "Export a version…", icon: "ext", dialog: {
-        title: `Export from ${o.chainId}`,
-        desc: "Copies the chain up to the chosen version to another bucket or an external target.",
-        fields: [
-          {k: "version_id", label: "Version", type: "select", required: true, options: opts},
-          {k: "destination", label: "Destination", type: "text", def: "s3://sb-archive-cold/", required: true}
-        ], confirm: "Export", run: v => api.backupExport(o.id, v.destination, v.version_id)}},
-      {label: "Delete backup chain", icon: "trash", danger: true, removes: true, dialog: {
-        title: `Delete ${o.chainId}?`, danger: true,
-        desc: `Deleting a volume backup deletes the entire chain — all ${vs.length} version(s), full and deltas. Online snapshots on the cluster are not touched.`,
-        fields: [{k: "confirmName", label: "Type the chain id to confirm", type: "text", match: o.chainId, required: true}],
-        confirm: "Delete chain", run: () => api.backupDelete(o.id)}}
-    ];
-  },
-
-  pool: o => [
-    o.enabled
-      ? {label: "Disable pool", icon: "power", dialog: {
-          title: `Disable ${o.name}?`,
-          desc: "The pool keeps serving its existing volumes — no I/O is interrupted. New volumes can no longer be provisioned into it until it is enabled again.",
-          confirm: "Disable", run: () => api.poolDisable(o.id)}}
-      : {label: "Enable pool", icon: "refresh", dialog: {
-          title: `Enable ${o.name}?`,
-          desc: "Provisioning of new volumes into this pool is allowed again.",
-          confirm: "Enable", run: () => api.poolEnable(o.id)}},
-    {label: "QoS limits…", icon: "gauge", dialog: {
-      title: `QoS limits for pool ${o.name}`,
-      desc: "Pool-wide caps. Volumes without their own QoS profile inherit these.",
-      fields: qosFields(o.qos), confirm: "Apply limits", run: v => api.poolSetQos(o.id, v)}}
   ],
   // A pair is never edited: spec.targetCluster is immutable. It can only be
   // replaced, and the delete is refused while a policy references it.

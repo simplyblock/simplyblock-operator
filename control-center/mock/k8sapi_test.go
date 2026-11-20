@@ -58,7 +58,7 @@ func TestDiscovery(t *testing.T) {
 	var rl struct {
 		Resources []struct{ Name string } `json:"resources"`
 	}
-	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1", &rl)
+	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2", &rl)
 	names := map[string]bool{}
 	for _, r := range rl.Resources {
 		names[r.Name] = true
@@ -77,34 +77,34 @@ func TestListAndGetGenerated(t *testing.T) {
 		Kind  string           `json:"kind"`
 		Items []map[string]any `json:"items"`
 	}
-	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storagenodes", &list)
+	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2/namespaces/sb-tenant-a/storagenodes", &list)
 	if list.Kind != "StorageNodeList" || len(list.Items) != 3 {
 		t.Fatalf("want StorageNodeList with 3 items, got %s with %d", list.Kind, len(list.Items))
 	}
 
 	// every device must point at an existing node
 	var devs struct{ Items []map[string]any }
-	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/storagedevices", &devs)
+	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2/storagedevices", &devs)
 	if len(devs.Items) == 0 {
 		t.Fatal("no devices generated")
 	}
 	for _, d := range devs.Items {
 		nodeRef := getStr(d, "spec.nodeRef")
-		resp := getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storagenodes/"+nodeRef, nil)
+		resp := getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2/namespaces/sb-tenant-a/storagenodes/"+nodeRef, nil)
 		if resp.StatusCode != 200 {
 			t.Errorf("device %s references missing node %s", getStr(d, "metadata.name"), nodeRef)
 		}
 	}
 
-	// a proposed kind answers an empty list, not a 404
+	// a kind with no objects answers an empty list, not a 404
 	var empty struct{ Items []map[string]any }
-	resp := getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/storagedeviceops", &empty)
+	resp := getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2/storagepoolops", &empty)
 	if resp.StatusCode != 200 || len(empty.Items) != 0 {
-		t.Fatalf("proposed kind should return an empty list, got %d items (status %d)", len(empty.Items), resp.StatusCode)
+		t.Fatalf("an empty kind should return an empty list, got %d items (status %d)", len(empty.Items), resp.StatusCode)
 	}
 
-	// unknown resource is a k8s Status 404
-	resp = getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha1/doesnotexist", nil)
+	// unknown resource is a Kubernetes Status 404
+	resp = getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2/doesnotexist", nil)
 	if resp.StatusCode != 404 {
 		t.Fatalf("unknown resource should 404, got %d", resp.StatusCode)
 	}
@@ -112,9 +112,12 @@ func TestListAndGetGenerated(t *testing.T) {
 
 func TestCreatePatchDeleteRoundtrip(t *testing.T) {
 	_, ts := newTestServer(t, "small-healthy")
-	base := ts.URL + "/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storagenodeops"
+	base := ts.URL + "/apis/storage.simplyblock.io/v1alpha2/namespaces/sb-tenant-a/storagenodeops"
 
-	body := `{"metadata":{"name":"restart-sn-01"},"spec":{"action":"restart","storageNodeRef":"sn-01"}}`
+	var nodes struct{ Items []map[string]any }
+	getJSON(t, ts.URL+"/apis/storage.simplyblock.io/v1alpha2/namespaces/sb-tenant-a/storagenodes", &nodes)
+	node := getStr(nodes.Items[0], "metadata.name")
+	body := `{"metadata":{"name":"restart-sn-01"},"spec":{"action":"Restart","nodeRef":"` + node + `"}}`
 	resp, err := http.Post(base, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -137,7 +140,7 @@ func TestCreatePatchDeleteRoundtrip(t *testing.T) {
 	if ab, _ := getPath(patched, "spec.abort").(bool); !ab {
 		t.Fatalf("patch did not set spec.abort: %v", patched["spec"])
 	}
-	if getStr(patched, "spec.action") != "restart" {
+	if getStr(patched, "spec.action") != "Restart" {
 		t.Fatal("merge patch clobbered unrelated spec fields")
 	}
 
@@ -157,7 +160,7 @@ func TestCreatePatchDeleteRoundtrip(t *testing.T) {
 
 func TestWatchStream(t *testing.T) {
 	_, ts := newTestServer(t, "small-healthy")
-	base := "/apis/storage.simplyblock.io/v1alpha1/namespaces/sb-tenant-a/storageclusterops"
+	base := "/apis/storage.simplyblock.io/v1alpha2/namespaces/sb-tenant-a/storageclusterops"
 
 	resp, err := http.Get(ts.URL + base + "?watch=true")
 	if err != nil {
@@ -183,7 +186,7 @@ func TestWatchStream(t *testing.T) {
 
 	// give the watch a moment to register, then create
 	time.Sleep(100 * time.Millisecond)
-	body := `{"metadata":{"name":"watch-op"},"spec":{"action":"restart","clusterRef":"sb-primary"}}`
+	body := `{"metadata":{"name":"watch-op"},"spec":{"action":"Restart","clusterRef":"cluster1"}}`
 	cresp, err := http.Post(ts.URL+base, "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)

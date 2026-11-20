@@ -24,34 +24,6 @@ const IoMetrics = ({o}) => (
   </div>
 );
 
-function ClusterTile({c, nav}) {
-  return (
-    <div className="tile" style={{"--sc": STATUS_META[c.status].c}} onDoubleClick={() => nav.detail(c)}>
-      <TileHead obj={c} left={<><TrafficLight status={c.status} /><Name>{c.name}</Name></>}
-        right={<span className="badge">{c.mode === "nvme" ? "NVMe" : "block device"}</span>} />
-      <Uuid value={c.id} />
-      <div className="labels">
-        <span className="lab"><i>siting</i>{c.siting === "edge" ? "edge" : "data center"}</span>
-        <span className="lab"><i>devices</i>{c.mode === "nvme" ? "NVMe" : "block dev"}</span>
-        {c.caps.rebalancing
-          ? <span className="lab"><i>rebalancing</i><Dot c={c.rebalancing ? "var(--warn)" : "var(--ok)"} />{c.rebalancing ? "yes" : "no"}</span>
-          : <span className="lab" style={{opacity: .6}}><i>rebalancing</i>n/a</span>}
-        {c.counts.nodes > 0 && <span className="lab" title={`Fault budget: ${c.faultBudget.kind === "failure_domain" ? "one failure domain" : c.faultBudget.tolerated + " node(s)"} may be lost before the cluster suspends`}
-          style={c.faultBudget.lost > c.faultBudget.tolerated ? {color: "var(--bad)", borderColor: "color-mix(in srgb,var(--bad) 40%,transparent)"} : c.faultBudget.lost ? {color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 40%,transparent)"} : undefined}>
-          <i>nodes online</i>{c.counts.nodesOnline}/{c.counts.nodes}
-          {c.faultBudget.lost > 0 && ` · ${c.faultBudget.lost}/${c.faultBudget.tolerated} ${c.faultBudget.kind === "failure_domain" ? "FD" : ""} lost`}</span>}
-      </div>
-      <Capacity total={c.capacity.total} used={c.capacity.used} />
-      <IoMetrics o={c} />
-      <Foot items={[
-        {label: "Hosts", count: c.counts.hosts, icon: "host", onClick: () => nav.layer(c, "hosts")},
-        {label: "Nodes", count: c.counts.nodes, icon: "node", onClick: () => nav.layer(c, "nodes")},
-        {label: "Pools", count: c.counts.pools, icon: "pool", onClick: () => nav.layer(c, "pools")},
-        {label: "Details", right: true, onClick: () => nav.detail(c)}
-      ]} />
-    </div>
-  );
-}
 
 const HOST_CANDIDATE = {discovered: 1, inspecting: 1, inspected: 1};
 
@@ -189,53 +161,6 @@ function NodeOpBox({op, wide}) {
   );
 }
 
-function NodeTile({n, nav}) {
-  return (
-    <div className="tile" style={{"--sc": STATUS_META[n.status].c}} onDoubleClick={() => nav.detail(n)}>
-      <TileHead obj={n} left={<><TrafficLight status={n.status} /><Name>{n.hostname}</Name></>}
-        right={<span className="tsub" title={n.multipath ? (n.dataNics || []).map(x => x.ip).join(", ") : n.ip}>
-          {n.ip}{n.multipath && <em style={{fontStyle: "normal", color: "var(--accent)"}}> +1</em>}</span>} />
-      <Uuid value={n.id} />
-      <div className="labels">
-        <span className="lab" style={n.failureDomain ? null : {opacity: .55}}><i>fd</i>{n.failureDomain || "—"}</span>
-        {n.physicalLabel && <span className="lab"><i>phys</i>{n.physicalLabel}</span>}
-        {n.hostId && <button className="lab link" onClick={e => {e.stopPropagation(); nav.openHost(n.clusterId, n.hostId);}}><Icon n="host" s={10} />host</button>}
-      </div>
-      {n.op && <NodeOpBox op={n.op} />}
-      <Capacity total={n.capacity.total} used={n.capacity.used} />
-      <div className="kv">
-        <div><span>vCPU res</span><b>{n.cpuReserved}</b></div>
-        <div><span>RAM used</span><b>{fmtBytes(n.memory.used, 0)}<em style={{color: "var(--dim2)", fontStyle: "normal"}}>/{fmtBytes(n.memory.total, 0)}</em></b></div>
-        <div title="Kubernetes request/limit">
-          <span>RAM res</span><b>{fmtBytes(n.memory.reserved, 0)}</b></div>
-        <div><span>Hugepages</span><b>{fmtBytes(n.hugepages.used, 0)}<em style={{color: "var(--dim2)", fontStyle: "normal"}}>/{fmtBytes(n.hugepages.total, 0)}</em></b></div>
-      </div>
-      <IoMetrics o={n} />
-      <Foot items={[
-        {label: "Devices", count: n.counts.devices, icon: "device", onClick: () => nav.layer(n, "devices")},
-        {label: "Details", right: true, onClick: () => nav.detail(n)}
-      ]} />
-    </div>
-  );
-}
 
-function DeviceTile({d, nav}) {
-  const primary = d.mode === "nvme" ? d.serial : d.blockdev;
-  const showHealth = (d.status === "online" || d.status === "read_only") && d.health;
-  return (
-    <div className="tile" style={{"--sc": STATUS_META[d.status].c}} onDoubleClick={() => nav.detail(d)}>
-      <TileHead obj={d} left={<><TrafficLight status={d.status} /><Name>{primary}</Name></>}
-        right={showHealth ? <span className="lab" title="Media health"><i>health</i><Dot c={STATUS_META[d.health].c} /></span> : null} />
-      <Uuid value={d.id} />
-      <div className="labels">
-        <span className="lab"><i>{d.mode === "nvme" ? "pcie" : "serial"}</i>{(d.mode === "nvme" ? d.pcie : d.serial) || "—"}</span>
-        <span className="lab"><i>dev</i>{d.blockdev || "—"}</span>
-      </div>
-      <Capacity total={d.capacity.total} used={d.capacity.used} />
-      <IoMetrics o={d} />
-      <Foot items={[{label: "Details", right: true, onClick: () => nav.detail(d)}]} />
-    </div>
-  );
-}
 
-Object.assign(window, {NodeOpBox, OP_HINT, Dot, TileHead, Name, Foot, IoMetrics, ClusterTile, HostTile, HostCandidateTile, NodeTile, DeviceTile});
+Object.assign(window, {NodeOpBox, OP_HINT, Dot, TileHead, Name, Foot, IoMetrics, HostTile, HostCandidateTile});

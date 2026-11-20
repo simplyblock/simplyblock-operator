@@ -2,19 +2,24 @@
 // KUBERNETES / OPERATOR / HELM TRANSPORT
 //
 // The console talks to exactly three things and nothing else:
-//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, the DR
-//                            hub's dr.simplyblock.io/v1alpha1 (plus the Ramen
-//                            and OCM objects it derives), and core objects
-//                            (Node, Pod, PVC, StorageClass, Secret, Event)
+//   · the Kubernetes API   — the storage CRDs (storage.simplyblock.io/v1alpha2
+//                            for every kind that has that version, v1alpha1
+//                            only for the replication kinds that never moved),
+//                            the DR hub's dr.simplyblock.io/v1alpha1 (plus the
+//                            Ramen and OCM objects it derives), and core objects
+//                            (Node, Pod, PV, PVC, StorageClass, Secret, Event)
 //   · the operator API     — what the operator exposes beyond CRDs
 //   · Helm                 — release state for the chart
 //
-// It does NOT call the control plane REST API. Anything the control plane knows
-// reaches the UI through a CRD status written by a controller.
+// The control plane REST API is read, read-only, through cpapi.jsx; nothing
+// here writes to it. Every action is an Ops object on the Kubernetes API.
 // ---------------------------------------------------------------------------
 const SB = window.SB_CONFIG;
 const GROUP = "storage.simplyblock.io";
-const VERSION = "v1alpha1";
+// the storage version of the operator's kinds on main; a kind that only exists
+// in v1alpha1 says so in its registry entry
+const VERSION = "v1alpha2";
+const LEGACY_VERSION = "v1alpha1";
 const API_GROUP = `${GROUP}/${VERSION}`;
 const DR_GROUP = "dr.simplyblock.io";
 const DR_API_GROUP = `${DR_GROUP}/v1alpha1`;
@@ -30,32 +35,49 @@ class ApiError extends Error {
 
 // ---- resource registry -----------------------------------------------------
 // Every kind the console reads, with the plural the API server routes on and the
-// short name from the design (§7.11). `core: true` means it is not our group.
+// short name the CRD declares. A kind of our group is served at VERSION unless
+// its entry carries `version`; `core` names another group and version.
+// `ops` names the entity an Ops kind acts on and `ref` the spec field that
+// names it, as the CRD spells it; `params` lists the actions that take a
+// parameter block of the same name, lowercased.
 const RESOURCES = {
-  // entities
+  // entities (storage.simplyblock.io/v1alpha2)
   StorageCluster:          {plural: "storageclusters",          short: "sbc",  namespaced: true},
   StorageNode:             {plural: "storagenodes",             short: "sbn",  namespaced: true},
   StorageDevice:           {plural: "storagedevices",           short: "sbd",  namespaced: true},
   StoragePool:             {plural: "storagepools",             short: "sbp",  namespaced: true},
   StorageBackup:           {plural: "storagebackups",           short: "sbbk", namespaced: true},
+  StorageBackupPolicy:     {plural: "storagebackuppolicies",    short: "sbbp", namespaced: true, creatable: true},
+  StorageGroupBackup:      {plural: "storagegroupbackups",      short: "sbgb", namespaced: true},
   ControlPlane:            {plural: "controlplanes",            short: "sbcp", namespaced: true},
   SimplyblockDriver:       {plural: "simplyblockdrivers",       short: "sbdrv", namespaced: true},
   ClusterDeploymentConfig: {plural: "clusterdeploymentconfigs", short: "sbcdc", namespaced: true},
-  // replication: real kinds in v1alpha1. A slot is created by the operator from
-  // a PVC annotation, so it is read-only here; the other three are creatable.
-  ReplicationPair:   {plural: "replicationpairs",    short: "relpair", namespaced: true, creatable: true},
-  ReplicationPolicy: {plural: "replicationpolicies", short: "repl",    namespaced: true, creatable: true},
-  ReplicationSlot:   {plural: "replicationslots",    short: "relslot", namespaced: true},
-  ReplicationOps:    {plural: "replicationops",      short: "replops", namespaced: true, creatable: true},
-  // one-shot operations
-  StorageClusterOps:  {plural: "storageclusterops",  short: "sbco",  namespaced: true, ops: "StorageCluster"},
-  StorageNodeOps:     {plural: "storagenodeops",     short: "sbno",  namespaced: true, ops: "StorageNode"},
-  StorageDeviceOps:   {plural: "storagedeviceops",   short: "sbdo",  namespaced: true, ops: "StorageDevice"},
-  StoragePoolOps:     {plural: "storagepoolops",     short: "sbpo",  namespaced: true, ops: "StoragePool"},
-  StorageBackupOps:   {plural: "storagebackupops",   short: "sbbo",  namespaced: true, ops: "StorageBackup"},
-  ControlPlaneOps:    {plural: "controlplaneops",    short: "sbcpo", namespaced: true, ops: "ControlPlane"},
-  PersistentVolumeOps: {plural: "persistentvolumeops", short: "sbpvo", namespaced: true, ops: "PersistentVolume"},
-  OperatorOps:        {plural: "operatorops",        short: "sbop",  namespaced: true, ops: null},
+  StretchedCluster:        {plural: "stretchedclusters",        short: "sbsc", namespaced: true},
+  // replication: the four kinds that only exist in v1alpha1. A slot is created
+  // by the operator from a PVC annotation, so it is read-only here; the other
+  // three are creatable.
+  ReplicationPair:   {plural: "replicationpairs",    short: "relpair", namespaced: true, creatable: true, version: LEGACY_VERSION},
+  ReplicationPolicy: {plural: "replicationpolicies", short: "repl",    namespaced: true, creatable: true, version: LEGACY_VERSION},
+  ReplicationSlot:   {plural: "replicationslots",    short: "relslot", namespaced: true, version: LEGACY_VERSION},
+  ReplicationOps:    {plural: "replicationops",      short: "replops", namespaced: true, creatable: true, version: LEGACY_VERSION},
+  // one-shot operations; the action enums are the CRDs' (OPERATIONS.md)
+  StorageClusterOps:  {plural: "storageclusterops",  short: "sbco",  namespaced: true, ops: "StorageCluster", ref: "clusterRef",
+    actions: ["Activate", "Expand", "Shutdown", "Start", "Restart", "RollingRestart", "CancelTask"], params: ["RollingRestart", "CancelTask"]},
+  StorageNodeOps:     {plural: "storagenodeops",     short: "sbno",  namespaced: true, ops: "StorageNode", ref: "nodeRef",
+    actions: ["Shutdown", "Restart", "Suspend", "Resume", "Remove", "Migrate", "HostMaintenance"], params: ["Migrate", "Remove"]},
+  StorageDeviceOps:   {plural: "storagedeviceops",   short: "sbdo",  namespaced: true, ops: "StorageDevice", ref: "deviceRef",
+    actions: ["Restart", "Fail", "CheckHealth"], params: []},
+  StoragePoolOps:     {plural: "storagepoolops",     short: "sbpo",  namespaced: true, ops: "StoragePool", ref: "poolRef",
+    actions: ["Rebalance"], params: []},
+  StorageBackupOps:   {plural: "storagebackupops",   short: "sbbo",  namespaced: true, ops: "StorageBackup", ref: "backupRef", refIsObject: true,
+    actions: ["Restore"], params: ["Restore"]},
+  ControlPlaneOps:    {plural: "controlplaneops",    short: "sbcpo", namespaced: true, ops: "ControlPlane", ref: "controlPlaneRef",
+    actions: ["Restart", "Upgrade", "Backup", "HostMaintenance"], params: ["Restart", "Upgrade", "Backup", "HostMaintenance"]},
+  // cluster-scoped: a PersistentVolume has no namespace
+  PersistentVolumeOps: {plural: "persistentvolumeops", short: "sbpvo", namespaced: false, ops: "PersistentVolume", ref: "persistentVolumeName",
+    actions: ["Migrate", "Relocate", "JoinConsistencyGroup"], params: ["Migrate", "Relocate", "JoinConsistencyGroup"]},
+  OperatorOps:        {plural: "operatorops",        short: "sbop",  namespaced: true, ops: null,
+    actions: ["Discover"], params: ["Discover"]},
   // ---- DR hub (dr-simplyblock) — dr.simplyblock.io/v1alpha1 ----------------
   // The hub has no REST API: every screen is a CR. Cluster-scoped kinds have
   // no namespace segment; namespaced ones are listed across all namespaces
@@ -93,9 +115,12 @@ const RESOURCES = {
   DRCluster:             {plural: "drclusters",             core: RAMEN_API_GROUP, namespaced: false},
   DRPlacementControl:    {plural: "drplacementcontrols",    core: RAMEN_API_GROUP, namespaced: true},
   ManagedCluster:        {plural: "managedclusters",        core: OCM_CLUSTER_API_GROUP, namespaced: false},
-  // a managed site's storage deployment, requested from the hub (operator,
-  // storage.simplyblock.io/v1alpha2); the operator carries it to the site
-  StorageSiteDeployment: {plural: "storagesitedeployments", short: "sbsd", core: "storage.simplyblock.io/v1alpha2", namespaced: true},
+  // a managed site's storage deployment, requested from the hub; the operator
+  // carries it to the site
+  StorageSiteDeployment: {plural: "storagesitedeployments", short: "sbsd", namespaced: true},
+  // the CRDs themselves: field descriptions, enums, and immutability rules for
+  // the schema-driven views come from here, never from prose in the console
+  CustomResourceDefinition: {plural: "customresourcedefinitions", core: "apiextensions.k8s.io/v1", namespaced: false},
   // access reviews: the API server answers what the caller may do
   SelfSubjectAccessReview: {plural: "selfsubjectaccessreviews", core: "authorization.k8s.io/v1", namespaced: false},
   SelfSubjectRulesReview:  {plural: "selfsubjectrulesreviews",  core: "authorization.k8s.io/v1", namespaced: false},
@@ -107,7 +132,12 @@ const RESOURCES = {
   PersistentVolumeClaim: {plural: "persistentvolumeclaims", core: "v1", namespaced: true},
   Secret:                {plural: "secrets",                core: "v1", namespaced: true},
   Event:                 {plural: "events",                 core: "v1", namespaced: true},
+  Namespace:             {plural: "namespaces",             core: "v1", namespaced: false},
+  Job:                   {plural: "jobs",                   core: "batch/v1", namespaced: true},
   StorageClass:          {plural: "storageclasses",         core: "storage.k8s.io/v1", namespaced: false},
+  VolumeSnapshot:        {plural: "volumesnapshots",        core: "snapshot.storage.k8s.io/v1", namespaced: true},
+  VolumeSnapshotContent: {plural: "volumesnapshotcontents", core: "snapshot.storage.k8s.io/v1", namespaced: false},
+  VolumeSnapshotClass:   {plural: "volumesnapshotclasses",  core: "snapshot.storage.k8s.io/v1", namespaced: false},
   // application resources read for Ramen recipes
   Deployment:            {plural: "deployments",            core: "apps/v1", namespaced: true},
   StatefulSet:           {plural: "statefulsets",           core: "apps/v1", namespaced: true},
@@ -132,7 +162,7 @@ function pathFor(kind, opts) {
   const o = opts || {};
   const r = RESOURCES[kind];
   if (!r) throw new Error("unknown kind " + kind);
-  const prefix = !r.core ? `/apis/${API_GROUP}`
+  const prefix = !r.core ? `/apis/${GROUP}/${r.version || VERSION}`
     : r.core === "v1" ? "/api/v1"
     : `/apis/${r.core}`;
   const ns = r.namespaced && !o.allNamespaces ? `/namespaces/${o.namespace || (r.dr ? DR_NS() : NS())}` : "";
@@ -141,7 +171,7 @@ function pathFor(kind, opts) {
   return `${prefix}${ns}/${r.plural}${name}${sub}`;
 }
 // apiVersion string for a kind, for the objects the console authors
-const apiVersionOf = kind => { const r = RESOURCES[kind]; return !r.core ? API_GROUP : r.core; };
+const apiVersionOf = kind => { const r = RESOURCES[kind]; return !r.core ? `${GROUP}/${r.version || VERSION}` : r.core; };
 
 // ---- transport -------------------------------------------------------------
 async function call(base, path, init) {
@@ -217,11 +247,15 @@ const review = {
     .then(r => (r.status && r.status.userInfo) || {})
 };
 
-// label selector helpers — the ownership tree is expressed in labels
+// label selector helpers, with the labels the operator writes: a StorageNode
+// carries storage.simplyblock.io/cluster and /worker (deployment expansion), a
+// StorageDevice carries /cluster, /node, and /worker (its mirror). The spec
+// references (spec.clusterRef, spec.nodeRef) are the joins of record; the
+// labels only narrow a list.
 const sel = o => Object.entries(o).map(([k, v]) => `${k}=${v}`).join(",");
-const ownedBy = (kind, name) => ({labelSelector: sel({
-  [`${GROUP}/owner-kind`]: kind, [`${GROUP}/owner-name`]: name})});
 const inCluster = name => ({labelSelector: sel({[`${GROUP}/cluster`]: name})});
+const ofNode = name => ({labelSelector: sel({[`${GROUP}/node`]: name})});
+const onWorker = name => ({labelSelector: sel({[`${GROUP}/worker`]: name})});
 
 // ---- operator API ----------------------------------------------------------
 // What the operator serves that is not a CRD: the release/compat matrix it
@@ -254,28 +288,51 @@ function opsKindFor(entityKind) {
   return hit ? hit[0] : null;
 }
 
-function submitOps(entityKind, targetName, action, payload) {
+// The object is shaped the way the CRD validates it: the target in the spec
+// field the kind names (`clusterRef`, `nodeRef`, `deviceRef`, `poolRef`,
+// `persistentVolumeName`, `controlPlaneRef`; StorageBackupOps takes an object
+// `backupRef{name}` plus `clusterRef{name}`), `action` spelled as the enum
+// spells it, and the action's parameter block under the action's name
+// lowercased (`migrate`, `rollingRestart`, `cancelTask`, ...). An action the
+// CRD does not list is refused here rather than by the API server.
+function submitOps(entityKind, targetName, action, payload, opts) {
   const kind = opsKindFor(entityKind);
   if (!kind) throw new Error("no Ops kind for " + entityKind);
+  const r = RESOURCES[kind];
+  if (r.actions && !r.actions.includes(action)) {
+    throw new ApiError(422, `${kind} has no action ${action}; the CRD allows ${r.actions.join(", ")}`, kind, "Invalid");
+  }
+  const o = opts || {};
+  const ns = o.namespace || NS();
   const stamp = Date.now().toString(36);
+  const spec = {action};
+  if (targetName && r.ref) {
+    spec[r.ref] = r.refIsObject ? {name: targetName} : targetName;
+  }
+  if (kind === "StorageBackupOps" && o.clusterRef) spec.clusterRef = {name: o.clusterRef};
+  if (payload && (r.params || []).includes(action)) spec[lowerFirst(action)] = payload;
   const body = {
-    apiVersion: API_GROUP, kind,
-    metadata: {
-      name: `${targetName}-${action.toLowerCase()}-${stamp}`.slice(0, 63),
-      namespace: NS(),
-      labels: {[`${GROUP}/target`]: targetName, [`${GROUP}/action`]: action}
-    },
-    spec: Object.assign({action}, targetName ? {targetRef: {name: targetName}} : {},
-      payload ? {[lowerFirst(action)]: payload} : {})
+    apiVersion: apiVersionOf(kind), kind,
+    metadata: Object.assign({
+      name: `${(targetName || "operator")}-${action.toLowerCase()}-${stamp}`.slice(0, 63)
+    }, r.namespaced ? {namespace: ns} : {})
   };
-  return k8s.create(kind, body);
+  body.spec = spec;
+  return k8s.create(kind, body, r.namespaced ? {namespace: ns} : {});
 }
-const abortOps = (opsKind, name) => k8s.patch(opsKind, name, {spec: {abort: true}});
+// Every Ops kind above has spec.abort; the replication kinds do not.
+const ABORTABLE_KINDS = Object.keys(RESOURCES).filter(k => RESOURCES[k].actions);
+const abortOps = (opsKind, name, opts) => {
+  if (!ABORTABLE_KINDS.includes(opsKind)) {
+    return Promise.reject(new ApiError(422, `${opsKind} has no abort field; it runs to a terminal phase`, opsKind, "Invalid"));
+  }
+  return k8s.patch(opsKind, name, {spec: {abort: true}}, opts);
+};
 const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
 
 // Terminal phases, per the design's phase vocabulary (PascalCase).
 const OPS_TERMINAL = ["Succeeded", "Failed", "Aborted"];
 const opsRunning = o => o && o.status && !OPS_TERMINAL.includes(o.status.phase);
 
-Object.assign(window, {k8s, operator, helm, review, ApiError, RESOURCES, API_GROUP, GROUP, VERSION, DR_GROUP, DR_API_GROUP,
-  pathFor, apiVersionOf, ownedBy, inCluster, sel, submitOps, abortOps, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS, DR_HUB_NS});
+Object.assign(window, {k8s, operator, helm, review, ApiError, RESOURCES, API_GROUP, GROUP, VERSION, LEGACY_VERSION, DR_GROUP, DR_API_GROUP,
+  pathFor, apiVersionOf, inCluster, ofNode, onWorker, sel, submitOps, abortOps, ABORTABLE_KINDS, opsKindFor, opsRunning, OPS_TERMINAL, NS, DR_NS, DR_HUB_NS});

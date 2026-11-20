@@ -18,36 +18,60 @@ func tickUntil(t *testing.T, sim *Simulator, n int, pred func() bool) {
 	}
 }
 
+// seedNode creates the StorageNode an operation acts on, online.
+func seedNode(st *Store, ns, name string) ResourceDef {
+	nd, _ := st.LookupResource(sbGroup, "storagenodes")
+	st.Create(nd, ns, map[string]any{
+		"metadata": map[string]any{"name": name},
+		"spec":     map[string]any{"clusterRef": "cluster1", "workerNode": "worker-1", "config": map[string]any{"sizing": map[string]any{"vcpuCount": float64(8)}}},
+		"status":   map[string]any{"status": "online", "phase": "Online", "uuid": "n-1"},
+	})
+	return nd
+}
+
 func TestOpProgressesToSucceeded(t *testing.T) {
 	st := newTestStore()
 	sim := NewSimulator(st, "sb", 0 /* never fail */, 1)
 	d := testDef()
+	nd := seedNode(st, "sb", "sn-01")
 
 	st.Create(d, "sb", map[string]any{
 		"metadata": map[string]any{"name": "op-restart"},
-		"spec":     map[string]any{"action": "restart", "storageNodeRef": "sn-01"},
+		"spec":     map[string]any{"action": "Restart", "nodeRef": "sn-01"},
 	})
 
 	phase := func() string {
 		obj, _ := st.Get(d, "sb", "op-restart")
 		return getStr(obj, "status.phase")
 	}
-	sawRunning := false
-	tickUntil(t, sim, 20, func() bool {
+	sawRunning, sawDeparting, sawLock := false, false, false
+	tickUntil(t, sim, 30, func() bool {
+		obj, _ := st.Get(d, "sb", "op-restart")
 		if phase() == "Running" {
 			sawRunning = true
+			node, _ := st.Get(nd, "sb", "sn-01")
+			if getStr(node, "status.activeOpsRef") == "op-restart" {
+				sawLock = true
+			}
+		}
+		if getStr(obj, "status.step.state") == "Departing" {
+			sawDeparting = true
 		}
 		return phase() == "Succeeded"
 	})
-	if !sawRunning {
-		t.Fatal("op never passed through Running")
+	if !sawRunning || !sawDeparting || !sawLock {
+		t.Fatalf("the restart walks Requesting, Departing, Awaiting under the node's lock: running=%v departing=%v lock=%v", sawRunning, sawDeparting, sawLock)
 	}
 	obj, _ := st.Get(d, "sb", "op-restart")
 	if getStr(obj, "status.startedAt") == "" || getStr(obj, "status.completedAt") == "" {
 		t.Fatalf("timestamps missing: %v", obj["status"])
 	}
-	if getStr(obj, "status.subPhase") == "" {
-		t.Fatalf("storagenodeops should carry a subPhase: %v", obj["status"])
+	if getStr(obj, "status.step.state") != "Completed" {
+		t.Fatalf("a succeeded operation rests in step Completed: %v", obj["status"])
+	}
+	node, _ := st.Get(nd, "sb", "sn-01")
+	if getStr(node, "status.activeOpsRef") != "" {
+		t.Fatalf("the lock was not released: %v", node["status"])
 	}
 	// the run left an audit trail of events
 	evDef, _ := st.Lookup("", "v1", "events")
@@ -62,9 +86,10 @@ func TestOpFailsAtFailRateOne(t *testing.T) {
 	st := newTestStore()
 	sim := NewSimulator(st, "sb", 1 /* always fail */, 1)
 	d := testDef()
+	seedNode(st, "sb", "sn-02")
 	st.Create(d, "sb", map[string]any{
 		"metadata": map[string]any{"name": "op-doomed"},
-		"spec":     map[string]any{"action": "restart"},
+		"spec":     map[string]any{"action": "Restart", "nodeRef": "sn-02"},
 	})
 	tickUntil(t, sim, 20, func() bool {
 		obj, _ := st.Get(d, "sb", "op-doomed")
@@ -76,21 +101,60 @@ func TestAbortWins(t *testing.T) {
 	st := newTestStore()
 	sim := NewSimulator(st, "sb", 0, 1)
 	d := testDef()
+	seedNode(st, "sb", "sn-03")
 	st.Create(d, "sb", map[string]any{
 		"metadata": map[string]any{"name": "op-abort"},
-		"spec":     map[string]any{"action": "restart"},
+		"spec":     map[string]any{"action": "Restart", "nodeRef": "sn-03"},
 	})
 	sim.Tick() // Pending
-	sim.Tick() // Running
+	sim.Tick() // Running, at Requesting: the one abortable step of a restart
 
 	obj, _ := st.Get(d, "sb", "op-abort")
+	if getStr(obj, "status.step.state") != "Requesting" {
+		t.Fatalf("want step Requesting, got %q", getStr(obj, "status.step.state"))
+	}
 	setPath(obj, "spec.abort", true)
 	st.Update(d, "sb", obj)
 
 	sim.Tick()
 	obj, _ = st.Get(d, "sb", "op-abort")
-	if getStr(obj, "status.phase") != "Aborted" {
-		t.Fatalf("want Aborted, got %s", getStr(obj, "status.phase"))
+	if getStr(obj, "status.phase") != "Aborted" || getStr(obj, "status.step.state") != "Requesting" {
+		t.Fatalf("want Aborted at Requesting, got %s at %s", getStr(obj, "status.phase"), getStr(obj, "status.step.state"))
+	}
+}
+
+// Past the abortable step an abort is refused: the operator emits AbortRefused
+// and the operation runs on to its end.
+func TestAbortRefusedPastTheLine(t *testing.T) {
+	st := newTestStore()
+	sim := NewSimulator(st, "sb", 0, 1)
+	d := testDef()
+	seedNode(st, "sb", "sn-04")
+	st.Create(d, "sb", map[string]any{
+		"metadata": map[string]any{"name": "op-late-abort"},
+		"spec":     map[string]any{"action": "Restart", "nodeRef": "sn-04"},
+	})
+	tickUntil(t, sim, 20, func() bool {
+		obj, _ := st.Get(d, "sb", "op-late-abort")
+		return getStr(obj, "status.step.state") == "Departing"
+	})
+	obj, _ := st.Get(d, "sb", "op-late-abort")
+	setPath(obj, "spec.abort", true)
+	st.Update(d, "sb", obj)
+	tickUntil(t, sim, 20, func() bool {
+		obj, _ := st.Get(d, "sb", "op-late-abort")
+		return getStr(obj, "status.phase") == "Succeeded"
+	})
+	evDef, _ := st.Lookup("", "v1", "events")
+	evs, _ := st.List(evDef, "sb", "", "involvedObject.name=op-late-abort")
+	refused := false
+	for _, e := range evs {
+		if getStr(e, "reason") == "AbortRefused" {
+			refused = true
+		}
+	}
+	if !refused {
+		t.Fatal("no AbortRefused event for an abort past Requesting")
 	}
 }
 
@@ -156,12 +220,12 @@ func TestGenerateAllDatasets(t *testing.T) {
 			st.Register(allResourceDefs()...)
 			Generate(st, sc, 99, "simplyblock")
 
-			nodeDef, _ := st.Lookup(sbGroup, "v1alpha1", "storagenodes")
+			nodeDef, _ := st.LookupResource(sbGroup, "storagenodes")
 			nodes, _ := st.List(nodeDef, "", "", "")
 			if len(nodes) != sc.Workers {
 				t.Fatalf("want %d StorageNodes, got %d", sc.Workers, len(nodes))
 			}
-			devDef, _ := st.Lookup(sbGroup, "v1alpha1", "storagedevices")
+			devDef, _ := st.LookupResource(sbGroup, "storagedevices")
 			devs, _ := st.List(devDef, "", "", "")
 			if len(devs) != sc.Workers*sc.DevicesPerNode {
 				t.Fatalf("want %d devices, got %d", sc.Workers*sc.DevicesPerNode, len(devs))
@@ -219,7 +283,7 @@ func TestGenerateDeterministic(t *testing.T) {
 		sc, _ := scenarioByName("medium-degraded")
 		Generate(st, sc, 7, "simplyblock")
 		out := map[string]int{}
-		nodeDef, _ := st.Lookup(sbGroup, "v1alpha1", "storagenodes")
+		nodeDef, _ := st.LookupResource(sbGroup, "storagenodes")
 		nodes, _ := st.List(nodeDef, "", "", "")
 		for _, n := range nodes {
 			out[getStr(n, "metadata.name")+"|"+getStr(n, "status.uuid")+"|"+getStr(n, "status.status")]++

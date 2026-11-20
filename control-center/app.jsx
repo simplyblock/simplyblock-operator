@@ -11,6 +11,8 @@ const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "m
 
 const LAYER_META = {
   clusters: {label: "Clusters", icon: "cluster"}, cluster: {icon: "cluster"},
+  // any custom resource, by its object key (cr-view.jsx)
+  cr: {icon: "list"},
   cp: {label: "Control plane", icon: "host"},
   hosts: {label: "Hosts", icon: "host"}, host: {icon: "host"},
   nodes: {label: "Storage nodes", icon: "node"}, node: {icon: "node"},
@@ -130,7 +132,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : [...pC(o.clusterId), {t: "policies"}, {t: "policy", id: o.id}];
 
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
-const segLabel = s => s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
+const segLabel = s => s.t === "cr" ? String(s.id).split("/").slice(1).join(" ") : s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
 const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain,
   o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`),
   o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest,
@@ -191,7 +193,7 @@ const SORT_KEYS = {
 const clusterOf = seg => seg.t === "cluster" ? seg.id : (REG[seg.id] || {}).clusterId;
 // Each view advertises the surface that actually backs it: a CRD, a core object,
 // or an operator /proposed collection for the kinds v1alpha1 does not model yet.
-const G_ = "/apis/storage.simplyblock.io/v1alpha1/namespaces/{ns}";
+const G_ = "/apis/storage.simplyblock.io/v1alpha2/namespaces/{ns}";
 const crd = (p, sel) => `GET ${G_}/${p}${sel ? "?labelSelector=" + sel.replace("storage.simplyblock.io/", "…/") : ""}`;
 const crd1 = p => `GET ${G_}/${p}/{name}`;
 const prop = p => `GET /operator/v1/proposed/${p}`;
@@ -206,7 +208,7 @@ const VIEWS = {
   nodes: {kind: "node",
     load: p => p.t === "host" ? api.nodes(clusterOf(p)).then(ns => ns.filter(n => n.hostId === p.id)) : api.nodes(p.id),
     api: p => crd("storagenodes", p.t === "host" ? OWNER : CLUS)},
-  devices: {kind: "device", load: p => api.devices(p.id), api: () => crd("storagedevices", OWNER)},
+  devices: {kind: "device", load: p => p.t === "cluster" ? api.clusterDevices(p.id) : api.devices(p.id), api: p => crd("storagedevices", p.t === "cluster" ? CLUS : "storage.simplyblock.io/node")},
   pools: {kind: "pool", load: p => api.pools(p.id), api: () => crd("storagepools", CLUS)},
   volumes: {kind: "volume",
     load: p => p.t === "rpolicy" ? api.rpolicyVolumes(p.id) : p.t === "cgroup" ? api.cgroupVolumes(p.id)
@@ -743,6 +745,8 @@ function App() {
     layer: (o, l) => go([...detailPath(o), {t: l}]),
     layerRef: (cid, l) => go([...pC(cid), {t: l}]),
     openCluster: cid => go(pC(cid)),
+    // any custom resource, as a child of wherever the user is
+    openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {t: "cr", id: objKey(ref.ns, ref.kind, ref.name)}]),
     openHost: (cid, hid) => go(pH(cid, hid)),
     openNode: (cid, nid) => go(pN(cid, nid)),
     openDevice: (cid, nid, did) => go(pD(cid, nid, did)),
@@ -911,7 +915,9 @@ function App() {
 
       {!acc.state.ready ? <div className="scroll"><div className="lmsg">Resolving your access…</div></div> :
       <ViewBoundary routeKey={viewKey} onReset={() => nav.root()}>
-      {cur.id
+      {cur.t === "cr"
+        ? <CRView key={viewKey} seg={cur} nav={nav} />
+        : cur.id
         ? <DetailView key={viewKey} seg={cur} nav={nav} rev={rev} up={upOne} upLabel={upLabel} />
         : cur.t === "dr"
         ? <DrHubHome key={viewKey} nav={nav} />

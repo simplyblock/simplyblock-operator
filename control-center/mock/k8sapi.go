@@ -13,8 +13,8 @@ import (
 
 // K8sAPI serves Kubernetes API conventions — discovery, list/get/create/
 // update/patch/delete, /status subresources, pod logs and streaming watches —
-// against the Store. It expects paths relative to the API root (/api, /apis,
-// /version); mount it behind http.StripPrefix when proxied under /k8s.
+// against the Store. It expects paths relative to the API root (`/api`, `/apis`,
+// /version); mount it behind http.StripPrefix when proxied under `/k8s`.
 type K8sAPI struct {
 	store *Store
 	authz *AuthZ
@@ -145,7 +145,7 @@ func (a *K8sAPI) serveResourceList(w http.ResponseWriter, group, version string)
 
 // ---- resource routing ---------------------------------------------------------
 
-// serveGroup handles everything after /api/v1 or /apis/{g}/{v}.
+// serveGroup handles everything after `/api/v1` or `/apis/{g}/{v}`.
 func (a *K8sAPI) serveGroup(w http.ResponseWriter, r *http.Request, group, version string, rest []string) {
 	if len(rest) == 0 {
 		a.serveResourceList(w, group, version)
@@ -183,6 +183,10 @@ func (a *K8sAPI) serveGroup(w http.ResponseWriter, r *http.Request, group, versi
 	d, ok := a.store.Lookup(group, version, resource)
 	if !ok {
 		a.writeStatus(w, &apiError{404, "NotFound", fmt.Sprintf("the server could not find resource %q in %s/%s", resource, group, version)})
+		return
+	}
+	if !d.Namespaced && ns != "" {
+		a.writeStatus(w, &apiError{404, "NotFound", fmt.Sprintf("the server could not find resource %q in namespace %q: %s is cluster-scoped", resource, ns, d.Kind)})
 		return
 	}
 	if d.Namespaced && ns == "" && name != "" && r.Method != http.MethodGet {
