@@ -80,7 +80,8 @@ type ControlPlaneReconciler struct {
 	NUMAPluginImage string
 
 	// OpenShift is whether the cluster is an OpenShift one. It decides the
-	// SELinux type the NUMA device plugin runs with (numaplugin.go).
+	// SELinux type the NUMA device plugin runs with (numaplugin.go), and
+	// whether the control plane's account is granted the anyuid SCC (scc.go).
 	OpenShift bool
 }
 
