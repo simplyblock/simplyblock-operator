@@ -1,0 +1,18 @@
+{{- /* Refuses prometheus value combinations that leave no working Prometheus,
+     and a bundled kube-prometheus-stack beside another prometheus-operator. */ -}}
+{{- if not (has .Values.prometheus.mode (list "Managed" "External")) -}}
+{{- fail (printf "prometheus.mode must be Managed or External, not %q." .Values.prometheus.mode) -}}
+{{- end -}}
+{{- $kps := index .Values "kube-prometheus-stack" -}}
+{{- if and $kps.enabled (ne .Values.prometheus.mode "External") -}}
+{{- fail "kube-prometheus-stack.enabled requires prometheus.mode=External: in Managed mode the operator runs its own Prometheus, and the bundled one would scrape nothing." -}}
+{{- end -}}
+{{- if and $kps.enabled ($kps.crds).enabled -}}
+{{- $existing := lookup "apiextensions.k8s.io/v1" "CustomResourceDefinition" "" "servicemonitors.monitoring.coreos.com" -}}
+{{- if $existing -}}
+{{- $owner := (($existing.metadata).annotations | default dict) -}}
+{{- if ne (get $owner "meta.helm.sh/release-name") .Release.Name -}}
+{{- fail "kube-prometheus-stack.enabled is true, but monitoring.coreos.com CRDs already exist from another installation. Leave kube-prometheus-stack.enabled false and set prometheus.mode=External to use that prometheus-operator." -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

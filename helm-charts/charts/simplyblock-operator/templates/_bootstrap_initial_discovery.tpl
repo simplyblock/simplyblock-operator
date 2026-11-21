@@ -2,8 +2,9 @@
 The one discovery run a fresh standalone install performs.
 
 This chart is the only thing that creates it: the operator raises no run of its
-own. A managed or empty install, and `discovery.enabled=false`, render none. The
-`draft` values are accepted and unused.
+own. A managed or empty install, and `discovery.enabled=false`, render none. Of
+the `draft` values, the images reach the run, which copies them into the draft
+it writes; the rest are accepted and unused.
 
 Rendered into the simplyblock-bootstrap-objects ConfigMap rather than as a
 release resource, for the reason _bootstrap_controlplane.tpl gives. The
@@ -81,6 +82,15 @@ spec:
     {{- end }}
     {{- with $filter }}
     deviceFilter:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- $images := dict }}
+    {{- with ($d.draft).images }}
+    {{- with .spdk }}{{ $_ := set $images "spdk" (dict "image" .) }}{{ end }}
+    {{- with .spdkProxy }}{{ $_ := set $images "spdkProxy" (dict "image" .) }}{{ end }}
+    {{- end }}
+    {{- with $images }}
+    images:
       {{- toYaml . | nindent 6 }}
     {{- end }}
 {{- end }}

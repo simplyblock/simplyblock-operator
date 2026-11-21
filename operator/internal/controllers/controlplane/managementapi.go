@@ -37,9 +37,10 @@ import (
 )
 
 // fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
-// metrics. It is upstream's rather than simplyblock's, and pinned for the same
-// reason the database's images are.
-const fdbExporterImage = "aikoven/foundationdb-exporter:3.1.0"
+// metrics. It is upstream's exporter mirrored to simplyblock's registry, named
+// with its registry like every other control-plane image, and pinned for the
+// same reason the database's images are.
+const fdbExporterImage = "quay.io/simplyblock-io/foundationdb-exporter:3.1.0"
 
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name
@@ -66,7 +67,7 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		fdbExporterDeployment(cp),
 		fdbExporterService(ns),
 	}
-	objects = append(objects, prometheusObjects(cp)...)
+	objects = append(objects, prometheusObjectsFor(cp)...)
 	return append(objects, servingCertificateObjects(cp)...)
 }
 
@@ -284,7 +285,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 		// trust before anything else works: every controller in this process
 		// authenticates with its token.
 		{Name: "SB_K8S_ADMIN_SERVICE_ACCOUNTS", Value: adminServiceAccounts(cp.Namespace)},
-		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS", Value: metricsServiceAccounts()},
+		{Name: "SB_K8S_METRICS_SERVICE_ACCOUNTS", Value: metricsServiceAccounts(cp)},
 	}
 	if ref := managed.AdminTokenSecretRef; ref != nil && ref.Name != "" {
 		// Sourced from the Secret directly rather than read and copied in here,
@@ -797,32 +798,6 @@ const extraAdminAccountsEnv = "SB_EXTRA_ADMIN_SERVICE_ACCOUNTS"
 func adminServiceAccounts(namespace string) string {
 	accounts := []string{"system:serviceaccount:" + namespace + ":simplyblock-operator"}
 	for _, a := range strings.Split(os.Getenv(extraAdminAccountsEnv), ",") {
-		a = strings.TrimSpace(a)
-		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {
-			accounts = append(accounts, a)
-		}
-	}
-	return strings.Join(accounts, ",")
-}
-
-// extraMetricsAccountsEnv names the operator's own environment variable
-// listing the service accounts the management API trusts as metrics
-// scrapers. There is no account this operator could trust on its own
-// authority, unlike adminServiceAccounts trusting itself: the Prometheus
-// pod presents its own ServiceAccount's token, and the chart names it here
-// from the Helm value prometheus.serviceAccount, whether that Prometheus is
-// the one the chart bundles or one the customer already runs. An install
-// without it trusts no metrics scraper at all, and every scrape gets a 401.
-const extraMetricsAccountsEnv = "SB_EXTRA_METRICS_SERVICE_ACCOUNTS"
-
-// metricsServiceAccounts is every account named in extraMetricsAccountsEnv,
-// filtered the same way adminServiceAccounts filters its list. Empty unless
-// the chart set something, by design: there is no account this operator
-// could trust on its own authority the way adminServiceAccounts trusts
-// itself, since it does not run the Prometheus doing the scraping.
-func metricsServiceAccounts() string {
-	var accounts []string
-	for _, a := range strings.Split(os.Getenv(extraMetricsAccountsEnv), ",") {
 		a = strings.TrimSpace(a)
 		if strings.Count(a, ":") == 3 && strings.HasPrefix(a, "system:serviceaccount:") && !slices.Contains(accounts, a) {
 			accounts = append(accounts, a)

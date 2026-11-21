@@ -1,144 +1,9 @@
-# PrometheusRule and AlertmanagerConfig objects for a prometheus-operator,
-# bundled by default or the customer's own (see
-# prometheus-operator-servicemonitors.yaml): the Alertmanager-routed
-# equivalent of the Grafana alerting rules and contact points in
-# controlplane_configmap.yaml (simplyblock-grafana-alerting). The eleven
-# rules below are a hand translation of that ConfigMap's eleven, from
-# Grafana's threshold-evaluator shape into plain PromQL comparisons. Nothing
-# checks the two stay in step, so a new rule needs adding in both places
-# until that ConfigMap is retired. Separate from
-# prometheus-operator-servicemonitors.yaml because a customer may want these
-# rules evaluated without taking an opinion on routing, or may already have
-# their own routing in place. Both still require `prometheus.enabled`.
-#
-# AlertmanagerConfig's schema has moved between prometheus-operator releases
-# (v1alpha1 promoted toward v1beta1). What follows targets v1alpha1, the
-# longest-supported version. Check it against the cluster's installed CRD
-# before relying on it, the msteamsConfigs block in particular.
-{{- if .Values.prometheus.enabled }}
-{{- if ne (include "simplyblock.bundlesPrometheusOperator" .) "true" }}
-{{- if not (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PrometheusRule") }}
-{{ fail "prometheus.enabled is true and kube-prometheus-stack.crds.enabled/.prometheusOperator.enabled are not both true, but this cluster has no monitoring.coreos.com/v1 PrometheusRule CRD either. Point prometheus.serviceAccount at the prometheus-operator the customer already runs, install one first, or set prometheus.enabled to false." }}
-{{- end }}
-{{- end }}
----
-apiVersion: monitoring.coreos.com/v1
-kind: PrometheusRule
-metadata:
-  name: simplyblock
-  namespace: {{ .Release.Namespace }}
-  labels:
-    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
-spec:
-  groups:
-    - name: simplyblock
-      rules:
-        - alert: Device_status_online_to_unavailable
-          expr: simplyblock_device_status{status="unavailable"} > 0
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule checks for device unavailability.
-            summary: >-
-              Device {{ "{{" }} $labels.device {{ "}}" }} in storage node
-              {{ "{{" }} $labels.snode {{ "}}" }} is unavailable.
-        - alert: Device_status_online_to_read_only
-          expr: simplyblock_device_status{status="read_only"} > 0
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule checks for devices read-only state.
-            summary: >-
-              Device {{ "{{" }} $labels.device {{ "}}" }} on snode
-              {{ "{{" }} $labels.snode {{ "}}" }} is now read-only.
-        - alert: Cluster_status_online_to_degraded
-          expr: simplyblock_cluster_status{status="degraded"} > 0
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts on cluster degraded state.
-            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} is in degraded state.
-        - alert: Cluster_status_online_to_suspended
-          expr: simplyblock_cluster_status{status="suspended"} > 0
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts for cluster suspended state.
-            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} is in suspended state.
-        - alert: StorageNode_status_online_to_unreachable
-          expr: simplyblock_snode_status{status="unreachable"} > 0
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts for unreachable storage nodes.
-            summary: >-
-              Storage node {{ "{{" }} $labels.snode {{ "}}" }} in cluster
-              {{ "{{" }} $labels.cluster {{ "}}" }} is unreachable.
-        - alert: StorageNode_status_online_to_down
-          expr: simplyblock_snode_status{status="down"} > 0
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts for down storage nodes.
-            summary: >-
-              Storage node {{ "{{" }} $labels.snode {{ "}}" }} in cluster
-              {{ "{{" }} $labels.cluster {{ "}}" }} is down.
-        - alert: StorageNode_health_check_false
-          expr: simplyblock_snode_health_check < 1
-          for: 2m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts for unhealthy storage nodes.
-            summary: >-
-              Storage node {{ "{{" }} $labels.snode {{ "}}" }} in cluster
-              {{ "{{" }} $labels.cluster {{ "}}" }} is unhealthy.
-        - alert: Cluster_provisioned_capacity_reached
-          expr: >-
-            (simplyblock_cluster_size_provisioned_bytes / simplyblock_cluster_size_total_bytes)
-            / simplyblock_cluster_provisioned_capacity_critical_threshold_ratio > 1
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts about cluster provisioned capacity reached.
-            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} provisioned capacity reached.
-        - alert: Cluster_absolute_capacity_reached
-          expr: >-
-            (simplyblock_cluster_size_used_bytes / simplyblock_cluster_size_total_bytes)
-            / simplyblock_cluster_capacity_critical_threshold_ratio > 1
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts about cluster absolute capacity reached.
-            summary: Cluster {{ "{{" }} $labels.cluster {{ "}}" }} absolute capacity reached.
-        - alert: Lvol_status_online_to_offline
-          expr: simplyblock_lvol_status{status="offline"} > 0
-          for: 2m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts for offline lvols.
-            summary: >-
-              Lvol {{ "{{" }} $labels.lvol {{ "}}" }} in cluster
-              {{ "{{" }} $labels.cluster {{ "}}" }} is offline.
-        - alert: RootFilesystemLowSpace
-          expr: >-
-            (node_filesystem_avail_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}
-             / node_filesystem_size_bytes{mountpoint="/",fstype!~"tmpfs|overlay"}) * 100 < 20
-          for: 1m
-          labels:
-            app: simplyblock
-          annotations:
-            description: The rule alerts when root filesystem space is critically low (below 20%).
-            summary: Root filesystem space is critically low on {{ "{{" }} $labels.instance {{ "}}" }}.
+# Alertmanager routing for prometheus.mode=External: an AlertmanagerConfig
+# sending the operator's PrometheusRule alerts (labeled app=simplyblock) to the
+# receivers configured under controlplane.observability.grafana.notifications,
+# and the Secret holding their credentials. The rules themselves are applied by
+# the operator. Managed mode routes through Grafana alerting instead.
+{{- if eq .Values.prometheus.mode "External" }}
 {{- $grafana := .Values.controlplane.observability.grafana }}
 {{- $notifications := $grafana.notifications | default dict }}
 {{- $slack := $notifications.slack | default dict }}
@@ -148,8 +13,8 @@ spec:
 {{- $webhook := $notifications.webhook | default dict }}
 {{- $anyReceiver := or $slack.enabled $teams.enabled $pagerduty.enabled $opsgenie.enabled $webhook.enabled }}
 {{- if $anyReceiver }}
-{{- if not (or (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1alpha1/AlertmanagerConfig") (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1beta1/AlertmanagerConfig")) }}
-{{ fail "A notifications.* receiver is enabled under controlplane.observability.grafana, but this cluster has no AlertmanagerConfig CRD. Install prometheus-operator first, or disable every notifications.*.enabled to render only the PrometheusRule above." }}
+{{- if and (not (index .Values "kube-prometheus-stack").enabled) (not (or (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1alpha1/AlertmanagerConfig") (.Capabilities.APIVersions.Has "monitoring.coreos.com/v1beta1/AlertmanagerConfig"))) }}
+{{ fail "A notifications.* receiver is enabled under controlplane.observability.grafana, but this cluster has no AlertmanagerConfig CRD. Install prometheus-operator first, or disable every notifications.*.enabled or set kube-prometheus-stack.enabled." }}
 {{- end }}
 ---
 # The credentials AlertmanagerConfig needs as secretKeyRefs rather than inline
@@ -189,8 +54,10 @@ kind: AlertmanagerConfig
 metadata:
   name: simplyblock
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.prometheus.external.labels }}
   labels:
-    {{- toYaml .Values.prometheus.additionalLabels | nindent 4 }}
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
 spec:
   route:
     receiver: simplyblock-alerts

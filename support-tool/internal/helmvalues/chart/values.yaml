@@ -394,9 +394,11 @@ discovery:
     # -- Size range a device must fall in, for example, `1T-16T`. Applies to either device class.
     driveSizeRange: ""
 
-  # The values below are accepted and not used. The operator no longer seeds the
-  # draft from the chart, so edit the draft before approving it. They stay so that
-  # a values file written for an earlier release still installs.
+  # Of the values below, only images is used: it reaches the discovery run's
+  # spec.discover.images, which the operator copies into the draft. The rest are
+  # accepted and not used, because the operator no longer seeds the draft from
+  # the chart, so edit the draft before approving it. They stay so that a values
+  # file written for an earlier release still installs.
   # What the draft proposes, for the parts no probe can read.
   #
   # Every field here is one discovery would otherwise guess at, and the guesses
@@ -427,10 +429,12 @@ discovery:
     # about it.
     # edgeCluster: true
 
-    # Images the draft pins, as full repository:tag references. Empty leaves each
-    # to its own default, which is the pairing this release was tested as. The
-    # node agent is not here: a draft that pins none takes the ControlPlane
-    # object's image, which this chart already writes.
+    # Images the draft pins, as full repository:tag references, carried by the
+    # discovery run into the draft's spec.images and from there onto every
+    # StorageNode. Empty leaves each to its own default, which is the pairing
+    # this release was tested as. The node agent is not here: a draft that pins
+    # none takes the ControlPlane object's image, which this chart already
+    # writes.
     #
     #   images:
     #     spdk: quay.io/simplyblock-io/spdk:v26.2.6
@@ -1039,8 +1043,9 @@ metricsAPI:
   # Where the capacity samples are read from. A logical volume's used size is
   # not in the control plane's own API, only in the metrics it exports, so an
   # empty value serves each volume's provisioned size and nothing measured.
-  # -- Prometheus the capacity samples are read from. Empty serves provisioned sizes only.
-  prometheusURL: http://simplyblock-prometheus:9090
+  # -- Prometheus the capacity samples are read from. Unset follows `prometheus.mode`. Empty serves
+  # provisioned sizes only.
+  prometheusURL: ~
 
 mongodb-kubernetes:
   # -- Name of the MongoDB operator.
@@ -1506,81 +1511,30 @@ ramen:
 # needs installing beforehand. Off by default means no monitoring wiring at
 # all, not a choice between two kinds of it.
 prometheus:
-  enabled: false
-  # The labels the selected `Prometheus` CR matches on, via its
-  # serviceMonitorSelector/podMonitorSelector/ruleSelector/
-  # scrapeConfigSelector. The ServiceMonitor, PodMonitor, ScrapeConfig, and
-  # PrometheusRule objects below all carry these. The bundled
-  # kube-prometheus-stack's own Prometheus is configured below to select
-  # everything regardless of label, so this is only worth setting when
-  # pointed at a prometheus-operator the customer already runs and its
-  # selector is narrower than that.
-  additionalLabels: {}
-  interval: 30s
-  # The ServiceAccount the scraping Prometheus pod itself runs as (not the
-  # selector above): webappapi does a TokenReview on every scrape's bearer
-  # token and otherwise trusts no identity at all, so every scrape gets a 401
-  # until its identity is named here. Defaults to the bundled
-  # kube-prometheus-stack's own Prometheus, whose ServiceAccount name is
-  # fixed below (kube-prometheus-stack.prometheus.serviceAccount.name) rather
-  # than left to its usual release-derived default, precisely so this can
-  # name it without having to predict it. Pointed at a prometheus-operator
-  # the customer already runs instead, set this to that Prometheus's own
-  # ServiceAccount: `kubectl get prometheus -A
-  # -o jsonpath='{.items[0].spec.serviceAccountName}'`.
-  serviceAccount:
-    name: simplyblock-prometheus-operator
-    namespace: ""
-  # Fallback for Control Center's own Prometheus link, when
-  # controlCenter.prometheusUrl is unset. prometheus-operator always names its
-  # governing Service "prometheus-operated" in the Prometheus CR's own
-  # namespace, regardless of the CR's name or which release created it, so
-  # this resolves correctly for the bundled Prometheus and for a
-  # same-namespace one the customer already runs alike. Only a
-  # prometheus-operator in another namespace needs this overridden.
-  simplyblock:
-    prometheusURL: "prometheus-operated"
-    prometheusPORT: 9090
+  # Prometheus is required: the metrics API and the Control Center read from it.
+  # This selects which one, and is passed to the ControlPlane as
+  # spec.source.local.observability.prometheus.
+  # -- `Managed`: the operator runs Prometheus beside the control plane. `External`: the operator
+  # creates ServiceMonitor, PodMonitor, ScrapeConfig, and PrometheusRule objects for a
+  # prometheus-operator that already runs, or for the bundled `kube-prometheus-stack`.
+  mode: Managed
+  external:
+    # -- Labels added to every object created for the external prometheus-operator, so that its
+    # Prometheus resource's selectors match them.
+    labels: {}
+    # -- Prometheus the Control Center and the metrics API read from in `External` mode. Empty is
+    # `http://prometheus-operated:9090`, the Service prometheus-operator creates in the namespace
+    # of its Prometheus resource.
+    url: ""
 
-# The prometheus-operator this chart bundles when prometheus.enabled is true
-# (see prometheus-operator-servicemonitors.yaml) — CRDs, the controller, one
-# Prometheus, and Alertmanager (for the PrometheusRule/AlertmanagerConfig
-# objects that file also renders). Grafana, node-exporter, and
-# kube-state-metrics stay off: this is a scrape target for the customer's own
-# dashboards, not a second monitoring stack to look at.
-#
-# To use a prometheus-operator the customer already runs instead, every
-# component kube-prometheus-stack would otherwise render has to be turned
-# off, not only the four below: its default cluster-component scrapers
-# (kubelet, kubeApiServer, kubeControllerManager, kubeScheduler, kubeProxy,
-# kubeEtcd, coreDns) and its default alerting rules (defaultRules) are
-# separate toggles that do not follow prometheusOperator.enabled or
-# prometheus.enabled, and are left on at their own chart defaults here
-# because they are genuinely useful cluster-health signal with nothing
-# redundant about them when this is the only prometheus-operator present.
-# Also point prometheus.serviceAccount at the existing installation's own
-# Prometheus:
-#
-#   --set kube-prometheus-stack.crds.enabled=false
-#   --set kube-prometheus-stack.prometheusOperator.enabled=false
-#   --set kube-prometheus-stack.prometheus.enabled=false
-#   --set kube-prometheus-stack.alertmanager.enabled=false
-#   --set kube-prometheus-stack.defaultRules.create=false
-#   --set kube-prometheus-stack.kubelet.enabled=false
-#   --set kube-prometheus-stack.kubeApiServer.enabled=false
-#   --set kube-prometheus-stack.kubeControllerManager.enabled=false
-#   --set kube-prometheus-stack.kubeScheduler.enabled=false
-#   --set kube-prometheus-stack.kubeProxy.enabled=false
-#   --set kube-prometheus-stack.kubeEtcd.enabled=false
-#   --set kube-prometheus-stack.coreDns.enabled=false
-#   --set prometheus.serviceAccount.name=<its Prometheus's own ServiceAccount>
-#   --set prometheus.serviceAccount.namespace=<its namespace>
-#
-# Left on with monitoring.coreos.com CRDs already present from elsewhere —
-# whether or not every override above was remembered — the chart refuses to
-# install rather than risk two prometheus-operators fighting over the same
-# CRDs (prometheus-operator-servicemonitors.yaml).
+# The prometheus-operator this chart can install for prometheus.mode=External:
+# CRDs, the controller, one Prometheus, and Alertmanager. Grafana,
+# node-exporter, and kube-state-metrics stay off. Off by default; a cluster
+# that already runs a prometheus-operator leaves it off and sets
+# prometheus.mode=External alone.
 kube-prometheus-stack:
+  # -- Installs kube-prometheus-stack. Requires `prometheus.mode: External`.
+  enabled: false
   crds:
     enabled: true
   prometheusOperator:
@@ -1588,17 +1542,10 @@ kube-prometheus-stack:
   prometheus:
     enabled: true
     serviceAccount:
-      # Fixed rather than left to the chart's own release-derived default, so
-      # prometheus.serviceAccount.name above can name it without having to
-      # predict it.
       name: simplyblock-prometheus-operator
     prometheusSpec:
-      # kube-prometheus-stack's own default is nil-uses-Helm-values, which
-      # restricts these to objects carrying this release's own `release:`
-      # label. The ServiceMonitor/PodMonitor/ScrapeConfig/PrometheusRule
-      # objects this chart renders carry no such label by default
-      # (prometheus.additionalLabels above), so without this they are
-      # discovered and then immediately filtered back out.
+      # Select the operator's monitors and rules whatever their labels; the
+      # default selects only objects labeled with this release.
       serviceMonitorSelectorNilUsesHelmValues: false
       podMonitorSelectorNilUsesHelmValues: false
       ruleSelectorNilUsesHelmValues: false

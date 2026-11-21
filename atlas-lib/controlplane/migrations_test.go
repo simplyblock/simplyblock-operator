@@ -320,3 +320,99 @@ func TestMigrationJSONShapesAreDistinguishable(t *testing.T) {
 		t.Error("a volume's migration carries member_count, so the two cannot be told apart")
 	}
 }
+
+// answering is a control plane that answers every request with status and a
+// FastAPI-shaped body carrying detail.
+func answering(t *testing.T, status int, detail string) *Client {
+	t.Helper()
+	return newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		body, _ := json.Marshal(map[string]string{"detail": detail})
+		_, _ = w.Write(body)
+	})
+}
+
+// TestClientCreateMigrationNamesTheRefusal. Release 26.3 answers every refused
+// create with a 400 and leaves the reason in the wording, while later releases
+// answer the refusals that clear by themselves with a 409. A caller acts on
+// which refusal it was, so the client names it the same way for both, and still
+// hands back the control plane's answer for the words.
+func TestClientCreateMigrationNamesTheRefusal(t *testing.T) {
+	const target = "55555555-5555-5555-5555-555555555555"
+	cases := []struct {
+		name   string
+		status int
+		detail string
+		want   error
+	}{
+		{"a 409 is not yet", http.StatusConflict,
+			"An active migration for x already exists targeting a different node (y). Cancel it first.",
+			ErrMigrationBlocked},
+		{"a rebalancing cluster on 26.3 is not yet", http.StatusBadRequest,
+			"Cluster c is rebalancing; wait for it to finish before migrating", ErrMigrationBlocked},
+		{"a busy node on 26.3 is not yet", http.StatusBadRequest,
+			"Node n has a data migration in progress; wait for it to finish", ErrMigrationBlocked},
+		{"an active migration on 26.3 is not yet", http.StatusBadRequest,
+			"An active migration for x already exists targeting a different node (y). Cancel it first.",
+			ErrMigrationBlocked},
+		{"a volume on the target is already there", http.StatusBadRequest,
+			"LVol x is already on node " + target + "; cannot migrate to the same node",
+			ErrMigrationAlreadyOnTarget},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := answering(t, tc.status, tc.detail)
+			_, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+			if !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want it to be %v", err, tc.want)
+			}
+			var answer *StatusError
+			if !errors.As(err, &answer) || !strings.Contains(answer.Body, tc.detail[:20]) {
+				t.Errorf("err = %v, want the control plane's answer kept", err)
+			}
+		})
+	}
+}
+
+// TestClientCreateMigrationLeavesOtherRefusalsUnnamed. A refusal no retry
+// changes must not read as one that clears by itself, or the caller waits on
+// it until a deadline instead of reporting it. The already-there wording
+// counts only for the node that was asked for.
+func TestClientCreateMigrationLeavesOtherRefusalsUnnamed(t *testing.T) {
+	const target = "55555555-5555-5555-5555-555555555555"
+	for _, detail := range []string{
+		"Cannot migrate to node " + target + ": it serves as the fallback source",
+		"LVol x is already on node 66666666-6666-6666-6666-666666666666; cannot migrate to the same node",
+	} {
+		c := answering(t, http.StatusBadRequest, detail)
+		_, err := c.CreateMigration(context.Background(), testCluster, testNQN, target)
+		if err == nil || errors.Is(err, ErrMigrationBlocked) || errors.Is(err, ErrMigrationAlreadyOnTarget) {
+			t.Errorf("%q: err = %v, want a refusal named neither not-yet nor already-there", detail, err)
+		}
+	}
+}
+
+// Regression: SFAM-2824 — a cancel of a migration that had already failed was
+// answered with a 400 saying it is not active, and the operator read that as
+// the cancel having failed: it stopped unwinding the migration and left the
+// target paths connected on every consuming host. Both wordings are the control
+// plane's, one for a volume's migration and one for a subsystem's group.
+func TestClientCancelOfAnEndedMigrationIsNotActive(t *testing.T) {
+	for _, detail := range []string{
+		"Migration is not active (status=failed)",
+		"Group " + testMigration + " is not active (status=done)",
+	} {
+		c := answering(t, http.StatusBadRequest, detail)
+		err := c.CancelMigration(context.Background(), testCluster, testNQN, testMigration)
+		if !errors.Is(err, ErrMigrationNotActive) {
+			t.Errorf("%q: err = %v, want ErrMigrationNotActive", detail, err)
+		}
+	}
+
+	c := answering(t, http.StatusBadRequest, "LVolMigrationGroup g not found")
+	err := c.CancelMigration(context.Background(), testCluster, testNQN, testMigration)
+	if err == nil || errors.Is(err, ErrMigrationNotActive) {
+		t.Errorf("err = %v, want any other refusal reported as one", err)
+	}
+}

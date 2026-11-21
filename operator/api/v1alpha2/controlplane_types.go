@@ -417,12 +417,76 @@ type ControlPlaneObservability struct {
 	// Secret that does not exist does not start.
 	// +optional
 	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
+
+	// Prometheus says which Prometheus collects this control plane's metrics
+	// and evaluates its alert rules. Absent is Managed.
+	// +optional
+	Prometheus *ControlPlanePrometheus `json:"prometheus,omitempty"`
+}
+
+// PrometheusMode says which Prometheus serves a control plane. There is no
+// mode without one: the metrics API and the Control Center read from it.
+// +kubebuilder:validation:Enum=Managed;External
+type PrometheusMode string
+
+const (
+	// PrometheusModeManaged runs the operator's own Prometheus beside the
+	// control plane, scraping it with a static configuration.
+	PrometheusModeManaged PrometheusMode = "Managed"
+	// PrometheusModeExternal leaves scraping to a prometheus-operator that
+	// already runs on the cluster. The operator creates ServiceMonitor,
+	// PodMonitor, ScrapeConfig, and PrometheusRule objects for it instead of a
+	// Prometheus of its own.
+	PrometheusModeExternal PrometheusMode = "External"
+)
+
+// ControlPlanePrometheus selects the Prometheus a control plane uses.
+// +kubebuilder:validation:XValidation:rule="!has(self.external) || self.mode == 'External'",message="external is only valid when mode is External"
+type ControlPlanePrometheus struct {
+	// Mode is Managed or External.
+	// +kubebuilder:default=Managed
+	// +optional
+	Mode PrometheusMode `json:"mode,omitempty"`
+
+	// External configures the objects created for an external
+	// prometheus-operator. Only valid when Mode is External.
+	// +optional
+	External *ExternalPrometheus `json:"external,omitempty"`
+}
+
+// ExternalPrometheus is what an external prometheus-operator needs to pick up
+// the objects the operator creates for it.
+type ExternalPrometheus struct {
+	// Labels are added to every ServiceMonitor, PodMonitor, ScrapeConfig, and
+	// PrometheusRule, so that the Prometheus resource's selectors match them.
+	// +optional
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // MonitoringEnabled reports whether the control plane is to provision the
 // monitoring stack.
 func (l *LocalControlPlane) MonitoringEnabled() bool {
 	return l != nil && l.Observability != nil && l.Observability.EnableMonitoring
+}
+
+// PrometheusMode is the Prometheus this control plane uses, Managed unless
+// the spec says External.
+func (l *LocalControlPlane) PrometheusMode() PrometheusMode {
+	if l == nil || l.Observability == nil || l.Observability.Prometheus == nil ||
+		l.Observability.Prometheus.Mode == "" {
+		return PrometheusModeManaged
+	}
+	return l.Observability.Prometheus.Mode
+}
+
+// ExternalPrometheusLabels is the labels for the objects created for an
+// external prometheus-operator, or nil when none are set.
+func (l *LocalControlPlane) ExternalPrometheusLabels() map[string]string {
+	if l == nil || l.Observability == nil || l.Observability.Prometheus == nil ||
+		l.Observability.Prometheus.External == nil {
+		return nil
+	}
+	return l.Observability.Prometheus.External.Labels
 }
 
 // MonitoringSecretRef is the Secret holding the monitoring stack's admin

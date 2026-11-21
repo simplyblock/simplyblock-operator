@@ -31,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -116,9 +117,16 @@ func (r *ControlPlaneOpsReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 	}
 
 	if ops.Status.Phase != simplyblockv1alpha2.ControlPlaneOpsPhaseRunning {
-		acquired, result, err := r.acquireLock(ctx, &ops, target)
-		if err != nil || !acquired {
-			return result, err
+		if locksFromTheStart(ops.Spec.Action) {
+			acquired, result, err := r.acquireLock(ctx, &ops, target)
+			if err != nil || !acquired {
+				return result, err
+			}
+		} else if err := r.start(ctx, &ops, target); err != nil {
+			// A HostMaintenance window starts without the lock: Holding is a
+			// budget the window owns, and it takes the lock on the way into the
+			// first step that touches the database (graphs.go, opsLockedSteps).
+			return ctrl.Result{}, err
 		}
 	}
 
@@ -135,7 +143,8 @@ func (r *ControlPlaneOpsReconciler) acquireLock(
 	ops *simplyblockv1alpha2.ControlPlaneOps,
 	target *simplyblockv1alpha2.ControlPlane,
 ) (bool, ctrl.Result, error) {
-	if held := target.Status.ActiveOpsRef; held != "" && held != ops.Name {
+	if !r.takeLock(ctx, ops, target) {
+		held := target.Status.ActiveOpsRef
 		if ops.Status.Phase != simplyblockv1alpha2.ControlPlaneOpsPhasePending {
 			if err := r.setPhase(ctx, ops, simplyblockv1alpha2.ControlPlaneOpsPhasePending,
 				fmt.Sprintf("waiting for operation %q to release the control plane", held)); err != nil {
@@ -146,6 +155,26 @@ func (r *ControlPlaneOpsReconciler) acquireLock(
 			fmt.Sprintf("control plane %q is held by operation %q", target.Name, held))
 		return false, ctrl.Result{RequeueAfter: opsRetry}, nil
 	}
+	if err := r.start(ctx, ops, target); err != nil {
+		return false, ctrl.Result{}, err
+	}
+	return true, ctrl.Result{Requeue: true}, nil
+}
+
+// takeLock writes this operation into the target's status.activeOpsRef, and
+// reports false when another operation holds it or when the write lost a race.
+// Both are answered by asking again later, and neither is an error.
+func (r *ControlPlaneOpsReconciler) takeLock(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.ControlPlaneOps,
+	target *simplyblockv1alpha2.ControlPlane,
+) bool {
+	switch held := target.Status.ActiveOpsRef; {
+	case held == ops.Name:
+		return true
+	case held != "":
+		return false
+	}
 
 	// The optimistic lock is what makes this a lock at all: two reconcilers that
 	// both saw a free field patch the same resourceVersion, and one of them gets
@@ -154,9 +183,21 @@ func (r *ControlPlaneOpsReconciler) acquireLock(
 	target.Status.ActiveOpsRef = ops.Name
 	patch := client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{})
 	if err := r.Status().Patch(ctx, target, patch); err != nil {
-		return false, ctrl.Result{RequeueAfter: opsRetry}, nil //nolint:nilerr // a lost race is retried, not failed
+		// A lost race is retried, not failed.
+		target.Status.ActiveOpsRef = base.Status.ActiveOpsRef
+		return false
 	}
+	return true
+}
 
+// start marks the operation Running and records when it started. For an action
+// that locks from its first step this follows the lock; for one that does not,
+// it is the whole of starting.
+func (r *ControlPlaneOpsReconciler) start(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.ControlPlaneOps,
+	target *simplyblockv1alpha2.ControlPlane,
+) error {
 	now := metav1.Now()
 	opsBase := ops.DeepCopy()
 	ops.Status.Phase = simplyblockv1alpha2.ControlPlaneOpsPhaseRunning
@@ -164,11 +205,16 @@ func (r *ControlPlaneOpsReconciler) acquireLock(
 	ops.Status.Message = ""
 	ops.Status.ObservedGeneration = ops.Generation
 	if err := r.Status().Patch(ctx, ops, client.MergeFrom(opsBase)); err != nil {
-		return false, ctrl.Result{}, err
+		return err
 	}
-	r.emit(ops, corev1.EventTypeNormal, OperationStarted,
-		fmt.Sprintf("acquired control plane %q and started %s", target.Name, ops.Spec.Action))
-	return true, ctrl.Result{Requeue: true}, nil
+	if target.Status.ActiveOpsRef == ops.Name {
+		r.emit(ops, corev1.EventTypeNormal, OperationStarted,
+			fmt.Sprintf("acquired control plane %q and started %s", target.Name, ops.Spec.Action))
+	} else {
+		r.emit(ops, corev1.EventTypeNormal, OperationStarted,
+			fmt.Sprintf("started %s on control plane %q", ops.Spec.Action, target.Name))
+	}
+	return nil
 }
 
 // advance runs the action's machine forward by at most one step.
@@ -194,11 +240,33 @@ func (r *ControlPlaneOpsReconciler) advance(
 
 	current := machine.CurrentState()
 
+	// A step declared lock-free never holds the lock. The release after the
+	// last locked step is written after that step's successor is recorded, so
+	// a pass that finds the lock still held in a lock-free step is the pass
+	// after a restart in between, and it finishes the release.
+	if !holdsLock(ops.Spec.Action, current) {
+		if err := r.releaseLock(ctx, ops, target); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+
 	if ops.Spec.Abort {
 		return r.unwind(ctx, ops, target, machine, current)
 	}
 
-	if machine.TimeoutReached() {
+	timedOut := machine.TimeoutReached()
+	if timedOut && ops.Spec.Action == simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance &&
+		current == stepHolding {
+		// A window's Holding deadline runs from the last drain observed in the
+		// namespace (hostmaintenance_drain.go), so a pool whose update is
+		// progressing never expires a window waiting its turn.
+		open, err := r.holdingStillOpen(ctx, ops)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		timedOut = !open
+	}
+	if timedOut {
 		return r.failAndRelease(ctx, ops, target,
 			fmt.Sprintf("step %s outlived its deadline", current))
 	}
@@ -209,6 +277,11 @@ func (r *ControlPlaneOpsReconciler) advance(
 		var fatal *terminalStepError
 		if errorsAs(err, &fatal) {
 			return r.failAndRelease(ctx, ops, target, fatal.Error())
+		}
+		if apierrors.IsConflict(err) {
+			// A status write on a window the cache served stale. The next pass
+			// reads the fresh object, and nothing is wrong to log.
+			return ctrl.Result{Requeue: true}, nil
 		}
 		return ctrl.Result{}, err
 	case !done:
@@ -223,11 +296,35 @@ func (r *ControlPlaneOpsReconciler) advance(
 		return r.finish(ctx, ops, target, simplyblockv1alpha2.ControlPlaneOpsPhaseSucceeded,
 			fmt.Sprintf("%s finished", ops.Spec.Action))
 	}
+	// A step that holds the lock is entered holding it. The window takes the
+	// lock here, on the way out of Holding, and a lock another operation holds
+	// keeps the window in Holding with its budget up rather than failing it:
+	// the other operation is a move, and a move takes seconds.
+	if holdsLock(ops.Spec.Action, next) && !holdsLock(ops.Spec.Action, current) {
+		if !r.takeLock(ctx, ops, target) {
+			message := fmt.Sprintf("waiting for operation %q to release the control plane before %s",
+				target.Status.ActiveOpsRef, next)
+			r.emit(ops, corev1.EventTypeNormal, MoveQueued, message)
+			return ctrl.Result{RequeueAfter: opsRetry}, r.note(ctx, ops, message)
+		}
+	}
 	if err := machine.TransitionTo(ctx, next); err != nil {
 		return ctrl.Result{}, fmt.Errorf("enter step %s: %w", next, err)
 	}
 	snapshot := statemachine.ToKube(machine.Snapshot())
-	return ctrl.Result{RequeueAfter: opsAdvance}, r.recordStep(ctx, ops, next, snapshot.Deadline)
+	if err := r.recordStep(ctx, ops, next, snapshot.Deadline); err != nil {
+		return ctrl.Result{}, err
+	}
+	// The lock is given back on the way out of the last step that holds it,
+	// after the successor is recorded, so that a restart in between finds a
+	// lock-free step holding the lock, which the top of this function releases,
+	// rather than a locked step without one.
+	if holdsLock(ops.Spec.Action, current) && !holdsLock(ops.Spec.Action, next) {
+		if err := r.releaseLock(ctx, ops, target); err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	return ctrl.Result{RequeueAfter: opsAdvance}, nil
 }
 
 // terminalStepError is a step failure nothing recovers from by reconciling
@@ -261,6 +358,24 @@ func (r *ControlPlaneOpsReconciler) perform(
 		return r.verify(ctx, ops, target)
 	case stepRequesting:
 		return r.requestBackup(ctx, ops, target)
+	case stepHolding:
+		return r.windowHold(ctx, ops, target)
+	case stepEnteringMaintenance:
+		return r.windowEnterMaintenance(ctx, ops, target)
+	case stepMovingCoordinators:
+		return r.windowMoveCoordinators(ctx, ops, target)
+	case stepExcludingProcesses:
+		return r.windowExcludeProcesses(ctx, ops, target)
+	case stepReleasing:
+		return r.windowRelease(ctx, ops)
+	case stepAwaitingHost:
+		return r.windowAwaitHost(ctx, ops)
+	case stepIncludingProcesses:
+		return r.windowIncludeProcesses(ctx, ops, target)
+	case stepLeavingMaintenance:
+		return r.windowLeaveMaintenance(ctx, ops, target)
+	case stepCleanup:
+		return r.windowCleanup(ctx, ops)
 	default:
 		return false, "", &terminalStepError{message: fmt.Sprintf("unknown step %q", current)}
 	}
@@ -757,7 +872,11 @@ func (r *ControlPlaneOpsReconciler) unwind(
 	}
 
 	// Nothing before the drain performs a side effect, so there is nothing to
-	// unwind: the abort is the lock being released and a terminal phase.
+	// unwind: the abort is the lock being released and a terminal phase. A
+	// HostMaintenance window is the exception, and what it has put up by the
+	// one step it can be aborted from is its markers, which its teardown takes
+	// down.
+	r.teardownWindow(ctx, ops)
 	if err := r.releaseLock(ctx, ops, target); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -819,6 +938,7 @@ func (r *ControlPlaneOpsReconciler) failAndRelease(
 	target *simplyblockv1alpha2.ControlPlane,
 	message string,
 ) (ctrl.Result, error) {
+	r.teardownWindow(ctx, ops)
 	if err := r.releaseLock(ctx, ops, target); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -848,6 +968,7 @@ func (r *ControlPlaneOpsReconciler) reconcileDeletion(
 			return ctrl.Result{}, err
 		}
 	}
+	r.teardownWindow(ctx, ops)
 
 	base := ops.DeepCopy()
 	controllerutil.RemoveFinalizer(ops, FinalizerControlPlaneOps)
@@ -998,6 +1119,12 @@ func (r *ControlPlaneOpsReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&simplyblockv1alpha2.ControlPlaneOps{}).
 		Named("controlplaneops").
+		// The three watches below are the HostMaintenance window's: a pod on
+		// a held worker is a drain signal, the cluster file is the move's
+		// verification, and a window that observed a drain re-arms the others.
+		Watches(&corev1.Pod{}, handler.EnqueueRequestsFromMapFunc(r.windowsForPod)).
+		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.windowsForClusterFile)).
+		Watches(&simplyblockv1alpha2.ControlPlaneOps{}, handler.EnqueueRequestsFromMapFunc(r.holdingWindowsBeside)).
 		Complete(r)
 }
 

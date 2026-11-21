@@ -83,6 +83,46 @@ func TestClientCreateClusterSendsTheSpecsFieldNames(t *testing.T) {
 	}
 }
 
+// Checksum validation and atomicity are sent when on and left out when off,
+// which is the control plane's own default for both. The metadata journal is
+// the other way about: the control plane journals unless told not to, so off
+// has to be said.
+func TestClientCreateClusterSendsTheIntegritySettings(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		var body map[string]any
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(raw, &body); err != nil {
+				t.Errorf("decode the body: %v", err)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(clusterDTO))
+		})
+
+		_, err := c.CreateCluster(context.Background(), CreateClusterParams{
+			Name: "prod", MaxSubsys: 20, SpdkVCPUCount: 8,
+			InlineChecksum: on, Atomic4K: on, MetadataJournal: on,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		for _, key := range []string{"inline_checksum", "atomic_4k"} {
+			value, sent := body[key]
+			if on && value != true {
+				t.Errorf("on: body[%q] = %v, want true", key, value)
+			}
+			if !on && sent {
+				t.Errorf("off: body[%q] = %v, want it left out", key, value)
+			}
+		}
+		if value, sent := body["md_journal"]; !sent || value != on {
+			t.Errorf("body[md_journal] = %v (sent %v), want %v stated", value, sent, on)
+		}
+	}
+}
+
 // The control plane's refusal keeps its status and body, which is what an
 // event about the refusal quotes.
 func TestClientCreateClusterRefusalCarriesTheAnswer(t *testing.T) {
