@@ -448,6 +448,34 @@ func TestNodePostStartScriptWritesTheDefaultHostNQN(t *testing.T) {
 	}
 }
 
+// The node plugin stages new volumes behind the device-mapper indirection unless
+// it is told otherwise, so a deployment that states nothing renders nothing: an
+// operator upgrade does not change the node plugin's template, and does not
+// restart it on every node.
+func TestDeviceMapperIndirectionIsTheNodePluginsDefault(t *testing.T) {
+	node := containerNamed(nodeDaemonSet(testDriver("simplyblock"), testImage).Spec.Template.Spec.Containers, "csi-node")
+	if e := envNamed(node, "SPDKCSI_DM_INDIRECTION"); e != nil {
+		t.Errorf("SPDKCSI_DM_INDIRECTION = %q on a driver that leaves the indirection on, want it unset", e.Value)
+	}
+}
+
+// Turning the indirection off reaches the node plugin, which stages, and not
+// the controller plugin, which never touches a host's devices: a change that
+// reached both would restart the controller for nothing.
+func TestDisablingDeviceMapperIndirectionReachesOnlyTheNodePlugin(t *testing.T) {
+	d := testDriver("simplyblock")
+	d.Spec.DisableDeviceMapperIndirection = true
+
+	node := containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-node")
+	if e := envNamed(node, "SPDKCSI_DM_INDIRECTION"); e == nil || e.Value != "false" {
+		t.Errorf("node plugin SPDKCSI_DM_INDIRECTION = %v, want \"false\"", e)
+	}
+	controller := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-controller")
+	if e := envNamed(controller, "SPDKCSI_DM_INDIRECTION"); e != nil {
+		t.Errorf("the controller plugin carries SPDKCSI_DM_INDIRECTION = %q", e.Value)
+	}
+}
+
 // U-111: enableNVMeTCPModuleInstall adds the nvme-tcp-module init container.
 // It runs the driver's own image under the driver's pull policy, so a mirrored
 // or air-gapped registry needs nothing more, and it reaches the host through a

@@ -199,6 +199,24 @@ func (e ConsistencyGroupReplicationStatusDTOState) Valid() bool {
 	}
 }
 
+// Defines values for ConsistencyGroupSubsystemMoveCreateDTOPurpose.
+const (
+	Join  ConsistencyGroupSubsystemMoveCreateDTOPurpose = "join"
+	Leave ConsistencyGroupSubsystemMoveCreateDTOPurpose = "leave"
+)
+
+// Valid indicates whether the value is a known member of the ConsistencyGroupSubsystemMoveCreateDTOPurpose enum.
+func (e ConsistencyGroupSubsystemMoveCreateDTOPurpose) Valid() bool {
+	switch e {
+	case Join:
+		return true
+	case Leave:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for DevicePerformanceAssessmentDTOVerdict.
 const (
 	DevicePerformanceAssessmentDTOVerdictOk      DevicePerformanceAssessmentDTOVerdict = "ok"
@@ -313,6 +331,36 @@ const (
 func (e HCPKeyDescriptorType) Valid() bool {
 	switch e {
 	case Hcp:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKMSSettingsProvider.
+const (
+	KMIPKMSSettingsProviderKmip KMIPKMSSettingsProvider = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKMSSettingsProvider enum.
+func (e KMIPKMSSettingsProvider) Valid() bool {
+	switch e {
+	case KMIPKMSSettingsProviderKmip:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for KMIPKeyDescriptorType.
+const (
+	KMIPKeyDescriptorTypeKmip KMIPKeyDescriptorType = "kmip"
+)
+
+// Valid indicates whether the value is a known member of the KMIPKeyDescriptorType enum.
+func (e KMIPKeyDescriptorType) Valid() bool {
+	switch e {
+	case KMIPKeyDescriptorTypeKmip:
 		return true
 	default:
 		return false
@@ -916,6 +964,21 @@ func (e UpdatableClusterParametersTwoNodeFencingAuthority) Valid() bool {
 	}
 }
 
+// Defines values for VaultKMSSettingsProvider.
+const (
+	Vault VaultKMSSettingsProvider = "vault"
+)
+
+// Valid indicates whether the value is a known member of the VaultKMSSettingsProvider enum.
+func (e VaultKMSSettingsProvider) Valid() bool {
+	switch e {
+	case Vault:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for CreateParamsHaType.
 const (
 	CreateParamsHaTypeHa     CreateParamsHaType = "ha"
@@ -1450,50 +1513,53 @@ type ClusterLogEntryDTO struct {
 
 // ClusterParams defines model for ClusterParams.
 type ClusterParams struct {
-	Atomic4k               *bool                    `json:"atomic_4k,omitempty"`
-	BackupConfig           *UnresolvedBackupConfig  `json:"backup_config,omitempty"`
-	BlkSize                *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
-	CapCrit                *int                     `json:"cap_crit,omitempty"`
-	CapWarn                *int                     `json:"cap_warn,omitempty"`
-	ClientDataNic          *string                  `json:"client_data_nic,omitempty"`
-	CrName                 *string                  `json:"cr_name,omitempty"`
-	CrNamespace            *string                  `json:"cr_namespace,omitempty"`
-	CrPlural               *string                  `json:"cr_plural,omitempty"`
-	DeviceMode             *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
-	DistrBs                *int                     `json:"distr_bs,omitempty"`
-	DistrChunkBs           *int                     `json:"distr_chunk_bs,omitempty"`
-	DistrNdcs              *int                     `json:"distr_ndcs,omitempty"`
-	DistrNpcs              *int                     `json:"distr_npcs,omitempty"`
-	EnableFailureDomain    *bool                    `json:"enable_failure_domain,omitempty"`
-	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
-	Fabric                 *string                  `json:"fabric,omitempty"`
-	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
-	HashicorpVaultSettings *HashicorpVaultSettings  `json:"hashicorp_vault_settings,omitempty"`
-	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
-	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
-	InlineChecksum         *bool                    `json:"inline_checksum,omitempty"`
-	IsSingleNode           *bool                    `json:"is_single_node,omitempty"`
-	LeaderSite             *string                  `json:"leader_site,omitempty"`
-	LvolGeometryEnabled    *bool                    `json:"lvol_geometry_enabled,omitempty"`
-	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
-	MaxSubsys              int                      `json:"max_subsys"`
-	MdJournal              *bool                    `json:"md_journal,omitempty"`
-	Name                   *string                  `json:"name,omitempty"`
-	NodeLabelSuffix        *string                  `json:"node_label_suffix,omitempty"`
-	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
-	PageCopy               *bool                    `json:"page_copy,omitempty"`
-	PageSizeInBlocks       *int                     `json:"page_size_in_blocks,omitempty"`
-	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
-	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
-	QpairCount             *int                     `json:"qpair_count,omitempty"`
-	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
-	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
-	SnodeApiService        *string                  `json:"snode_api_service,omitempty"`
-	SpdkProxyService       *string                  `json:"spdk_proxy_service,omitempty"`
-	SpdkProxyTlsSecret     *string                  `json:"spdk_proxy_tls_secret,omitempty"`
-	SpdkVcpuCount          int                      `json:"spdk_vcpu_count"`
-	StrictNodeAntiAffinity *bool                    `json:"strict_node_anti_affinity,omitempty"`
-	SyncReplication        *bool                    `json:"sync_replication,omitempty"`
+	Atomic4k             *bool                    `json:"atomic_4k,omitempty"`
+	BackupConfig         *UnresolvedBackupConfig  `json:"backup_config,omitempty"`
+	BlkSize              *ClusterParamsBlkSize    `json:"blk_size,omitempty"`
+	CapCrit              *int                     `json:"cap_crit,omitempty"`
+	CapWarn              *int                     `json:"cap_warn,omitempty"`
+	ClientDataNic        *string                  `json:"client_data_nic,omitempty"`
+	ContainerImagePrefix *string                  `json:"container_image_prefix,omitempty"`
+	CrName               *string                  `json:"cr_name,omitempty"`
+	CrNamespace          *string                  `json:"cr_namespace,omitempty"`
+	CrPlural             *string                  `json:"cr_plural,omitempty"`
+	DeviceMode           *ClusterParamsDeviceMode `json:"device_mode,omitempty"`
+	DistrBs              *int                     `json:"distr_bs,omitempty"`
+	DistrChunkBs         *int                     `json:"distr_chunk_bs,omitempty"`
+	DistrNdcs            *int                     `json:"distr_ndcs,omitempty"`
+	DistrNpcs            *int                     `json:"distr_npcs,omitempty"`
+	EnableFailureDomain  *bool                    `json:"enable_failure_domain,omitempty"`
+	EnableNodeAffinity   *bool                    `json:"enable_node_affinity,omitempty"`
+	Fabric               *string                  `json:"fabric,omitempty"`
+	HaType               *ClusterParamsHaType     `json:"ha_type,omitempty"`
+	HugepagesMem         *int                     `json:"hugepages_mem,omitempty"`
+	InflightIoThreshold  *int                     `json:"inflight_io_threshold,omitempty"`
+	InlineChecksum       *bool                    `json:"inline_checksum,omitempty"`
+	IsSingleNode         *bool                    `json:"is_single_node,omitempty"`
+	KmsSettings          *struct {
+		union json.RawMessage
+	} `json:"kms_settings,omitempty"`
+	LeaderSite             *string `json:"leader_site,omitempty"`
+	LvolGeometryEnabled    *bool   `json:"lvol_geometry_enabled,omitempty"`
+	MaxQueueSize           *int    `json:"max_queue_size,omitempty"`
+	MaxSubsys              int     `json:"max_subsys"`
+	MdJournal              *bool   `json:"md_journal,omitempty"`
+	Name                   *string `json:"name,omitempty"`
+	NodeLabelSuffix        *string `json:"node_label_suffix,omitempty"`
+	NvmfBasePort           *int    `json:"nvmf_base_port,omitempty"`
+	PageCopy               *bool   `json:"page_copy,omitempty"`
+	PageSizeInBlocks       *int    `json:"page_size_in_blocks,omitempty"`
+	ProvCapCrit            *int    `json:"prov_cap_crit,omitempty"`
+	ProvCapWarn            *int    `json:"prov_cap_warn,omitempty"`
+	QpairCount             *int    `json:"qpair_count,omitempty"`
+	RpcBasePort            *int    `json:"rpc_base_port,omitempty"`
+	SnodeApiPort           *int    `json:"snode_api_port,omitempty"`
+	SnodeApiService        *string `json:"snode_api_service,omitempty"`
+	SpdkProxyService       *string `json:"spdk_proxy_service,omitempty"`
+	SpdkProxyTlsSecret     *string `json:"spdk_proxy_tls_secret,omitempty"`
+	SpdkVcpuCount          int     `json:"spdk_vcpu_count"`
+	StrictNodeAntiAffinity *bool   `json:"strict_node_anti_affinity,omitempty"`
+	SyncReplication        *bool   `json:"sync_replication,omitempty"`
 }
 
 // ClusterParamsBlkSize defines model for ClusterParams.BlkSize.
@@ -1513,6 +1579,20 @@ type CommitParams struct {
 // ConsistencyGroupColocateDTO Request body for moving a member into its group's subsystem.
 type ConsistencyGroupColocateDTO struct {
 	ClientSwapReady *bool `json:"client_swap_ready,omitempty"`
+}
+
+// ConsistencyGroupColocationDTO The subsystem move a late join would end in, computed against the state
+// the pinned node has once the join's migration landed. Nothing is reserved.
+// “target_nqn“ is empty for a fresh subsystem (“target_is_new“), and
+// “refusal“ names why the group could not be brought into one subsystem:
+// “SubsystemLimitReached: ...“ is final (the join would be refused for
+// it); “SubsystemBusy: ...“ is a subsystem held by an active migration or
+// move, which ends, so the join is waited, not refused.
+type ConsistencyGroupColocationDTO struct {
+	MovingLvolIds *[]string `json:"moving_lvol_ids,omitempty"`
+	Refusal       *string   `json:"refusal,omitempty"`
+	TargetIsNew   *bool     `json:"target_is_new,omitempty"`
+	TargetNqn     *string   `json:"target_nqn,omitempty"`
 }
 
 // ConsistencyGroupDTO A standalone consistency group summary (design §10).
@@ -1546,12 +1626,14 @@ type ConsistencyGroupGenerationMemberDTO struct {
 
 // ConsistencyGroupJoinPlanDTO The steps a late join of an existing volume takes (co-location design
 // §5): “migrate“ (live-migrate “migrate_lvol_ids“ to “target_node_id“
-// first), “join“, “colocate“ (move into “target_nqn“).
+// first), “join“, “colocate“ (move into “target_nqn“). “colocation“
+// is absent when the group has no other member to share a subsystem with.
 type ConsistencyGroupJoinPlanDTO struct {
-	MigrateLvolIds *[]string `json:"migrate_lvol_ids,omitempty"`
-	Steps          []string  `json:"steps"`
-	TargetNodeId   *string   `json:"target_node_id,omitempty"`
-	TargetNqn      *string   `json:"target_nqn,omitempty"`
+	Colocation     *ConsistencyGroupColocationDTO `json:"colocation,omitempty"`
+	MigrateLvolIds *[]string                      `json:"migrate_lvol_ids,omitempty"`
+	Steps          []string                       `json:"steps"`
+	TargetNodeId   *string                        `json:"target_node_id,omitempty"`
+	TargetNqn      *string                        `json:"target_nqn,omitempty"`
 }
 
 // ConsistencyGroupLineageMemberDTO One protected volume of a consistency group: the handle its
@@ -1641,6 +1723,72 @@ type ConsistencyGroupResolutionDTO struct {
 	ClusterId       string                              `json:"cluster_id"`
 	GroupId         string                              `json:"group_id"`
 	Members         *[]ConsistencyGroupLineageMemberDTO `json:"members,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMoveCreateDTO Request body for a subsystem move. With “purpose“ “join“ (the
+// default), “lvol_id“ is the member that just joined and the group is
+// brought into one subsystem. With “leave“, “lvol_id“ is a member about
+// to leave, and its namespace moves out of the subsystem it shares into a
+// fresh one of its own. A retry with the same “request_id“ answers with
+// the same move.
+type ConsistencyGroupSubsystemMoveCreateDTO struct {
+	LvolId    string                                         `json:"lvol_id"`
+	Purpose   *ConsistencyGroupSubsystemMoveCreateDTOPurpose `json:"purpose,omitempty"`
+	RequestId string                                         `json:"request_id"`
+}
+
+// ConsistencyGroupSubsystemMoveCreateDTOPurpose defines model for ConsistencyGroupSubsystemMoveCreateDTO.Purpose.
+type ConsistencyGroupSubsystemMoveCreateDTOPurpose string
+
+// ConsistencyGroupSubsystemMoveDTO A consistency group's subsystem move. “id“ is empty, and “volumes“
+// too, when nothing had to move. “namespaces_at“ is “source“ or
+// “target“; “deadline“ is the hosts' suspend deadline in Unix seconds
+// the move was started under (0 before it started).
+type ConsistencyGroupSubsystemMoveDTO struct {
+	Deadline     *int                                      `json:"deadline,omitempty"`
+	Id           string                                    `json:"id"`
+	NamespacesAt *string                                   `json:"namespaces_at,omitempty"`
+	Purpose      *string                                   `json:"purpose,omitempty"`
+	RequestId    *string                                   `json:"request_id,omitempty"`
+	Status       *string                                   `json:"status,omitempty"`
+	TargetIsNew  *bool                                     `json:"target_is_new,omitempty"`
+	TargetNqn    *string                                   `json:"target_nqn,omitempty"`
+	Volumes      *[]ConsistencyGroupSubsystemMoveVolumeDTO `json:"volumes,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMovePrepareDTO Request body for preparing a move: “host_nqn“ asks for the target
+// subsystem's connect entries for that host.
+type ConsistencyGroupSubsystemMovePrepareDTO struct {
+	HostNqn *string `json:"host_nqn,omitempty"`
+}
+
+// ConsistencyGroupSubsystemMovePreparedDTO A prepared move, and the connect entries of its target subsystem for
+// the requested host, shaped like the volume connect route's.
+type ConsistencyGroupSubsystemMovePreparedDTO struct {
+	Connect *[]map[string]interface{} `json:"connect,omitempty"`
+
+	// Move A consistency group's subsystem move. ``id`` is empty, and ``volumes``
+	// too, when nothing had to move. ``namespaces_at`` is ``source`` or
+	// ``target``; ``deadline`` is the hosts' suspend deadline in Unix seconds
+	// the move was started under (0 before it started).
+	Move ConsistencyGroupSubsystemMoveDTO `json:"move"`
+}
+
+// ConsistencyGroupSubsystemMoveStartDTO Request body for moving the namespaces: the hosts' suspend deadline in
+// Unix seconds. The move refuses to begin once it has passed.
+type ConsistencyGroupSubsystemMoveStartDTO struct {
+	Deadline int `json:"deadline"`
+}
+
+// ConsistencyGroupSubsystemMoveVolumeDTO One volume whose namespace changes subsystem: where it is exported
+// from and at which nsid, its wire identity, and its nsid in the target.
+type ConsistencyGroupSubsystemMoveVolumeDTO struct {
+	LvolId     string  `json:"lvol_id"`
+	Nguid      *string `json:"nguid,omitempty"`
+	NsUuid     *string `json:"ns_uuid,omitempty"`
+	SourceNqn  *string `json:"source_nqn,omitempty"`
+	SourceNsid *int    `json:"source_nsid,omitempty"`
+	TargetNsid *int    `json:"target_nsid,omitempty"`
 }
 
 // DeviceDTO defines model for DeviceDTO.
@@ -1969,13 +2117,25 @@ type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
-// HashicorpVaultSettings defines model for HashicorpVaultSettings.
-type HashicorpVaultSettings struct {
-	BaseUrl      *string `json:"base_url,omitempty"`
-	CertRole     *string `json:"cert_role,omitempty"`
-	KvMount      *string `json:"kv_mount,omitempty"`
-	TransitMount *string `json:"transit_mount,omitempty"`
+// KMIPKMSSettings A KMIP-speaking key management appliance.
+type KMIPKMSSettings struct {
+	Provider  *KMIPKMSSettingsProvider `json:"provider,omitempty"`
+	ServerUrl string                   `json:"server_url"`
 }
+
+// KMIPKMSSettingsProvider defines model for KMIPKMSSettings.Provider.
+type KMIPKMSSettingsProvider string
+
+// KMIPKeyDescriptor Keys held in a KMIP-speaking appliance, wrapped under a named key.
+type KMIPKeyDescriptor struct {
+	DekPath   string                 `json:"dek_path"`
+	KekName   string                 `json:"kek_name"`
+	ServerUrl *string                `json:"server_url,omitempty"`
+	Type      *KMIPKeyDescriptorType `json:"type,omitempty"`
+}
+
+// KMIPKeyDescriptorType defines model for KMIPKeyDescriptor.Type.
+type KMIPKeyDescriptorType string
 
 // LocatedManifestsInput Manifests that were read from one location, and that location.
 type LocatedManifestsInput struct {
@@ -2669,6 +2829,19 @@ type ValidationError_Loc_Item struct {
 	union json.RawMessage
 }
 
+// VaultKMSSettings HashiCorp Vault (or an OpenBao-compatible server): a Transit mount
+// wraps/unwraps DEKs, a KV mount stores the wrapped ciphertext.
+type VaultKMSSettings struct {
+	BaseUrl      string                    `json:"base_url"`
+	CertRole     *string                   `json:"cert_role,omitempty"`
+	KvMount      *string                   `json:"kv_mount,omitempty"`
+	Provider     *VaultKMSSettingsProvider `json:"provider,omitempty"`
+	TransitMount *string                   `json:"transit_mount,omitempty"`
+}
+
+// VaultKMSSettingsProvider defines model for VaultKMSSettings.Provider.
+type VaultKMSSettingsProvider string
+
 // VolumeDTO defines model for VolumeDTO.
 type VolumeDTO struct {
 	AllowedHosts          []string                `json:"allowed_hosts"`
@@ -3074,6 +3247,9 @@ type ClustersConsistencyGroupsReplicationSyncStatusApiV2ClustersClusterIdConsist
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody defines parameters for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody = UnderscoreGenerationTakeParams
 
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody defines parameters for ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost.
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody = ConsistencyGroupSubsystemMovePrepareDTO
+
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
 type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
 	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
@@ -3441,6 +3617,15 @@ type ClustersConsistencyGroupsReplicationFailbackApiV2ClustersClusterIdConsisten
 
 // ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody defines body for ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost for application/json ContentType.
 type ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONRequestBody = ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPostJSONBody
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPostJSONRequestBody = ConsistencyGroupSubsystemMoveCreateDTO
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePostJSONRequestBody = ConsistencyGroupSubsystemMoveStartDTO
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody defines body for ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost for application/json ContentType.
+type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONRequestBody = ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePostJSONBody
 
 // ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody defines body for ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPost for application/json ContentType.
 type ClustersMigrationPlansCreateApiV2ClustersClusterIdMigrationPlansPostJSONRequestBody = PlanParams
@@ -4140,6 +4325,24 @@ type ServerInterface interface {
 	// ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet Clusters:Consistency-Groups:Snapshots:Detail
 	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq})
 	ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, seq int)
+	// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost Clusters:Consistency-Groups:Subsystem-Moves:Create
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves)
+	ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID)
+	// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet Clusters:Consistency-Groups:Subsystem-Moves:Get
+	// (GET /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id})
+	ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost Clusters:Consistency-Groups:Subsystem-Moves:Commit
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit)
+	ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost Clusters:Consistency-Groups:Subsystem-Moves:Move
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move)
+	ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost Clusters:Consistency-Groups:Subsystem-Moves:Prepare
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare)
+	ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
+	// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost Clusters:Consistency-Groups:Subsystem-Moves:Rollback
+	// (POST /api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback)
+	ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, groupId openapi_types.UUID, moveId string)
 	// ClustersExpandApiV2ClustersClusterIdExpandPost Clusters:Expand
 	// (POST /api/v2/clusters/{cluster_id}/expand)
 	ClustersExpandApiV2ClustersClusterIdExpandPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
@@ -6754,6 +6957,261 @@ func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSnapshotsDetailApiV2
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet(w, r, clusterId, groupId, seq)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost(w, r, clusterId, groupId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost(w, r, clusterId, groupId, moveId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "group_id" -------------
+	var groupId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "group_id", r.PathValue("group_id"), &groupId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "group_id", Err: err})
+		return
+	}
+
+	// ------------- Path parameter "move_id" -------------
+	var moveId string
+
+	err = runtime.BindStyledParameterWithOptions("simple", "move_id", r.PathValue("move_id"), &moveId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "move_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost(w, r, clusterId, groupId, moveId)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -12131,6 +12589,12 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots", wrapper.ClustersConsistencyGroupsSnapshotsTakeApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsPost)
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq}", wrapper.ClustersConsistencyGroupsSnapshotsDeleteApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqDelete)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/snapshots/{seq}", wrapper.ClustersConsistencyGroupsSnapshotsDetailApiV2ClustersClusterIdConsistencyGroupsGroupIdSnapshotsSeqGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves", wrapper.ClustersConsistencyGroupsSubsystemMovesCreateApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesPost)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}", wrapper.ClustersConsistencyGroupsSubsystemMovesGetApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdGet)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/commit", wrapper.ClustersConsistencyGroupsSubsystemMovesCommitApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdCommitPost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/move", wrapper.ClustersConsistencyGroupsSubsystemMovesMoveApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdMovePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/prepare", wrapper.ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdPreparePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/consistency-groups/{group_id}/subsystem-moves/{move_id}/rollback", wrapper.ClustersConsistencyGroupsSubsystemMovesRollbackApiV2ClustersClusterIdConsistencyGroupsGroupIdSubsystemMovesMoveIdRollbackPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/expand", wrapper.ClustersExpandApiV2ClustersClusterIdExpandPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/grow-devices", wrapper.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/iostats", wrapper.ClustersIostatsApiV2ClustersClusterIdIostatsGet)

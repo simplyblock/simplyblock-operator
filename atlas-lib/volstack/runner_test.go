@@ -10,6 +10,7 @@ package volstack
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"strings"
 	"testing"
@@ -856,5 +857,93 @@ func TestDownSaysWhichLayersItSkipped(t *testing.T) {
 	}
 	if !strings.Contains(out, "Absent") {
 		t.Errorf("the log does not say why it was skipped:\n%s", out)
+	}
+}
+
+// interruptedLayer is an unhealthy layer whose device lost every path while it
+// was held, which is what dmLinear reports after total path loss.
+type interruptedLayer struct {
+	healingLayer
+}
+
+func (i interruptedLayer) Observe(ctx context.Context, below Artifact) (State, Artifact, error) {
+	state, own, err := i.healingLayer.Observe(ctx, below)
+	own.Interrupted = !i.healthy
+	return state, own, err
+}
+
+// yieldingLayer adds the optional Yielder interface. A yield that worked leaves
+// the layer unmounted, so the heal walk finds it unhealthy and brings it back.
+type yieldingLayer struct {
+	healingLayer
+	yieldErr error
+}
+
+func (y yieldingLayer) Yield(context.Context, Artifact, Artifact) error {
+	y.note("yield")
+	if y.yieldErr != nil {
+		return y.yieldErr
+	}
+	y.healthy = false
+	return nil
+}
+
+func interruptedPlan(log *[]string, interrupted bool, yieldErr error) (Plan, *fakeLayer) {
+	fabric := &fakeLayer{name: "fabric", log: log, exposes: "nvme1n1", state: StateReady}
+	dm := &fakeLayer{name: "dmLinear", log: log, exposes: "dm-1", state: StateReady}
+	fs := &fakeLayer{name: "filesystem", log: log, state: StateReady, healthy: true}
+	var mid Layer = healingLayer{dm}
+	if interrupted {
+		mid = interruptedLayer{healingLayer{dm}}
+	}
+	return Plan{fabric, mid, yieldingLayer{healingLayer{fs}, yieldErr}}, fs
+}
+
+// Regression: 2026-11-19-ext4-stays-aborted-behind-dmlinear (e2e run
+// 44487645991). The indirection kept the device across total path loss, so the
+// ext4 mounted on it kept the journal it aborted during the outage and every
+// write after the heal failed read-only. A layer above an Interrupted one lets
+// go before the heal and is brought back by it, the way it was remade on the
+// new device before the indirection existed.
+func TestHealOfAnInterruptedLayerYieldsTheLayersAboveFirst(t *testing.T) {
+	var log []string
+	plan, _ := interruptedPlan(&log, true, nil)
+	if err := newRunner(t).Heal(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	yield, heal, remount := indexOf(log, "filesystem:yield"), indexOf(log, "dmLinear:heal"), indexOf(log, "filesystem:heal")
+	if yield < 0 || heal < 0 || remount < 0 || yield > heal || heal > remount {
+		t.Errorf("want filesystem:yield, then dmLinear:heal, then filesystem:heal:\n%s", strings.Join(log, " "))
+	}
+}
+
+// A re-point without loss, which is the live subsystem flip, keeps the mount:
+// keeping it is what the indirection is for.
+func TestHealOfALayerThatWasNotInterruptedYieldsNothing(t *testing.T) {
+	var log []string
+	plan, _ := interruptedPlan(&log, false, nil)
+	plan[1].(healingLayer).healthy = false
+	if err := newRunner(t).Heal(context.Background(), testHandle, plan); err != nil {
+		t.Fatalf("Heal: %v", err)
+	}
+	if indexOf(log, "filesystem:yield") >= 0 || indexOf(log, "filesystem:heal") >= 0 {
+		t.Errorf("a re-point without loss remounted the filesystem:\n%s", strings.Join(log, " "))
+	}
+	if indexOf(log, "dmLinear:heal") < 0 {
+		t.Errorf("the stale layer was not healed:\n%s", strings.Join(log, " "))
+	}
+}
+
+// A layer that cannot let go yet stops the heal before the layer under it is
+// touched, and says why, so the retry finds the interruption still in place.
+func TestHealWaitsWhileALayerAboveIsHeldElsewhere(t *testing.T) {
+	var log []string
+	plan, _ := interruptedPlan(&log, true, fmt.Errorf("mounted at /pods/a: %w", ErrHeldElsewhere))
+	err := newRunner(t).Heal(context.Background(), testHandle, plan)
+	if !errors.Is(err, ErrHeldElsewhere) {
+		t.Fatalf("Heal = %v, want ErrHeldElsewhere", err)
+	}
+	if indexOf(log, "dmLinear:heal") >= 0 {
+		t.Errorf("the interrupted layer was healed under a filesystem still held elsewhere:\n%s", strings.Join(log, " "))
 	}
 }

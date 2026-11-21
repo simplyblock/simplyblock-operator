@@ -37,9 +37,10 @@ import (
 )
 
 // fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
-// metrics. It is upstream's rather than simplyblock's, and pinned for the same
-// reason the database's images are.
-const fdbExporterImage = "aikoven/foundationdb-exporter:3.1.0"
+// metrics. It is upstream's exporter mirrored to simplyblock's registry, named
+// with its registry like every other control-plane image, and pinned for the
+// same reason the database's images are.
+const fdbExporterImage = "quay.io/simplyblock-io/foundationdb-exporter:3.1.0"
 
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name

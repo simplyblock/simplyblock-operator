@@ -218,5 +218,8 @@ func (h Host) WithClassBlock() Host {
 		}
 	}
 
-	return Host{Dirs: h.Dirs, Files: h.Files, Links: links, DevLinks: h.DevLinks}
+	// A copy, not a new Host: every field but the links is carried as captured.
+	derived := h
+	derived.Links = links
+	return derived
 }

@@ -27,6 +27,9 @@ type fakeFS struct {
 
 	mountPoints map[string]bool
 
+	// others are the mount points that share a staging mount's filesystem.
+	others map[string][]string
+
 	grown [][]string
 
 	formatErr     error
@@ -90,6 +93,10 @@ func (f *fakeFS) IsMountPoint(_ context.Context, path string) (bool, error) {
 		return false, f.mountPointErr
 	}
 	return f.mountPoints[path], nil
+}
+
+func (f *fakeFS) OtherMounts(_ context.Context, path string) ([]string, error) {
+	return f.others[path], nil
 }
 
 // fakeReader answers the content reading for the device under test.

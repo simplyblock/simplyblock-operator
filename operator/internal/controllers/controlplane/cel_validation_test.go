@@ -372,3 +372,77 @@ func TestControlPlaneCELAdmitsTheSameTLSAgain(t *testing.T) {
 		t.Fatalf("an edit that leaves tls alone was denied: %v", err)
 	}
 }
+
+// A HostMaintenance window names the worker it is for, and it names it at
+// admission: Holding labels that worker's pods and Releasing unlabels them, so
+// an operation admitted without a worker, or re-pointed at another one, would
+// hold one host and release a different one.
+//
+// U-63 and U-64 in test-plan-fdb-host-maintenance.md.
+func TestControlPlaneOpsCELRequiresTheWorkerForHostMaintenance(t *testing.T) {
+	ctx := context.Background()
+	apiClient := apiServer(t)
+	namespace := freshNamespace(t, apiClient)
+
+	ops := &simplyblockv1alpha2.ControlPlaneOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "a-window-without-a-worker", Namespace: namespace},
+		Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
+			ControlPlaneRef: SingletonName,
+			Action:          simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance,
+		},
+	}
+	err := apiClient.Create(ctx, ops)
+	if err == nil {
+		t.Fatal("a HostMaintenance window was admitted without spec.hostMaintenance, " +
+			"so Holding has no worker whose pods to label")
+	}
+	if !strings.Contains(err.Error(), "spec.hostMaintenance") {
+		t.Errorf("the refusal does not name the missing block: %v", err)
+	}
+}
+
+func TestControlPlaneOpsCELFreezesTheWorker(t *testing.T) {
+	ctx := context.Background()
+	apiClient := apiServer(t)
+	namespace := freshNamespace(t, apiClient)
+
+	ops := &simplyblockv1alpha2.ControlPlaneOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "a-window", Namespace: namespace},
+		Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
+			ControlPlaneRef: SingletonName,
+			Action:          simplyblockv1alpha2.ControlPlaneOpsActionHostMaintenance,
+			HostMaintenance: &simplyblockv1alpha2.HostMaintenanceSpec{
+				WorkerNode: "worker-1.example.internal",
+			},
+		},
+	}
+	if err := apiClient.Create(ctx, ops); err != nil {
+		t.Fatalf("create the window: %v", err)
+	}
+
+	t.Run("the worker cannot be swapped", func(t *testing.T) {
+		edited := ops.DeepCopy()
+		edited.Spec.HostMaintenance.WorkerNode = "worker-2.example.internal"
+		if err := apiClient.Update(ctx, edited); err == nil {
+			t.Error("the worker was changed after admission, so Holding labeled one host's " +
+				"pods and Releasing would unlabel another's")
+		}
+	})
+
+	t.Run("the block cannot be cleared", func(t *testing.T) {
+		edited := ops.DeepCopy()
+		edited.Spec.HostMaintenance = nil
+		if err := apiClient.Update(ctx, edited); err == nil {
+			t.Error("spec.hostMaintenance was cleared after admission, which is what every " +
+				"later step would then dereference")
+		}
+	})
+
+	t.Run("abort stays settable", func(t *testing.T) {
+		edited := ops.DeepCopy()
+		edited.Spec.Abort = true
+		if err := apiClient.Update(ctx, edited); err != nil {
+			t.Errorf("spec.abort could not be set on a window: %v", err)
+		}
+	})
+}

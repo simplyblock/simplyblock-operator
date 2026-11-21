@@ -19,13 +19,15 @@ Nothing here duplicates those IDs.
 
 ```text
 operator/internal/controllers/deployment/testdata/discovery/
+  baseline.yaml             # the values more than half of the cases' documents share
   net/
     net-13-bond-holds-node-address/
       case.md               # the row this directory is, copied from this document
       ops.yaml              # the OperatorOps, carrying spec.discover and its deviceFilter
       nodes.yaml            # corev1.Node objects: labels, taints, addresses, capacity
       reports/<node>.yaml   # one ConfigMap per worker, the report JSON under report.json
-      expected.yaml         # the ClusterDeploymentConfig the run should write
+      expected.yaml         # the ClusterDeploymentConfig the run should write, as a merge patch against baseline.yaml
+      expected-notes.txt    # the notes on fields the case sets differently from baseline.yaml
       expected-refusals.txt # Plan.RefusalLines(), one per line, absent when there are none
     net-14-.../
   numa/
@@ -39,6 +41,14 @@ reviews, and eleven families of a dozen is.
 
 The directory name carries the case identifier and a slug of the mutation, so
 that a failure names the case without anybody looking it up.
+
+A case records its document as a JSON merge patch (RFC 7386) against
+`baseline.yaml`, so a change every fleet's draft makes the same way is one line in
+the baseline rather than one per case. The comparison stays exact: the patch
+applied to the baseline has to give back the document the run wrote. A note is
+recorded only when the field its first word names differs from the baseline, so
+the wording of a note on a field a case shares with the baseline is not checked
+here. `-update` rewrites the baseline only when every case ran.
 
 A case with no `expected.yaml` is a refusal case: `expected-error.txt` holds the
 message the run fails with, which is what `kubectl get operatorops` shows.
@@ -109,7 +119,7 @@ constructing one directly.
 | DEV-17 | An iSCSI LUN beside virtio disks, block run, no allow list  | Only the virtio disks. A LUN is storage across a network and is never taken by default      | `CM`    |
 | DEV-18 | The same worker with the allow list naming the LUN          | Both disks. Naming it is the decision a run cannot make for a fleet                         | `CM`    |
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
-| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Drafted with the journal split: enableJournalDevice unset, every disk carries data | `CM`    |
+| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Drafted with the journal split: enableJournalDevice unset, every disk carries data          | `CM`    |
 | DEV-21 | Blank, formatted, and unread partitions, block run          | Regression: the blank one only. `TestPlanProposesABlankPartitionInABlockRun`                | `GO`    |
 
 ## 3. NUMA topology

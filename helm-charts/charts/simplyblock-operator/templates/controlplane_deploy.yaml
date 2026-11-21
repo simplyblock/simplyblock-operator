@@ -23,7 +23,7 @@ spec:
           - 0 
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
-        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
       {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
@@ -139,7 +139,7 @@ spec:
     spec:
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
-        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
       {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
@@ -271,7 +271,7 @@ spec:
           - 0
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
-        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
       {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:

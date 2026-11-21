@@ -7,14 +7,19 @@ package driver
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/simplyblock-operator/internal/tlsutil"
 )
 
 const remoteClusterID = "2b201eb1-15b6-4bb6-a341-23acde78bb6c"
@@ -24,8 +29,15 @@ const remoteClusterID = "2b201eb1-15b6-4bb6-a341-23acde78bb6c"
 func remoteControlPlane(t *testing.T, lvolPorts ...int) (*httptest.Server, *[]string) {
 	t.Helper()
 	var tokens []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tokens = append(tokens, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
+	srv := httptest.NewServer(storageNodesHandler(&tokens, lvolPorts))
+	t.Cleanup(srv.Close)
+	return srv, &tokens
+}
+
+// storageNodesHandler is the storage-node listing remoteControlPlane serves.
+func storageNodesHandler(tokens *[]string, lvolPorts []int) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		*tokens = append(*tokens, strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "))
 		if r.URL.Path != "/api/v2/clusters/"+remoteClusterID+"/storage-nodes/" {
 			http.NotFound(w, r)
 			return
@@ -41,9 +53,7 @@ func remoteControlPlane(t *testing.T, lvolPorts ...int) (*httptest.Server, *[]st
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(nodes)
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &tokens
+	})
 }
 
 // csiCredentials is simplyblock-csi-secret-v2 naming one cluster at endpoint.
@@ -104,5 +114,41 @@ func TestAnUnreachableControlPlaneKeepsThePublishedPorts(t *testing.T) {
 
 	if got := publishedPorts(t, c); got != "4428\n" {
 		t.Errorf("ports = %q, want the published 4428 kept while the control plane is unreachable", got)
+	}
+}
+
+// Regression: 2026-11-18-mds-proxy-remote-tls. A remote control plane served
+// over HTTPS presents a certificate for its own hostname. The operator checked
+// it against the in-cluster webappapi Service name instead, so every call
+// failed verification and the ports ConfigMap stayed empty, while the CSI
+// driver reached the same endpoint without trouble.
+func TestTheListenerPortsOfARemoteControlPlaneServedOverTLS(t *testing.T) {
+	var tokens []string
+	srv := httptest.NewTLSServer(storageNodesHandler(&tokens, []int{4428}))
+	t.Cleanup(srv.Close)
+
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "ca.crt")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	nsFile := filepath.Join(dir, "namespace")
+	for path, data := range map[string][]byte{caFile: caPEM, nsFile: []byte("simplyblock")} {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for v, path := range map[*string]string{
+		&tlsutil.ServiceCABundlePath:   caFile,
+		&tlsutil.OperatorNamespacePath: nsFile,
+	} {
+		old := *v
+		*v = path
+		t.Cleanup(func() { *v = old })
+	}
+
+	d := withMDS(testDriver("simplyblock"))
+	c := reconcileDriver(t, d, csiCredentials(srv.URL, "cluster-secret"))
+
+	if got := publishedPorts(t, c); got != "4428\n" {
+		t.Errorf("ports = %q, want 4428 from the control plane at %s", got, srv.URL)
 	}
 }

@@ -19,6 +19,7 @@ CPAPI_GEN := internal/cpapi/cpapi.gen.go internal/cpapi/validation.gen.go
 # when absent without a phony target forcing a regeneration on every make run.
 PROTO_DIRS := link/linkv1 link/sitev1 storage/storagerpc/storagev1 nfsexport/nfsexportrpc/nfsexportv1 \
 	conntrack/conntrackrpc/conntrackv1 placement/placementrpc/placementv1 netcheck/netcheckrpc/netcheckv1 \
+	volstack/swaprpc/swapv1 \
 	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 freeze/freezerpc/freezev1
 PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	link/sitev1/relay.pb.go link/sitev1/relay_grpc.pb.go \
@@ -29,6 +30,7 @@ PROTO_GEN := link/linkv1/link.pb.go link/linkv1/link_grpc.pb.go \
 	conntrack/conntrackrpc/conntrackv1/flow.pb.go conntrack/conntrackrpc/conntrackv1/flow_grpc.pb.go \
 	placement/placementrpc/placementv1/placement.pb.go placement/placementrpc/placementv1/placement_grpc.pb.go \
 	netcheck/netcheckrpc/netcheckv1/check.pb.go netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go \
+	volstack/swaprpc/swapv1/swap.pb.go volstack/swaprpc/swapv1/swap_grpc.pb.go \
 	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go \
 	bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery_grpc.pb.go \
 	freeze/freezerpc/freezev1/freeze.pb.go freeze/freezerpc/freezev1/freeze_grpc.pb.go
@@ -97,6 +99,11 @@ netcheck/netcheckrpc/netcheckv1/check.pb.go: netcheck/netcheckrpc/netcheckv1/che
 	cd netcheck/netcheckrpc/netcheckv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
 
 netcheck/netcheckrpc/netcheckv1/check_grpc.pb.go: netcheck/netcheckrpc/netcheckv1/check.pb.go
+
+volstack/swaprpc/swapv1/swap.pb.go: volstack/swaprpc/swapv1/swap.proto volstack/swaprpc/swapv1/buf.gen.yaml volstack/swaprpc/swapv1/buf.yaml | buf
+	cd volstack/swaprpc/swapv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate
+
+volstack/swaprpc/swapv1/swap_grpc.pb.go: volstack/swaprpc/swapv1/swap.pb.go
 
 bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.pb.go: bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/bucketdelivery.proto bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.gen.yaml bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1/buf.yaml | buf
 	cd bucketdelivery/bucketdeliveryrpc/bucketdeliveryv1 && PATH="$(BIN_DIR):$$PATH" "$(BUF)" generate

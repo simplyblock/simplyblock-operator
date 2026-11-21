@@ -1,0 +1,29 @@
+# The values most discovery cases' documents share. Each case's
+# expected.yaml is a JSON merge patch against this file. Written by
+# `go test ./internal/controllers/deployment/ -run TestDiscoveryCases -update`.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+  namespace: simplyblock
+spec:
+  approved: false
+  cluster:
+    clusterMode: Single
+    enableDriveFormat: true
+    enableMetadataJournal: true
+    maxSubsystemCount: 30
+    minHugePagesSize: 16G
+    network:
+      spdkOnHostNetwork: true
+    stripe:
+      dataChunks: 2
+      parityChunks: 1
+    vcpuCount: 5
+  environment: K3s
+  hostOS:
+    distro: ubuntu
+    family: Debian
+status:
+  step: {}
