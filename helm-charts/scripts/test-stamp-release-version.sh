@@ -44,6 +44,12 @@ check() {
   control_center="$("$YQ" -r '.controlCenter.image.tag' "$copy/values.yaml")"
   [[ "$control_center" == "$want_operator" ]] ||
     fail "$tag: controlCenter.image.tag is '$control_center', want '$want_operator'"
+  # The mock is released beside the console under the same tag.
+  # Regression: 2026-11-23-control-center-mock-tag-unstamped (#955)
+  local mock
+  mock="$("$YQ" -r '.controlCenter.mock.image.tag' "$copy/values.yaml")"
+  [[ "$mock" == "$want_operator" ]] ||
+    fail "$tag: controlCenter.mock.image.tag is '$mock', want '$want_operator'"
 }
 
 check v26.4.0 v26.4.0 26.4.0

@@ -12,7 +12,7 @@
 {{- $mock := $cc.mock }}
 {{- $name := printf "%s-mock" (include "sbcc.fullname" .) }}
 {{- $reg := $mock.image.registry | default "quay.io" }}
-{{- $tag := $mock.image.tag | default (.Chart.AppVersion | default "latest") }}
+{{- $tag := $mock.image.tag | default (include "sbcc.defaultTag" .) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

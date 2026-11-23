@@ -1372,10 +1372,10 @@ controlCenter:
     registry: ""
     # -- Control Center image repository.
     repository: simplyblock-io/control-center
-    # inherits .Chart.AppVersion when unset. This chart's appVersion is a
-    # floating tag, so pin a released console tag here for production.
-    # -- Control Center image tag. Empty uses the chart's `appVersion`. Pin a released tag in
-    # production.
+    # A release stamps its tag here. Empty falls back to the chart's appVersion,
+    # with a "v" when it is a version, the tag the console is released under.
+    # -- Control Center image tag. Empty uses the chart's `appVersion`, prefixed with `v` when it is
+    # a version. Pin a released tag when installing a development chart.
     tag: ""
     # -- Control Center image pull policy.
     pullPolicy: IfNotPresent
@@ -1564,7 +1564,7 @@ controlCenter:
       # defaults to quay.io when unset
       registry: ""
       repository: simplyblock-io/control-center-mock
-      # inherits .Chart.AppVersion when unset
+      # stamped by a release; empty falls back as controlCenter.image.tag does
       tag: ""
       pullPolicy: IfNotPresent
     # small-healthy | medium-degraded | large-scale | dr-failover | chaos,

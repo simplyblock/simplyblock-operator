@@ -34,13 +34,23 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{- end }}
 {{- end -}}
 
+{{/* The tag the console and its mock fall back to when theirs is empty. They
+     are released under the release tag verbatim (v26.4.0-beta6.1), while a
+     released chart's appVersion carries no "v" (26.4.0-beta6.1), so a version
+     gets its "v" back. Any other appVersion, such as "latest" on a development
+     chart, is used as it stands. */}}
+{{- define "sbcc.defaultTag" -}}
+{{- $v := .Chart.AppVersion | default "latest" -}}
+{{- if regexMatch "^[0-9]" $v -}}v{{ $v }}{{- else -}}{{ $v }}{{- end -}}
+{{- end -}}
+
 {{/* Image reference. The registry falls back to the public one and the tag to
-     the chart's appVersion — pin controlCenter.image.tag for production, this
-     chart's appVersion is a floating tag. */}}
+     sbcc.defaultTag. A release stamps controlCenter.image.tag; pin it when
+     installing a development chart. */}}
 {{- define "sbcc.image" -}}
 {{- $i := .Values.controlCenter.image -}}
 {{- $reg := $i.registry | default "quay.io" -}}
-{{- $tag := $i.tag | default (.Chart.AppVersion | default "latest") -}}
+{{- $tag := $i.tag | default (include "sbcc.defaultTag" .) -}}
 {{- printf "%s/%s:%s" $reg $i.repository $tag -}}
 {{- end -}}
 
