@@ -505,7 +505,7 @@ func (r *S3BucketReconciler) boundVolumeHandle(
 }
 
 // objectStoreExists reports whether spec.objectStoreRef names an ObjectStore
-// in the bucket's own namespace.
+// in the bucket's own namespace that is not being deleted.
 func (r *S3BucketReconciler) objectStoreExists(
 	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (bool, error) {
@@ -513,7 +513,9 @@ func (r *S3BucketReconciler) objectStoreExists(
 	err := r.Get(ctx, client.ObjectKey{Namespace: bucket.Namespace, Name: bucket.Spec.ObjectStoreRef}, &store)
 	switch {
 	case err == nil:
-		return true, nil
+		// An ObjectStore being deleted counts as missing: a new bucket must
+		// not hold its delete open indefinitely (design §9).
+		return store.DeletionTimestamp.IsZero(), nil
 	case apierrors.IsNotFound(err):
 		return false, nil
 	default:

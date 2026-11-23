@@ -1,15 +1,17 @@
 // ObjectStoreReconciler drives one S3 gateway's workload from creation to
 // Ready: the Deployment, the ClusterIP Service, that Service's serving
 // certificate (design-objectstore.md), and the gateway's ServiceAccount,
-// Role, and RoleBinding. No finalizer: every owned object is
-// garbage-collected by Kubernetes on delete (§4.2), and nothing outside them
-// needs cleanup.
+// Role, and RoleBinding. Every owned object is garbage-collected by Kubernetes
+// on delete. A finalizer holds the delete while S3Buckets still reference the
+// ObjectStore, so its gateway keeps serving them until they are gone (§4.2).
 
 package objectstore
 
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -52,7 +54,14 @@ const (
 const (
 	conditionDeploymentAvailable = "DeploymentAvailable"
 	conditionCertificateReady    = "CertificateReady"
+	// BucketsRemaining is True while a requested delete is held because
+	// S3Buckets still reference the ObjectStore (design §4.2).
+	conditionBucketsRemaining = "BucketsRemaining"
 )
+
+// objectStoreBucketsFinalizer holds an ObjectStore's delete until no S3Bucket
+// references it.
+const objectStoreBucketsFinalizer = "storage.simplyblock.io/objectstore-buckets"
 
 // The controller's cadence, in one place so it can be read and tuned.
 const (
@@ -104,6 +113,17 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	var store simplyblockv1alpha2.ObjectStore
 	if err := r.Get(ctx, req.NamespacedName, &store); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
+	}
+
+	if !store.DeletionTimestamp.IsZero() {
+		return ctrl.Result{}, r.reconcileDelete(ctx, &store)
+	}
+	// Update refreshes store in place, so this pass continues on the copy
+	// the finalizer write returned.
+	if controllerutil.AddFinalizer(&store, objectStoreBucketsFinalizer) {
+		if err := r.Update(ctx, &store); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Degraded is reached by refusing to act, and retrying the refusal on a
@@ -559,7 +579,9 @@ func unstructuredConditionTrue(obj *unstructured.Unstructured, condType string) 
 // and the gateway's ServiceAccount, Role, and RoleBinding it creates, so a manual edit or delete of either is noticed and
 // repaired on the ObjectStore's own reconcile. Watches Secrets and ConfigMaps
 // and enqueues the ObjectStores whose envFrom names them, which is what lets
-// a Degraded ObjectStore notice a missing reference being created. The certificate is
+// a Degraded ObjectStore notice a missing reference being created. Watches
+// S3Buckets and enqueues the ObjectStore each names, so a held delete
+// completes when the last bucket is gone. The certificate is
 // unstructured and owned the same way the Deployment and the Service are
 // (an owner reference, set in applyCertificate), but is not watched: this
 // manager has no cert-manager scheme registered to decode it as a typed
@@ -573,6 +595,7 @@ func (r *ObjectStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&rbacv1.Role{}).
 		Owns(&rbacv1.RoleBinding{}).
+		Watches(&simplyblockv1alpha2.S3Bucket{}, handler.EnqueueRequestsFromMapFunc(storeOfBucket)).
 		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.storesReferencingEnvFrom)).
 		Watches(&corev1.ConfigMap{}, handler.EnqueueRequestsFromMapFunc(r.storesReferencingEnvFrom)).
 		WithOptions(objectStoreControllerOptions()).
@@ -704,4 +727,47 @@ func (r *ObjectStoreReconciler) storesReferencingEnvFrom(ctx context.Context, ob
 		}
 	}
 	return requests
+}
+
+// reconcileDelete holds the delete while S3Buckets reference the ObjectStore,
+// saying so in BucketsRemaining, and releases the finalizer once none do.
+// The phase is left as it is: the gateway keeps serving the remaining
+// buckets until then.
+func (r *ObjectStoreReconciler) reconcileDelete(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
+	if !controllerutil.ContainsFinalizer(store, objectStoreBucketsFinalizer) {
+		return nil
+	}
+	var buckets simplyblockv1alpha2.S3BucketList
+	if err := r.List(ctx, &buckets, client.InNamespace(store.Namespace)); err != nil {
+		return fmt.Errorf("listing the S3Buckets that may reference %s: %w", store.Name, err)
+	}
+	var remaining []string
+	for i := range buckets.Items {
+		if buckets.Items[i].Spec.ObjectStoreRef == store.Name {
+			remaining = append(remaining, buckets.Items[i].Name)
+		}
+	}
+	if len(remaining) > 0 {
+		sort.Strings(remaining)
+		message := fmt.Sprintf("deletion waits for S3Buckets still referencing this ObjectStore: %s", strings.Join(remaining, ", "))
+		if cond := meta.FindStatusCondition(store.Status.Conditions, conditionBucketsRemaining); cond == nil || cond.Message != message {
+			r.event(store, corev1.EventTypeNormal, conditionBucketsRemaining, message)
+		}
+		return r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
+			meta.SetStatusCondition(&s.Conditions, metav1.Condition{
+				Type: conditionBucketsRemaining, Status: metav1.ConditionTrue, Reason: conditionBucketsRemaining, Message: message,
+			})
+		})
+	}
+	controllerutil.RemoveFinalizer(store, objectStoreBucketsFinalizer)
+	return client.IgnoreNotFound(r.Update(ctx, store))
+}
+
+// storeOfBucket maps an S3Bucket to the ObjectStore it references.
+func storeOfBucket(_ context.Context, obj client.Object) []ctrl.Request {
+	bucket, ok := obj.(*simplyblockv1alpha2.S3Bucket)
+	if !ok || bucket.Spec.ObjectStoreRef == "" {
+		return nil
+	}
+	return []ctrl.Request{{NamespacedName: client.ObjectKey{Namespace: bucket.Namespace, Name: bucket.Spec.ObjectStoreRef}}}
 }

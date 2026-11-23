@@ -84,10 +84,11 @@ Run the full controller reconciliation loop against a real Kubernetes API via `e
 
 ### Capacity (CRD `capacityBytes`)
 
-| #    | Scenario                                                                                                                                                                                                                              | Type       | Test                                        |
-|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------|
-| I-14 | `capacityBytes` raised on a `Ready` bucket → PVC requested storage raised to match, bucket stays `Ready`. Regression: 2026-11-23-s3bucket-capacity-never-expands (CI run 45100042373, TC-S3-004: the PVC stayed at its creation size) | Regression | `TestS3BucketCapacityIncreaseExpandsThePVC` |
-| I-15 | `capacityBytes` lowered → rejected at admission by the CRD's transition rule                                                                                                                                                          | Negative   | `TestS3BucketCapacityDecreaseIsRejected`    |
+| #    | Scenario                                                                                                                                                                                                                              | Type       | Test                                                   |
+|------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| I-14 | `capacityBytes` raised on a `Ready` bucket → PVC requested storage raised to match, bucket stays `Ready`. Regression: 2026-11-23-s3bucket-capacity-never-expands (CI run 45100042373, TC-S3-004: the PVC stayed at its creation size) | Regression | `TestS3BucketCapacityIncreaseExpandsThePVC`            |
+| I-15 | `capacityBytes` lowered → rejected at admission by the CRD's transition rule                                                                                                                                                          | Negative   | `TestS3BucketCapacityDecreaseIsRejected`               |
+| I-16 | `spec.objectStoreRef` names an `ObjectStore` that is being deleted → `Degraded`, `ObjectStoreNotFound`, so a new bucket cannot hold the delete open                                                                                   | Negative   | `TestS3BucketDegradesWhenItsObjectStoreIsBeingDeleted` |
 
 ### Bucket Delivery Reconciliation (§5.3, §7.3)
 
@@ -196,7 +197,7 @@ Run against a live simplyblock cluster with the pNFS path actually deployed (`de
 | Class       | Scenarios                                   | Covered | Not covered |
 |-------------|---------------------------------------------|---------|-------------|
 | Unit        | 20 (U-19 moved to `csi-driver`'s own suite) | 20      | —           |
-| Integration | 15                                          | 13      | I-08, I-11  |
+| Integration | 16                                          | 14      | I-08, I-11  |
 | E2E         | 8 (E-09 obsolete)                           | 0       | E-01 … E-08 |
 | Manual      | 2 (both resolved)                           | 2       | —           |
 
