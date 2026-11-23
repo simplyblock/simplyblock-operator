@@ -69,7 +69,8 @@ func serviceResources() corev1.ResourceRequirements {
 }
 
 // pingSecurityContext lets any group ping without sudo or CAP_NET_RAW. Despite
-// its name, the sysctl covers ICMPv6 as well.
+// its name, the sysctl covers ICMPv6 as well. OpenShift's CRI-O and containerd
+// 2.0+ set it by default. containerd 1.x and upstream CRI-O do not.
 func pingSecurityContext() *corev1.PodSecurityContext {
 	return &corev1.PodSecurityContext{
 		Sysctls: []corev1.Sysctl{{Name: "net.ipv4.ping_group_range", Value: "0 2147483647"}},
