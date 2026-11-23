@@ -78,6 +78,10 @@ type ControlPlaneReconciler struct {
 	// NUMAPluginImage is the NUMA device plugin's image. Empty keeps the image
 	// the embedded manifest names.
 	NUMAPluginImage string
+
+	// OpenShift is whether the cluster is an OpenShift one. It decides whether
+	// the control plane's account is granted the anyuid SCC (scc.go).
+	OpenShift bool
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch;create;update;patch;delete
