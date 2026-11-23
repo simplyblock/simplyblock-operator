@@ -76,6 +76,9 @@ spec:
                   restriction the PVC it wraps already carries.
                 format: int64
                 type: integer
+                x-kubernetes-validations:
+                - message: capacityBytes cannot decrease
+                  rule: self >= oldSelf
               objectStoreRef:
                 description: |-
                   ObjectStoreRef names the ObjectStore whose gateway Deployment serves
