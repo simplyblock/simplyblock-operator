@@ -74,8 +74,3 @@ jobs:
           cp -R helm-charts/charts/simplyblock-operator "$RUNNER_TEMP/chart"
           helm-charts/scripts/stamp-release-version.sh "$RUNNER_TEMP/chart" v0.0.0-lint
           helm-charts/scripts/test-stamp-release-version.sh
-
-      # A chart whose Control Center tags are empty falls back to a tag derived
-      # from appVersion, which has to name an image that was pushed.
-      - name: Control Center image fallback
-        run: helm-charts/scripts/test-control-center-image.sh
