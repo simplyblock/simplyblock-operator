@@ -523,3 +523,50 @@ func TestS3BucketCapacityDecreaseIsRejected(t *testing.T) {
 		t.Error("lowering capacityBytes was admitted, want it rejected")
 	}
 }
+
+// I-16: an S3Bucket naming an ObjectStore that is being deleted degrades
+// with ObjectStoreNotFound, so a new bucket cannot keep a deleting
+// ObjectStore alive indefinitely.
+func TestS3BucketDegradesWhenItsObjectStoreIsBeingDeleted(t *testing.T) {
+	cli := apiServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startFakeCSIBinder(ctx, t, cli)
+
+	store := testObjectStoreNamed("i16-store")
+	// A finalizer of the test's own keeps the deleted ObjectStore around
+	// with deletionTimestamp set, as the operator's finalizer would.
+	store.Finalizers = []string{"test.simplyblock.io/hold"}
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	if err := cli.Delete(ctx, store); err != nil {
+		t.Fatalf("deleting the ObjectStore: %v", err)
+	}
+	t.Cleanup(func() {
+		var o simplyblockv1alpha2.ObjectStore
+		if cli.Get(context.Background(), client.ObjectKeyFromObject(store), &o) == nil {
+			o.Finalizers = nil
+			_ = cli.Update(context.Background(), &o)
+		}
+	})
+
+	bucket := &simplyblockv1alpha2.S3Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "i16-bucket", Namespace: store.Namespace},
+		Spec: simplyblockv1alpha2.S3BucketSpec{
+			ObjectStoreRef: store.Name, BucketName: "i16-bucket",
+			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
+		},
+	}
+	if err := cli.Create(ctx, bucket); err != nil {
+		t.Fatalf("creating the bucket: %v", err)
+	}
+	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: events.NewFakeRecorder(16)}
+	got := reconcileBucketUntil(t, r, client.ObjectKeyFromObject(bucket), func(b *simplyblockv1alpha2.S3Bucket) bool {
+		return b.Status.Phase == phaseDegraded || b.Status.Phase == phaseReady
+	})
+	cond := findCondition(got.Status.Conditions, conditionObjectStoreOK)
+	if got.Status.Phase != phaseDegraded || cond == nil || cond.Reason != reasonObjectStoreNotFound {
+		t.Errorf("phase = %q, ObjectStoreOK = %+v, want Degraded with reason ObjectStoreNotFound", got.Status.Phase, cond)
+	}
+}
