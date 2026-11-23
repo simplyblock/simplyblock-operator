@@ -20289,6 +20289,12 @@ rules:
   - list
   - update
 - apiGroups:
+  - monitoring.coreos.com
+  resources:
+  - servicemonitors
+  verbs:
+  - get
+- apiGroups:
   - operator.openshift.io
   resources:
   - networks
