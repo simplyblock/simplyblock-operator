@@ -310,6 +310,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Affinity:           spreadAcrossHosts(ComponentWebAPI),
+		SecurityContext:    pingSecurityContext(),
 		Containers: []corev1.Container{{
 			Name:            "webappapi",
 			Image:           localImage(cp),
@@ -570,6 +571,7 @@ func servicePoolDeployment(
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Containers:         containers(services, managed, localImage(cp), pullPolicyOf(managed)),
+		SecurityContext:    pingSecurityContext(),
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
 			tlsVolume(managed)...),
 	}
@@ -615,6 +617,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Affinity:           spreadAcrossHosts(ComponentAdminControl),
+		SecurityContext:    pingSecurityContext(),
 		Containers: []corev1.Container{{
 			Name:            "simplyblock-control",
 			Image:           localImage(cp),

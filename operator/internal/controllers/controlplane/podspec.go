@@ -68,6 +68,14 @@ func serviceResources() corev1.ResourceRequirements {
 	}
 }
 
+// pingSecurityContext lets any group ping without sudo or CAP_NET_RAW. Despite
+// its name, the sysctl covers ICMPv6 as well.
+func pingSecurityContext() *corev1.PodSecurityContext {
+	return &corev1.PodSecurityContext{
+		Sysctls: []corev1.Sysctl{{Name: "net.ipv4.ping_group_range", Value: "0 2147483647"}},
+	}
+}
+
 // logLevelEnv reads the shared log level, which is what makes changing it one
 // ConfigMap edit rather than a rebuild of every workload.
 func logLevelEnv() corev1.EnvVar {
