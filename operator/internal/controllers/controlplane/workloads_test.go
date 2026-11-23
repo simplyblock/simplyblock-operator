@@ -478,6 +478,30 @@ func TestNoControlPlaneWorkloadRunsOnTheHostNetwork(t *testing.T) {
 	}
 }
 
+// The control plane's image pings storage nodes as an unprivileged user, which
+// the kernel allows only for groups in ping_group_range. Every pod that runs the
+// image opens the range to all groups, so no sudo, setuid bit, or CAP_NET_RAW is
+// needed.
+func TestEveryControlPlaneImageWorkloadMayPingUnprivileged(t *testing.T) {
+	objects := managementAPIObjects(localControlPlane())
+
+	for _, name := range controlPlaneImageWorkloads {
+		spec := findDeployment(t, objects, name).Spec.Template.Spec
+		var sysctls []corev1.Sysctl
+		if spec.SecurityContext != nil {
+			sysctls = spec.SecurityContext.Sysctls
+		}
+		want := corev1.Sysctl{Name: "net.ipv4.ping_group_range", Value: "0 2147483647"}
+		found := false
+		for _, s := range sysctls {
+			found = found || s == want
+		}
+		if !found {
+			t.Errorf("%s: sysctls %v, want %v among them", name, sysctls, want)
+		}
+	}
+}
+
 // Regression: the tasks-runner-backup-merge container must name the module the
 // control-plane image ships, or it crash-loops ("python3: can't open file") and
 // pins the whole tasks pod. sbcli main's task-runner rework (#1226) ships it as
