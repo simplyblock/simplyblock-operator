@@ -478,6 +478,12 @@ func TestNoControlPlaneWorkloadRunsOnTheHostNetwork(t *testing.T) {
 	}
 }
 
+// controlPlaneImageWorkloads are the Deployments that run the control plane's
+// image.
+var controlPlaneImageWorkloads = []string{
+	ComponentWebAPI, ComponentTasks, ComponentMonitoring, ComponentAdminControl,
+}
+
 // The control plane's image pings storage nodes as an unprivileged user, which
 // the kernel allows only for groups in ping_group_range. Every pod that runs the
 // image opens the range to all groups, so no sudo, setuid bit, or CAP_NET_RAW is
