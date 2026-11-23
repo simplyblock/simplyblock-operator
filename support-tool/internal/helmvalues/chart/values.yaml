@@ -1042,6 +1042,17 @@ metricsAPI:
   # -- Prometheus the capacity samples are read from. Empty serves provisioned sizes only.
   prometheusURL: http://simplyblock-prometheus:9090
 
+operatorMetrics:
+  # The operator's controller-runtime metrics, including the ObjectStore and
+  # S3Bucket families. Served per pod, on the container port named "metrics",
+  # over HTTPS behind Kubernetes authentication and authorization: a scraper
+  # presents a ServiceAccount token bound to the
+  # simplyblock-operator-metrics-reader ClusterRole.
+  # -- Serves the operator's own metrics. `false` closes the port.
+  enabled: false
+  # -- Container port of the operator's metrics endpoint.
+  port: 8443
+
 mongodb-kubernetes:
   # -- Name of the MongoDB operator.
   name: "simplyblock-mongodb"
