@@ -56,6 +56,10 @@ const (
 	// symlinks scanned to find a namespace's block device.
 	defaultDevDiskByID = "/dev/disk/by-id"
 
+	// defaultSysBlock is where the kernel publishes each block device, with
+	// the subsystem it belongs to under device/subsysnqn.
+	defaultSysBlock = "/sys/block"
+
 	// deviceReadyAttempts and deviceGoneAttempts bound how many times Connect
 	// and Disconnect rescan the by-id directory before giving up.
 	deviceReadyAttempts = 10
@@ -263,7 +267,8 @@ func (nvmf *initiatorNVMf) connectOnce(ctx context.Context) (string, error) {
 		}
 	}
 
-	return matchNamespaceDevice(ctx, defaultDevDiskByID, nvmf.model, nvmf.deviceLvolID, nvmf.nsId, time.Second)
+	gate := subsystemGate{sysBlockDir: defaultSysBlock, nqn: nvmf.nqn}
+	return matchNamespaceDevice(ctx, defaultDevDiskByID, gate, nvmf.model, nvmf.deviceLvolID, nvmf.nsId, time.Second)
 }
 
 // registerDevicePresence records a freshly connected device in the shared
@@ -367,9 +372,15 @@ func nsuuidDeviceGlob(byIDDir, id string) string {
 //  2. *<lvolID>*_<nsID>: clone UUID with nsID suffix (_ha_N udev rule).
 //  3. `nvme-uuid.<lvolID>`: kernel NSUUID symlink, no nsID suffix, produced for
 //     failover clones of namespaced volumes whose NSUUID = clone UUID.
+//
+// Every pattern's matches pass the gate first, so a link of another subsystem
+// still connected on the node is never the answer, whichever pattern it
+// matches.
 func matchNamespaceDevice(
 	ctx context.Context,
-	byIDDir, model, lvolID string,
+	byIDDir string,
+	gate subsystemGate,
+	model, lvolID string,
 	nsID int,
 	pollInterval time.Duration,
 ) (string, error) {
@@ -377,13 +388,13 @@ func matchNamespaceDevice(
 	deviceGlobFallback := namespaceDeviceGlob(byIDDir, lvolID, nsID)
 	deviceGlobNSUUID := nsuuidDeviceGlob(byIDDir, lvolID)
 
-	devicePath, primaryErr := waitForDeviceReady(ctx, deviceGlob, deviceReadyAttempts, pollInterval)
+	devicePath, primaryErr := waitForDeviceReady(ctx, deviceGlob, gate, deviceReadyAttempts, pollInterval)
 	if primaryErr == nil {
 		return devicePath, nil
 	}
 
 	klog.Warningf("New device symlink not found (%s). Retrying fallback format: %s", deviceGlob, deviceGlobFallback)
-	devicePath, err := waitForDeviceReady(ctx, deviceGlobFallback, deviceReadyAttempts, pollInterval)
+	devicePath, err := waitForDeviceReady(ctx, deviceGlobFallback, gate, deviceReadyAttempts, pollInterval)
 	if err == nil {
 		return devicePath, nil
 	}
@@ -391,7 +402,7 @@ func matchNamespaceDevice(
 	// Failover clones of namespaced volumes land under nvme-uuid.<clone-uuid>
 	// (no _<nsID> suffix) because the NSUUID is set to the clone's own UUID.
 	klog.Warningf("New device symlink not found (%s). Retrying NSUUID format: %s", deviceGlobFallback, deviceGlobNSUUID)
-	devicePath, nsuuidErr := waitForDeviceReady(ctx, deviceGlobNSUUID, deviceReadyAttempts, pollInterval)
+	devicePath, nsuuidErr := waitForDeviceReady(ctx, deviceGlobNSUUID, gate, deviceReadyAttempts, pollInterval)
 	if nsuuidErr == nil {
 		return devicePath, nil
 	}
@@ -401,12 +412,66 @@ func matchNamespaceDevice(
 		errors.Join(primaryErr, err, nsuuidErr))
 }
 
-// waitForDeviceReady rescans deviceGlob until it resolves to a single device,
-// waiting pollInterval between attempts. With attempts set to 0 it scans once
+// subsystemGate is the subsystem a looked-up device has to belong to. The zero
+// value admits every device.
+//
+// A by-id pattern names a volume, not a subsystem, and another subsystem still
+// connected on the node can carry a link the pattern matches: the source a
+// volume failed over from, or the DR clone a fail-back left behind. Taking
+// that link would attach the workload to the wrong volume with no error, so a
+// match is checked against the subsystem the control plane named before it is
+// accepted, whichever pattern produced it (#537).
+type subsystemGate struct {
+	sysBlockDir string
+	nqn         string
+}
+
+// admit splits matches into the links that may be the volume's device and a
+// description of each one refused as another subsystem's. A link whose
+// subsystem cannot be read is admitted: the gate refuses only a device it
+// knows belongs elsewhere, and a dangling link is left to the settle logic.
+func (g subsystemGate) admit(matches []string) (admitted []string, refused []string) {
+	if g.nqn == "" {
+		return matches, nil
+	}
+	for _, match := range matches {
+		owner, ok := subsystemNQNOf(g.sysBlockDir, match)
+		if ok && owner != g.nqn {
+			refused = append(refused, fmt.Sprintf("%s (subsystem %s)", match, owner))
+			continue
+		}
+		admitted = append(admitted, match)
+	}
+	return admitted, refused
+}
+
+// subsystemNQNOf reads the NQN of the subsystem the device behind link belongs
+// to, from /sys/block/<dev>/device/subsysnqn. The attribute is there for a
+// multipath head, whose device is the nvme-subsystem, and for a single-path
+// namespace, whose device is the controller.
+func subsystemNQNOf(sysBlockDir, link string) (string, bool) {
+	resolved, err := filepath.EvalSymlinks(link)
+	if err != nil {
+		return "", false
+	}
+	path := filepath.Join(sysBlockDir, filepath.Base(resolved), "device", "subsysnqn")
+	data, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
+		return os.ReadFile(path)
+	})
+	if err != nil {
+		return "", false
+	}
+	owner := strings.TrimSpace(string(data))
+	return owner, owner != ""
+}
+
+// waitForDeviceReady rescans deviceGlob until it resolves to a single device of
+// the gate's subsystem, waiting pollInterval between attempts. With attempts set to 0 it scans once
 // and returns immediately.
 func waitForDeviceReady(
 	ctx context.Context,
 	deviceGlob string,
+	gate subsystemGate,
 	attempts int,
 	pollInterval time.Duration,
 ) (string, error) {
@@ -415,6 +480,13 @@ func waitForDeviceReady(
 		matches, err := filepath.Glob(deviceGlob)
 		if err != nil {
 			return "", err
+		}
+		matches, refused := gate.admit(matches)
+		if len(refused) > 0 {
+			lastErr = fmt.Errorf("matched only devices of other subsystems than %s: %s",
+				gate.nqn, strings.Join(refused, ", "))
+			klog.Warningf("device glob %s: passing over devices of other subsystems than %s: %s",
+				deviceGlob, gate.nqn, strings.Join(refused, ", "))
 		}
 		switch {
 		case len(matches) == 1:
