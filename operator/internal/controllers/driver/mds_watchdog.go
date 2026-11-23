@@ -6,7 +6,10 @@
 // unhealthy, but a container restart cannot recover a guest whose state volume
 // lost its device on the host, because only a new pod stages the volume again.
 // Every pNFS client in the cluster goes through the MDS, so the operator
-// deletes the pod and the StatefulSet creates a fresh one.
+// deletes the pod and the StatefulSet creates a fresh one. While a storage node
+// of its cluster is not online, an unready MDS is waiting on that node, and a
+// new pod could not attach its volumes either, so the threshold stretches to
+// MaxOutageHold (SFAM-2860).
 
 package driver
 
@@ -23,6 +26,8 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -33,6 +38,14 @@ const (
 	// stay unready before it is recreated. It is past the runner's own
 	// 90 s deadline, so the container restart gets its chance first.
 	DefaultMDSUnreadyThreshold = 3 * time.Minute
+
+	// DefaultMDSMaxOutageHold is how long an MDS pod may stay unready while a
+	// storage node of its cluster is not online. Node recovery takes minutes;
+	// a node that never returns must not keep a dead MDS forever.
+	DefaultMDSMaxOutageHold = 20 * time.Minute
+
+	// storageNodeOnline is the control plane's status of a serving node.
+	storageNodeOnline = "online"
 
 	// MDSPodStuckReason is the event reason raised when a pod is recreated.
 	MDSPodStuckReason = "MDSPodStuck"
@@ -57,11 +70,15 @@ type MDSReadinessWatchdog struct {
 	Interval time.Duration
 	// UnreadyThreshold is how long a pod that was ready may stay unready.
 	UnreadyThreshold time.Duration
+	// MaxOutageHold replaces UnreadyThreshold while a storage node of the
+	// pod's cluster is not online.
+	MaxOutageHold time.Duration
 	// The clock the watchdog reads, which a test replaces.
 	Now func() time.Time
 }
 
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;patch;delete
+// +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters;storagenodes,verbs=get;list;watch
 
 // NeedLeaderElection implements manager.LeaderElectionRunnable, so two
 // replicas never delete the same pod.
@@ -91,6 +108,9 @@ func (w *MDSReadinessWatchdog) defaults() {
 	}
 	if w.UnreadyThreshold == 0 {
 		w.UnreadyThreshold = DefaultMDSUnreadyThreshold
+	}
+	if w.MaxOutageHold == 0 {
+		w.MaxOutageHold = DefaultMDSMaxOutageHold
 	}
 	if w.Now == nil {
 		w.Now = time.Now
@@ -140,14 +160,58 @@ func (w *MDSReadinessWatchdog) Pass(ctx context.Context) error {
 			if pod.Annotations[mdsWasReadyAnnotation] != mdsWasReadyValue {
 				continue // still booting: the runner's boot deadline covers it
 			}
-			if unready := now.Sub(cond.LastTransitionTime.Time); unready >= w.UnreadyThreshold {
-				if err := w.recreate(ctx, log, pod, unready); err != nil {
+			unready := now.Sub(cond.LastTransitionTime.Time)
+			if unready < w.UnreadyThreshold {
+				continue
+			}
+			if unready < w.MaxOutageHold {
+				down, err := w.storageNodeDown(ctx, pod.Labels[MDSClusterLabel])
+				if err != nil {
 					failures = append(failures, err)
+					continue
 				}
+				if down != "" {
+					log.Info("holding an unready pNFS metadata server during a storage outage",
+						"pod", pod.Name, "unreadyFor", unready.Round(time.Second).String(), "storageNode", down)
+					continue
+				}
+			}
+			if err := w.recreate(ctx, log, pod, unready); err != nil {
+				failures = append(failures, err)
 			}
 		}
 	}
 	return errors.Join(failures...)
+}
+
+// storageNodeDown returns the name of a storage node of the cluster with
+// clusterUUID that is not online, or "" when there is none or the cluster has
+// no StorageCluster here, as for a remote one.
+func (w *MDSReadinessWatchdog) storageNodeDown(ctx context.Context, clusterUUID string) (string, error) {
+	if clusterUUID == "" {
+		return "", nil
+	}
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := w.List(ctx, &clusters); err != nil {
+		return "", fmt.Errorf("list StorageClusters: %w", err)
+	}
+	for i := range clusters.Items {
+		c := &clusters.Items[i]
+		if c.Status.UUID != clusterUUID {
+			continue
+		}
+		var nodes simplyblockv1alpha2.StorageNodeList
+		if err := w.List(ctx, &nodes, client.InNamespace(c.Namespace)); err != nil {
+			return "", fmt.Errorf("list StorageNodes of %s: %w", c.Name, err)
+		}
+		for j := range nodes.Items {
+			n := &nodes.Items[j]
+			if n.Spec.ClusterRef == c.Name && n.Status.Status != "" && n.Status.Status != storageNodeOnline {
+				return n.Name, nil
+			}
+		}
+	}
+	return "", nil
 }
 
 func podReadyCondition(pod *corev1.Pod) *corev1.PodCondition {

@@ -17,6 +17,8 @@ import (
 	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
 const (
@@ -46,6 +48,9 @@ func wdWatchdog(t *testing.T, now time.Time, objects ...client.Object) (*MDSRead
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
+		t.Fatal(err)
+	}
+	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
 		t.Fatal(err)
 	}
 	rec := events.NewFakeRecorder(16)
@@ -159,5 +164,75 @@ func TestOnlyMDSPodsAreWatched(t *testing.T) {
 	}
 	if _, exists := wdExists(t, w, "fio-0"); !exists {
 		t.Error("a pod that is not a metadata server was deleted")
+	}
+}
+
+// wdCluster is the StorageCluster behind mdsPod, with one storage node per
+// control-plane status given.
+func wdCluster(nodeStatuses ...string) []client.Object {
+	objs := []client.Object{&simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "cluster", Namespace: wdNamespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "2600692a-7b7d-4402-b7dc-43b8c12e5d81"},
+	}}
+	for i, st := range nodeStatuses {
+		objs = append(objs, &simplyblockv1alpha2.StorageNode{
+			ObjectMeta: metav1.ObjectMeta{Name: "node-" + string(rune('a'+i)), Namespace: wdNamespace},
+			Spec:       simplyblockv1alpha2.StorageNodeSpec{ClusterRef: "cluster"},
+			Status:     simplyblockv1alpha2.StorageNodeStatus{Status: st},
+		})
+	}
+	return objs
+}
+
+// Regression: SFAM-2860. With the runner's own deadline held during a storage
+// outage, this watchdog recreated the MDS 3m28s into the outage instead
+// (cluster 66), and the replacement could not attach the volumes whose paths
+// were still down. While a storage node of its cluster is not online, an
+// unready MDS is waiting on the outage and is left alone.
+func TestAnMDSPodUnreadyDuringAStorageOutageIsLeftAlone(t *testing.T) {
+	now := time.Now()
+	objs := append(wdCluster("online", "in_restart", "online"),
+		mdsPod(corev1.ConditionFalse, now.Add(-4*time.Minute), true))
+	w, rec := wdWatchdog(t, now, objs...)
+
+	if err := w.Pass(context.Background()); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	if _, exists := wdExists(t, w, wdMDSPod); !exists {
+		t.Error("the MDS pod was recreated while a storage node was restarting: its replacement cannot attach that node's volumes")
+	}
+	if wdAnnounced(rec) {
+		t.Error("a recreation was announced during a storage outage")
+	}
+}
+
+// A node that never returns does not keep a dead MDS forever: past the
+// outage ceiling the pod is recreated regardless.
+func TestAnMDSPodUnreadyPastTheOutageCeilingIsRecreated(t *testing.T) {
+	now := time.Now()
+	objs := append(wdCluster("online", "offline"),
+		mdsPod(corev1.ConditionFalse, now.Add(-25*time.Minute), true))
+	w, _ := wdWatchdog(t, now, objs...)
+
+	if err := w.Pass(context.Background()); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	if _, exists := wdExists(t, w, wdMDSPod); exists {
+		t.Error("the MDS pod stayed 25 minutes unready because one node is offline")
+	}
+}
+
+// Every node online: nothing to wait for, so the plain threshold applies.
+func TestAnMDSPodUnreadyWithEveryNodeOnlineIsRecreated(t *testing.T) {
+	now := time.Now()
+	objs := append(wdCluster("online", "online"),
+		mdsPod(corev1.ConditionFalse, now.Add(-4*time.Minute), true))
+	w, _ := wdWatchdog(t, now, objs...)
+
+	if err := w.Pass(context.Background()); err != nil {
+		t.Fatalf("Pass: %v", err)
+	}
+	if _, exists := wdExists(t, w, wdMDSPod); exists {
+		t.Error("the MDS pod stayed four minutes unready with every storage node online")
 	}
 }
