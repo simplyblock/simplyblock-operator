@@ -90,3 +90,30 @@ func GRPCHealthProbe(addr string) func(context.Context) error {
 		return nil
 	}
 }
+
+// GRPCStorageOutageProbe returns a probe that is true while the guest agent at
+// addr reports its storage service NOT_SERVING. An agent that does not answer,
+// or predates the service, is not waiting on storage.
+func GRPCStorageOutageProbe(addr string) func(context.Context) bool {
+	var (
+		once   sync.Once
+		client healthpb.HealthClient
+	)
+	return func(ctx context.Context) bool {
+		once.Do(func() {
+			conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+			if err == nil {
+				client = healthpb.NewHealthClient(conn)
+			}
+		})
+		if client == nil {
+			return false
+		}
+		resp, err := client.Check(ctx, &healthpb.HealthCheckRequest{Service: storageService})
+		return err == nil && resp.GetStatus() == healthpb.HealthCheckResponse_NOT_SERVING
+	}
+}
+
+// storageService matches agent.StorageService; the runner does not import the
+// guest's packages.
+const storageService = "storage"

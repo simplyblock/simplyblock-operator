@@ -137,3 +137,27 @@ func checkWithin(check func() error, timeout time.Duration) error {
 		return fmt.Errorf("the health check did not answer within %s", timeout)
 	}
 }
+
+// StorageService is the health service that is NOT_SERVING while the guest
+// waits on a storage path that is down. The runner holds its unhealthy
+// deadline meanwhile, since a restart cannot attach a node that is down.
+const StorageService = "storage"
+
+// ReportStorage keeps StorageService current with outage, every interval,
+// until ctx ends.
+func ReportStorage(ctx context.Context, server *health.Server, outage func() bool, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		status := healthpb.HealthCheckResponse_SERVING
+		if outage() {
+			status = healthpb.HealthCheckResponse_NOT_SERVING
+		}
+		server.SetServingStatus(StorageService, status)
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}

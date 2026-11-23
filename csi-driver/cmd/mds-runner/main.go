@@ -116,7 +116,8 @@ func parseFlags() config {
 	flag.DurationVar(&c.bootDeadline, "boot-deadline", 120*time.Second,
 		"Time the guest has to turn healthy before the pod restarts")
 	flag.DurationVar(&c.unhealthyDeadline, "unhealthy-deadline", 90*time.Second,
-		"Time a booted guest may stay unhealthy before the pod restarts; 0 never restarts it")
+		"Time a booted guest may stay unhealthy before the pod restarts, not counting time it waits on "+
+			"a storage path that is down; 0 never restarts it")
 	flag.DurationVar(&c.shutdownGrace, "shutdown-grace", 20*time.Second,
 		"Time a powered-down guest has to exit; keep below the pod's termination grace period")
 	flag.DurationVar(&c.drainWait, "drain-wait", 3*time.Second,
@@ -242,8 +243,9 @@ func run(ctx context.Context, c config) error {
 			}
 			return startHostPath(ctx, plan, c.hostProxy)
 		},
-		Start: runner.StartProcess(binary, args, os.Stdout, os.Stderr),
-		Probe: runner.GRPCHealthProbe(agentAddress),
+		Start:         runner.StartProcess(binary, args, os.Stdout, os.Stderr),
+		Probe:         runner.GRPCHealthProbe(agentAddress),
+		StorageOutage: runner.GRPCStorageOutageProbe(agentAddress),
 		Powerdown: func(ctx context.Context) error {
 			client, err := qmp.Dial(ctx, qmpSocket)
 			if err != nil {

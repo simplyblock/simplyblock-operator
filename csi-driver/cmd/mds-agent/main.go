@@ -162,6 +162,7 @@ func run(ctx context.Context, listen, stateDir string, watchdog, mdsData, pathIn
 		Stuck:         nfsdWatchdog.StuckFor,
 		StuckLimit:    nfsdStuckLimit,
 	}.Check, healthInterval, healthTimeout)
+	go agent.ReportStorage(ctx, healthServer, keeper.StorageOutage, healthInterval)
 	go agent.RunNFSDWatchdog(ctx, nfsdWatchdog, watchdog)
 	go agent.RunMDSDataWatch(ctx, &agent.MDSDataWatch{Log: agent.KlogLogger{}}, mdsData)
 	go keeper.Run(ctx, pathInterval)

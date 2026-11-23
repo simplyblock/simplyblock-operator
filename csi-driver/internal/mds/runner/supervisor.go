@@ -4,7 +4,7 @@
 //
 // The pod is the unit of recovery. Whatever ends the guest (a panic, a power
 // off from inside, a missed boot deadline, a booted guest unhealthy past
-// UnhealthyDeadline) ends Run with an error, the runner
+// UnhealthyDeadline, not counting time spent waiting on a storage outage) ends Run with an error, the runner
 // exits, and kubelet restarts the pod into a cold boot that the operator then
 // resyncs. The supervisor therefore never restarts QEMU itself. QEMU, the
 // health probe, and the power button are injected, so the lifecycle is tested
@@ -65,7 +65,10 @@ type Supervisor struct {
 	// UnhealthyDeadline is how long a guest that has booted may stay unhealthy
 	// before QEMU is killed and Run fails. Zero never gives up.
 	UnhealthyDeadline time.Duration
-	ProbeInterval     time.Duration
+	// StorageOutage reports whether the guest is waiting on storage paths that
+	// are down. While it does, UnhealthyDeadline is held. Optional.
+	StorageOutage func(ctx context.Context) bool
+	ProbeInterval time.Duration
 	// ShutdownGrace is how long a powered-down guest gets to exit before
 	// QEMU is killed. It has to fit in the pod's termination grace period.
 	ShutdownGrace time.Duration
@@ -123,7 +126,9 @@ func (s *Supervisor) Run(ctx context.Context) error {
 				unhealthySince = time.Time{}
 				continue
 			}
-			if unhealthySince.IsZero() {
+			// A guest waiting on a storage outage is not wedged: a restart
+			// cannot attach a node that is still down (SFAM-2860).
+			if unhealthySince.IsZero() || s.storageOutage(ctx) {
 				unhealthySince = time.Now()
 			}
 			if s.UnhealthyDeadline > 0 && time.Since(unhealthySince) >= s.UnhealthyDeadline {
@@ -145,6 +150,16 @@ func (s *Supervisor) probeOnce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, s.ProbeInterval)
 	defer cancel()
 	return s.Probe(ctx)
+}
+
+// storageOutage asks StorageOutage, bounded by the probe interval.
+func (s *Supervisor) storageOutage(ctx context.Context) bool {
+	if s.StorageOutage == nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, s.ProbeInterval)
+	defer cancel()
+	return s.StorageOutage(ctx)
 }
 
 // shutdown presses the power button and gives the guest ShutdownGrace to

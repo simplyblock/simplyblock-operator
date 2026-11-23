@@ -105,3 +105,38 @@ func TestGRPCHealthProbeFollowsTheAgent(t *testing.T) {
 		t.Error("probe passed with no agent answering")
 	}
 }
+
+// The runner reads a storage outage from the agent's storage service. An agent
+// that does not serve it, or does not answer, is not waiting on storage.
+func TestGRPCStorageOutageProbeFollowsTheAgent(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := grpc.NewServer()
+	hs := health.NewServer()
+	healthpb.RegisterHealthServer(srv, hs)
+	go func() { _ = srv.Serve(ln) }()
+	t.Cleanup(srv.Stop)
+
+	outage := GRPCStorageOutageProbe(ln.Addr().String())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if outage(ctx) {
+		t.Error("an agent without the storage service read as a storage outage")
+	}
+	hs.SetServingStatus("storage", healthpb.HealthCheckResponse_NOT_SERVING)
+	if !outage(ctx) {
+		t.Error("no outage read while the agent reports its storage NOT_SERVING")
+	}
+	hs.SetServingStatus("storage", healthpb.HealthCheckResponse_SERVING)
+	if outage(ctx) {
+		t.Error("an outage read while the agent reports its storage SERVING")
+	}
+	hs.SetServingStatus("storage", healthpb.HealthCheckResponse_NOT_SERVING)
+	srv.Stop()
+	if outage(ctx) {
+		t.Error("an agent that does not answer read as a storage outage")
+	}
+}

@@ -389,3 +389,41 @@ func TestABriefUnhealthySpellDoesNotKillTheGuest(t *testing.T) {
 		t.Error("QEMU was killed for an unhealthy spell shorter than the deadline")
 	}
 }
+
+// Regression: SFAM-2860. Two of six storage nodes were down inside the
+// cluster's tolerance; the guest's I/O to them parked, it read as unhealthy,
+// and the flat deadline killed it four seconds before the first node returned.
+// The restarted guest could not attach the still-down node's volumes, and their
+// clients got EBADF. While the guest says it is waiting on storage, the
+// deadline is held.
+func TestAGuestWaitingOnAStorageOutageIsNotKilled(t *testing.T) {
+	q := newFakeQEMU()
+	s := supervisor(q)
+	var broken, outage atomic.Bool
+	s.Probe = func(context.Context) error {
+		if broken.Load() {
+			return errors.New("an export's filesystem does not answer")
+		}
+		return nil
+	}
+	s.StorageOutage = func(context.Context) bool { return outage.Load() }
+	s.UnhealthyDeadline = 50 * time.Millisecond
+	done := runAsync(context.Background(), s)
+
+	waitFor(t, "readiness", s.Ready)
+	outage.Store(true)
+	broken.Store(true)
+
+	select {
+	case err := <-done:
+		t.Fatalf("Run = %v during a storage outage, want the guest kept", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+
+	// Storage is back but the guest stays unhealthy: now it is wedged, and the
+	// deadline runs from the end of the outage.
+	outage.Store(false)
+	if err := result(t, done); !errors.Is(err, ErrGuestUnhealthy) {
+		t.Errorf("Run = %v, want ErrGuestUnhealthy once storage is back and the guest is not", err)
+	}
+}

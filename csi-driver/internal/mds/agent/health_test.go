@@ -170,3 +170,35 @@ func TestAHangingCheckReportsNotServing(t *testing.T) {
 	hang.Store(true)
 	waitStatus(t, s, healthpb.HealthCheckResponse_NOT_SERVING)
 }
+
+// The outage is served as its own health service, beside the overall status.
+func TestReportServesTheStorageOutage(t *testing.T) {
+	s := health.NewServer()
+	var outage atomic.Bool
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go ReportStorage(ctx, s, outage.Load, time.Millisecond)
+
+	storage := func() healthpb.HealthCheckResponse_ServingStatus {
+		resp, err := s.Check(context.Background(), &healthpb.HealthCheckRequest{Service: StorageService})
+		if err != nil {
+			return healthpb.HealthCheckResponse_UNKNOWN
+		}
+		return resp.GetStatus()
+	}
+	waitFor := func(want healthpb.HealthCheckResponse_ServingStatus) {
+		t.Helper()
+		deadline := time.Now().Add(5 * time.Second)
+		for storage() != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("storage status = %v, want %v", storage(), want)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	waitFor(healthpb.HealthCheckResponse_SERVING)
+	outage.Store(true)
+	waitFor(healthpb.HealthCheckResponse_NOT_SERVING)
+	outage.Store(false)
+	waitFor(healthpb.HealthCheckResponse_SERVING)
+}

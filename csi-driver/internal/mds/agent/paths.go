@@ -67,6 +67,8 @@ type kept struct {
 	// down is every path last seen down, by address, with the reason.
 	down    map[string]string
 	lastErr string
+	// outage is whether the last reconcile left a path down.
+	outage bool
 }
 
 // Wrap returns inner with every successful Create kept and every successful
@@ -218,6 +220,7 @@ func (k *PathKeeper) reconcile(ctx context.Context, path string) {
 
 	k.mu.Lock()
 	e.state = state
+	e.outage = len(e.down) > 0 || e.lastErr != ""
 	k.mu.Unlock()
 }
 
@@ -263,4 +266,17 @@ func (k *PathKeeper) CheckFilesystems(statfs func(path string) error) error {
 		}
 	}
 	return nil
+}
+
+// StorageOutage reports whether any kept export had a path down at its last
+// reconcile.
+func (k *PathKeeper) StorageOutage() bool {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	for _, e := range k.exports {
+		if e.outage {
+			return true
+		}
+	}
+	return false
 }

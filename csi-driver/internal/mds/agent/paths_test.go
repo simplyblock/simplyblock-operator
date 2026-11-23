@@ -375,3 +375,36 @@ func TestAShutDownExportFilesystemFailsTheCheck(t *testing.T) {
 		t.Errorf("CheckFilesystems = %v with every filesystem answering, want nil", err)
 	}
 }
+
+// SFAM-2860: the runner holds its unhealthy deadline while an export has a
+// path down, so the keeper says when one has.
+func TestTheKeeperReportsAStorageOutageWhileAPathIsDown(t *testing.T) {
+	down := true
+	r := &reconciles{state: func(lvol.Connection) nvmeof.PathState {
+		st := nvmeof.PathState{NQN: "nqn:lvol:a", Expected: 1}
+		if down {
+			st.Results = []nvmeof.PathResult{{Target: target("10.10.10.143"), Err: errors.New("connection refused")}}
+		} else {
+			st.Results = []nvmeof.PathResult{{Target: target("10.10.10.143"), Live: true}}
+			st.Live = 1
+		}
+		return st
+	}}
+	k := newKeeper(r, &recordingLog{})
+	ctx := context.Background()
+	_ = k.Wrap(&fakeAssembler{}).Create(ctx, spec("/exports/a", "nqn:lvol:a"))
+	if k.StorageOutage() {
+		t.Error("an outage reported before any path was seen down")
+	}
+
+	k.Tick(ctx)
+	if !k.StorageOutage() {
+		t.Error("no outage reported while the only path is down")
+	}
+
+	down = false
+	k.Tick(ctx)
+	if k.StorageOutage() {
+		t.Error("an outage still reported after the path came back")
+	}
+}
