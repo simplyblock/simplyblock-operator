@@ -13,7 +13,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/simplyblock/atlas/bounded"
-	"github.com/simplyblock/atlas/internal/nvmepassthru"
 )
 
 // The request numbers of include/uapi/linux/pr.h: _IOW('p', nr, struct), that
@@ -123,7 +122,7 @@ func (d *linuxDevice) Preempt(_ context.Context, key, victim uint64, t Type, abo
 }
 
 func (d *linuxDevice) Report(_ context.Context) (Report, error) {
-	nsid, err := nvmepassthru.NamespaceID(d.f.Fd())
+	nsid, err := namespaceID(d.f.Fd())
 	if err != nil {
 		return Report{}, fmt.Errorf("namespace id of %s: %w", d.path, err)
 	}
@@ -149,14 +148,7 @@ func (d *linuxDevice) readReport(nsid uint32, size int) ([]byte, error) {
 	size = (size + 3) &^ 3
 	return bounded.Call("pr report "+d.path, commandTimeout, func() ([]byte, error) {
 		buf := make([]byte, size)
-		cmd := nvmepassthru.Cmd{
-			Opcode:    nvmeOpReservationReport,
-			NSID:      nsid,
-			CDW10:     uint32(size/4 - 1), // NUMD, zero-based dwords
-			CDW11:     reportEDS,
-			TimeoutMs: uint32(commandTimeout / time.Millisecond),
-		}
-		if err := nvmepassthru.Run(d.f.Fd(), nvmepassthru.IoctlIOCmd, &cmd, buf); err != nil {
+		if err := reservationReport(d.f.Fd(), nsid, buf, uint32(commandTimeout/time.Millisecond)); err != nil {
 			return nil, fmt.Errorf("reservation report of %s: %w", d.path, err)
 		}
 		return buf, nil
