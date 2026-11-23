@@ -81,7 +81,7 @@ type ControlPlaneReconciler struct {
 
 	// OpenShift is whether the cluster is an OpenShift one. It decides the
 	// SELinux type the NUMA device plugin runs with (numaplugin.go), and
-	// whether the control plane's account is granted the anyuid SCC (scc.go).
+	// whether a leftover anyuid SCC grant is removed (scc.go).
 	OpenShift bool
 }
 
@@ -423,7 +423,7 @@ func (r *ControlPlaneReconciler) applyEverything(
 			return err
 		}
 	}
-	return nil
+	return r.removeAnyUIDSCCBinding(ctx, cp.Namespace)
 }
 
 // probe performs the readiness read and records what it cost.
