@@ -766,21 +766,22 @@ func TestExtraMetricsServiceAccountsReachTheManagementAPI(t *testing.T) {
 	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
 	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
 
-	if want := "system:serviceaccount:monitoring:kube-prometheus-stack-prometheus"; env.Value != want {
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus," +
+		"system:serviceaccount:monitoring:kube-prometheus-stack-prometheus"; env.Value != want {
 		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
 	}
 }
 
-// This chart deploys no Prometheus of its own, so without the operator's
-// variable there is no account to trust and every scrape gets a 401.
-func TestNoExtraMetricsServiceAccountsMeansNoneAreTrusted(t *testing.T) {
+// Regression: an upgrade from 26.3 keeps the operator's own Prometheus, so its
+// account stays trusted even when the chart names no extra scraper.
+func TestTheOperatorsOwnPrometheusStaysTrusted(t *testing.T) {
 	t.Setenv(extraMetricsAccountsEnv, "")
 	cp := localControlPlane()
 
 	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
 	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
 
-	if env.Value != "" {
-		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want empty", env.Value)
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"; env.Value != want {
+		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
 	}
 }

@@ -80,6 +80,22 @@ spec:
 # wherever it lands. staticConfigs is a literal address rather than pod
 # discovery, which is what keeps it to the one target this needs regardless of
 # how many webappapi replicas are running.
+# The identity the ScrapeConfig scrapes as; the management API trusts it.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: simplyblock-metrics-scraper
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: v1
+kind: Secret
+type: kubernetes.io/service-account-token
+metadata:
+  name: simplyblock-metrics-scraper-token
+  namespace: {{ .Release.Namespace }}
+  annotations:
+    kubernetes.io/service-account.name: simplyblock-metrics-scraper
+---
 apiVersion: monitoring.coreos.com/v1alpha1
 kind: ScrapeConfig
 metadata:
@@ -94,11 +110,12 @@ spec:
   metricsPath: /api/v2/metrics
   scrapeInterval: {{ .Values.prometheus.interval }}
   scrapeTimeout: 30s
-  # The webappapi job's own identity, read off the scraping pod rather than a
-  # minted Secret: it is Prometheus's own in-cluster token, the same one the
-  # static scrape config points `credentials_file` at.
+  # ScrapeConfig takes the token only from a Secret, so it presents the
+  # scraper account's token below rather than the Prometheus pod's own.
   authorization:
-    credentialsFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+    credentials:
+      name: simplyblock-metrics-scraper-token
+      key: token
   {{- if .Values.tls.enabled }}
   # ScrapeConfig's scheme is the enum HTTP/HTTPS, unlike ServiceMonitor's
   # lowercase http/https: the two CRDs disagree on casing for the same field.

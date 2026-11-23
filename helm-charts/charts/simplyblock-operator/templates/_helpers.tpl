@@ -50,9 +50,14 @@ true
      the Control Center's entry empty until it opts in. */}}
 {{- define "simplyblock.extraMetricsServiceAccount" -}}
 {{- $sa := .Values.prometheus.serviceAccount | default dict -}}
+{{- $accounts := list -}}
 {{- if $sa.name -}}
-{{- printf "system:serviceaccount:%s:%s" ($sa.namespace | default .Release.Namespace) $sa.name -}}
+{{- $accounts = append $accounts (printf "system:serviceaccount:%s:%s" ($sa.namespace | default .Release.Namespace) $sa.name) -}}
 {{- end -}}
+{{- if .Values.prometheus.enabled -}}
+{{- $accounts = append $accounts (printf "system:serviceaccount:%s:simplyblock-metrics-scraper" .Release.Namespace) -}}
+{{- end -}}
+{{- join "," $accounts -}}
 {{- end -}}
 
 {{- define "simplyblock.controlPlaneAddr" -}}
