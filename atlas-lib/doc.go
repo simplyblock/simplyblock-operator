@@ -15,7 +15,7 @@
 //	nvmeof          Connect and disconnect NVMe-oF (TCP) targets.
 //	nvmepr          Register, acquire, and preempt a namespace's persistent
 //	                reservation, and read who is registered under which host;
-//	                nvmepr/nvmeprtest is an in-memory namespace for tests.
+//	                nvmepr/test is an in-memory namespace for tests.
 //	nqn             Build and parse NVMe Qualified Names.
 //	blockdev        What a Linux block device is, and what it carries: the
 //	                reading a formatting decision rests on, plus the scan that

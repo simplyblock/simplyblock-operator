@@ -20,6 +20,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 )
 
@@ -154,7 +155,7 @@ func (c *Coordinator) Reconcile(ctx context.Context, in Input) (Result, error) {
 // or returns the recorded handle when there is none.
 func (c *Coordinator) stateVolume(ctx context.Context, state *StateVolume, in Input) (lvol.VolumeHandle, error) {
 	sts := in.StatefulSet
-	if sts.Annotations[StateVolumeAnnotation] == "" && len(in.Exports) == 0 {
+	if sts.Annotations[kube.AnnoMDSStateVolume] == "" && len(in.Exports) == 0 {
 		return "", nil
 	}
 	poolRef := ""

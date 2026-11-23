@@ -2,7 +2,7 @@
 
 package mdsstate
 
-import "github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
+import mdsstatetest "github.com/simplyblock/simplyblock-operator/internal/mdsstate/test"
 
 const (
 	testCluster = mdsstatetest.Cluster

@@ -3,7 +3,7 @@
 // host that is registered, a Replace with ignore-existing-key registers any
 // host, a Preempt of an unknown key succeeds, and a host that is not registered
 // can neither read nor write once a registrants-only reservation exists.
-package nvmeprtest
+package test
 
 import (
 	"context"

@@ -2,7 +2,7 @@
 // hosts, the coordinator, and the driver controller that runs it: volumes with
 // allowed-host lists, call counts, and failures injected per call.
 
-package mdsstatetest
+package test
 
 import (
 	"context"

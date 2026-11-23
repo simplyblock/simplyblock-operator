@@ -15,12 +15,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
-	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
+	mdsstatetest "github.com/simplyblock/simplyblock-operator/internal/mdsstate/test"
 )
 
 type noSwitchover struct{}
@@ -88,7 +89,7 @@ func TestADriverReconcileRunsTheMetadataServerCoordinator(t *testing.T) {
 	if *got.Spec.Replicas != 2 {
 		t.Errorf("replicas = %d, want 2", *got.Spec.Replicas)
 	}
-	if got.Annotations[mdsstate.StateVolumeAnnotation] == "" {
+	if got.Annotations[kube.AnnoMDSStateVolume] == "" {
 		t.Errorf("no state volume recorded: %v", got.Annotations)
 	}
 	host, _ := mdsstate.HostNQN(coordinatorStatefulSetUID, 1)
@@ -122,8 +123,8 @@ func TestADriverReconcileFinalizesADeletedStatefulSet(t *testing.T) {
 	_, sts := mdsObjects(t, d)
 	sts.UID = coordinatorStatefulSetUID
 	sts.Labels = map[string]string{MDSClusterLabel: testClusterID}
-	sts.Annotations[mdsstate.StateVolumeAnnotation] = string(state)
-	sts.Finalizers = []string{mdsstate.StateVolumeFinalizer}
+	sts.Annotations[kube.AnnoMDSStateVolume] = string(state)
+	sts.Finalizers = []string{kube.FinalizerMDSStateVolume}
 	now := metav1.Now()
 	sts.DeletionTimestamp = &now
 
@@ -143,7 +144,7 @@ func TestADriverReconcileFinalizesADeletedStatefulSet(t *testing.T) {
 	}
 	var got appsv1.StatefulSet
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(sts), &got); err == nil &&
-		slices.Contains(got.Finalizers, mdsstate.StateVolumeFinalizer) {
+		slices.Contains(got.Finalizers, kube.FinalizerMDSStateVolume) {
 		t.Errorf("finalizers = %v, want the state volume's removed", got.Finalizers)
 	}
 }

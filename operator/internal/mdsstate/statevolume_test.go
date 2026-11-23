@@ -17,8 +17,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
-	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
+	mdsstatetest "github.com/simplyblock/simplyblock-operator/internal/mdsstate/test"
 )
 
 func testSTS(annotations map[string]string) *appsv1.StatefulSet {
@@ -57,11 +58,11 @@ func TestEnsureStateVolumeCreatesAndRecordsItOnce(t *testing.T) {
 		t.Fatalf("Ensure: %v", err)
 	}
 	got := reload(t, c, sts)
-	if got.Annotations[StateVolumeAnnotation] != string(h) || h == "" {
-		t.Errorf("recorded %q, want the created handle %q", got.Annotations[StateVolumeAnnotation], h)
+	if got.Annotations[kube.AnnoMDSStateVolume] != string(h) || h == "" {
+		t.Errorf("recorded %q, want the created handle %q", got.Annotations[kube.AnnoMDSStateVolume], h)
 	}
-	if !slices.Contains(got.Finalizers, StateVolumeFinalizer) {
-		t.Errorf("finalizers = %v, want %s", got.Finalizers, StateVolumeFinalizer)
+	if !slices.Contains(got.Finalizers, kube.FinalizerMDSStateVolume) {
+		t.Errorf("finalizers = %v, want %s", got.Finalizers, kube.FinalizerMDSStateVolume)
 	}
 	v := api.Volumes[h]
 	if v == nil || v.Vol.SizeBytes != StateVolumeSize || v.Vol.Pool != testPool {
@@ -85,7 +86,7 @@ func TestEnsureStateVolumeCreatesAndRecordsItOnce(t *testing.T) {
 func TestEnsureStateVolumeKeepsTheRecordedHandle(t *testing.T) {
 	api := mdsstatetest.New()
 	recorded := api.Add("whatever")
-	sts := testSTS(map[string]string{StateVolumeAnnotation: string(recorded)})
+	sts := testSTS(map[string]string{kube.AnnoMDSStateVolume: string(recorded)})
 	sv := &StateVolume{Client: kubeFor(t, sts), API: api}
 
 	h, err := sv.Ensure(context.Background(), sts, testCluster, "99999999-2222-4333-8444-555555555555")
@@ -109,8 +110,8 @@ func TestEnsureStateVolumeAdoptsAVolumeCreatedBeforeACrash(t *testing.T) {
 	if _, err := failing.Ensure(context.Background(), sts, testCluster, testPool); err == nil {
 		t.Fatal("the lost record write was not reported")
 	}
-	if api.Creates != 1 || reload(t, c, sts).Annotations[StateVolumeAnnotation] != "" {
-		t.Fatalf("setup: %d creates, record %q", api.Creates, reload(t, c, sts).Annotations[StateVolumeAnnotation])
+	if api.Creates != 1 || reload(t, c, sts).Annotations[kube.AnnoMDSStateVolume] != "" {
+		t.Fatalf("setup: %d creates, record %q", api.Creates, reload(t, c, sts).Annotations[kube.AnnoMDSStateVolume])
 	}
 
 	h, err := sv.Ensure(context.Background(), reload(t, c, sts), testCluster, testPool)
@@ -120,7 +121,7 @@ func TestEnsureStateVolumeAdoptsAVolumeCreatedBeforeACrash(t *testing.T) {
 	if api.Creates != 1 {
 		t.Errorf("%d create calls, want the one volume adopted", api.Creates)
 	}
-	if got := reload(t, c, sts).Annotations[StateVolumeAnnotation]; got != string(h) || h == "" {
+	if got := reload(t, c, sts).Annotations[kube.AnnoMDSStateVolume]; got != string(h) || h == "" {
 		t.Errorf("recorded %q, want %q", got, h)
 	}
 }
@@ -132,7 +133,7 @@ type failingPatch struct {
 }
 
 func (f *failingPatch) Patch(ctx context.Context, obj client.Object, p client.Patch, o ...client.PatchOption) error {
-	if obj.GetAnnotations()[StateVolumeAnnotation] != "" {
+	if obj.GetAnnotations()[kube.AnnoMDSStateVolume] != "" {
 		return f.err
 	}
 	return f.Client.Patch(ctx, obj, p, o...)
@@ -154,7 +155,7 @@ func TestEnsureStateVolumeFailureRecordsNothing(t *testing.T) {
 	if !errors.Is(err, ErrStateUnavailable) {
 		t.Errorf("error %v is not ErrStateUnavailable", err)
 	}
-	if got := reload(t, c, sts).Annotations[StateVolumeAnnotation]; got != "" {
+	if got := reload(t, c, sts).Annotations[kube.AnnoMDSStateVolume]; got != "" {
 		t.Errorf("recorded %q after a failed create", got)
 	}
 }
@@ -180,8 +181,8 @@ func TestFinalizeDeletesTheVolumeAndReleasesTheStatefulSet(t *testing.T) {
 	api := mdsstatetest.New()
 	h := api.Add("state")
 	now := metav1.Now()
-	sts := testSTS(map[string]string{StateVolumeAnnotation: string(h)})
-	sts.Finalizers = []string{StateVolumeFinalizer}
+	sts := testSTS(map[string]string{kube.AnnoMDSStateVolume: string(h)})
+	sts.Finalizers = []string{kube.FinalizerMDSStateVolume}
 	sts.DeletionTimestamp = &now
 	c := kubeFor(t, sts)
 	sv := &StateVolume{Client: c, API: api}
@@ -194,7 +195,7 @@ func TestFinalizeDeletesTheVolumeAndReleasesTheStatefulSet(t *testing.T) {
 	}
 	var gone appsv1.StatefulSet
 	err := c.Get(context.Background(), client.ObjectKeyFromObject(sts), &gone)
-	if err == nil && slices.Contains(gone.Finalizers, StateVolumeFinalizer) {
+	if err == nil && slices.Contains(gone.Finalizers, kube.FinalizerMDSStateVolume) {
 		t.Errorf("finalizers = %v, want it removed", gone.Finalizers)
 	}
 }
@@ -202,8 +203,8 @@ func TestFinalizeDeletesTheVolumeAndReleasesTheStatefulSet(t *testing.T) {
 func TestFinalizeCountsAMissingVolumeAsDone(t *testing.T) {
 	api := mdsstatetest.New() // the volume was never there: the delete answers as for a 404
 	now := metav1.Now()
-	sts := testSTS(map[string]string{StateVolumeAnnotation: testCluster + ":" + testPool + ":00000000-0000-4000-8000-000000000099"})
-	sts.Finalizers = []string{StateVolumeFinalizer}
+	sts := testSTS(map[string]string{kube.AnnoMDSStateVolume: testCluster + ":" + testPool + ":00000000-0000-4000-8000-000000000099"})
+	sts.Finalizers = []string{kube.FinalizerMDSStateVolume}
 	sts.DeletionTimestamp = &now
 	c := kubeFor(t, sts)
 	if err := (&StateVolume{Client: c, API: api}).Finalize(context.Background(), sts); err != nil {
@@ -217,14 +218,14 @@ func TestFinalizeKeepsTheFinalizerWhenTheDeleteFails(t *testing.T) {
 	h := api.Add("state")
 	api.DeleteErr = errors.New("500")
 	now := metav1.Now()
-	sts := testSTS(map[string]string{StateVolumeAnnotation: string(h)})
-	sts.Finalizers = []string{StateVolumeFinalizer}
+	sts := testSTS(map[string]string{kube.AnnoMDSStateVolume: string(h)})
+	sts.Finalizers = []string{kube.FinalizerMDSStateVolume}
 	sts.DeletionTimestamp = &now
 	c := kubeFor(t, sts)
 	if err := (&StateVolume{Client: c, API: api}).Finalize(context.Background(), sts); err == nil {
 		t.Fatal("a failed delete was reported as done")
 	}
-	if !slices.Contains(reload(t, c, sts).Finalizers, StateVolumeFinalizer) {
+	if !slices.Contains(reload(t, c, sts).Finalizers, kube.FinalizerMDSStateVolume) {
 		t.Error("the finalizer was removed while the volume still exists")
 	}
 }

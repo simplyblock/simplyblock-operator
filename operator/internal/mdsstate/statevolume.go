@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 )
 
@@ -61,7 +62,7 @@ func StateVolumeName(statefulSetName string) string {
 func (s *StateVolume) Ensure(
 	ctx context.Context, sts *appsv1.StatefulSet, clusterID, poolRef string,
 ) (lvol.VolumeHandle, error) {
-	if recorded := sts.Annotations[StateVolumeAnnotation]; recorded != "" {
+	if recorded := sts.Annotations[kube.AnnoMDSStateVolume]; recorded != "" {
 		return lvol.VolumeHandle(recorded), nil
 	}
 	unavailable := func(err error) (lvol.VolumeHandle, error) {
@@ -70,9 +71,9 @@ func (s *StateVolume) Ensure(
 
 	// The finalizer goes first, so a StatefulSet deleted after the create is
 	// still released only after the volume is dealt with.
-	if !controllerutil.ContainsFinalizer(sts, StateVolumeFinalizer) {
+	if !controllerutil.ContainsFinalizer(sts, kube.FinalizerMDSStateVolume) {
 		patch := client.MergeFromWithOptions(sts.DeepCopy(), client.MergeFromWithOptimisticLock{})
-		controllerutil.AddFinalizer(sts, StateVolumeFinalizer)
+		controllerutil.AddFinalizer(sts, kube.FinalizerMDSStateVolume)
 		if err := s.Client.Patch(ctx, sts, patch); err != nil {
 			return unavailable(fmt.Errorf("adding the finalizer to %s: %w", sts.Name, err))
 		}
@@ -106,7 +107,7 @@ func (s *StateVolume) Ensure(
 	if sts.Annotations == nil {
 		sts.Annotations = map[string]string{}
 	}
-	sts.Annotations[StateVolumeAnnotation] = string(handle)
+	sts.Annotations[kube.AnnoMDSStateVolume] = string(handle)
 	if err := s.Client.Patch(ctx, sts, patch); err != nil {
 		return unavailable(fmt.Errorf("recording volume %s on %s: %w", handle, sts.Name, err))
 	}
@@ -129,16 +130,16 @@ func (s *StateVolume) poolID(ctx context.Context, clusterID, poolRef string) (st
 // and removes the finalizer. A failed delete keeps the finalizer and returns
 // the error, so the volume is not orphaned.
 func (s *StateVolume) Finalize(ctx context.Context, sts *appsv1.StatefulSet) error {
-	if !controllerutil.ContainsFinalizer(sts, StateVolumeFinalizer) {
+	if !controllerutil.ContainsFinalizer(sts, kube.FinalizerMDSStateVolume) {
 		return nil
 	}
-	if handle := sts.Annotations[StateVolumeAnnotation]; handle != "" {
+	if handle := sts.Annotations[kube.AnnoMDSStateVolume]; handle != "" {
 		if err := s.API.DeleteVolume(ctx, lvol.VolumeHandle(handle)); err != nil {
 			return fmt.Errorf("deleting the state volume %s: %w", handle, err)
 		}
 	}
 	patch := client.MergeFromWithOptions(sts.DeepCopy(), client.MergeFromWithOptimisticLock{})
-	controllerutil.RemoveFinalizer(sts, StateVolumeFinalizer)
+	controllerutil.RemoveFinalizer(sts, kube.FinalizerMDSStateVolume)
 	if err := s.Client.Patch(ctx, sts, patch); client.IgnoreNotFound(err) != nil {
 		return fmt.Errorf("removing the finalizer from %s: %w", sts.Name, err)
 	}

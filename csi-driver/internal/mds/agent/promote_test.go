@@ -22,7 +22,7 @@ import (
 	"github.com/simplyblock/atlas/nfsexport/nfsexportrpc"
 	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/nvmepr"
-	"github.com/simplyblock/atlas/nvmepr/nvmeprtest"
+	nvmeprtest "github.com/simplyblock/atlas/nvmepr/test"
 )
 
 const (

@@ -69,7 +69,7 @@ File: `atlas-lib/nvmepr/report_test.go`, `atlas-lib/nvmepr/status_test.go`, `atl
 
 ### The fake target (§6.4)
 
-File: `atlas-lib/nvmepr/nvmeprtest/target_test.go`. The fence's tests run against this double, so each row pins the behavior it reproduces of the target SPDK showed on 2026-10-21.
+File: `atlas-lib/nvmepr/test/target_test.go`. The fence's tests run against this double, so each row pins the behavior it reproduces of the target SPDK showed on 2026-10-21.
 
 | #    | Scenario                                                                                                                  | Type     | Test                                                        |
 |------|---------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------------|

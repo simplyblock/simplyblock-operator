@@ -11,8 +11,9 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
-	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
+	mdsstatetest "github.com/simplyblock/simplyblock-operator/internal/mdsstate/test"
 )
 
 type recordedEvent struct{ eventType, reason, message string }
@@ -56,8 +57,8 @@ func TestReconcileCreatesTheStateVolumeAllowsHostsAndScales(t *testing.T) {
 		t.Fatalf("Reconcile: %v", err)
 	}
 	got := reload(t, co.Client, sts)
-	if res.StateVolume == "" || got.Annotations[StateVolumeAnnotation] != string(res.StateVolume) {
-		t.Errorf("state volume %q, recorded %q", res.StateVolume, got.Annotations[StateVolumeAnnotation])
+	if res.StateVolume == "" || got.Annotations[kube.AnnoMDSStateVolume] != string(res.StateVolume) {
+		t.Errorf("state volume %q, recorded %q", res.StateVolume, got.Annotations[kube.AnnoMDSStateVolume])
 	}
 	if !slices.Contains(api.HostsOf(first), hostOf(t, 1)) {
 		t.Errorf("export 1 hosts = %v, want ordinal 1 allowed", api.HostsOf(first))
@@ -168,8 +169,8 @@ func TestReconcileWithNoExportsAndNoStateVolumeTouchesNoVolume(t *testing.T) {
 func TestFinalizeDeletesTheStateVolumeThroughTheCoordinator(t *testing.T) {
 	api := mdsstatetest.New()
 	h := api.Add("state")
-	sts := testSTS(map[string]string{StateVolumeAnnotation: string(h)})
-	sts.Finalizers = []string{StateVolumeFinalizer}
+	sts := testSTS(map[string]string{kube.AnnoMDSStateVolume: string(h)})
+	sts.Finalizers = []string{kube.FinalizerMDSStateVolume}
 	co, _ := coordinatorFor(t, api, sts, nil)
 	if err := co.Finalize(context.Background(), sts, testCluster); err != nil {
 		t.Fatalf("Finalize: %v", err)

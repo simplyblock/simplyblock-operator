@@ -1,10 +1,10 @@
-// Package nvmeprtest is an in-memory NVMe namespace with persistent
+// Package test is an in-memory NVMe namespace with persistent
 // reservations, for tests of whatever drives package nvmepr. It models what a
 // real target did when the fence's commands were tried against SPDK on
 // 2026-10-21, and nothing beyond it: each Host is one host's view of the one
 // shared namespace, so a test can play an old active and a newer one against the
 // same reservation.
-package nvmeprtest
+package test
 
 import (
 	"context"

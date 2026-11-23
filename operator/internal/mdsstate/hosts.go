@@ -19,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
 )
 
@@ -55,7 +56,7 @@ func (s *HostSync) Sync(
 	ctx context.Context, sts *appsv1.StatefulSet, volumes []lvol.VolumeHandle, ordinals int32,
 ) (HostResult, error) {
 	recorded := ordinals
-	if v, err := strconv.ParseInt(sts.Annotations[HostOrdinalsAnnotation], 10, 32); err == nil && int32(v) > recorded {
+	if v, err := strconv.ParseInt(sts.Annotations[kube.AnnoMDSHostOrdinals], 10, 32); err == nil && int32(v) > recorded {
 		recorded = int32(v)
 	}
 	allow, err := hostNQNs(sts, 0, ordinals)
@@ -107,14 +108,14 @@ func (s *HostSync) syncVolume(ctx context.Context, h lvol.VolumeHandle, allow, d
 // record writes the settled ordinal count when it changed.
 func (s *HostSync) record(ctx context.Context, sts *appsv1.StatefulSet, n int32) error {
 	want := strconv.Itoa(int(n))
-	if sts.Annotations[HostOrdinalsAnnotation] == want {
+	if sts.Annotations[kube.AnnoMDSHostOrdinals] == want {
 		return nil
 	}
 	patch := client.MergeFrom(sts.DeepCopy())
 	if sts.Annotations == nil {
 		sts.Annotations = map[string]string{}
 	}
-	sts.Annotations[HostOrdinalsAnnotation] = want
+	sts.Annotations[kube.AnnoMDSHostOrdinals] = want
 	if err := s.Client.Patch(ctx, sts, patch); err != nil {
 		return fmt.Errorf("recording the allowed ordinals on %s: %w", sts.Name, err)
 	}

@@ -10,8 +10,9 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/lvol"
-	"github.com/simplyblock/simplyblock-operator/internal/mdsstate/mdsstatetest"
+	mdsstatetest "github.com/simplyblock/simplyblock-operator/internal/mdsstate/test"
 )
 
 func hostOf(t *testing.T, ordinal int32) string {
@@ -118,7 +119,7 @@ func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
 	if _, err := hs.Sync(ctx, sts, []lvol.VolumeHandle{v}, 3); err != nil {
 		t.Fatal(err)
 	}
-	if got := reload(t, c, sts).Annotations[HostOrdinalsAnnotation]; got != "3" {
+	if got := reload(t, c, sts).Annotations[kube.AnnoMDSHostOrdinals]; got != "3" {
 		t.Fatalf("recorded ordinals = %q, want 3", got)
 	}
 
@@ -126,7 +127,7 @@ func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
 	if res, _ := hs.Sync(ctx, reload(t, c, sts), []lvol.VolumeHandle{v}, 1); len(res.Failed) != 1 {
 		t.Fatalf("a failed removal was not reported: %+v", res)
 	}
-	if got := reload(t, c, sts).Annotations[HostOrdinalsAnnotation]; got != "3" {
+	if got := reload(t, c, sts).Annotations[kube.AnnoMDSHostOrdinals]; got != "3" {
 		t.Errorf("recorded ordinals = %q after a failed removal, want 3 kept for the retry", got)
 	}
 
@@ -138,7 +139,7 @@ func TestSyncHostsRemovesTheHostsOfRemovedOrdinals(t *testing.T) {
 	if !slices.Contains(hosts, hostOf(t, 0)) || slices.Contains(hosts, hostOf(t, 1)) || slices.Contains(hosts, hostOf(t, 2)) {
 		t.Errorf("hosts = %v, want ordinal 0 kept and 1 and 2 removed", hosts)
 	}
-	if got := reload(t, c, sts).Annotations[HostOrdinalsAnnotation]; got != strconv.Itoa(1) {
+	if got := reload(t, c, sts).Annotations[kube.AnnoMDSHostOrdinals]; got != strconv.Itoa(1) {
 		t.Errorf("recorded ordinals = %q, want 1", got)
 	}
 

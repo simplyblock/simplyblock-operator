@@ -16,9 +16,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	"github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
-
-	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 )
 
 // O-01, O-02, O-33, O-34: a guest per standby and one for the active.
@@ -171,9 +170,9 @@ func TestUpdateMDSKeepsTheActiveRecordAndTheFinalizer(t *testing.T) {
 	old := current.DeepCopy()
 	old.Annotations[MDSTemplateHashAnnotation] = "0ld0ld0ld0ld0ld0"
 	old.Spec.Template.Spec.Containers[0].Image = "public.ecr.aws/simply-block/spdkcsi:pnfs-mds-old"
-	old.Finalizers = []string{mdsstate.StateVolumeFinalizer}
-	old.Annotations[mdsstate.StateVolumeAnnotation] = "cluster:pool:vol"
-	old.Annotations[mdsstate.EpochAnnotation] = "3"
+	old.Finalizers = []string{kube.FinalizerMDSStateVolume}
+	old.Annotations[kube.AnnoMDSStateVolume] = "cluster:pool:vol"
+	old.Annotations[kube.AnnoMDSEpoch] = "3"
 	old.Spec.Replicas = ptr.To(int32(3))
 
 	c := fake.NewClientBuilder().WithScheme(reconcilerScheme(t)).WithObjects(old).Build()
@@ -184,8 +183,8 @@ func TestUpdateMDSKeepsTheActiveRecordAndTheFinalizer(t *testing.T) {
 	// The takeover moves the record after the update read the object.
 	var live appsv1.StatefulSet
 	_ = c.Get(context.Background(), client.ObjectKeyFromObject(old), &live)
-	live.Annotations[mdsstate.EpochAnnotation] = "7"
-	live.Annotations[mdsstate.ActiveAnnotation] = old.Name + "-1"
+	live.Annotations[kube.AnnoMDSEpoch] = "7"
+	live.Annotations[kube.AnnoMDSActive] = old.Name + "-1"
 	if err := c.Update(context.Background(), &live); err != nil {
 		t.Fatal(err)
 	}
@@ -199,13 +198,13 @@ func TestUpdateMDSKeepsTheActiveRecordAndTheFinalizer(t *testing.T) {
 	if err := c.Get(context.Background(), client.ObjectKeyFromObject(old), &got); err != nil {
 		t.Fatal(err)
 	}
-	if got.Annotations[mdsstate.EpochAnnotation] != "7" || got.Annotations[mdsstate.ActiveAnnotation] != old.Name+"-1" {
+	if got.Annotations[kube.AnnoMDSEpoch] != "7" || got.Annotations[kube.AnnoMDSActive] != old.Name+"-1" {
 		t.Errorf("the record was overwritten: %v", got.Annotations)
 	}
-	if got.Annotations[mdsstate.StateVolumeAnnotation] != "cluster:pool:vol" {
+	if got.Annotations[kube.AnnoMDSStateVolume] != "cluster:pool:vol" {
 		t.Errorf("the state volume handle was lost: %v", got.Annotations)
 	}
-	if !slices.Contains(got.Finalizers, mdsstate.StateVolumeFinalizer) {
+	if !slices.Contains(got.Finalizers, kube.FinalizerMDSStateVolume) {
 		t.Errorf("finalizers = %v, want the state volume's kept", got.Finalizers)
 	}
 	if got.Annotations[MDSTemplateHashAnnotation] != current.Annotations[MDSTemplateHashAnnotation] ||
