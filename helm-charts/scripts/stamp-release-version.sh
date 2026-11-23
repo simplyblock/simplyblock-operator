@@ -10,9 +10,9 @@
 #
 # Only these tags are rewritten. The rebalancer and the CSI plugin take the
 # operator's tag when theirs is empty, and Chart.yaml is left alone because
-# `helm package` takes --version and --app-version. The Control Center image is
-# pushed under the release tag verbatim, so it cannot fall back to the
-# appVersion, which has no "v".
+# `helm package` takes --version and --app-version. The Control Center image and
+# its mock are pushed under the release tag verbatim, so they cannot fall back to
+# the appVersion, which has no "v".
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
@@ -48,6 +48,9 @@ awk -v operator_tag="$TAG" -v simplyblock_tag="$VERSION" '
   top == "controlCenter" && sub_key == "image" && /^    tag:/ {
     print "    tag: \"" operator_tag "\""; next
   }
+  top == "controlCenter" && sub_key == "mock" && /^      tag:/ {
+    print "      tag: \"" operator_tag "\""; next
+  }
   { print }
 ' "$VALUES" > "$VALUES.stamped"
 mv "$VALUES.stamped" "$VALUES"
@@ -58,10 +61,11 @@ mv "$VALUES.stamped" "$VALUES"
 stamped_operator="$("$YQ" -r '.image.operator.tag' "$VALUES")"
 stamped_simplyblock="$("$YQ" -r '.image.simplyblock.tag' "$VALUES")"
 stamped_control_center="$("$YQ" -r '.controlCenter.image.tag' "$VALUES")"
+stamped_mock="$("$YQ" -r '.controlCenter.mock.image.tag' "$VALUES")"
 if [ "$stamped_operator" != "$TAG" ] || [ "$stamped_simplyblock" != "$VERSION" ] ||
-  [ "$stamped_control_center" != "$TAG" ]; then
-  echo "$(basename "$0"): the image tags did not take: operator is '$stamped_operator' (want '$TAG'), simplyblock is '$stamped_simplyblock' (want '$VERSION'), controlCenter is '$stamped_control_center' (want '$TAG')" >&2
+  [ "$stamped_control_center" != "$TAG" ] || [ "$stamped_mock" != "$TAG" ]; then
+  echo "$(basename "$0"): the image tags did not take: operator is '$stamped_operator' (want '$TAG'), simplyblock is '$stamped_simplyblock' (want '$VERSION'), controlCenter is '$stamped_control_center' (want '$TAG'), controlCenter.mock is '$stamped_mock' (want '$TAG')" >&2
   exit 1
 fi
 
-echo "Stamped $VALUES: image.operator.tag=$TAG, image.simplyblock.tag=$VERSION, controlCenter.image.tag=$TAG"
+echo "Stamped $VALUES: image.operator.tag=$TAG, image.simplyblock.tag=$VERSION, controlCenter.image.tag=$TAG, controlCenter.mock.image.tag=$TAG"
