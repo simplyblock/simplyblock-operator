@@ -1531,15 +1531,11 @@ prometheus:
   serviceAccount:
     name: simplyblock-prometheus-operator
     namespace: ""
-  # Fallback for Control Center's own Prometheus link, when
-  # controlCenter.prometheusUrl is unset. prometheus-operator always names its
-  # governing Service "prometheus-operated" in the Prometheus CR's own
-  # namespace, regardless of the CR's name or which release created it, so
-  # this resolves correctly for the bundled Prometheus and for a
-  # same-namespace one the customer already runs alike. Only a
-  # prometheus-operator in another namespace needs this overridden.
+  # Fallback for Control Center's Prometheus link when
+  # controlCenter.prometheusUrl is unset. Empty means simplyblock-prometheus,
+  # or prometheus-operated when prometheus.enabled is true.
   simplyblock:
-    prometheusURL: "prometheus-operated"
+    prometheusURL: ""
     prometheusPORT: 9090
 
 # The prometheus-operator this chart bundles when prometheus.enabled is true
