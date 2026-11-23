@@ -1367,11 +1367,10 @@ controlCenter:
   fullnameOverride: ""
 
   image:
-    # defaults to quay.io when unset
-    # -- Control Center image registry. Empty uses `quay.io`.
+    # -- Replaces the registry `repository` names, for a mirror. Empty uses the repository as it is.
     registry: ""
-    # -- Control Center image repository.
-    repository: simplyblock-io/control-center
+    # -- Control Center image repository, with its registry.
+    repository: quay.io/simplyblock-io/control-center
     # A release stamps its tag here. Empty falls back to the chart's appVersion,
     # with a "v" when it is a version, the tag the console is released under.
     # -- Control Center image tag. Empty uses the chart's `appVersion`, prefixed with `v` when it is
@@ -1561,9 +1560,9 @@ controlCenter:
   mock:
     enabled: false
     image:
-      # defaults to quay.io when unset
+      # replaces the registry repository names; empty uses it as it is
       registry: ""
-      repository: simplyblock-io/control-center-mock
+      repository: quay.io/simplyblock-io/control-center-mock
       # stamped by a release; empty falls back as controlCenter.image.tag does
       tag: ""
       pullPolicy: IfNotPresent

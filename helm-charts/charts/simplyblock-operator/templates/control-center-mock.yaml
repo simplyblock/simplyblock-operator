@@ -11,8 +11,6 @@
 {{- $cc := .Values.controlCenter }}
 {{- $mock := $cc.mock }}
 {{- $name := printf "%s-mock" (include "sbcc.fullname" .) }}
-{{- $reg := $mock.image.registry | default "quay.io" }}
-{{- $tag := $mock.image.tag | default (include "sbcc.defaultTag" .) }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -49,7 +47,7 @@ spec:
       {{- end }}
       containers:
         - name: mock
-          image: "{{ $reg }}/{{ $mock.image.repository }}:{{ $tag }}"
+          image: {{ include "sbcc.imageRef" (dict "image" $mock.image "root" .) | quote }}
           imagePullPolicy: {{ $mock.image.pullPolicy }}
           args:
             - --listen=:8080

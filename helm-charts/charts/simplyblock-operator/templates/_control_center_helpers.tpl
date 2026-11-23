@@ -44,14 +44,29 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{- if regexMatch "^[0-9]" $v -}}v{{ $v }}{{- else -}}{{ $v }}{{- end -}}
 {{- end -}}
 
-{{/* Image reference. The registry falls back to the public one and the tag to
-     sbcc.defaultTag. A release stamps controlCenter.image.tag; pin it when
+{{/* An image reference from an image block (repository, registry, tag). The
+     repository names its registry. A registry, when set, replaces the one the
+     repository names, so a mirror set before the repository was qualified
+     still takes effect. The tag falls back to sbcc.defaultTag. Called with
+     (dict "image" <block> "root" $). */}}
+{{- define "sbcc.imageRef" -}}
+{{- $i := .image -}}
+{{- $repo := $i.repository -}}
+{{- if $i.registry -}}
+{{- $parts := splitList "/" $repo -}}
+{{- if and (gt (len $parts) 1) (regexMatch "[.:]|^localhost$" (first $parts)) -}}
+{{- $repo = join "/" (rest $parts) -}}
+{{- end -}}
+{{- $repo = printf "%s/%s" $i.registry $repo -}}
+{{- end -}}
+{{- $tag := $i.tag | default (include "sbcc.defaultTag" .root) -}}
+{{- printf "%s:%s" $repo $tag -}}
+{{- end -}}
+
+{{/* The console's image. A release stamps controlCenter.image.tag; pin it when
      installing a development chart. */}}
 {{- define "sbcc.image" -}}
-{{- $i := .Values.controlCenter.image -}}
-{{- $reg := $i.registry | default "quay.io" -}}
-{{- $tag := $i.tag | default (include "sbcc.defaultTag" .) -}}
-{{- printf "%s/%s:%s" $reg $i.repository $tag -}}
+{{- include "sbcc.imageRef" (dict "image" .Values.controlCenter.image "root" .) -}}
 {{- end -}}
 
 {{/* Default upstream URLs. This chart names its objects statically
