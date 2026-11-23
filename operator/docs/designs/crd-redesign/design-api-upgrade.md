@@ -754,10 +754,9 @@ installed is a write that can only introduce risk.
 The whole set is embedded in the installer binary so that the version of the
 CRDs always matches the version of the conversion code that converts them.
 `go:embed` cannot reach outside the directory of the file that declares it, so
-the CRDs controller-gen writes into `config/crd/bases` are copied into
-`internal/upgrade/crds/manifests` by the `crd-embed` target that
-`make -C operator manifests` runs, and the copy is committed. It is the
-arrangement the Helm chart's copy of the same files already uses.
+the embedding package is `config/crd/bases` itself, next to the files
+controller-gen writes, and `internal/upgrade/crds` imports it. The operator
+module carries one committed copy of each CRD.
 
 **Which of the three groups a CRD is in is read from the CRD rather than from a
 table**, since a list of kinds is a second place to edit when a kind is added

@@ -133,8 +133,9 @@ func TestAShortIdentifyNamespaceBufferYieldsNoFormats(t *testing.T) {
 }
 
 func TestReadNamespaceFormatsAsksTheControllerForTheNamespace(t *testing.T) {
-	prev := identifyNS
-	t.Cleanup(func() { identifyNS = prev })
+	prev, prevCtrl := identifyNS, identifyCtrl
+	t.Cleanup(func() { identifyNS, identifyCtrl = prev, prevCtrl })
+	identifyCtrl = func(string) ([]byte, error) { return identifyControllerBuf(0), nil }
 
 	var asked NamespaceID
 	identifyNS = func(devicePath string, nsid NamespaceID) ([]byte, error) {

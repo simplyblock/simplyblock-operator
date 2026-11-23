@@ -51,10 +51,17 @@ type Server struct {
 	volumeLocks     *csicommon.VolumeLocks
 	// freezes are the striped volumes suspended on this node for a snapshot
 	// (freeze.go).
-	freezes    *freeze.Holds
+	freezes *freeze.Holds
+	// swapGate is the node's swap service, asked whether it is holding a
+	// volume's I/O before a stage, unstage, publish, or expand touches the
+	// mapping it holds. Nil before the service is built, when nothing is held.
+	swapGate   swapGate
 	kubeClient kubernetes.Interface
 	manager    *sbkube.Manager
 	guardian   *guardian.Guardian
+	// deviceMapper is whether this host can run the dmLinear indirection, as
+	// the probe at start found it. Set before the service serves.
+	deviceMapper bool
 
 	// The stretched cluster's stage gate (syncgate.go): this node's site and
 	// whether a cluster is sync, and where a volume is led from. Seams, so the

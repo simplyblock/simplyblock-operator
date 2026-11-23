@@ -119,7 +119,7 @@ Most controllers project an explicit `running/success/failed` action workflow in
 - Single manager deployment (`config/manager/manager.yaml`) runs all reconcilers in one process and is scoped to its own namespace.
 - The Helm chart (external to this repo) installs the operator, creates the singleton `ControlPlane` CR, and configures the cert-manager `ClusterIssuer` used for mTLS. This repository does not contain the chart or the cert-manager `ClusterIssuer`/`Certificate` manifests.
 - The Kustomize default overlay (`config/default`) enables the CRDs, RBAC, manager, and secure metrics service. The webhook (a `MutatingWebhookConfiguration` for the rebalancer sidecar injector, `simplyblock-rebalancer-injector.simplyblock.io`), the metrics `NetworkPolicy`, and the Prometheus `ServiceMonitor` are defined under `config/` but are disabled by default (and therefore absent from `dist/install.yaml`).
-- `make build-installer` renders the full manifest set into `dist/install.yaml`.
+- `make build-installer` renders the full manifest set into `dist/install.yaml`. The file is not committed; the release workflow renders it against the release's image and attaches it to the GitHub release.
 - Storage-node data-plane preparation is performed through a reconciled DaemonSet generated from the `StorageNodeSet` CR intent.
 - Multi-arch (amd64/arm64) images for the operator and the `simplyblock-rebalancer` are built via `docker-buildx` and pushed to DockerHub, ECR Public, and quay.io. The OLM bundle is generated via `make bundle`, published to quay.io, and attached to GitHub releases. Grype and Trivy vulnerability scanning (plus CycloneDX SBOM generation) run daily in CI (`security.yml`).
 

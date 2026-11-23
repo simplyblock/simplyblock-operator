@@ -4,6 +4,7 @@ package webapi
 
 import (
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -28,9 +29,11 @@ type Client struct {
 var (
 	tlsClientCacheMu sync.Mutex
 	tlsClient        *http.Client
+	endpointClient   *http.Client
 )
 
-// cachedTLSClient is the verified client every TLS request shares.
+// cachedTLSClient is the verified client every TLS request to the in-cluster
+// webappapi Service shares. It checks the certificate against the Service name.
 //
 // Only a success is remembered. The CA bundle and the client certificate arrive
 // with the pod's volumes, and a failure cached for the life of the process would
@@ -47,13 +50,7 @@ func cachedTLSClient() (*http.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The pair is presented where the pod mounts one. Whether callers present a
-	// certificate is the ControlPlane's decision, and the chart mounts the pair
-	// exactly when the ControlPlane asks for it, so the files are the evidence.
-	certPath, keyPath := tlsutil.ServiceClientCertificatePath, tlsutil.ServiceClientKeyPath
-	if !fileExists(certPath) || !fileExists(keyPath) {
-		certPath, keyPath = "", ""
-	}
+	certPath, keyPath := mountedClientCertificate()
 	client, err := tlsutil.BuildWebAPIClient(ns, tlsutil.ServiceCABundlePath, certPath, keyPath)
 	if err != nil {
 		return nil, err
@@ -64,6 +61,51 @@ func cachedTLSClient() (*http.Client, error) {
 	tlsClient = client
 	return tlsClient, nil
 }
+
+// cachedEndpointClient is the verified client every TLS request to any other
+// address shares: a control plane outside this Kubernetes cluster, whose
+// certificate names its own hostname. Only a success is remembered.
+func cachedEndpointClient() (*http.Client, error) {
+	tlsClientCacheMu.Lock()
+	defer tlsClientCacheMu.Unlock()
+	if endpointClient != nil {
+		return endpointClient, nil
+	}
+	certPath, keyPath := mountedClientCertificate()
+	client, err := tlsutil.BuildEndpointClient(tlsutil.ServiceCABundlePath, certPath, keyPath)
+	if err != nil {
+		return nil, err
+	}
+	client.Timeout = RequestTimeout
+	endpointClient = client
+	return endpointClient, nil
+}
+
+// mountedClientCertificate is the client certificate pair where the pod mounts
+// one. Whether callers present a certificate is the ControlPlane's decision, and
+// the chart mounts the pair exactly when the ControlPlane asks for it, so the
+// files are the evidence.
+func mountedClientCertificate() (string, string) {
+	certPath, keyPath := tlsutil.ServiceClientCertificatePath, tlsutil.ServiceClientKeyPath
+	if !fileExists(certPath) || !fileExists(keyPath) {
+		return "", ""
+	}
+	return certPath, keyPath
+}
+
+// isInClusterAddress reports whether rawURL names the webappapi Service, by its
+// short name or any longer form of its DNS name.
+func isInClusterAddress(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := u.Hostname()
+	return host == webAPIService || strings.HasPrefix(host, webAPIService+".")
+}
+
+// webAPIService is the in-cluster control plane's Service name.
+const webAPIService = "simplyblock-webappapi"
 
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
@@ -78,12 +120,12 @@ const RequestTimeout = 30 * time.Second
 func NewClient(baseURL ...string) *Client {
 	const defaultURL = "http://" + defaultHost
 
-	url, explicit := defaultURL, false
+	address, explicit := defaultURL, false
 	if envURL := os.Getenv("SIMPLYBLOCK_WEBAPI_BASE_URL"); envURL != "" {
-		url, explicit = envURL, true
+		address, explicit = envURL, true
 	}
 	if len(baseURL) > 0 {
-		url, explicit = baseURL[0], true
+		address, explicit = baseURL[0], true
 	}
 
 	httpClient := &http.Client{Timeout: RequestTimeout}
@@ -92,8 +134,12 @@ func NewClient(baseURL ...string) *Client {
 	case !explicit:
 		// The default address, whose scheme the ControlPlane decides per request.
 		httpClient.Transport = &adaptiveTransport{plain: http.DefaultTransport, secure: secureTransport}
-	case strings.HasPrefix(url, "https://"):
-		if c, err := cachedTLSClient(); err != nil {
+	case strings.HasPrefix(address, "https://"):
+		build := cachedEndpointClient
+		if isInClusterAddress(address) {
+			build = cachedTLSClient
+		}
+		if c, err := build(); err != nil {
 			initErr = err
 		} else {
 			httpClient = c
@@ -101,7 +147,7 @@ func NewClient(baseURL ...string) *Client {
 	}
 
 	c := &Client{
-		BaseURL:    url,
+		BaseURL:    address,
 		HttpClient: httpClient,
 		initErr:    initErr,
 	}

@@ -1156,6 +1156,7 @@ func (r *StorageClusterReconciler) creationParams(
 		EnableFailureDomain: ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
 		InlineChecksum:      ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
 		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
+		MetadataJournal:     ptr.BoolFromOrTrue(cluster.Spec.EnableMetadataJournal),
 		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
 		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
 		SyncReplication:     ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),

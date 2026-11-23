@@ -162,7 +162,7 @@ func TestPersistentVolumeOpsCELRejectsAnUndeclaredStep(t *testing.T) {
 		{step: "Validating"},
 		{step: "Migrating"},
 		{step: "Verifying"},
-		{step: "Suspending", wantDenied: true},
+		{step: "Draining", wantDenied: true},
 	} {
 		t.Run(tc.step, func(t *testing.T) {
 			fresh := &simplyblockv1alpha2.PersistentVolumeOps{}

@@ -28,6 +28,10 @@ import (
 	"github.com/simplyblock/atlas/kube"
 )
 
+// modprobeCommand loads a kernel module. The VDO, device-mapper, and NVMe/TCP
+// probes all run it.
+const modprobeCommand = "modprobe"
+
 // The two names VDO goes by. dm-vdo is the in-tree module (kernel 6.9 and
 // newer) and kvdo is what RHEL-family systems ship it as through the separate
 // kmod-kvdo package, verified live on a Rocky/RHEL 9 kernel carrying no dm-vdo
@@ -141,7 +145,7 @@ func probeVDO(ctx context.Context, nodeName string, run commandRunner) bool {
 
 	capable := false
 	for _, module := range vdoModules {
-		out, err := run(ctx, "modprobe", module)
+		out, err := run(ctx, modprobeCommand, module)
 		switch {
 		case err == nil:
 			klog.Infof("vdo probe: node %s loaded %s", nodeName, module)

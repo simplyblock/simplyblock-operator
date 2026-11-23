@@ -1,29 +1,13 @@
-apiVersion: storage.simplyblock.io/v1alpha2
-kind: ClusterDeploymentConfig
 metadata:
   labels:
-    storage.simplyblock.io/component: nodeprobe
     storage.simplyblock.io/nodeprobe-run: discover-filt-02
   name: discovered-discover-filt-02
-  namespace: simplyblock
 spec:
-  approved: false
   cluster:
-    clusterMode: Single
-    enableDriveFormat: true
-    maxSubsystemCount: 30
-    minHugePagesSize: 16G
+    enableNodeAffinity: true
     name: discovered-discover-filt-02-cluster
-    network:
-      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
-      parityChunks: 1
-    vcpuCount: 5
-  environment: K3s
-  hostOS:
-    distro: ubuntu
-    family: Debian
   nodeSets:
   - groups:
     - dataInterfaces:
@@ -37,5 +21,3 @@ spec:
       workers:
       - worker-01
     name: discovered
-status:
-  step: {}

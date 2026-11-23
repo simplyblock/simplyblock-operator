@@ -76,6 +76,12 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 	}
 	volumes = append(volumes, linkVolumes()...)
 
+	var initContainers []corev1.Container
+	if nvmeTCPModuleInstall(d) {
+		initContainers = append(initContainers, nvmeTCPModuleContainer(image, pullPolicy(d)))
+		volumes = append(volumes, hostRootVolume())
+	}
+
 	return &appsv1.DaemonSet{
 		ObjectMeta: metav1.ObjectMeta{Name: n.nodeDaemonSet, Namespace: d.Namespace},
 		Spec: appsv1.DaemonSetSpec{
@@ -93,8 +99,9 @@ func nodeDaemonSet(d *simplyblockv1alpha2.SimplyblockDriver, image string) *apps
 					// namespace, but a reconnect runs from a kernel thread in the
 					// host's, so a pod that connects is moved to the host on the
 					// first reset. The plugin also reads the host's interfaces.
-					HostNetwork: true,
-					DNSPolicy:   corev1.DNSClusterFirstWithHostNet,
+					HostNetwork:    true,
+					DNSPolicy:      corev1.DNSClusterFirstWithHostNet,
+					InitContainers: initContainers,
 					Containers: []corev1.Container{
 						nodeRegistrarContainer(d, s, driver),
 						nodePluginContainer(d, image),
@@ -156,7 +163,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 		Env: slices.Concat([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
 			{Name: "GUARDIAN_MIN_BROKEN_FOR", Value: "30s"},
-		}, linkEnv(), serviceAccountAuthEnv(d), tlsEnv(d)),
+		}, linkEnv(), serviceAccountAuthEnv(d), tlsEnv(d), dmIndirectionEnv(d)),
 		Lifecycle: &corev1.Lifecycle{PostStart: &corev1.LifecycleHandler{
 			Exec: &corev1.ExecAction{Command: []string{"/bin/sh", "-c", nodePostStartScript}},
 		}},
@@ -440,6 +447,16 @@ func serviceAccountAuthEnv(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.En
 		Name:  "SPDKCSI_API_TOKEN_PATH",
 		Value: "/var/run/secrets/kubernetes.io/serviceaccount/token",
 	}}
+}
+
+// dmIndirectionEnv turns the node plugin's device-mapper indirection off. The
+// plugin has it on by default, so a driver that leaves it on renders nothing,
+// and an operator upgrade does not change the node plugin's template.
+func dmIndirectionEnv(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.EnvVar {
+	if !d.Spec.DisableDeviceMapperIndirection {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: "SPDKCSI_DM_INDIRECTION", Value: "false"}}
 }
 
 // pullPolicy applies the CRD's default, so that an object written before

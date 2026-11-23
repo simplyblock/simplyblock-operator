@@ -78,6 +78,11 @@ type ControlPlaneReconciler struct {
 	// NUMAPluginImage is the NUMA device plugin's image. Empty keeps the image
 	// the embedded manifest names.
 	NUMAPluginImage string
+
+	// OpenShift is whether the cluster is an OpenShift one. It decides the
+	// SELinux type the NUMA device plugin runs with (numaplugin.go), and
+	// whether the control plane's account is granted the anyuid SCC (scc.go).
+	OpenShift bool
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch;create;update;patch;delete
@@ -219,6 +224,15 @@ func (r *ControlPlaneReconciler) reconcileLocal(
 		r.emit(cp, corev1.EventTypeWarning, PrerequisiteMissing, message)
 		return ctrl.Result{RequeueAfter: installRetry}, r.report(ctx, cp,
 			simplyblockv1alpha2.ControlPlanePhaseInstalling, message)
+	}
+
+	// A cordoned worker that runs FoundationDB pods gets a maintenance window,
+	// and an uncordoned one has its window called off or its record removed
+	// (controlplane_hostmaintenance.go). It runs before the install machine
+	// because a Node event is what reaches it, and the install's own steps are
+	// unaffected by it.
+	if err := r.reconcileHostMaintenance(ctx, cp); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if cp.Status.Phase != simplyblockv1alpha2.ControlPlanePhaseInstalling &&
@@ -793,6 +807,9 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
 				return o.GetName() == clusterFileConfigMapName
 			}))).
+		// A Node's cordon, uncordon, or deletion reaches the control plane whose
+		// FoundationDB pods it carries (controlplane_hostmaintenance.go).
+		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.nodeRequests)).
 		Named("controlplane").
 		Complete(r)
 }

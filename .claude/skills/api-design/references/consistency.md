@@ -110,7 +110,7 @@ only the second is covered by this rule.
 | `// Immutable.` in a doc comment                                 | **no**             | nothing. It documents an intention and enforces none of it |
 
 `+k8s:immutable` emits two rules. In controller-gen v0.21.0, which is the version
-the repo generates with (`operator/dist/install.yaml:14`):
+the repo generates with (the `controller-gen.kubebuilder.io/version` annotation on every CRD):
 
 - `pkg/crd/markers/validation.go:603` adds a field-level
   `self == oldSelf` / `field is immutable`.

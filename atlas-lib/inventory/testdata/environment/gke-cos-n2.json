@@ -1,0 +1,62 @@
+{
+  "apiVersion": "v1",
+  "items": [
+    {
+      "apiVersion": "v1",
+      "kind": "Node",
+      "metadata": {
+        "annotations": {
+          "node.alpha.kubernetes.io/ttl": "0",
+          "node.gke.io/last-applied-node-labels": "addon.gke.io/node-local-dns-ds-ready=true,cloud.google.com/gke-boot-disk=pd-balanced,cloud.google.com/gke-container-runtime=containerd,cloud.google.com/gke-cpu-scaling-level=2,cloud.google.com/gke-local-nvme-ssd=true,cloud.google.com/gke-logging-variant=DEFAULT,cloud.google.com/gke-max-pods-per-node=110,cloud.google.com/gke-memory-gb-scaling-level=8,cloud.google.com/gke-nodepool=default-pool,cloud.google.com/gke-os-distribution=cos,cloud.google.com/gke-provisioning=standard,cloud.google.com/gke-stack-type=IPV4,cloud.google.com/machine-family=n2,cloud.google.com/private-node=false,disk-type.gke.io/hyperdisk-throughput=true,disk-type.gke.io/pd-balanced=true,disk-type.gke.io/pd-extreme=true,disk-type.gke.io/pd-ssd=true,disk-type.gke.io/pd-standard=true",
+          "node.gke.io/last-applied-node-taints": "",
+          "volumes.kubernetes.io/controller-managed-attach-detach": "true"
+        },
+        "labels": {
+          "addon.gke.io/node-local-dns-ds-ready": "true",
+          "beta.kubernetes.io/arch": "amd64",
+          "beta.kubernetes.io/instance-type": "n2-standard-2",
+          "beta.kubernetes.io/os": "linux",
+          "cloud.google.com/gke-boot-disk": "pd-balanced",
+          "cloud.google.com/gke-container-runtime": "containerd",
+          "cloud.google.com/gke-cpu-scaling-level": "2",
+          "cloud.google.com/gke-local-nvme-ssd": "true",
+          "cloud.google.com/gke-logging-variant": "DEFAULT",
+          "cloud.google.com/gke-max-pods-per-node": "110",
+          "cloud.google.com/gke-memory-gb-scaling-level": "8",
+          "cloud.google.com/gke-nodepool": "default-pool",
+          "cloud.google.com/gke-os-distribution": "cos",
+          "cloud.google.com/gke-provisioning": "standard",
+          "cloud.google.com/gke-stack-type": "IPV4",
+          "cloud.google.com/machine-family": "n2",
+          "cloud.google.com/private-node": "false",
+          "disk-type.gke.io/hyperdisk-throughput": "true",
+          "disk-type.gke.io/pd-balanced": "true",
+          "disk-type.gke.io/pd-extreme": "true",
+          "disk-type.gke.io/pd-ssd": "true",
+          "disk-type.gke.io/pd-standard": "true",
+          "failure-domain.beta.kubernetes.io/region": "us-east1",
+          "failure-domain.beta.kubernetes.io/zone": "us-east1-b",
+          "kubernetes.io/arch": "amd64",
+          "kubernetes.io/hostname": "gke-sb-mdj-probe-default-pool-89f521dd-6gcd",
+          "kubernetes.io/os": "linux",
+          "node.kubernetes.io/instance-type": "n2-standard-2",
+          "topology.gke.io/zone": "us-east1-b",
+          "topology.kubernetes.io/region": "us-east1",
+          "topology.kubernetes.io/zone": "us-east1-b"
+        },
+        "name": "gke-sb-mdj-probe-default-pool-89f521dd-6gcd"
+      },
+      "status": {
+        "nodeInfo": {
+          "architecture": "amd64",
+          "containerRuntimeVersion": "containerd://2.2.7",
+          "kernelVersion": "6.12.105+",
+          "kubeletVersion": "v1.36.4-gke.2046003",
+          "operatingSystem": "linux",
+          "osImage": "Container-Optimized OS from Google"
+        }
+      }
+    }
+  ],
+  "kind": "List"
+}

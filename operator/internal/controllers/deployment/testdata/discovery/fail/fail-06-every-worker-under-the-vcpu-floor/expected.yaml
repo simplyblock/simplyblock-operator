@@ -1,28 +1,15 @@
-apiVersion: storage.simplyblock.io/v1alpha2
-kind: ClusterDeploymentConfig
 metadata:
   labels:
-    storage.simplyblock.io/component: nodeprobe
     storage.simplyblock.io/nodeprobe-run: discover-fail-06
   name: discovered-discover-fail-06
-  namespace: simplyblock
 spec:
-  approved: false
   cluster:
-    enableDriveFormat: true
-    maxSubsystemCount: 30
-    minHugePagesSize: 16G
+    clusterMode: null
+    enableNodeAffinity: true
     name: discovered-discover-fail-06-cluster
-    network:
-      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
-      parityChunks: 1
     vcpuCount: 4
-  environment: K3s
-  hostOS:
-    distro: ubuntu
-    family: Debian
   nodeSets:
   - groups:
     - dataInterfaces:
@@ -40,5 +27,3 @@ spec:
       - worker-02
       - worker-03
     name: discovered
-status:
-  step: {}

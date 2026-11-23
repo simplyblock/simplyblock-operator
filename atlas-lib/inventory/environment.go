@@ -143,6 +143,9 @@ type Environment struct {
 // K3s cluster carries both sets of markers. What decides the host's shape is the
 // distribution that installed the kubelet, so K3s wins, and the Rancher finding
 // stays on the record for a reviewer who wants the other answer.
+//
+// RKE2 is the same pair the other way around, and the order alone gets it wrong:
+// see kubeletDecidesBetweenK3sAndRancher.
 var precedence = []Distribution{
 	DistributionOpenShift,
 	DistributionTalos,
@@ -155,6 +158,11 @@ var precedence = []Distribution{
 }
 
 // apiGroupMarkers are the API groups that identify a distribution outright.
+//
+// k3s.cattle.io is the exception. RKE2 is built on the K3s code and serves the
+// group as well, for its add-ons and its etcd snapshot records, so the group
+// says "K3s or RKE2" and the kubelet says which
+// (kubeletDecidesBetweenK3sAndRancher).
 var apiGroupMarkers = map[string]Distribution{
 	"config.openshift.io":               DistributionOpenShift,
 	"operator.openshift.io":             DistributionOpenShift,
@@ -285,7 +293,36 @@ func DetectEnvironment(apiGroups []string, nodes []corev1.Node) Environment {
 			break
 		}
 	}
+	env.Distribution = kubeletDecidesBetweenK3sAndRancher(env.Distribution, env.Evidence)
 	return env
+}
+
+// kubeletDecidesBetweenK3sAndRancher turns a K3s conclusion into Rancher for a
+// cluster whose kubelets were all built by the Rancher family.
+//
+// An RKE2 cluster carries a K3s marker of its own: it serves the k3s.cattle.io
+// API group, because RKE2 is built on the K3s code. With K3s ahead of Rancher
+// in the precedence, every RKE2 cluster was concluded to be K3s (RKE2
+// v1.36.6+rke2r1, 2026-11-13). The precedence exists for a Rancher-managed K3s
+// cluster, and the rule it states is that the distribution that installed the
+// kubelet decides, so the kubelet's own build suffix is asked: where it names
+// the Rancher family and no kubelet names K3s, the cluster is Rancher's.
+//
+// A cluster with kubelets of both, or with no kubelet version to read, keeps the
+// precedence's answer.
+func kubeletDecidesBetweenK3sAndRancher(concluded Distribution, evidence []Evidence) Distribution {
+	if concluded != DistributionK3s {
+		return concluded
+	}
+	builtBy := func(dist Distribution) bool {
+		return slices.ContainsFunc(evidence, func(e Evidence) bool {
+			return e.Distribution == dist && e.Source == SourceKubeletVersion
+		})
+	}
+	if builtBy(DistributionRancher) && !builtBy(DistributionK3s) {
+		return DistributionRancher
+	}
+	return concluded
 }
 
 // nodeEvidence reads one node's four markers.
