@@ -46,6 +46,17 @@ File: `internal/controllers/objectstore/objectstore_phase_unit_test.go`
 | U-07 | `Ready`, `spec.replicas` changed → reconciles in place, never returns to `Pending`                     | Positive | `TestReadyObjectStoreReconcilesReplicasInPlace`                   |
 | U-08 | Operator restart mid-`Provisioning` → resumes from `status`, does not recreate the Deployment          | Positive | `TestRestartMidProvisioningDoesNotRecreateTheDeployment`          |
 
+### Recovery from Degraded (§6)
+
+File: `internal/controllers/objectstore/objectstore_recovery_unit_test.go`
+
+| #    | Scenario                                                                                                                                                                                                                                                                                           | Type       | Test                                                         |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------|
+| U-20 | `Degraded` on `DeploymentAvailable`, the `envFrom` `Secret` created afterward → `Provisioning` with a fresh deadline. Regression: 2026-11-23-objectstore-degraded-never-recovers (CI run 45100042373, S3MissingEnvFromSecretK8s: the ObjectStore stayed `Degraded` after the `Secret` was created) | Regression | `TestDegradedObjectStoreRecoversWhenItsEnvFromSecretAppears` |
+| U-21 | `Degraded`, no referenced object changed since → stays `Degraded`                                                                                                                                                                                                                                  | Negative   | `TestDegradedObjectStoreStaysDegradedWhileNothingChanged`    |
+| U-22 | `Degraded` on `CertificateReady`, the `Certificate` now `Ready` → `Provisioning`                                                                                                                                                                                                                   | Positive   | `TestDegradedObjectStoreRecoversWhenItsCertificateIsReady`   |
+| U-23 | An event on a `Secret` enqueues the `ObjectStore`s whose `envFrom` names it, and no other                                                                                                                                                                                                          | Positive   | `TestEnvFromReferenceEnqueuesTheObjectStoresNamingIt`        |
+
 ### Object Construction (§4, §5)
 
 File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
@@ -149,11 +160,11 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios                               | Covered | Not covered |
-|-------------|-----------------------------------------|---------|-------------|
-| Unit        | 18 (U-16 dropped, U-17/U-18/U-19 added) | 18      | —           |
-| Integration | 7                                       | 5       | I-05, I-07  |
-| E2E         | 3                                       | 0       | E-01 … E-03 |
+| Class       | Scenarios                            | Covered | Not covered |
+|-------------|--------------------------------------|---------|-------------|
+| Unit        | 22 (U-16 dropped, U-17 … U-23 added) | 22      | —           |
+| Integration | 7                                    | 5       | I-05, I-07  |
+| E2E         | 3                                    | 0       | E-01 … E-03 |
 
 ---
 
