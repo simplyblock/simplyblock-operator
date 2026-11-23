@@ -132,11 +132,11 @@ func (r *MDSFailoverReconciler) ActiveOrdinal(_ context.Context, sts *appsv1.Sta
 	if rec.Empty() {
 		return 0, false, nil
 	}
-	ordinal := mdsfailover.Ordinal(rec.Active)
-	if ordinal < 0 {
+	_, ordinal, ok := utils.SplitMDSPodName(rec.Active)
+	if !ok {
 		return 0, false, fmt.Errorf("the recorded active %q is not a StatefulSet pod", rec.Active)
 	}
-	return int32(ordinal), true, nil
+	return ordinal, true, nil
 }
 
 // RequestSwitchover moves the active onto an ordinal below keepBelow. It is the

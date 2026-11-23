@@ -10,14 +10,14 @@ package mdsfailover
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 const (
@@ -137,15 +137,10 @@ func Instance(pod *corev1.Pod) string {
 
 // Ordinal is the number a StatefulSet's pod name ends in, or -1.
 func Ordinal(pod string) int {
-	i := strings.LastIndex(pod, "-")
-	if i < 0 {
-		return -1
+	if _, n, ok := utils.SplitMDSPodName(pod); ok {
+		return int(n)
 	}
-	n, err := strconv.ParseInt(pod[i+1:], 10, 32)
-	if err != nil {
-		return -1
-	}
-	return int(n)
+	return -1
 }
 
 func sortGuests(gs []Guest) {

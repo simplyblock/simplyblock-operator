@@ -194,3 +194,13 @@ func TestOrdinalAndInstance(t *testing.T) {
 		t.Errorf("a pod with a runner = %q, want uid/containerID", Instance(pod))
 	}
 }
+
+// Regression: Ordinal and utils.MDSStatefulSetNameOfPod split the same pod name
+// with different checks, so a name one refused the other read an ordinal from.
+func TestOrdinalRefusesWhatIsNotAPodName(t *testing.T) {
+	for _, name := range []string{"", "mds", "mds-", "mds-x", "-1", "mds-+5", "mds-4294967296"} {
+		if got := Ordinal(name); got != -1 {
+			t.Errorf("Ordinal(%q) = %d, want -1", name, got)
+		}
+	}
+}

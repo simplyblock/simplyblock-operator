@@ -108,16 +108,16 @@ func BuildMDSEndpointSlice(namespace, serviceName, address string) *discoveryv1.
 	return buildEndpointSlice(namespace, serviceName, address)
 }
 
-// MDSStatefulSetNameOfPod is the StatefulSet a metadata server pod belongs to:
-// its name without the trailing ordinal. It reports false for a name that does
-// not end in `-<ordinal>`.
-func MDSStatefulSetNameOfPod(podName string) (string, bool) {
+// SplitMDSPodName splits a metadata server pod's name into its StatefulSet and
+// ordinal. It reports false for a name that does not end in `-<ordinal>`.
+func SplitMDSPodName(podName string) (statefulSet string, ordinal int32, ok bool) {
 	i := strings.LastIndex(podName, "-")
 	if i <= 0 || i == len(podName)-1 {
-		return "", false
+		return "", 0, false
 	}
-	if _, err := strconv.ParseUint(podName[i+1:], 10, 32); err != nil {
-		return "", false
+	n, err := strconv.ParseUint(podName[i+1:], 10, 31)
+	if err != nil {
+		return "", 0, false
 	}
-	return podName[:i], true
+	return podName[:i], int32(n), true
 }

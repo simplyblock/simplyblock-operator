@@ -42,8 +42,8 @@ import (
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
-	"github.com/simplyblock/simplyblock-operator/internal/mdsfailover"
 	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // phase is an alias so the graph below reads as a table.
@@ -543,8 +543,10 @@ func (r *NFSExportReconciler) exportHost(
 		return host
 	}
 	if owner := metav1.GetControllerOf(&pod); owner != nil && owner.Kind == "StatefulSet" {
-		if n, err := mdsstate.HostNQN(owner.UID, int32(mdsfailover.Ordinal(name))); err == nil {
-			host.HostNQN = n
+		if _, ordinal, ok := utils.SplitMDSPodName(name); ok {
+			if n, err := mdsstate.HostNQN(owner.UID, ordinal); err == nil {
+				host.HostNQN = n
+			}
 		}
 	}
 	return host

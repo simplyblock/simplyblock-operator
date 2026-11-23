@@ -130,7 +130,7 @@ func (r *NFSExportReconciler) mdsOwner(ctx context.Context, mdsPod string) []met
 // mdsServiceNameOf is the Service of the metadata server whose pod is pod. Every
 // ordinal of a StatefulSet shares one, so it is named from the StatefulSet.
 func mdsServiceNameOf(pod string) string {
-	if sts, ok := utils.MDSStatefulSetNameOfPod(pod); ok {
+	if sts, _, ok := utils.SplitMDSPodName(pod); ok {
 		return utils.MDSServiceName(sts)
 	}
 	return utils.MDSServiceName(pod)

@@ -15,10 +15,10 @@ func TestMDSServiceNameDerivesFromTheStatefulSet(t *testing.T) {
 
 func TestEveryOrdinalOfAStatefulSetNamesTheSameService(t *testing.T) {
 	const sts = "simplyblock-pnfs-mds-0f2ac1d3-d1167e95"
-	for _, pod := range []string{sts + "-0", sts + "-1", sts + "-4", sts + "-12"} {
-		got, ok := MDSStatefulSetNameOfPod(pod)
-		if !ok || got != sts {
-			t.Errorf("MDSStatefulSetNameOfPod(%q) = %q, %v, want %q", pod, got, ok, sts)
+	for i, pod := range []string{sts + "-0", sts + "-1", sts + "-4", sts + "-12"} {
+		got, ordinal, ok := SplitMDSPodName(pod)
+		if want := []int32{0, 1, 4, 12}[i]; !ok || got != sts || ordinal != want {
+			t.Errorf("SplitMDSPodName(%q) = %q, %d, %v, want %q, %d", pod, got, ordinal, ok, sts, want)
 		}
 		if MDSServiceName(got) != sts+"-nfs" {
 			t.Errorf("pod %s names Service %s", pod, MDSServiceName(got))
@@ -26,10 +26,10 @@ func TestEveryOrdinalOfAStatefulSetNamesTheSameService(t *testing.T) {
 	}
 }
 
-func TestMDSStatefulSetNameOfPodRefusesWhatIsNotAPodName(t *testing.T) {
-	for _, name := range []string{"", "mds", "mds-", "mds-x", "-1"} {
-		if got, ok := MDSStatefulSetNameOfPod(name); ok {
-			t.Errorf("MDSStatefulSetNameOfPod(%q) = %q, want a refusal", name, got)
+func TestSplitMDSPodNameRefusesWhatIsNotAPodName(t *testing.T) {
+	for _, name := range []string{"", "mds", "mds-", "mds-x", "-1", "mds-+5", "mds-2147483648"} {
+		if got, ordinal, ok := SplitMDSPodName(name); ok {
+			t.Errorf("SplitMDSPodName(%q) = %q, %d, want a refusal", name, got, ordinal)
 		}
 	}
 }
