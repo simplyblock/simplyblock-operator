@@ -34,39 +34,14 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{- end }}
 {{- end -}}
 
-{{/* The tag the console and its mock fall back to when theirs is empty. They
-     are released under the release tag verbatim (v26.4.0-beta6.1), while a
-     released chart's appVersion carries no "v" (26.4.0-beta6.1), so a version
-     gets its "v" back. Any other appVersion, such as "latest" on a development
-     chart, is used as it stands. */}}
-{{- define "sbcc.defaultTag" -}}
-{{- $v := .Chart.AppVersion | default "latest" -}}
-{{- if regexMatch "^[0-9]" $v -}}v{{ $v }}{{- else -}}{{ $v }}{{- end -}}
-{{- end -}}
-
-{{/* An image reference from an image block (repository, registry, tag). The
-     repository names its registry. A registry, when set, replaces the one the
-     repository names, so a mirror set before the repository was qualified
-     still takes effect. The tag falls back to sbcc.defaultTag. Called with
-     (dict "image" <block> "root" $). */}}
-{{- define "sbcc.imageRef" -}}
-{{- $i := .image -}}
-{{- $repo := $i.repository -}}
-{{- if $i.registry -}}
-{{- $parts := splitList "/" $repo -}}
-{{- if and (gt (len $parts) 1) (regexMatch "[.:]|^localhost$" (first $parts)) -}}
-{{- $repo = join "/" (rest $parts) -}}
-{{- end -}}
-{{- $repo = printf "%s/%s" $i.registry $repo -}}
-{{- end -}}
-{{- $tag := $i.tag | default (include "sbcc.defaultTag" .root) -}}
-{{- printf "%s:%s" $repo $tag -}}
-{{- end -}}
-
-{{/* The console's image. A release stamps controlCenter.image.tag; pin it when
-     installing a development chart. */}}
+{{/* Image reference. The registry falls back to the public one and the tag to
+     the chart's appVersion — pin controlCenter.image.tag for production, this
+     chart's appVersion is a floating tag. */}}
 {{- define "sbcc.image" -}}
-{{- include "sbcc.imageRef" (dict "image" .Values.controlCenter.image "root" .) -}}
+{{- $i := .Values.controlCenter.image -}}
+{{- $reg := $i.registry | default "quay.io" -}}
+{{- $tag := $i.tag | default (.Chart.AppVersion | default "latest") -}}
+{{- printf "%s/%s:%s" $reg $i.repository $tag -}}
 {{- end -}}
 
 {{/* Default upstream URLs. This chart names its objects statically

@@ -10,9 +10,9 @@
 #
 # Only these tags are rewritten. The rebalancer and the CSI plugin take the
 # operator's tag when theirs is empty, and Chart.yaml is left alone because
-# `helm package` takes --version and --app-version. The Control Center image is
-# pushed under the release tag verbatim, so it cannot fall back to the
-# appVersion, which has no "v".
+# `helm package` takes --version and --app-version. The Control Center image and
+# its mock are pushed under the release tag verbatim, so they cannot fall back to
+# the appVersion, which has no "v".
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
