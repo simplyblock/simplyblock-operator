@@ -95,7 +95,7 @@ func TestReportFollowsTheCheck(t *testing.T) {
 }
 
 // Regression: 2026-11-12-pnfs-mds-stays-dead-after-state-disk-journal-abort.
-// The state disk lost its backing device, ext4 aborted its journal, and the
+// The state disk lost its backing device, XFS shut the filesystem down, and the
 // guest still counted as healthy because the disk was still mounted.
 func TestAGuestWhoseStateDiskTakesNoWriteIsUnhealthy(t *testing.T) {
 	h := healthy()

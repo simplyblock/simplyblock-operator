@@ -55,30 +55,30 @@ func mountState(reading blockdev.Reading, mounted bool) (*fakeFS, error) {
 	return fs, m.Mount(context.Background(), blockdev.Device{Path: devOne}, "/var/lib/nfs")
 }
 
-func TestStateMounterU22FormatsExt4OnceWhenTheDeviceIsBlank(t *testing.T) {
+func TestStateMounterU22FormatsXFSOnceWhenTheDeviceIsBlank(t *testing.T) {
 	fs, err := mountState(blockdev.Reading{Content: blockdev.ContentBlank}, false)
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
-	want := []string{"format ext4 /dev/nvme1n1", "mount ext4 /dev/nvme1n1 /var/lib/nfs"}
+	want := []string{"format xfs /dev/nvme1n1", "mount xfs /dev/nvme1n1 /var/lib/nfs"}
 	if !slices.Equal(fs.calls, want) {
 		t.Errorf("calls = %q, want %q", fs.calls, want)
 	}
 }
 
-func TestStateMounterU22MountsAnExt4DeviceWithoutFormattingIt(t *testing.T) {
-	fs, err := mountState(blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "ext4"}, false)
+func TestStateMounterU22MountsAnXFSDeviceWithoutFormattingIt(t *testing.T) {
+	fs, err := mountState(blockdev.Reading{Content: blockdev.ContentFilesystem, Type: "xfs"}, false)
 	if err != nil {
 		t.Fatalf("Mount: %v", err)
 	}
-	if want := []string{"mount ext4 /dev/nvme1n1 /var/lib/nfs"}; !slices.Equal(fs.calls, want) {
+	if want := []string{"mount xfs /dev/nvme1n1 /var/lib/nfs"}; !slices.Equal(fs.calls, want) {
 		t.Errorf("calls = %q, want %q", fs.calls, want)
 	}
 }
 
 func TestStateMounterNeverFormatsADeviceThatCarriesSomethingElse(t *testing.T) {
 	for _, r := range []blockdev.Reading{
-		{Content: blockdev.ContentFilesystem, Type: "xfs"},
+		{Content: blockdev.ContentFilesystem, Type: "ext4"},
 		{Content: blockdev.ContentForeign},
 		{Content: blockdev.ContentUnknown},
 	} {

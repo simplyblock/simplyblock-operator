@@ -80,7 +80,7 @@ type Filesystems interface {
 }
 
 // StateFSType is the state volume's filesystem.
-const StateFSType = "ext4"
+const StateFSType = "xfs"
 
 // FSMounter mounts the state volume, formatting it only when the content probe
 // finds it blank. It is the same probe and the same mkfs and mount helpers the
