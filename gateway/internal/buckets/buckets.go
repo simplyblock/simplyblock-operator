@@ -3,8 +3,10 @@
 // (README.md "Why bucket-per-volume"), which only the
 // operator can provision, so CreateBucket creates the S3Bucket and waits for
 // its volume to be mounted under the gateway's root, and DeleteBucket deletes
-// the S3Bucket and waits for it to be gone. Every other call goes to the
-// posix backend unchanged.
+// the S3Bucket and waits for it to be gone. PutObject, CopyObject, and
+// CompleteMultipartUpload go to the posix backend with their errors
+// reclassified (nospace.go). Every other call goes to the posix backend
+// unchanged.
 
 package buckets
 
@@ -76,18 +78,23 @@ type Settings struct {
 	PollInterval time.Duration
 }
 
-// Backend is the posix backend with CreateBucket and DeleteBucket replaced.
+// Backend is the posix backend with CreateBucket and DeleteBucket replaced
+// and the write errors of a full volume corrected.
 type Backend struct {
 	backend.Backend
 	client   client.Client
 	settings Settings
+
+	// statfs reports a path's available and total bytes. A field so a test
+	// can stand in for a full volume.
+	statfs func(path string) (avail, total uint64, err error)
 }
 
 // New wraps be. The client needs get, create, and delete on S3Buckets in
 // settings.Namespace, which the operator grants the gateway's
 // ServiceAccount.
 func New(be backend.Backend, cli client.Client, settings Settings) *Backend {
-	return &Backend{Backend: be, client: cli, settings: settings}
+	return &Backend{Backend: be, client: cli, settings: settings, statfs: statfs}
 }
 
 // CreateBucket creates the bucket's S3Bucket, waits until the operator
