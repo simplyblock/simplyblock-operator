@@ -27,8 +27,58 @@ env:
 
 jobs:
 
+  # One job per architecture on a native runner, pushed by digest; Build joins
+  # the digests into the tagged multi-arch manifest.
+  build-arch:
+    name: Build (${{ matrix.arch }})
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    strategy:
+      matrix:
+        arch: [amd64, arm64]
+    steps:
+    - name: Check out code
+      uses: actions/checkout@v4
+
+    - name: Log in to container registries
+      uses: ./.github/actions/registry-login
+      with:
+        dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+        dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        quay: ${{ inputs.version != '' }}
+        quay-username: ${{ secrets.QUAY_USERNAME }}
+        quay-password: ${{ secrets.QUAY_PASSWORD }}
+        internal-username: ${{ secrets.INTERNAL_USERNAME }}
+        internal-password: ${{ secrets.INTERNAL_PASSWORD }}
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push by digest
+      id: build
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: csi-driver/deploy/image/Dockerfile
+        platforms: linux/${{ matrix.arch }}
+        outputs: type=image,"name=${{ env.IMAGE_NAME }},${{ env.ECR_IMAGE_NAME }},${{ env.INTERNAL_IMAGE_NAME }}${{ inputs.version != '' && format(',{0}', env.QUAY_IMAGE_NAME) || '' }}",push-by-digest=true,name-canonical=true,push=true
+        cache-from: type=gha,scope=spdkcsi-${{ matrix.arch }}
+        cache-to: type=gha,mode=max,scope=spdkcsi-${{ matrix.arch }}
+
+    - name: Record the digest
+      run: mkdir -p digests && echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.arch }}"
+
+    - name: Upload the digest
+      uses: actions/upload-artifact@v4
+      with:
+        name: spdkcsi-digest-${{ matrix.arch }}
+        path: digests/${{ matrix.arch }}
+        retention-days: 1
+
   build:
     name: Build
+    needs: build-arch
     runs-on: ubuntu-latest
     outputs:
       image: ${{ steps.image.outputs.ref }}
@@ -50,9 +100,6 @@ jobs:
         quay-password: ${{ secrets.QUAY_PASSWORD }}
         internal-username: ${{ secrets.INTERNAL_USERNAME }}
         internal-password: ${{ secrets.INTERNAL_PASSWORD }}
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v3
@@ -84,16 +131,17 @@ jobs:
           type=ref,event=tag
           type=sha,prefix=${{ github.ref_name }}-,format=short,enable=${{ github.event_name == 'push' }}
 
-    - name: Build and push
-      uses: docker/build-push-action@v6
+    - name: Download the digests
+      uses: actions/download-artifact@v4
       with:
-        context: .
-        file: csi-driver/deploy/image/Dockerfile
-        platforms: linux/amd64,linux/arm64
-        push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        cache-from: type=gha
-        cache-to: type=gha,mode=max
+        pattern: spdkcsi-digest-*
+        merge-multiple: true
+        path: digests
+
+    - name: Create the multi-arch manifests
+      env:
+        TAGS: ${{ steps.meta.outputs.tags }}
+      run: .github/scripts/merge-arch-manifests.sh digests
 
     # Which of the tags just pushed the integration suite should run in. The
     # branch tag is the one that exists for every push, so the name is derived

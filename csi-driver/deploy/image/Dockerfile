@@ -17,11 +17,13 @@ WORKDIR /workspace
 COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
 
 COPY csi-driver/go.mod csi-driver/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY atlas-lib/ /atlas-lib/
 COPY csi-driver/cmd/ cmd/
 COPY csi-driver/internal/ internal/
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2
 LABEL name="simplyblock"
