@@ -113,6 +113,29 @@ test("isLocked covers immutable and operator-managed fields alike", async () => 
   await page.context().close();
 });
 
+// The tree's guide line ends at the last entry of its block, on that entry's
+// own row: a line running on to the bottom of a nested block read as if the
+// tree had been cut off there.
+test("the Everything tree's guide line stops at the last entry's row", async () => {
+  const page = await openFixture();
+  await page.click(".crpanel .tab:has-text('Everything')");
+  await page.waitForSelector(".crpanel .jt");
+  const blocks = await page.$$eval(".crpanel .card .jt .n", ns => ns.map(n => {
+    const last = n.lastElementChild;
+    const row = parseFloat(getComputedStyle(last).lineHeight);
+    const line = getComputedStyle(last, "::before");
+    const nestedBelow = last.offsetHeight > row * 1.5;
+    return {nestedBelow, drawn: line.content !== "none", height: parseFloat(line.height), row};
+  }));
+  const nested = blocks.filter(b => b.nestedBelow);
+  assert.ok(nested.length > 0, "the fixture has a block whose last entry is an open object");
+  for (const b of blocks) {
+    assert.ok(b.drawn, "the last entry draws its own guide line");
+    assert.ok(b.height <= b.row, `the last entry's line is ${b.height}px, longer than its ${b.row}px row`);
+  }
+  await page.context().close();
+});
+
 test("an invisible field is not shown in Essentials", async () => {
   const page = await openFixture();
   assert.equal(await essentialsRow(page, "maxSubsystemCount"), null);
