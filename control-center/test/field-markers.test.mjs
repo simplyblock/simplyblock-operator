@@ -43,6 +43,12 @@ async function openFixture() {
           }},
           tuning: {type: "object", properties: {depth: {type: "integer"}}},
           tolerations: {type: "array", items: {type: "object", properties: {key: {type: "string"}}}},
+          backup: {type: "object", properties: {
+            endpoint: {type: "string"}, bucket: {type: "string"},
+            credentials: {type: "object", properties: {source: {type: "string"}}},
+          }},
+          arbitration: {type: "object", properties: {holdMs: {type: "integer"}}},
+          port10: {type: "integer"}, port2: {type: "integer"},
         }}},
       }}}]},
     };
@@ -129,6 +135,21 @@ test("Essentials lists a spec field the CRD has and no headline names, unset and
 test("Essentials does not list a field inside a list of objects", async () => {
   const page = await openFixture();
   assert.equal(await essentialsRow(page, "tolerations.key"), null);
+  await page.context().close();
+});
+
+// Essentials lists the CRD's spec fields: the top-level ones first, then the
+// nested ones, each in natural order, which keeps every block together. The
+// curated headlines only decorate the fields they name; they decide neither
+// which fields appear nor where.
+test("Essentials lists top-level fields first, then nested ones, each in natural order", async () => {
+  const page = await openFixture();
+  const labels = await page.evaluate(() => {
+    const spec = [...document.querySelectorAll(".crpanel .card")].find(c => c.querySelector("h3")?.textContent.trim() === "spec");
+    return [...spec.querySelectorAll("dl.props > dt")].map(e => e.textContent.trim());
+  });
+  assert.deepEqual(labels, ["minHugePagesSize", "port2", "port10", "vcpuCount",
+    "arbitration.holdMs", "backup.bucket", "backup.credentials.source", "backup.endpoint", "volumeAutoPlacement.disableMigration"]);
   await page.context().close();
 });
 

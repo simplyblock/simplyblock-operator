@@ -1,11 +1,13 @@
 // ---------------------------------------------------------------------------
 // CR HEADLINES: what matters first on each kind, and how kinds relate
 //
-// A custom resource has dozens of fields. The first tier of a detail shows
-// the ones an operator reads or changes most, in the order they are asked
-// about; the second tier shows everything. The tables here are that first
-// tier: a path into spec or status, spelled exactly as the CRD spells it, a
-// label, how to format it, and whether it may be edited in place. Every path
+// A custom resource has dozens of fields. Which spec fields the first tier
+// of a detail shows comes from the CRD, in an order of its own (cr-view.jsx);
+// the spec tables here only decorate the fields they name: a label, how to
+// format it, a link to a related object, and whether the console offers an
+// edit. They decide the spec rows only when the CRD cannot be read. The
+// status tables still choose the status rows, which the operator writes and
+// the schema cannot rank. A path is spelled exactly as the CRD spells it. Every path
 // is one of storage.simplyblock.io/v1alpha2 on main (or the core kind's own
 // schema); descriptions and enums come from the CRD at run time (cr-view.jsx)
 // and are never restated here. Immutability is read from the CRD too;

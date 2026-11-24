@@ -20253,11 +20253,13 @@ Object.assign(window, {
 // ---------------------------------------------------------------------------
 // CR HEADLINES: what matters first on each kind, and how kinds relate
 //
-// A custom resource has dozens of fields. The first tier of a detail shows
-// the ones an operator reads or changes most, in the order they are asked
-// about; the second tier shows everything. The tables here are that first
-// tier: a path into spec or status, spelled exactly as the CRD spells it, a
-// label, how to format it, and whether it may be edited in place. Every path
+// A custom resource has dozens of fields. Which spec fields the first tier
+// of a detail shows comes from the CRD, in an order of its own (cr-view.jsx);
+// the spec tables here only decorate the fields they name: a label, how to
+// format it, a link to a related object, and whether the console offers an
+// edit. They decide the spec rows only when the CRD cannot be read. The
+// status tables still choose the status rows, which the operator writes and
+// the schema cannot rank. A path is spelled exactly as the CRD spells it. Every path
 // is one of storage.simplyblock.io/v1alpha2 on main (or the core kind's own
 // schema); descriptions and enums come from the CRD at run time (cr-view.jsx)
 // and are never restated here. Immutability is read from the CRD too;
@@ -21088,11 +21090,12 @@ Object.assign(window, {
 // annotations, which the operator's +simplyblock: field markers write
 // (operator/hack/fieldmarkers): an operator-managed field is the operator's to
 // change, an advanced one is shown in Everything only, and an invisible one is
-// not shown at all. Essentials lists the curated headlines of the kind
-// (cr-headlines.jsx) for their order, labels, and formats, then every other
-// spec field the CRD has, so a field added to the API reaches the console
-// without an edit here, and a headline the CRD no longer has is dropped. An edit is refused in the console
-// for immutable and operator-managed fields; every other edit is sent as a dry
+// not shown at all. Essentials lists the spec fields of the CRD, top-level ones
+// first and then nested ones, each in natural order, so a field added to the
+// API reaches the console without an edit here; the curated headlines of the
+// kind (cr-headlines.jsx) only decorate the fields they name, and one the CRD
+// no longer has is dropped. An edit is refused in the console for immutable
+// and operator-managed fields; every other edit is sent as a dry
 // run first, so a webhook or CEL message is shown verbatim before anything is
 // written. The YAML block stays the whole object, invisible fields included,
 // because it is what a copy or a download is made from.
@@ -21163,6 +21166,7 @@ async function readCrdSchema(kind) {
       if (path) out.known.add(path);
       // a spec field Essentials can show and edit: a scalar, a list of
       // scalars, or a string map; an object is listed through its fields
+      if (path.startsWith("spec.") && !within) out.order.push(path);
       if (path.startsWith("spec.") && !within) {
         const items = node.items || {};
         const scalar = ["string", "integer", "number", "boolean"].includes(node.type);
@@ -21223,6 +21227,7 @@ const emptySchema = kind => ({
   advanced: new Set(),
   known: new Set(),
   fields: [],
+  order: [],
   descriptions: {},
   enums: {},
   types: {},
@@ -21253,23 +21258,47 @@ const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisi
 const isAdvanced = (schema, path) => !!schema.advanced && marked(schema.advanced, path);
 // what Essentials leaves out: an advanced field is in Everything only
 const offEssentials = (schema, path) => isInvisible(schema, path) || isAdvanced(schema, path);
-// The spec rows of Essentials: the curated headlines first, minus any the CRD
-// no longer has once it has been read, then every other spec field of the CRD
-// in schema order, labeled by its path as the headlines are.
+// The spec rows of Essentials. With the CRD read, they are its spec fields:
+// the top-level ones first, then the nested ones, each in natural order
+// (port2 before port10, case aside), which keeps every block together; a curated
+// headline (cr-headlines.jsx) only decorates the field it names, with a label,
+// a format, a link, or a read-only flag, and one naming an object stands in for
+// the fields below it. A headline the CRD does not have is dropped. Without
+// the CRD, the curated headlines are all there is to go by.
 function essentialSpecRows(curated, schema) {
-  const fromCrd = schema.source === "crd";
-  const rows = curated.filter(r => !fromCrd || schema.known.has(r.path));
-  const covered = rows.map(r => r.path);
-  const under = (p, q) => p === q || p.startsWith(q + ".") || q.startsWith(p + ".");
-  schema.fields.filter(f => !covered.some(c => under(f.path, c))).forEach(f => rows.push({
-    path: f.path,
-    label: f.path.replace(/^spec\./, ""),
-    mutable: true,
-    fmt: f.type === "boolean" ? F.bool : F.raw,
-    type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
-  }));
-  return rows.filter(r => !offEssentials(schema, r.path));
+  if (schema.source !== "crd") return curated.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
+  const byPath = Object.fromEntries(curated.map(r => [r.path, r]));
+  const fields = Object.fromEntries(schema.fields.map(f => [f.path, f]));
+  const rows = [];
+  let inside = null; // a curated object path whose fields it stands in for
+  schema.order.forEach(path => {
+    if (inside && path.startsWith(inside + ".")) return;
+    inside = null;
+    if (byPath[path]) {
+      rows.push(byPath[path]);
+      if (!fields[path]) inside = path;
+      return;
+    }
+    const f = fields[path];
+    if (!f) return;
+    rows.push({
+      path,
+      label: path.replace(/^spec\./, ""),
+      mutable: true,
+      fmt: f.type === "boolean" ? F.bool : F.raw,
+      type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
+    });
+  });
+  return rows.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
 }
+const naturally = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base"
+});
+const essentialOrder = (a, b) => {
+  const nested = r => (r.path.match(/\./g) || []).length > 1; // beyond "spec."
+  return nested(a) - nested(b) || naturally.compare(a.path, b.path);
+};
 // the badge a locked field carries, immutability first: it binds the operator too
 const lockOf = (schema, path) => !isLocked(schema, path) ? null : isImmutable(schema, path) ? "immutable" : "operator-managed";
 const LOCK_TITLE = {
