@@ -369,7 +369,7 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Virtual = sysfs.IsVirtual(resolved)
 	disk.PCIAddress = sysfs.PCIAddressOf(resolved)
 	disk.NUMANode = numaNodeOf(resolved)
-	disk.SubsystemNQN = subsystemNQNOf(resolved)
+	disk.SubsystemNQN = SubsystemNQNOf(resolved)
 	if transport, ok := nvmeSubsystemTransport(resolved); ok {
 		disk.Transport = transport
 	} else {
@@ -568,15 +568,17 @@ func nvmeSubsystemTransport(resolved string) (Transport, bool) {
 	return TransportNVMeFabric, true
 }
 
-// subsystemNQNOf reads the NQN of the NVMe subsystem a namespace belongs to,
+// SubsystemNQNOf reads the NQN of the NVMe subsystem a namespace belongs to,
 // and returns the empty string for a device that is on no NVMe subsystem.
+// resolved is the device's sysfs directory with its symlinks resolved, such as
+// filepath.EvalSymlinks("/sys/block/nvme3n1").
 //
 // One read covers both shapes the kernel presents. A namespace reached through
 // a multipath head sits under its nvme-subsysN directory, and one reached
 // through a single controller sits under that controller: in both, the
 // subsysnqn attribute is in the parent, which is why this reads the parent
 // rather than deciding which shape it is looking at first.
-func subsystemNQNOf(resolved string) string {
+func SubsystemNQNOf(resolved string) string {
 	return sysfs.String(filepath.Dir(filepath.Clean(resolved)), "subsysnqn")
 }
 
