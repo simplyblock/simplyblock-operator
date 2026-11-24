@@ -16117,18 +16117,21 @@ Object.assign(window, {
 // ---- tasks.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
-// TASKS AND OPERATIONS: one monitor for everything long-running
+// TASKS AND OPERATIONS: one monitor, two lists, for everything long-running
 //
-// What it shows is what the operator records (OPERATIONS.md): the Ops
+// What it shows is what the operator records (OPERATIONS.md), in two lists
+// under one search and state filter. The operator's operations: the Ops
 // objects of every kind with their phase, their step on the action's graph
 // (ops-model.jsx), and the progress fields their CRD carries; a StorageNode
 // in its provisioning machine (a node add); a ClusterDeploymentConfig in its
-// expansion machine; and the control plane's task window on each
-// StorageCluster (status.tasks). Rows nest only where an object names its
-// parent: a PersistentVolumeOps through spec.creatorRef or the drain-node
-// label, a StorageClusterOps through its controller owner, a node add's task
-// through status.nodeAddTaskID, a relocation's tasks through
-// status.relocate.volumes[].taskID. Nothing is inferred from timing.
+// expansion machine. Operations nest only where an object names its parent:
+// a PersistentVolumeOps through spec.creatorRef or the drain-node label, a
+// StorageClusterOps through its controller owner. The control plane's tasks:
+// each StorageCluster's status.tasks window, a flat list whose entries carry
+// the four fields the CRD has (id, type, status, retry) and name the
+// operation that recorded their id (status.nodeAddTaskID,
+// status.relocate.volumes[].taskID) when one did. Nothing is inferred from
+// timing.
 //
 // Cancel is offered exactly where the operator has it: spec.abort while the
 // operation stands at a step its graph marks abortable, and a
@@ -16629,7 +16632,7 @@ function WorkRow({
   onToggle,
   onCancel
 }) {
-  const hasKids = it.children.length > 0;
+  const hasKids = (it.shownChildren !== undefined ? it.shownChildren : it.children.length) > 0;
   const t = it.target || {};
   const openTarget = () => {
     const vm = t.vm;
@@ -16744,15 +16747,18 @@ function WorkTree({
   roots,
   nav,
   filterFn,
-  onCancel
+  onCancel,
+  withTasks
 }) {
   const [open, setOpen] = useLocal("sb.work.open", {});
+  const kids = it => withTasks ? it.children : it.children.filter(c => c.src !== "task");
   const isOpen = it => open[it.key] !== false && (open[it.key] || it.phase === "Running" || it.phase === "Failed" || it.depth === 0);
   const rows = [];
   const walk = (it, d) => {
     it.depth = d;
+    it.shownChildren = kids(it).length;
     rows.push(it);
-    if (isOpen(it)) it.children.forEach(c => walk(c, d + 1));
+    if (isOpen(it)) kids(it).forEach(c => walk(c, d + 1));
   };
   roots.filter(filterFn).forEach(r => walk(r, 0));
   if (!rows.length) return /*#__PURE__*/React.createElement("div", {
@@ -16771,6 +16777,89 @@ function WorkTree({
     onCancel: onCancel
   }))));
 }
+// the control plane's task window: the four fields status.tasks[] carries, the cluster, and the operation that recorded the id
+function TaskTable({
+  tasks,
+  nav,
+  onCancel
+}) {
+  if (!tasks.length) return /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "Nothing matches.");
+  return /*#__PURE__*/React.createElement("table", {
+    className: "dt tasks"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "status.tasks[].id"), /*#__PURE__*/React.createElement("th", null, "type"), /*#__PURE__*/React.createElement("th", null, "StorageCluster"), /*#__PURE__*/React.createElement("th", null, "status"), /*#__PURE__*/React.createElement("th", null, "retry"), /*#__PURE__*/React.createElement("th", null, "Recorded by"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, tasks.map(t => {
+    const parent = t.parentKey ? workStore.byKey(t.parentKey) : null;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: t.key,
+      className: "wrow" + (t.phase === "Failed" ? " failed" : "")
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, t.name, window.MULTI_CTX ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, " \xB7 ", t.ctx) : null), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("b", null, t.action || /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset"))), /*#__PURE__*/React.createElement("td", null, t.clusterId && REG[t.clusterId] ? /*#__PURE__*/React.createElement("button", {
+      className: "tlink",
+      onClick: () => nav.openCluster(t.clusterId)
+    }, REG[t.clusterId].name) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Phase, {
+      p: t.phase
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 10,
+        color: "var(--dim2)",
+        marginLeft: 6
+      },
+      title: "the control plane's own status string"
+    }, t.raw.status)), /*#__PURE__*/React.createElement("td", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, t.retry), /*#__PURE__*/React.createElement("td", null, parent ? /*#__PURE__*/React.createElement("button", {
+      className: "tlink",
+      onClick: () => nav.openWork(parent.clusterId, parent.key),
+      title: parent.src === "nodeadd" ? "status.nodeAddTaskID" : "status.relocate.volumes[].taskID"
+    }, parent.src === "nodeadd" ? `StorageNode ${parent.name}` : `${parent.crKind} ${parent.name}`) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "no operation names it")), /*#__PURE__*/React.createElement("td", {
+      style: {
+        textAlign: "right",
+        whiteSpace: "nowrap"
+      }
+    }, t.cancel.can ? /*#__PURE__*/React.createElement("button", {
+      className: "chip",
+      onClick: () => onCancel(t)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "x",
+      s: 10
+    }), "CancelTask") : /*#__PURE__*/React.createElement("span", {
+      className: "chip",
+      style: {
+        opacity: .55,
+        cursor: "help"
+      },
+      title: t.cancel.reason
+    }, "no cancel"), nav.openWork && /*#__PURE__*/React.createElement("button", {
+      className: "chip",
+      onClick: () => nav.openWork(t.clusterId, t.key)
+    }, "Open")));
+  })));
+}
 function MonitorView({
   seg,
   nav,
@@ -16781,13 +16870,21 @@ function MonitorView({
   const clusterId = scope && scope.id || p.cluster || null;
   const [state, setState] = React.useState(p.state || "running");
   const [kind, setKind] = React.useState(p.kind || "");
+  const [type, setType] = React.useState(p.type || "");
   const [q, setQ] = React.useState(p.q || "");
   const all = w.items.filter(i => !clusterId || i.clusterId === clusterId);
-  const kinds = Array.from(new Set(all.map(i => i.crKind || i.src))).sort();
-  const roots = w.roots.filter(r => !clusterId || r.clusterId === clusterId);
-  const matchesSelf = i => (!kind || (i.crKind || i.src) === kind) && (!q || `${i.crKind || ""} ${i.action || ""} ${i.name} ${(i.target || {}).name || ""} ${i.message}`.toLowerCase().includes(q.toLowerCase()));
+  const ops = all.filter(i => i.src !== "task"),
+    tasks = all.filter(i => i.src === "task");
+  const kinds = Array.from(new Set(ops.map(i => i.crKind || i.src))).sort();
+  const types = Array.from(new Set(tasks.map(t => t.action).filter(Boolean))).sort();
+  const roots = w.roots.filter(r => r.src !== "task" && (!clusterId || r.clusterId === clusterId));
+  // the search and the state apply to both lists; the kind and the type each to one
+  const matchesQ = i => !q || `${i.crKind || ""} ${i.action || ""} ${i.name} ${(i.target || {}).name || ""} ${i.message || ""}`.toLowerCase().includes(q.toLowerCase());
   const stateOk = i => state === "all" || (state === "running" ? ["Running", "Pending", "Suspended"].includes(i.phase) : state === "failed" ? i.phase === "Failed" : true);
-  const matchesTree = i => matchesSelf(i) && stateOk(i) || i.children.some(matchesTree);
+  const matchesOp = i => (!kind || (i.crKind || i.src) === kind) && matchesQ(i) && stateOk(i);
+  const matchesTree = i => matchesOp(i) || i.children.some(c => c.src !== "task" && matchesTree(c));
+  const matchesTask = t => (!type || t.action === type) && matchesQ(t) && stateOk(t);
+  const shownTasks = tasks.filter(matchesTask);
   const day = Date.now() - 86400000;
   const counts = {
     running: all.filter(i => i.phase === "Running" || i.phase === "Pending").length,
@@ -16795,7 +16892,7 @@ function MonitorView({
     failed: all.filter(i => i.phase === "Failed" && Date.parse(i.completedAt || i.startedAt || 0) > day).length,
     done: all.filter(i => i.phase === "Succeeded" && Date.parse(i.completedAt || i.startedAt || 0) > day).length,
     cancelable: all.filter(i => i.cancel.can).length,
-    tasks: all.filter(i => i.src === "task").length
+    tasks: tasks.length
   };
   const cancel = it => window.__ui.dialog(cancelDialog(it), {
     kind: "operation",
@@ -16841,18 +16938,9 @@ function MonitorView({
     c: "var(--dim2)"
   }), /*#__PURE__*/React.createElement("input", {
     value: q,
-    placeholder: "Search kind, action, target, message\u2026",
+    placeholder: "Search kind, action, type, target, id, message\u2026",
     onChange: e => setQ(e.target.value)
-  })), /*#__PURE__*/React.createElement("select", {
-    className: "sel",
-    value: kind,
-    onChange: e => setKind(e.target.value)
-  }, /*#__PURE__*/React.createElement("option", {
-    value: ""
-  }, "all kinds"), kinds.map(k => /*#__PURE__*/React.createElement("option", {
-    key: k,
-    value: k
-  }, k))), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     className: "seg"
   }, [["running", "running"], ["failed", "failed"], ["all", "all"]].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
     key: k,
@@ -16861,8 +16949,6 @@ function MonitorView({
   }, l))), /*#__PURE__*/React.createElement("div", {
     className: "spacer"
   }), /*#__PURE__*/React.createElement("span", {
-    className: "count"
-  }, roots.filter(matchesTree).length), /*#__PURE__*/React.createElement("span", {
     className: "live"
   }, /*#__PURE__*/React.createElement("i", null), "live"), /*#__PURE__*/React.createElement("button", {
     className: "chip",
@@ -16871,7 +16957,32 @@ function MonitorView({
   }, /*#__PURE__*/React.createElement(Icon, {
     n: "refresh",
     s: 12
-  }))), !w.ready ? /*#__PURE__*/React.createElement("div", {
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "0 12px 10px"
+    }
+  }, "The search and the state filter both lists; each list has its own kind or type.")), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Operator operations"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: kind,
+    onChange: e => setKind(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "all kinds"), kinds.map(k => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, k))), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, roots.filter(matchesTree).length)), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, !w.ready ? /*#__PURE__*/React.createElement("div", {
     className: "lmsg"
   }, "reading operations\u2026") : /*#__PURE__*/React.createElement(WorkTree, {
     roots: roots,
@@ -16883,7 +16994,38 @@ function MonitorView({
     style: {
       margin: "10px 12px 12px"
     }
-  }, "Every Ops object, every StorageNode in its provisioning machine, and each cluster's status.tasks window. A row nests under the object that names it (spec.creatorRef, the drain-node label, a controller owner, a recorded task id) and nowhere else. Abort appears while the operation stands at a step its graph honors; the tooltip says why not elsewhere.")));
+  }, "Every Ops object and every StorageNode in its provisioning machine. A row nests under the object that names it (spec.creatorRef, the drain-node label, a controller owner) and nowhere else. Abort appears while the operation stands at a step its graph honors; the tooltip says why not elsewhere.")), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Control plane tasks"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: type,
+    onChange: e => setType(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "all types"), types.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t,
+    value: t
+  }, t))), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, shownTasks.length)), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, !w.ready ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading tasks\u2026") : /*#__PURE__*/React.createElement(TaskTable, {
+    tasks: shownTasks,
+    nav: nav,
+    onCancel: cancel
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "10px 12px 12px"
+    }
+  }, "Each cluster's status.tasks window, as the operator copies it from the control plane: id, type, status, and retry are the backend's own. A task names the operation that recorded its id (status.nodeAddTaskID, status.relocate.volumes[].taskID) when one did. A finished task leaves the window. CancelTask raises a StorageClusterOps for it.")));
   if (scope) return /*#__PURE__*/React.createElement("div", {
     style: {
       marginTop: 4
@@ -17021,7 +17163,23 @@ function WorkItemDetail({
     roots: it.children,
     nav: nav,
     filterFn: () => true,
-    onCancel: cancel
+    onCancel: cancel,
+    withTasks: true
+  }))), it.src !== "task" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "What the operator is doing"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(ObjectEvents, {
+    it: it
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement(OperatorLog, {
+    it: it
   }))), /*#__PURE__*/React.createElement("div", {
     className: "sech",
     style: {
@@ -17077,6 +17235,245 @@ function WorkItemDetail({
     status: it.raw.status
   }, null, 2)))));
 }
+// ---- what an operation is doing ------------------------------------------------------------
+// Two records exist of an operation's progress beyond its status: the Events
+// the operator emits on the object (Recorder.Eventf in every controller), and
+// the operator pod's own log, whose reconcile lines carry the object's name
+// because controller-runtime adds the request's key to each of them. Both are
+// read from the Kubernetes API of the operation's context; nothing is inferred.
+const OPERATOR_POD_SELECTOR = "app=simplyblock-operator";
+const OPERATOR_LOG_TAIL = 2000;
+async function operatorPods(ctx) {
+  const pods = await k8s.list("Pod", {
+    allNamespaces: true,
+    ctx,
+    labelSelector: OPERATOR_POD_SELECTOR
+  });
+  return pods.map(p => ({
+    name: p.metadata.name,
+    ns: p.metadata.namespace,
+    containers: (p.spec.containers || []).map(c => c.name),
+    phase: (p.status || {}).phase
+  }));
+}
+// the raw text of pods/log, with timestamps, as lines; k8s.logs parses JSON and a log is not JSON
+async function operatorLogLines(ctx, pod, container, tail) {
+  const path = pathFor("Pod", {
+    name: pod.name,
+    namespace: pod.ns,
+    subresource: "log"
+  }) + `?tailLines=${tail || OPERATOR_LOG_TAIL}&timestamps=true` + (container ? `&container=${encodeURIComponent(container)}` : "");
+  let res;
+  try {
+    res = await fetch(baseFor(ctx) + path, {
+      headers: {
+        Accept: "*/*",
+        Authorization: `Bearer ${window.SB_CONFIG.token}`
+      }
+    });
+  } catch (e) {
+    throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable");
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let b = null;
+    try {
+      b = JSON.parse(text);
+    } catch (e) {}
+    throw new ApiError(res.status, b && b.message || "Request failed", path, b && b.reason || null);
+  }
+  return text.split("\n").filter(Boolean).map(line => {
+    const sp = line.indexOf(" ");
+    const ts = sp > 0 ? line.slice(0, sp) : "",
+      msg = sp > 0 ? line.slice(sp + 1) : line;
+    return {
+      ts,
+      level: levelOf(msg),
+      msg,
+      pod: pod.name,
+      container: container || ""
+    };
+  });
+}
+// the Events on one object, newest first
+function ObjectEvents({
+  it
+}) {
+  const r = useResource(`events|${it.ctx}|${it.ns}|${it.crKind}|${it.name}`, () => k8s.list("Event", {
+    namespace: it.ns,
+    ctx: it.ctx,
+    fieldSelector: `involvedObject.name=${it.name}`
+  }).then(evs => evs.filter(e => !e.involvedObject.kind || e.involvedObject.kind === it.crKind).sort((a, b) => Date.parse(b.lastTimestamp || b.eventTime || b.metadata.creationTimestamp || 0) - Date.parse(a.lastTimestamp || a.eventTime || a.metadata.creationTimestamp || 0))), 5000);
+  const evs = r.data || [];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, "Events on ", it.crKind, " ", it.name, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, evs.length), /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "live")), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, r.error ? /*#__PURE__*/React.createElement(ErrorState, {
+    error: r.error,
+    onRetry: r.reload
+  }) : !r.data ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading events\u2026") : !evs.length ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "The operator has emitted no Event on this object, or the Events have aged out (the API server keeps them for an hour by default).") : /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "lastTimestamp"), /*#__PURE__*/React.createElement("th", null, "type"), /*#__PURE__*/React.createElement("th", null, "reason"), /*#__PURE__*/React.createElement("th", null, "message"), /*#__PURE__*/React.createElement("th", null, "count"))), /*#__PURE__*/React.createElement("tbody", null, evs.map(e => /*#__PURE__*/React.createElement("tr", {
+    key: e.metadata.uid || e.metadata.name,
+    className: e.type === "Warning" ? "failed" : ""
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      whiteSpace: "nowrap"
+    },
+    title: e.lastTimestamp || e.eventTime
+  }, fmtAgo(e.lastTimestamp || e.eventTime || e.metadata.creationTimestamp)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      color: e.type === "Warning" ? "var(--warn)" : undefined
+    }
+  }, e.type)), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11
+    }
+  }, e.reason), /*#__PURE__*/React.createElement("td", {
+    style: {
+      whiteSpace: "pre-wrap"
+    }
+  }, e.message), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11
+    }
+  }, e.count || 1)))))));
+}
+// the operator's log, following, cut to the lines that name the object
+function OperatorLog({
+  it
+}) {
+  const [pods, setPods] = React.useState(null);
+  const [pod, setPod] = React.useState("");
+  const [only, setOnly] = React.useState(true);
+  const [follow, setFollow] = React.useState(!TERMINAL.includes(it.phase));
+  const [q, setQ] = React.useState("");
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    operatorPods(it.ctx).then(ps => {
+      setPods(ps);
+      if (ps.length && !pod) setPod(ps[0].name);
+    }).catch(setErr);
+  }, [it.ctx]);
+  const chosen = (pods || []).find(p => p.name === pod) || null;
+  const container = chosen ? chosen.containers.includes("manager") ? "manager" : chosen.containers[0] : "";
+  const r = useResource(chosen ? `oplog|${it.ctx}|${chosen.ns}|${chosen.name}|${container}` : "oplog|none", () => chosen ? operatorLogLines(it.ctx, chosen, container) : Promise.resolve([]), follow ? 3000 : 0);
+  const all = r.data || [];
+  const needle = it.name.toLowerCase(),
+    qq = q.toLowerCase();
+  const lines = all.filter(l => (!only || l.msg.toLowerCase().includes(needle)) && (!qq || l.msg.toLowerCase().includes(qq)));
+  const endRef = React.useRef(null);
+  React.useEffect(() => {
+    if (follow && endRef.current) endRef.current.scrollIntoView({
+      block: "end"
+    });
+  }, [lines.length, follow]);
+  const tools = /*#__PURE__*/React.createElement("div", {
+    className: "ptools"
+  }, pods && pods.length > 1 && /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: pod,
+    onChange: e => setPod(e.target.value)
+  }, pods.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p.name,
+    value: p.name
+  }, p.ns, "/", p.name))), chosen && /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: "var(--dim)"
+    }
+  }, chosen.ns, "/", chosen.name, " \xB7 ", container), /*#__PURE__*/React.createElement("div", {
+    className: "search",
+    style: {
+      minWidth: 180
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    value: q,
+    placeholder: "Search the lines\u2026",
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "chip",
+    title: `only the lines that carry ${it.name}; controller-runtime puts the reconciled object's key on each line`
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: only,
+    onChange: e => setOnly(e.target.checked)
+  }), " only ", it.name), /*#__PURE__*/React.createElement("label", {
+    className: "chip",
+    title: "re-read the tail every 3 s and keep the end in view"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: follow,
+    onChange: e => setFollow(e.target.checked)
+  }), " follow"), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, lines.length, only || qq ? ` of ${all.length}` : ""), follow && /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "live"), /*#__PURE__*/React.createElement(CopyBtn, {
+    get: () => lines.map(l => `${l.ts} ${l.msg}`).join("\n")
+  }));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Operator log"), err ? /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(ErrorState, {
+    error: err
+  })) : pods && !pods.length ? /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "No pod with ", OPERATOR_POD_SELECTOR, " in context ", it.ctx, ".")) : /*#__PURE__*/React.createElement(LogStream, {
+    lines: lines,
+    loading: !r.data && !r.error,
+    error: r.error,
+    onRetry: r.reload,
+    tools: tools,
+    height: 420,
+    empty: only ? `None of the last ${all.length} lines of the operator log names ${it.name}.` : "No lines."
+  }), /*#__PURE__*/React.createElement("div", {
+    ref: endRef
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "8px 12px 12px"
+    }
+  }, "The last ", OPERATOR_LOG_TAIL, " lines of the operator pod's log through the Kubernetes API (pods/log), re-read while following. Each reconcile line carries the object it is about, which is what the filter matches on."));
+}
+
 // the top-bar indicator and the chip on a detail head
 function OpsIndicator({
   nav
@@ -17129,6 +17526,11 @@ Object.assign(window, {
   MonitorView,
   WorkItemDetail,
   WorkTree,
+  TaskTable,
+  ObjectEvents,
+  OperatorLog,
+  operatorPods,
+  operatorLogLines,
   OpsIndicator,
   OpsLink,
   normOpsItem,
