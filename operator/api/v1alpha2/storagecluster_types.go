@@ -681,6 +681,7 @@ type StorageNodesSpec struct {
 	// default journal split).
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
 
 	// EnableFormat4K formats NVMe devices to a 4K block size where the device
@@ -710,6 +711,7 @@ type StorageNodesSpec struct {
 
 	// EnableCpuTopology turns on topology-aware CPU assignment.
 	// +optional
+	// +simplyblock:invisible
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
 
 	// ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
@@ -1059,6 +1061,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	EnableMetadataJournal *bool `json:"enableMetadataJournal,omitempty"`
 
 	// DeviceClass is the class of backend storage every node in this cluster
