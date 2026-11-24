@@ -5,7 +5,7 @@
 # Helm renders an unread value as nothing, so a key in values.yaml that no
 # template reads looks like a working setting. These cases assert that the
 # Graylog retention period and the pull policies of Graylog, Grafana, and Thanos
-# reach the objects they configure.
+# reach the objects they configure, and so do Graylog's sizing and journal.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -83,6 +83,45 @@ if render \
   --set-string controlplane.observability.graylog.maxNumberIndex=24 >/dev/null 2>&1; then
   fail "12h over 24 indices rendered, want a render failure"
 fi
+
+# Graylog is sized for the storage nodes' SPDK logs by default: 4 CPUs, a 3g heap
+# within a 6Gi limit, more processing threads, and its journal on a volume.
+out="$(render --set controlplane.storageclass.name=gp3)"
+[[ "$(container "$out" graylog resources.limits.cpu)" == "4" ]] ||
+  fail "graylog cpu limit is $(container "$out" graylog resources.limits.cpu), want 4"
+[[ "$(container "$out" graylog resources.limits.memory)" == "6Gi" ]] ||
+  fail "graylog memory limit is $(container "$out" graylog resources.limits.memory), want 6Gi"
+[[ "$(graylog_env "$out" GRAYLOG_SERVER_JAVA_OPTS)" == "-Xms3g -Xmx3g -XX:+UseG1GC" ]] ||
+  fail "graylog java opts are $(graylog_env "$out" GRAYLOG_SERVER_JAVA_OPTS), want a 3g heap"
+[[ "$(graylog_env "$out" GRAYLOG_PROCESSBUFFER_PROCESSORS)" == "4" ]] ||
+  fail "graylog processbuffer processors are $(graylog_env "$out" GRAYLOG_PROCESSBUFFER_PROCESSORS), want 4"
+[[ "$(graylog_env "$out" GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE)" == "15gb" ]] ||
+  fail "graylog journal max size is $(graylog_env "$out" GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE), want 15gb"
+journal_claim="$(query "$out" 'select(.kind == "Deployment" and .metadata.name == "simplyblock-graylog") | .spec.template.spec.volumes[] | select(.name == "simplyblock-graylog-journal") | .persistentVolumeClaim.claimName')"
+[[ "$journal_claim" == "simplyblock-graylog-journal" ]] ||
+  fail "graylog journal volume claim is $journal_claim, want simplyblock-graylog-journal"
+[[ "$(query "$out" 'select(.kind == "PersistentVolumeClaim" and .metadata.name == "simplyblock-graylog-journal") | .spec.storageClassName')" == "gp3" ]] ||
+  fail "graylog journal claim does not use controlplane.storageclass.name"
+[[ "$(query "$out" 'select(.kind == "Deployment" and .metadata.name == "simplyblock-graylog") | .spec.strategy.type')" == "Recreate" ]] ||
+  fail "graylog with a journal volume does not use the Recreate strategy"
+
+# Each sizing value reaches the container.
+out="$(render   --set controlplane.observability.graylog.resources.limits.cpu=8   --set controlplane.observability.graylog.heapSize=6g   --set controlplane.observability.graylog.outputBatchSize=1000)"
+[[ "$(container "$out" graylog resources.limits.cpu)" == "8" ]] ||
+  fail "graylog cpu limit is $(container "$out" graylog resources.limits.cpu), want 8"
+[[ "$(graylog_env "$out" GRAYLOG_SERVER_JAVA_OPTS)" == "-Xms6g -Xmx6g -XX:+UseG1GC" ]] ||
+  fail "graylog java opts are $(graylog_env "$out" GRAYLOG_SERVER_JAVA_OPTS), want a 6g heap"
+[[ "$(graylog_env "$out" GRAYLOG_OUTPUT_BATCH_SIZE)" == "1000" ]] ||
+  fail "graylog output batch size is $(graylog_env "$out" GRAYLOG_OUTPUT_BATCH_SIZE), want 1000"
+
+# Without journal persistence: an emptyDir, no claim, the default rollout.
+out="$(render --set controlplane.observability.graylog.journal.persistence=false)"
+[[ "$(query "$out" 'select(.kind == "PersistentVolumeClaim" and .metadata.name == "simplyblock-graylog-journal") | .metadata.name')" == "unset" ]] ||
+  fail "graylog journal claim rendered with persistence off"
+[[ "$(query "$out" 'select(.kind == "Deployment" and .metadata.name == "simplyblock-graylog") | .spec.template.spec.volumes[] | select(.name == "simplyblock-graylog-journal") | has("emptyDir")')" == "true" ]] ||
+  fail "graylog journal is not an emptyDir with persistence off"
+[[ "$(query "$out" 'select(.kind == "Deployment" and .metadata.name == "simplyblock-graylog") | .spec.strategy.type')" == "unset" ]] ||
+  fail "graylog without a journal volume sets a rollout strategy"
 
 if [[ "$failures" -gt 0 ]]; then
   echo "$failures failure(s)"

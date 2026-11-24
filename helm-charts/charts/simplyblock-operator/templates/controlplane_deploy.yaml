@@ -7,6 +7,12 @@ metadata:
   namespace: {{ .Release.Namespace }}
 spec:
   replicas: 1
+  {{- if .Values.controlplane.observability.graylog.journal.persistence }}
+  # The journal volume is ReadWriteOnce: the old pod has to release it before
+  # the new one can mount it.
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       app: simplyblock-graylog
@@ -89,7 +95,15 @@ spec:
             - name: GRAYLOG_ELASTICSEARCH_REPLICAS
               value: "1"
             - name: GRAYLOG_MESSAGE_JOURNAL_MAX_SIZE
-              value: "10gb"
+              value: {{ .Values.controlplane.observability.graylog.journal.maxSize | quote }}
+            - name: GRAYLOG_SERVER_JAVA_OPTS
+              value: {{ printf "-Xms%s -Xmx%s -XX:+UseG1GC" .Values.controlplane.observability.graylog.heapSize .Values.controlplane.observability.graylog.heapSize | quote }}
+            - name: GRAYLOG_PROCESSBUFFER_PROCESSORS
+              value: {{ .Values.controlplane.observability.graylog.processbufferProcessors | quote }}
+            - name: GRAYLOG_OUTPUTBUFFER_PROCESSORS
+              value: {{ .Values.controlplane.observability.graylog.outputbufferProcessors | quote }}
+            - name: GRAYLOG_OUTPUT_BATCH_SIZE
+              value: {{ .Values.controlplane.observability.graylog.outputBatchSize | quote }}
           ports:
             - containerPort: 5044
             - containerPort: 5140
@@ -109,17 +123,33 @@ spec:
             - mountPath: /usr/share/graylog/data/journal
               name: simplyblock-graylog-journal
           resources:
-            requests:
-              cpu: "100m"
-              memory: "512Mi"
-            limits:
-              cpu: "400m"
-              memory: "2Gi"
+            {{- toYaml .Values.controlplane.observability.graylog.resources | nindent 12 }}
       volumes:
         - name: simplyblock-graylog-data
           emptyDir: {}
         - name: simplyblock-graylog-journal
+          {{- if .Values.controlplane.observability.graylog.journal.persistence }}
+          persistentVolumeClaim:
+            claimName: simplyblock-graylog-journal
+          {{- else }}
           emptyDir: {}
+          {{- end }}
+{{- if .Values.controlplane.observability.graylog.journal.persistence }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: simplyblock-graylog-journal
+  namespace: {{ .Release.Namespace }}
+spec:
+  accessModes: [ "ReadWriteOnce" ]
+  {{- if .Values.controlplane.storageclass.name }}
+  storageClassName: {{ .Values.controlplane.storageclass.name }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.controlplane.observability.graylog.journal.size }}
+{{- end }}
 
 ---
 apiVersion: apps/v1
