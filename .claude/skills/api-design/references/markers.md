@@ -83,7 +83,7 @@ object survives into the cluster, where the console reads it.
 | Marker                         | CRD annotation                           | In the Control Center                                            |
 |--------------------------------|------------------------------------------|------------------------------------------------------------------|
 | `+simplyblock:operatorManaged` | `simplyblock.io/operator-managed-fields` | Badged `operator-managed` and locked, as an immutable field is   |
-| `+simplyblock:advanced`        | `simplyblock.io/advanced-fields`         | Left out of Essentials, shown in Everything                      |
+| `+simplyblock:advanced`        | `simplyblock.io/advanced-fields`         | Left out of Essentials, shown and edited in Everything           |
 | `+simplyblock:invisible`       | `simplyblock.io/invisible-fields`        | Left out of Essentials and the Everything tree, kept in the YAML |
 
 ```go
@@ -105,11 +105,15 @@ then nested ones, each in natural order, so `port2` precedes `port10` and every
 block stays together. A field inside a list of objects is not listed, because its path
 names a field of every element. The curated headlines in
 `control-center/cr-headlines.jsx` only decorate the fields they name, with a
-label, a format, or a link, and one the CRD no longer has is dropped. So a new field reaches Essentials without an edit to the
-console, and keeping it out is a marker on the field: `advanced` for a setting
-few need, `invisible` for one nobody should see. The Everything tree shows only
-what the object holds, so an advanced field that is not set appears nowhere
-until it is set some other way.
+label, a format, or a link, and one the CRD no longer has is dropped. So a new
+field reaches Essentials without an edit to the console, and keeping it out is
+a marker on the field: `advanced` for a setting few need, `invisible` for one
+nobody should see.
+
+**What Everything lists.** The spec tree shows every field the CRD has, set or
+not, advanced ones included, and edits each in place as Essentials does. A
+list of objects or a map of them is shown as the object holds it. Unset blocks
+are collapsed. The status tree shows what the operator wrote, read-only.
 
 **None of the markers is enforced at admission.** `operatorManaged` stops an edit in
 the console only, and `kubectl` can still change the field. A field a user must not

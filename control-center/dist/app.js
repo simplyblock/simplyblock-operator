@@ -21079,8 +21079,9 @@ Object.assign(window, {
 //   Essentials   the headline fields of the kind (cr-headlines.jsx), spec
 //                editable in place where the CRD allows it, status read-only,
 //                the active operation, generation drift
-//   Everything   the full spec and status as trees, immutable fields marked,
-//                descriptions from the CRD on hover, and the object as YAML
+//   Everything   the spec as the CRD describes it, every field set or not and
+//                editable in place, the status as a read-only tree, locked
+//                fields marked, descriptions on hover, and the object as YAML
 //   Kubernetes   owners, labels and annotations, events, the raw metadata
 //
 // Field names are the CRD's own; descriptions, enums, and immutability come
@@ -21202,6 +21203,8 @@ async function readCrdSchema(kind) {
       if (node.additionalProperties && typeof node.additionalProperties === "object") walk(node.additionalProperties, path, true);
     };
     walk(schema, "");
+    out.specNode = (schema.properties || {}).spec || null;
+    out.fieldByPath = Object.fromEntries(out.fields.map(f => [f.path, f]));
     return out;
   })();
   CRD_CACHE.set(kind, p);
@@ -21228,6 +21231,8 @@ const emptySchema = kind => ({
   known: new Set(),
   fields: [],
   order: [],
+  fieldByPath: {},
+  specNode: null,
   descriptions: {},
   enums: {},
   types: {},
@@ -21281,16 +21286,19 @@ function essentialSpecRows(curated, schema) {
     }
     const f = fields[path];
     if (!f) return;
-    rows.push({
-      path,
-      label: path.replace(/^spec\./, ""),
-      mutable: true,
-      fmt: f.type === "boolean" ? F.bool : F.raw,
-      type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
-    });
+    rows.push(rowOfField(path, f));
   });
   return rows.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
 }
+// the editable row of a CRD field no headline decorates, as Essentials and the
+// Everything tree both edit it
+const rowOfField = (path, f) => ({
+  path,
+  label: path.replace(/^spec\./, ""),
+  mutable: true,
+  fmt: f.type === "boolean" ? F.bool : F.raw,
+  type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
+});
 const naturally = new Intl.Collator(undefined, {
   numeric: true,
   sensitivity: "base"
@@ -21401,12 +21409,16 @@ const coerce = (type, raw) => {
   return raw;
 };
 const editable = (type, value) => type === "list" ? Array.isArray(value) ? value.join(", ") : "" : type === "kv" ? Object.entries(value || {}).map(([k, v]) => `${k}=${v}`).join(", ") : value === undefined || value === null ? "" : String(value);
+
+// quiet leaves the badge of a locked field to the caller, which shows it next
+// to the field's name (the Everything tree), and shows only the value.
 function InlineField({
   r,
   value,
   lock,
   patch,
-  schema
+  schema,
+  quiet
 }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState("");
@@ -21422,7 +21434,7 @@ function InlineField({
       style: {
         color: "var(--dim2)"
       }
-    }, "unset") : String(shown)), badge ? /*#__PURE__*/React.createElement("span", {
+    }, "unset") : String(shown)), badge ? quiet ? null : /*#__PURE__*/React.createElement("span", {
       className: "immut",
       title: LOCK_TITLE[badge]
     }, badge) : /*#__PURE__*/React.createElement("button", {
@@ -21795,6 +21807,85 @@ function JsonTree({
     }));
   })));
 }
+// SpecTree is the Everything tab's spec: every field the CRD has, set or not,
+// in natural order, beside every field the object holds that the CRD does not
+// name. A field Essentials can edit is edited here in place, an advanced one
+// too, since this is where it is shown; a locked one carries its badge and no
+// edit. What the inline editor cannot take, a list of objects or a map of
+// them, is shown as the object holds it. An invisible field is left out.
+function SpecTree({
+  node,
+  data,
+  path,
+  schema,
+  depth,
+  patch
+}) {
+  const [open, setOpen] = React.useState((depth || 0) < 2 && data !== undefined);
+  const props = node && node.properties || {};
+  const value = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  const keys = [...new Set([...Object.keys(props), ...Object.keys(value)])].filter(k => !isInvisible(schema, `${path}.${k}`)).sort(naturally.compare);
+  if (!keys.length) return /*#__PURE__*/React.createElement("span", {
+    className: "v",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "{}");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "jt"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "tg",
+    onClick: () => setOpen(!open)
+  }, open ? "▾" : "▸", " ", `{${keys.length}}`, data === undefined && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, " unset")), open && /*#__PURE__*/React.createElement("div", {
+    className: "n"
+  }, keys.map(k => {
+    const p = `${path}.${k}`,
+      v = value[k],
+      child = props[k],
+      f = schema.fieldByPath[p];
+    const lock = lockOf(schema, p);
+    const badge = lock && /*#__PURE__*/React.createElement("span", {
+      className: "immut",
+      title: LOCK_TITLE[lock]
+    }, lock);
+    const desc = schema.descriptions[p] || p;
+    const shown = f ? /*#__PURE__*/React.createElement(InlineField, {
+      r: rowOfField(p, f),
+      value: v,
+      lock: lock,
+      patch: patch,
+      schema: schema,
+      quiet: true
+    }) : child && child.type === "object" && child.properties ? /*#__PURE__*/React.createElement(SpecTree, {
+      node: child,
+      data: v,
+      path: p,
+      schema: schema,
+      depth: (depth || 0) + 1,
+      patch: patch
+    }) : v === undefined ? /*#__PURE__*/React.createElement("span", {
+      className: "v",
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset") : /*#__PURE__*/React.createElement(JsonTree, {
+      data: v,
+      path: p,
+      schema: schema,
+      depth: (depth || 0) + 1
+    });
+    return /*#__PURE__*/React.createElement("div", {
+      key: k,
+      title: desc
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "k"
+    }, k), badge, ": ", shown);
+  })));
+}
 function toYaml(v, indent) {
   const pad = "  ".repeat(indent || 0);
   if (v === null || v === undefined) return "null";
@@ -21847,9 +21938,11 @@ function YamlBlock({
 }
 function EverythingTab({
   obj,
-  cref: ref
+  cref: ref,
+  onChanged
 }) {
   const schema = useCrdSchema(ref.kind);
+  const patch = useSpecPatch(ref, onChanged);
   const spec = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "dcols"
@@ -21857,7 +21950,14 @@ function EverythingTab({
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "spec"), /*#__PURE__*/React.createElement("div", {
     className: "bd"
-  }, /*#__PURE__*/React.createElement(JsonTree, {
+  }, schema.source === "crd" && schema.specNode ? /*#__PURE__*/React.createElement(SpecTree, {
+    node: schema.specNode,
+    data: obj.spec || {},
+    path: "spec",
+    schema: schema,
+    depth: 0,
+    patch: patch
+  }) : /*#__PURE__*/React.createElement(JsonTree, {
     data: spec,
     path: "spec",
     schema: schema,
@@ -22072,7 +22172,8 @@ function CRPanel({
     onChanged: () => setRev(r => r + 1)
   }), tab === "everything" && /*#__PURE__*/React.createElement(EverythingTab, {
     obj: obj,
-    cref: ref
+    cref: ref,
+    onChanged: () => setRev(r => r + 1)
   }), tab === "k8s" && /*#__PURE__*/React.createElement(KubernetesTab, {
     obj: obj,
     cref: ref,
