@@ -37,6 +37,19 @@ func TestCollectRefusesAnUnknownMarker(t *testing.T) {
 	}
 }
 
+// make manifests runs before make generate, so an API package whose deepcopy
+// still names a removed field has to resolve all the same.
+func TestCollectToleratesTypeErrors(t *testing.T) {
+	kinds, err := collect(".", "./testdata/stale/...")
+	if err != nil {
+		t.Fatalf("collect: %v", err)
+	}
+	want := Kinds{"stale.simplyblock.io/Gizmo": {markerOperatorManaged: {"v1": {"spec.owner"}}}}
+	if !reflect.DeepEqual(kinds, want) {
+		t.Fatalf("collect resolved %v, want %v", kinds, want)
+	}
+}
+
 func TestAnnotationsArePerVersionJSON(t *testing.T) {
 	got := annotations(Fields{
 		markerOperatorManaged: {"v1alpha2": {"spec.a", "spec.b"}, "v1alpha1": {"spec.a"}},

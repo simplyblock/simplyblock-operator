@@ -68,8 +68,11 @@ type root struct {
 // the markers of every root kind in them.
 func collect(dir string, patterns ...string) (Kinds, error) {
 	cfg := &packages.Config{
-		Dir:  dir,
-		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo,
+		Dir: dir,
+		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo |
+			// from source, not export data: building export data fails outright on a
+			// type error, where the type checker reports it and carries on
+			packages.NeedImports | packages.NeedDeps,
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -80,8 +83,14 @@ func collect(dir string, patterns ...string) (Kinds, error) {
 	marks := map[token.Pos][]string{}
 	var roots []root
 	for _, pkg := range pkgs {
-		if len(pkg.Errors) > 0 {
-			return nil, fmt.Errorf("load %s: %v", pkg.PkgPath, pkg.Errors[0])
+		// A type error does not stop the walk: make manifests runs before make
+		// generate, so a deepcopy file that still names a removed field is the
+		// normal state of an API change, and the struct types resolve anyway.
+		// A package that cannot be listed or parsed has no types to walk.
+		for _, e := range pkg.Errors {
+			if e.Kind != packages.TypeError {
+				return nil, fmt.Errorf("load %s: %v", pkg.PkgPath, e)
+			}
 		}
 		for _, file := range pkg.Syntax {
 			if err := fieldMarkers(pkg.Fset, file, marks); err != nil {
