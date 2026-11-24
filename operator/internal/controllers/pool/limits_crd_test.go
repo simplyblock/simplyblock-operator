@@ -58,7 +58,7 @@ func isImmutable(prop map[string]any) bool {
 }
 
 func TestTheLimitsThatCannotBeSetAreImmutable(t *testing.T) {
-	for _, name := range []string{"iops"} {
+	for _, name := range []string{"iops", "throughput"} {
 		if !isImmutable(limitsProperty(t, name)) {
 			t.Errorf("spec.limits.%s carries no self == oldSelf rule, so the console offers an edit the API server refuses", name)
 		}

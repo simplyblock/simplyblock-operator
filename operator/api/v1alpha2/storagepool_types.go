@@ -93,8 +93,10 @@ type PoolLimits struct {
 	// +k8s:immutable
 	IOPS *int32 `json:"iops,omitempty"`
 
-	// Throughput is the pool-wide throughput ceiling.
+	// Throughput is the pool-wide throughput ceiling. Not yet settable, for the
+	// reason IOPS is not, and immutable so the console shows it locked.
 	// +optional
+	// +k8s:immutable
 	Throughput *ThroughputLimits `json:"throughput,omitempty"`
 }
 
