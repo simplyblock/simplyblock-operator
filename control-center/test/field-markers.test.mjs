@@ -41,7 +41,7 @@ async function openFixture() {
             disableMigration: {type: "boolean", description: "Stops the rebalancer creating migrations."},
             evaluationInterval: {type: "string"},
           }},
-          tuning: {type: "object", properties: {depth: {type: "integer"}}},
+          tuning: {type: "object", properties: {depth: {type: "integer"}, width: {type: "integer"}}},
           tolerations: {type: "array", items: {type: "object", properties: {key: {type: "string"}}}},
           backup: {type: "object", properties: {
             endpoint: {type: "string"}, bucket: {type: "string"},
@@ -59,6 +59,9 @@ async function openFixture() {
         volumeAutoPlacement: {evaluationInterval: "5m"}, tuning: {depth: 3}},
       status: {observedGeneration: 1},
     };
+    // every patch the console sends, in order; none reaches a server
+    window.__patches = [];
+    window.k8s.patch = (kind, name, patch, opts) => { window.__patches.push({kind, name, patch, dryRun: (opts || {}).dryRun || null}); return Promise.resolve({}); };
     const get = window.k8s.get;
     window.k8s.get = (kind, name, opts) => kind === "CustomResourceDefinition" && name === crd.metadata.name ? Promise.resolve(crd)
       : kind === "StorageCluster" && name === "fixture" ? Promise.resolve(JSON.parse(JSON.stringify(obj)))
@@ -190,6 +193,67 @@ test("an advanced field is left out of Essentials and kept in Everything", async
   await page.waitForSelector(".crpanel .jt");
   const keys = await page.$$eval(".crpanel .card .jt .k", els => els.map(e => e.textContent.trim()));
   for (const k of ["evaluationInterval", "tuning", "depth"]) assert.ok(keys.includes(k), `${k} is in the Everything tree`);
+  await page.context().close();
+});
+
+// everythingRow is the spec tree's entry for `key`: the text of its row,
+// whether it offers an edit, and its badge, or null when there is none.
+const everythingRow = (page, key) => page.evaluate(k => {
+  const spec = [...document.querySelectorAll(".crpanel .card")].find(c => c.querySelector("h3")?.textContent.trim() === "spec");
+  const label = [...spec.querySelectorAll(".jt .k")].find(e => e.textContent.trim() === k);
+  if (!label) return null;
+  const row = label.parentElement;
+  const badge = label.nextElementSibling && label.nextElementSibling.classList.contains("immut") ? label.nextElementSibling.textContent.trim() : null;
+  return {text: row.textContent, editable: !!row.querySelector(":scope > .ifield .pen"), badge};
+}, key);
+
+async function openEverything() {
+  const page = await openFixture();
+  await page.click(".crpanel .tab:has-text('Everything')");
+  await page.waitForSelector(".crpanel .jt");
+  return page;
+}
+
+test("Everything lists an unset spec field of the CRD, editable in place", async () => {
+  const page = await openEverything();
+  const row = await everythingRow(page, "disableMigration");
+  assert.ok(row, "the unset disableMigration is in the tree");
+  assert.match(row.text, /unset/);
+  assert.equal(row.editable, true);
+  await page.context().close();
+});
+
+test("an unset advanced field is in Everything and editable there", async () => {
+  const page = await openEverything();
+  const row = await everythingRow(page, "width");
+  assert.ok(row, "the unset advanced tuning.width is in the tree");
+  assert.equal(row.editable, true);
+  await page.context().close();
+});
+
+test("a locked field in Everything is badged and offers no edit", async () => {
+  const page = await openEverything();
+  const row = await everythingRow(page, "vcpuCount");
+  assert.equal(row.badge, "operator-managed");
+  assert.equal(row.editable, false);
+  await page.context().close();
+});
+
+test("an edit in Everything patches the field, dry run first", async () => {
+  const page = await openEverything();
+  const spec = page.locator(".crpanel .card", {has: page.locator("h3", {hasText: /^spec$/})});
+  const row = spec.locator(".jt div", {has: page.locator(":scope > .k", {hasText: /^disableMigration$/})}).first();
+  // the edit control shows when the row is hovered, as in Essentials
+  await row.hover();
+  const pen = row.locator(":scope > .ifield .pen");
+  assert.equal(await pen.evaluate(e => getComputedStyle(e).opacity), "1", "the edit control is visible on hover");
+  await pen.click();
+  await row.locator("select.finput").selectOption("true");
+  await row.locator("button:has-text('Save')").click();
+  await page.waitForFunction(() => window.__patches.length >= 2);
+  const patches = await page.evaluate(() => window.__patches);
+  const want = {spec: {volumeAutoPlacement: {disableMigration: true}}};
+  assert.deepEqual(patches.map(p => [p.patch, p.dryRun]), [[want, "All"], [want, null]]);
   await page.context().close();
 });
 
