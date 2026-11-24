@@ -115,7 +115,7 @@ its logged `dataset=… seed=…` line.
 The `/operator/v1/*` surface is still settling, so it is fixture-driven: a
 request for `GET /v1/foo/bar` serves `<fixtures>/v1/foo/bar.json` (then
 `bar/index.json`; writes first try `bar.post.json` etc.). Anything unmatched
-answers `{"status":"success","data":[]}` and is recorded — check
+answers `{"results":[]}`, which the console reads as an empty collection, and is recorded — check
 `/mockctl/info`'s `unmockedOperatorRequests` after clicking through the UI to
 see exactly which endpoints still need fixture files. That list is the to-do
 list.
