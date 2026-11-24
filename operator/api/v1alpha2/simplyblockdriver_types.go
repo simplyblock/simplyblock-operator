@@ -377,6 +377,72 @@ type SimplyblockDriverSpec struct {
 	// PNFS configures pNFS support on the node plugin.
 	// +optional
 	PNFS DriverPNFS `json:"pnfs,omitempty"`
+
+	// RemoteClusters are storage clusters served by a management API outside
+	// this Kubernetes cluster. The operator writes one entry per item into the
+	// Secret the CSI driver reads its clusters from.
+	// +listType=map
+	// +listMapKey=clusterID
+	// +kubebuilder:validation:MaxItems=64
+	// +optional
+	RemoteClusters []RemoteStorageCluster `json:"remoteClusters,omitempty"`
+}
+
+// RemoteStorageCluster is a storage cluster whose control plane runs outside
+// this Kubernetes cluster, and which the CSI driver provisions volumes on.
+type RemoteStorageCluster struct {
+	// ClusterID is the storage cluster's UUID.
+	// +kubebuilder:validation:Pattern=`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`
+	ClusterID string `json:"clusterID"`
+
+	// Endpoint is the base URL of the management API serving the cluster. An
+	// HTTPS endpoint must present a certificate from a publicly trusted CA.
+	// +kubebuilder:validation:MaxLength=2048
+	// +kubebuilder:validation:XValidation:rule="isURL(self) && url(self).getScheme() in ['https', 'http']",message="endpoint must be an http or https URL"
+	Endpoint string `json:"endpoint"`
+
+	// CredentialsSecretRef names a Secret in this namespace that holds the
+	// cluster secret under the key cluster_secret.
+	CredentialsSecretRef corev1.LocalObjectReference `json:"credentialsSecretRef"`
+}
+
+// RemoteStorageClusterState is the outcome of the last check of a remote cluster.
+// +kubebuilder:validation:Enum=Connected;Unreachable;Unauthorized;CredentialsMissing;Conflict
+type RemoteStorageClusterState string
+
+const (
+	// RemoteStorageClusterConnected is a cluster whose management API accepted
+	// the cluster secret.
+	RemoteStorageClusterConnected RemoteStorageClusterState = "Connected"
+	// RemoteStorageClusterUnreachable is a cluster whose management API did not
+	// answer. Its entry is kept, so a transient outage does not remove it.
+	RemoteStorageClusterUnreachable RemoteStorageClusterState = "Unreachable"
+	// RemoteStorageClusterUnauthorized is a cluster whose management API refused
+	// the cluster secret. Its entry is kept.
+	RemoteStorageClusterUnauthorized RemoteStorageClusterState = "Unauthorized"
+	// RemoteStorageClusterCredentialsMissing is a cluster whose Secret or its
+	// cluster_secret key does not exist. No entry is written for it.
+	RemoteStorageClusterCredentialsMissing RemoteStorageClusterState = "CredentialsMissing"
+	// RemoteStorageClusterConflict is a cluster ID a local StorageCluster
+	// already manages. The local entry stays.
+	RemoteStorageClusterConflict RemoteStorageClusterState = "Conflict"
+)
+
+// RemoteStorageClusterStatus is the observed state of one remote cluster.
+type RemoteStorageClusterStatus struct {
+	// ClusterID is the cluster this item reports on.
+	ClusterID string `json:"clusterID"`
+
+	// State is the outcome of the last check.
+	State RemoteStorageClusterState `json:"state"`
+
+	// LastProbeTime is when the management API was last asked.
+	// +optional
+	LastProbeTime *metav1.Time `json:"lastProbeTime,omitempty"`
+
+	// Message is the reason for the state, in one sentence.
+	// +optional
+	Message string `json:"message,omitempty"`
 }
 
 // SnapshotSupportOrigin is where the cluster's snapshot support came from, or
@@ -459,6 +525,24 @@ type SimplyblockDriverStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// RemoteClusters reports each remote cluster the CSI secret carries an
+	// entry for on behalf of spec.remoteClusters. It is also the record of
+	// which entries this driver wrote, so an item removed from the spec has its
+	// entry removed.
+	// +listType=map
+	// +listMapKey=clusterID
+	// +optional
+	RemoteClusters []RemoteStorageClusterStatus `json:"remoteClusters,omitempty"`
+
+	// RemoteClustersTotal is the number of listed remote clusters, and
+	// RemoteClustersConnected how many of them are Connected.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	RemoteClustersTotal int32 `json:"remoteClustersTotal,omitempty"`
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	RemoteClustersConnected int32 `json:"remoteClustersConnected,omitempty"`
 }
 
 // +kubebuilder:object:root=true
@@ -468,6 +552,8 @@ type SimplyblockDriverStatus struct {
 // +kubebuilder:printcolumn:name="Version",type=string,JSONPath=".status.version"
 // +kubebuilder:printcolumn:name="NodesReady",type=integer,JSONPath=".status.nodesReady"
 // +kubebuilder:printcolumn:name="NodesTotal",type=integer,JSONPath=".status.nodesTotal"
+// +kubebuilder:printcolumn:name="RemoteClusters",type=integer,JSONPath=".status.remoteClustersTotal"
+// +kubebuilder:printcolumn:name="Connected",type=integer,JSONPath=".status.remoteClustersConnected"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=".metadata.creationTimestamp"
 
 // SimplyblockDriver is the deployment of simplyblock's CSI driver: the node
