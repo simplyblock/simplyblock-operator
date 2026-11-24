@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# Writes the +simplyblock:operatorManaged and +simplyblock:invisible field
-# markers onto the CRD manifests as annotations. It runs after controller-gen,
+# Writes the +simplyblock:operatorManaged, +simplyblock:advanced, and
+# +simplyblock:invisible field markers onto the CRD manifests as annotations. It runs after controller-gen,
 # which regenerates each base from the Go types and drops anything it did not
 # write, so the annotations have to be put back on every regeneration.
 #

@@ -73,7 +73,7 @@ backing it.
 
 ## The simplyblock field markers
 
-Two markers of this repository's own describe a field to the Control Center.
+Three markers of this repository's own describe a field to the Control Center.
 controller-gen ignores them. `make manifests` runs `hack/fieldmarkers` after it,
 which resolves each marked field to its path per API version and writes the
 list onto the CRD as an annotation. An annotation is the carrier because the API
@@ -83,6 +83,7 @@ object survives into the cluster, where the console reads it.
 | Marker                         | CRD annotation                           | In the Control Center                                            |
 |--------------------------------|------------------------------------------|------------------------------------------------------------------|
 | `+simplyblock:operatorManaged` | `simplyblock.io/operator-managed-fields` | Badged `operator-managed` and locked, as an immutable field is   |
+| `+simplyblock:advanced`        | `simplyblock.io/advanced-fields`         | Left out of Essentials, shown in Everything                      |
 | `+simplyblock:invisible`       | `simplyblock.io/invisible-fields`        | Left out of Essentials and the Everything tree, kept in the YAML |
 
 ```go
@@ -98,12 +99,23 @@ embed. The annotation value is JSON keyed by version,
 `{"v1alpha2":["spec.owner"]}`. A misspelled `+simplyblock:` marker fails
 `make manifests` instead of being skipped.
 
-**Neither marker is enforced at admission.** `operatorManaged` stops an edit in
+**What Essentials lists.** The kind's curated headlines in
+`control-center/cr-headlines.jsx` come first, for their order, labels, and
+formats, then every other spec field the CRD has: a scalar, a list of scalars,
+or a string map, whether it is set or not. A field inside a list of objects is not listed,
+because its path names a field of every element. A headline the CRD no longer
+has is dropped. So a new field reaches Essentials without an edit to the
+console, and keeping it out is a marker on the field: `advanced` for a setting
+few need, `invisible` for one nobody should see. The Everything tree shows only
+what the object holds, so an advanced field that is not set appears nowhere
+until it is set some other way.
+
+**None of the markers is enforced at admission.** `operatorManaged` stops an edit in
 the console only, and `kubectl` can still change the field. A field a user must not
 change belongs in `status`, or needs the webhook check that compares the old
 and new values for a requester that is not the operator (`isOperator` in
-`internal/webhook/storagenode_validator.go`). `invisible` hides nothing from
-anyone who can read the object.
+`internal/webhook/storagenode_validator.go`). `advanced` and `invisible` hide
+nothing from anyone who can read the object.
 
 ## Cross-field rules worth writing
 

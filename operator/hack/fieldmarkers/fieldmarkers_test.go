@@ -21,8 +21,9 @@ func TestCollectResolvesEveryMarkedPath(t *testing.T) {
 				"spec.byName.serial", "spec.inherited", "spec.owner", "spec.parts.serial", "spec.tree.label", "status.phase",
 			}},
 			markerInvisible: {"v1beta1": {
-				"spec.bookkeeping", "spec.byName.serial", "spec.detail.token", "spec.parts.serial",
+				"spec.bookkeeping", "spec.byName.serial", "spec.detail.token", "spec.parts.serial", "spec.tuning.token",
 			}},
+			markerAdvanced: {"v1beta1": {"spec.tuning"}},
 		},
 	}
 	if !reflect.DeepEqual(kinds, want) {
@@ -53,9 +54,11 @@ func TestCollectToleratesTypeErrors(t *testing.T) {
 func TestAnnotationsArePerVersionJSON(t *testing.T) {
 	got := annotations(Fields{
 		markerOperatorManaged: {"v1alpha2": {"spec.a", "spec.b"}, "v1alpha1": {"spec.a"}},
+		markerAdvanced:        {"v1alpha2": {"spec.c"}},
 	})
 	want := map[string]string{
 		"simplyblock.io/operator-managed-fields": `{"v1alpha1":["spec.a"],"v1alpha2":["spec.a","spec.b"]}`,
+		"simplyblock.io/advanced-fields":         `{"v1alpha2":["spec.c"]}`,
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("annotations = %v, want %v", got, want)
