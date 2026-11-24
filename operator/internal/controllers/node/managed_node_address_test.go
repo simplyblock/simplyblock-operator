@@ -44,13 +44,16 @@ func localControlPlaneSingleton() *simplyblockv1alpha2.ControlPlane {
 	}
 }
 
-// workerNode is the opsWorker Node with the given internal address.
-func workerNode(internalIP string) *corev1.Node {
+// workerIP is opsWorker's internal address.
+const workerIP = "192.168.10.112"
+
+// workerNode is the opsWorker Node with its internal address.
+func workerNode() *corev1.Node {
 	return &corev1.Node{
 		ObjectMeta: metav1.ObjectMeta{Name: opsWorker},
 		Status: corev1.NodeStatus{
 			Addresses: []corev1.NodeAddress{
-				{Type: corev1.NodeInternalIP, Address: internalIP},
+				{Type: corev1.NodeInternalIP, Address: workerIP},
 			},
 		},
 	}
@@ -63,7 +66,7 @@ func workerNode(internalIP string) *corev1.Node {
 func TestNodeAddressUsesTheWorkersRealIPWhenTheControlPlaneIsManaged(t *testing.T) {
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(managedControlPlaneSingleton(), workerNode("192.168.10.112")).
+		WithObjects(managedControlPlaneSingleton(), workerNode()).
 		Build()
 	w := &Workload{Client: c}
 
@@ -80,7 +83,7 @@ func TestNodeAddressUsesTheWorkersRealIPWhenTheControlPlaneIsManaged(t *testing.
 func TestNodeAddressKeepsTheDNSNameForALocalControlPlane(t *testing.T) {
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(localControlPlaneSingleton(), workerNode("192.168.10.112")).
+		WithObjects(localControlPlaneSingleton(), workerNode()).
 		Build()
 	w := &Workload{Client: c}
 
@@ -97,7 +100,7 @@ func TestNodeAddressKeepsTheDNSNameForALocalControlPlane(t *testing.T) {
 func TestNodeAddressFallsBackToDNSWhenTheControlPlaneCannotBeRead(t *testing.T) {
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(workerNode("192.168.10.112")).
+		WithObjects(workerNode()).
 		Build()
 	w := &Workload{Client: c}
 
@@ -136,7 +139,7 @@ func TestAStretchedSiteSendsTheWorkersAddressBesideTheName(t *testing.T) {
 		APIEndpoint: "https://cp-b.example:5000",
 	}
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(stretched, workerNode("192.168.10.112")).Build()
+		WithObjects(stretched, workerNode()).Build()
 	w := &Workload{Client: c}
 	if got := w.StretchNodeIP(context.Background(), opsNamespace, opsWorker); got != "192.168.10.112" {
 		t.Errorf("StretchNodeIP = %q, want the worker's InternalIP", got)
@@ -147,7 +150,7 @@ func TestAStretchedSiteSendsTheWorkersAddressBesideTheName(t *testing.T) {
 	}
 
 	plain := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(localControlPlaneSingleton(), workerNode("192.168.10.112")).Build()
+		WithObjects(localControlPlaneSingleton(), workerNode()).Build()
 	if got := (&Workload{Client: plain}).StretchNodeIP(context.Background(), opsNamespace, opsWorker); got != "" {
 		t.Errorf("an ordinary site sends node_ip %q", got)
 	}
