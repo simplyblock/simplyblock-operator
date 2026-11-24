@@ -21246,6 +21246,9 @@ const marked = (set, path) => {
 };
 const isImmutable = (schema, path) => marked(schema.immutable, path);
 const isManaged = (schema, path) => !!schema.managed && marked(schema.managed, path);
+// An operator-managed field is, to the console, an immutable one: neither is
+// the user's to change. This is the one check every lock decision goes through.
+const isLocked = (schema, path) => !!schema && (isImmutable(schema, path) || isManaged(schema, path));
 const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisible, path);
 const isAdvanced = (schema, path) => !!schema.advanced && marked(schema.advanced, path);
 // what Essentials leaves out: an advanced field is in Everything only
@@ -21268,7 +21271,7 @@ function essentialSpecRows(curated, schema) {
   return rows.filter(r => !offEssentials(schema, r.path));
 }
 // the badge a locked field carries, immutability first: it binds the operator too
-const lockOf = (schema, path) => !schema ? null : isImmutable(schema, path) ? "immutable" : isManaged(schema, path) ? "operator-managed" : null;
+const lockOf = (schema, path) => !isLocked(schema, path) ? null : isImmutable(schema, path) ? "immutable" : "operator-managed";
 const LOCK_TITLE = {
   "immutable": "immutable once set",
   "operator-managed": "set by the operator, not by hand"
@@ -21317,12 +21320,8 @@ function useSpecPatch(ref, onDone) {
   const [err, setErr] = React.useState(null);
   const save = async (path, value, schema) => {
     setErr(null);
-    if (schema && isImmutable(schema, path)) {
-      setErr(`${path} is immutable once set; the API server would refuse the change`);
-      return false;
-    }
-    if (schema && isManaged(schema, path)) {
-      setErr(`${path} is set by the operator; a change made here would be overwritten`);
+    if (isLocked(schema, path)) {
+      setErr(lockOf(schema, path) === "immutable" ? `${path} is immutable once set; the API server would refuse the change` : `${path} is set by the operator; a change made here would be overwritten`);
       return false;
     }
     const patch = setPath({}, path, value);
@@ -21551,6 +21550,8 @@ const shown = (r, v) => {
   const x = r.fmt ? r.fmt(v) : v;
   return x === null || x === undefined || x === "" ? null : String(x);
 };
+// " · 2 immutable paths" for the note above Essentials, nothing for none
+const countOf = (n, what) => n ? ` · ${n} ${what} path${n === 1 ? "" : "s"}` : "";
 function EssentialsTab({
   obj,
   cref: ref,
@@ -21629,7 +21630,7 @@ function EssentialsTab({
     style: {
       marginBottom: 8
     }
-  }, "Field names are the CRD's. Descriptions on hover ", schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies", schema.immutable.size ? ` · ${schema.immutable.size} immutable path${schema.immutable.size === 1 ? "" : "s"}` : "", ". Edits are dry-run against the API server first."), /*#__PURE__*/React.createElement("div", {
+  }, "Field names are the CRD's. Descriptions on hover ", schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies", countOf(schema.immutable.size, "immutable"), countOf(schema.managed.size, "operator-managed"), ". Edits are dry-run against the API server first."), /*#__PURE__*/React.createElement("div", {
     className: "dcols"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -22205,7 +22206,7 @@ Object.assign(window, {
   downloadText,
   useCrdSchema,
   readCrdSchema,
-  isImmutable,
+  isLocked,
   useSpecPatch,
   refOfVm,
   objKey,

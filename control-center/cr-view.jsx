@@ -108,6 +108,9 @@ const markedPaths = (crd, key, version) => {
 const marked = (set, path) => { const parts = path.split("."); for (let i = 1; i <= parts.length; i++) if (set.has(parts.slice(0, i).join("."))) return true; return false; };
 const isImmutable = (schema, path) => marked(schema.immutable, path);
 const isManaged = (schema, path) => !!schema.managed && marked(schema.managed, path);
+// An operator-managed field is, to the console, an immutable one: neither is
+// the user's to change. This is the one check every lock decision goes through.
+const isLocked = (schema, path) => !!schema && (isImmutable(schema, path) || isManaged(schema, path));
 const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisible, path);
 const isAdvanced = (schema, path) => !!schema.advanced && marked(schema.advanced, path);
 // what Essentials leaves out: an advanced field is in Everything only
@@ -127,7 +130,7 @@ function essentialSpecRows(curated, schema) {
   return rows.filter(r => !offEssentials(schema, r.path));
 }
 // the badge a locked field carries, immutability first: it binds the operator too
-const lockOf = (schema, path) => !schema ? null : isImmutable(schema, path) ? "immutable" : isManaged(schema, path) ? "operator-managed" : null;
+const lockOf = (schema, path) => !isLocked(schema, path) ? null : isImmutable(schema, path) ? "immutable" : "operator-managed";
 const LOCK_TITLE = {"immutable": "immutable once set", "operator-managed": "set by the operator, not by hand"};
 
 // ---- the object -------------------------------------------------------------
@@ -152,8 +155,11 @@ function useSpecPatch(ref, onDone) {
   const [err, setErr] = React.useState(null);
   const save = async (path, value, schema) => {
     setErr(null);
-    if (schema && isImmutable(schema, path)) { setErr(`${path} is immutable once set; the API server would refuse the change`); return false; }
-    if (schema && isManaged(schema, path)) { setErr(`${path} is set by the operator; a change made here would be overwritten`); return false; }
+    if (isLocked(schema, path)) {
+      setErr(lockOf(schema, path) === "immutable" ? `${path} is immutable once set; the API server would refuse the change`
+        : `${path} is set by the operator; a change made here would be overwritten`);
+      return false;
+    }
     const patch = setPath({}, path, value);
     setBusy(true);
     try {
@@ -231,6 +237,8 @@ function LinkValue({r, value, obj, nav}) {
   return <button className="lab link" style={{marginLeft: 6}} onClick={go}><Icon n="chev" s={9} />open</button>;
 }
 const shown = (r, v) => { const x = r.fmt ? r.fmt(v) : v; return x === null || x === undefined || x === "" ? null : String(x); };
+// " · 2 immutable paths" for the note above Essentials, nothing for none
+const countOf = (n, what) => n ? ` · ${n} ${what} path${n === 1 ? "" : "s"}` : "";
 function EssentialsTab({obj, cref: ref, nav, vm, onChanged}) {
   const schema = useCrdSchema(ref.kind);
   const patch = useSpecPatch(ref, onChanged);
@@ -253,7 +261,7 @@ function EssentialsTab({obj, cref: ref, nav, vm, onChanged}) {
       <DriftBanner obj={obj} />
       {st.activeOpsRef && <div className="banner" style={{color: "var(--info)", background: "var(--accent-soft)", borderColor: "var(--accent-line)"}}><Icon n="clock" s={15} />
         <span><b>status.activeOpsRef:</b> {st.activeOpsRef}. A second operation on this object stays Pending until it finishes. {nav.monitor && <button className="chip" onClick={() => nav.monitor({cluster: vm && (vm.kind === "cluster" ? vm.id : vm.clusterId), q: st.activeOpsRef})}>Follow it</button>}</span></div>}
-      <div className="mdesc" style={{marginBottom: 8}}>Field names are the CRD's. Descriptions on hover {schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies"}{schema.immutable.size ? ` · ${schema.immutable.size} immutable path${schema.immutable.size === 1 ? "" : "s"}` : ""}. Edits are dry-run against the API server first.</div>
+      <div className="mdesc" style={{marginBottom: 8}}>Field names are the CRD's. Descriptions on hover {schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies"}{countOf(schema.immutable.size, "immutable")}{countOf(schema.managed.size, "operator-managed")}. Edits are dry-run against the API server first.</div>
       <div className="dcols">
         <div className="card"><h3>spec</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>{specRows.length ? <Props rows={specRows} /> : <div className="nolim">No headline spec fields for {ref.kind}.</div>}</div></div>
         <div>
@@ -420,4 +428,4 @@ function CRSection({vm, nav}) {
 }
 
 Object.assign(window, {CRPanel, CRView, CRSection, RelationCards, EssentialsTab, EverythingTab, KubernetesTab, JsonTree, YamlBlock, toYaml, downloadText,
-  useCrdSchema, readCrdSchema, isImmutable, useSpecPatch, refOfVm, objKey, parseObjKey, getPath, setPath});
+  useCrdSchema, readCrdSchema, isLocked, useSpecPatch, refOfVm, objKey, parseObjKey, getPath, setPath});

@@ -86,6 +86,27 @@ test("an operator-managed field is badged and cannot be edited in Essentials", a
   await page.context().close();
 });
 
+test("the Essentials note counts operator-managed paths next to the immutable ones", async () => {
+  const page = await openFixture();
+  const note = await page.$eval(".crpanel .mdesc", e => e.textContent);
+  assert.match(note, /1 operator-managed path\b/);
+  await page.context().close();
+});
+
+// One check decides whether the console offers an edit, for every screen that
+// asks: a field is locked when it is immutable or operator-managed, and so is
+// everything below it.
+test("isLocked covers immutable and operator-managed fields alike", async () => {
+  const page = await openFixture();
+  const got = await page.evaluate(() => {
+    const schema = {immutable: new Set(["spec.a"]), managed: new Set(["spec.b"])};
+    return typeof window.isLocked !== "function" ? "isLocked is not published"
+      : ["spec.a", "spec.a.x", "spec.b", "spec.b.x", "spec.c"].map(p => window.isLocked(schema, p));
+  });
+  assert.deepEqual(got, [true, true, true, true, false]);
+  await page.context().close();
+});
+
 test("an invisible field is not shown in Essentials", async () => {
   const page = await openFixture();
   assert.equal(await essentialsRow(page, "maxSubsystemCount"), null);
