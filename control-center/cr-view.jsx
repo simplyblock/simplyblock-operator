@@ -342,15 +342,12 @@ function YamlBlock({obj}) {
 }
 function EverythingTab({obj, cref: ref}) {
   const schema = useCrdSchema(ref.kind);
-  const raw = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
-  const spec = pruneHidden(ref.kind, raw, "spec");
-  const hidden = (HIDDEN[ref.kind] || []).filter(p => getPath(obj, p) !== undefined);
+  const spec = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
   return (
     <>
       <div className="dcols">
-        <div className="card"><h3>spec</h3><div className="bd"><JsonTree data={spec} path="spec" schema={schema} depth={0} />
-          {hidden.length > 0 && <div className="mdesc" style={{marginTop: 8}}>{hidden.length} set field{hidden.length === 1 ? "" : "s"} the console does not show: {hidden.map(p => p.replace(/^spec\./, "")).join(", ")}. The YAML below carries {hidden.length === 1 ? "it" : "them"}.</div>}</div></div>
-        <div className="card"><h3>status</h3><div className="bd"><JsonTree data={pruneHidden(ref.kind, obj.status || {}, "status")} path="status" schema={schema} depth={0} /></div></div>
+        <div className="card"><h3>spec</h3><div className="bd"><JsonTree data={spec} path="spec" schema={schema} depth={0} /></div></div>
+        <div className="card"><h3>status</h3><div className="bd"><JsonTree data={obj.status || {}} path="status" schema={schema} depth={0} /></div></div>
       </div>
       <div style={{marginTop: 12}}><YamlBlock obj={obj} /></div>
     </>
@@ -454,4 +451,4 @@ function CRSection({vm, nav}) {
 }
 
 Object.assign(window, {CRPanel, CRView, CRSection, RelationCards, EssentialsTab, EverythingTab, KubernetesTab, JsonTree, YamlBlock, toYaml, downloadText,
-  useCrdSchema, readCrdSchema, isLocked, useSpecPatch, refOfVm, objKey, parseObjKey, getPath, setPath});
+  useCrdSchema, readCrdSchema, isInvisible, isLocked, useSpecPatch, refOfVm, objKey, parseObjKey, getPath, setPath});

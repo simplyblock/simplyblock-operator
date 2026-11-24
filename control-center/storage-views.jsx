@@ -192,6 +192,8 @@ function ClusterDetail({o: c, nav}) {
 function NodeDetail({o: n, nav}) {
   const [tab, setTab] = useState("overview");
   const res = n.resources, ports = n.ports, cap = n.capacity;
+  // the StorageNode CRD's field markers decide which spec.config fields the card shows (cr-view.jsx)
+  const schema = window.useCrdSchema ? useCrdSchema("StorageNode") : null;
   const items = [{k: "overview", label: "Overview", icon: "node"}, {k: "logs", label: "Storage plane logs", icon: "list"}];
   return (
     <div className="scroll">
@@ -216,8 +218,7 @@ function NodeDetail({o: n, nav}) {
           <div className="card"><h3>spec.config</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}><Props rows={[
             ["mgmtInterface", n.config.mgmtInterface], ["dataInterfaces", (n.config.dataInterfaces || []).join(", ")], ["pcieAllowList", (n.config.pcieAllowList || []).join(", ")],
             ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)]
-            // the same exception list as the CR tiers (cr-headlines.jsx HIDDEN) keeps this card in step with them
-            ].filter(([k]) => !(window.hiddenPath && hiddenPath("StorageNode", "spec.config." + k))).map(([k, v]) => [<span className="mono">{k}</span>, v === undefined || v === null || v === "" ? null : <span className="mono">{String(v)}</span>])} /></div></div>
+            ].filter(([k]) => !(schema && isInvisible(schema, "spec.config." + k))).map(([k, v]) => [<span className="mono">{k}</span>, v === undefined || v === null || v === "" ? null : <span className="mono">{String(v)}</span>])} /></div></div>
         </div>
         {n.network.length > 0 && <div className="card" style={{marginTop: 12}}><h3>status.network</h3><div className="bd" style={{padding: 0}}>
           <table className="dt"><thead><tr><th>network</th><th>phase</th><th>address</th><th>assigned</th><th>interface</th><th>hostReachable</th></tr></thead><tbody>

@@ -167,11 +167,13 @@ type StorageNodeConfig struct {
 	// Sizing is what this node's huge pages and core layout were sized from.
 	// Writable by the operator alone.
 	// +kubebuilder:validation:Required
+	// +simplyblock:invisible
 	Sizing StorageNodeSizing `json:"sizing"`
 
 	// SpdkImage overrides the SPDK image the control plane starts for this node,
 	// which is what makes a phased image rollout expressible per node.
 	// +optional
+	// +simplyblock:invisible
 	SpdkImage string `json:"spdkImage,omitempty"`
 
 	// SpdkImagePullPolicy controls when that image is pulled, and defaults to
@@ -185,10 +187,12 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=Always
 	// +optional
+	// +simplyblock:invisible
 	SpdkImagePullPolicy corev1.PullPolicy `json:"spdkImagePullPolicy,omitempty"`
 
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional
+	// +simplyblock:invisible
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
 	// SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
@@ -198,6 +202,7 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=Always
 	// +optional
+	// +simplyblock:invisible
 	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
 
 	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
@@ -206,6 +211,7 @@ type StorageNodeConfig struct {
 	// is decided at admission.
 	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
 	// +optional
+	// +simplyblock:invisible
 	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
 	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
@@ -229,6 +235,7 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
 	// +optional
+	// +simplyblock:invisible
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
 	// JournalManager tunes the journal manager count and per-device capacity
@@ -236,6 +243,7 @@ type StorageNodeConfig struct {
 	// devices were partitioned.
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
 
 	// DeviceNames names the devices to use. An entry is a PCI address
