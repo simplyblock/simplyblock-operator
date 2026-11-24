@@ -1090,6 +1090,10 @@ type StorageClusterSpec struct {
 	// and status.maxFaultTolerance, published as
 	// status.maxConcurrentWorkerRestarts so tooling reads one authoritative
 	// number rather than recomputing it.
+	//
+	// On a cluster with enableFailureDomains set and at least as many failure
+	// domains as a stripe has chunks, the workers of one failure domain count
+	// as one, so the number caps failure domains rather than workers.
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	// +optional
@@ -1342,7 +1346,8 @@ type StorageClusterStatus struct {
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 
 	// MaxConcurrentWorkerRestarts is the effective limit, the smaller of
-	// spec.maxConcurrentWorkerRestarts and maxFaultTolerance.
+	// spec.maxConcurrentWorkerRestarts and maxFaultTolerance. It counts failure
+	// domains where spec.maxConcurrentWorkerRestarts does.
 	// +optional
 	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 

@@ -298,6 +298,9 @@ minimum of 1 and a default of 1 when unset. The effective value is
 `min(spec.maxConcurrentWorkerRestarts, status.maxFaultTolerance)`, computed by
 `effectiveConcurrentRestarts` and published to `status` so tooling reads one
 authoritative number rather than recomputing it.
+On a cluster whose failure domains each hold one chunk of a stripe at most, the
+number counts failure domains rather than workers
+([`design-storagenode.md`](design-storagenode.md) §10).
 
 **Two separate migration policies, deliberately not one.**
 `volumeMigrationSettings` controls manual migration and the post-migration data

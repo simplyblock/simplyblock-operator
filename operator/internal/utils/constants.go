@@ -58,6 +58,9 @@ const (
 	ClusterStatusActive    = "active"
 	ClusterStatusSuspended = "suspended"
 	ClusterStatusUnready   = "unready"
+	// ClusterStatusDegraded is a cluster serving I/O with a node or a device
+	// down, which is what a node shut down for maintenance makes of it.
+	ClusterStatusDegraded = "degraded"
 	// ClusterStatusInActivation is a cluster the control plane is activating.
 	// It accepts a second activate on such a cluster and runs both.
 	ClusterStatusInActivation = "in_activation"
