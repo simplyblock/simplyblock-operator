@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/simplyblock/atlas/controlplane"
@@ -57,8 +58,10 @@ type Server struct {
 	// mapping it holds. Nil before the service is built, when nothing is held.
 	swapGate   swapGate
 	kubeClient kubernetes.Interface
-	manager    *sbkube.Manager
-	guardian   *guardian.Guardian
+	// exports reads NFSExports for a pNFS volume's health. Nil disables it.
+	exports  dynamic.Interface
+	manager  *sbkube.Manager
+	guardian *guardian.Guardian
 	// deviceMapper is whether this host can run the dmLinear indirection, as
 	// the probe at start found it. Set before the service serves.
 	deviceMapper bool

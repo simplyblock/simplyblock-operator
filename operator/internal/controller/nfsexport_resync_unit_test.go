@@ -2,14 +2,17 @@ package controller
 
 import (
 	"context"
+	"errors"
 	"slices"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	"github.com/simplyblock/atlas/link"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -218,4 +221,63 @@ func TestAnExportAssembledByTheRunningPodFollowsItsAddress(t *testing.T) {
 	if len(asm.created) != 0 {
 		t.Errorf("CreateExport reached %v, want no reassembly: the running pod assembled it", asm.created)
 	}
+}
+
+// servingBefore is a Ready export whose MDSReady was True before its pod
+// restarted.
+func servingBefore() *simplyblockv1alpha2.NFSExport {
+	e := readyPodHosted()
+	e.Status.Conditions = []metav1.Condition{{
+		Type:   simplyblockv1alpha2.NFSExportConditionMDSReady,
+		Status: metav1.ConditionTrue,
+		Reason: simplyblockv1alpha2.NFSExportReasonServing,
+	}}
+	return e
+}
+
+func assertMDSReady(t *testing.T, cl client.Client, status metav1.ConditionStatus, reason string) {
+	t.Helper()
+	got := meta.FindStatusCondition(loadExport(t, cl).Status.Conditions,
+		simplyblockv1alpha2.NFSExportConditionMDSReady)
+	if got == nil || got.Status != status || got.Reason != reason {
+		t.Errorf("MDSReady = %+v, want %s/%s", got, status, reason)
+	}
+}
+
+// Regression: a restarted guest that cannot attach the export's volume left
+// MDSReady True from before the restart, so the export looked served.
+func TestAnExportWhoseReassemblyFailsIsNotReportedServed(t *testing.T) {
+	asm := &fakeAssembler{createErr: errors.New("connecting the volume: no path")}
+	r, cl, _ := newResyncReconciler(t, asm,
+		servingBefore(), runningMDSPod(restartedPodUID, testMDSPodIP))
+
+	_, err := r.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: testExportName, Namespace: testExportNS},
+	})
+
+	if err == nil {
+		t.Error("Reconcile returned nil, want the reassembly error so it is retried")
+	}
+	assertMDSReady(t, cl, metav1.ConditionFalse, simplyblockv1alpha2.NFSExportReasonHealthCheckFailed)
+}
+
+// Regression: while the restarted guest has not linked yet, nothing serves
+// the export.
+func TestAnExportWaitingForItsRestartedPodIsNotReportedServed(t *testing.T) {
+	asm := &fakeAssembler{noSessions: true}
+	r, cl, _ := newResyncReconciler(t, asm,
+		servingBefore(), runningMDSPod(restartedPodUID, testMDSPodIP))
+
+	reconcileExport(t, r)
+
+	assertMDSReady(t, cl, metav1.ConditionFalse, simplyblockv1alpha2.NFSExportReasonMDSUnreachable)
+}
+
+// Regression: with its pod gone, nothing serves the export.
+func TestAnExportWhosePodIsGoneIsNotReportedServed(t *testing.T) {
+	r, cl, _ := newResyncReconciler(t, &fakeAssembler{}, servingBefore())
+
+	reconcileExport(t, r)
+
+	assertMDSReady(t, cl, metav1.ConditionFalse, simplyblockv1alpha2.NFSExportReasonMDSUnreachable)
 }
