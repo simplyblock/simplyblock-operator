@@ -85,13 +85,18 @@ type PoolLimits struct {
 
 	// IOPS is the pool-wide ceiling on operations per second, both directions
 	// together. Zero is unlimited, which is the control plane's own convention
-	// for these values.
+	// for these values. Not yet settable: the rule on PoolLimits refuses it, and
+	// it is immutable so the console shows it locked rather than offering an
+	// edit the API server refuses.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
+	// +k8s:immutable
 	IOPS *int32 `json:"iops,omitempty"`
 
-	// Throughput is the pool-wide throughput ceiling.
+	// Throughput is the pool-wide throughput ceiling. Not yet settable, for the
+	// reason IOPS is not, and immutable so the console shows it locked.
 	// +optional
+	// +k8s:immutable
 	Throughput *ThroughputLimits `json:"throughput,omitempty"`
 }
 
