@@ -8,3 +8,4 @@ uploads/
 *.md
 .thumbnail
 .git
+node_modules/

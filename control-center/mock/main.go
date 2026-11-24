@@ -17,6 +17,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -39,6 +40,7 @@ func main() {
 		failRate    = flag.Float64("fail-rate", 0.1, "probability that a simulated operation fails")
 		serveUI     = flag.String("serve-ui", "", "directory with the console's index.html; serves the UI and mounts the proxied paths (/k8s, /operator, /prometheus) so no nginx is needed")
 		crdDir      = flag.String("crd-dir", "../../operator/config/crd/bases", "directory with the operator's CRD YAMLs, served as apiextensions objects; empty or missing serves none")
+		crdReload   = flag.Duration("crd-reload-interval", 2*time.Second, "how often --crd-dir is checked for changed, added, or removed CRDs; 0 loads them once")
 		fixtures    = flag.String("operator-fixtures", "", "directory of JSON fixtures for the operator API (see mock/README.md)")
 		viewer      = flag.String("viewer", "global", "authorization stand-in for the impersonated user: global | none | <sb:role>@<namespace>[,...] (see PARADIGM.md)")
 	)
@@ -77,10 +79,15 @@ func main() {
 	}
 
 	if *crdDir != "" {
-		if n, err := srv.loadCRDs(*crdDir); err != nil {
+		crds := srv.crdSyncFor(*crdDir)
+		if n, err := crds.pass(); err != nil {
 			log.Printf("CRDs not served: %v", err)
 		} else {
 			log.Printf("serving %d CRDs from %s", n, *crdDir)
+		}
+		if *crdReload > 0 {
+			go crds.run(context.Background(), *crdReload)
+			log.Printf("CRDs reloaded from %s every %s", *crdDir, *crdReload)
 		}
 	}
 	mux := srv.routes(*serveUI)

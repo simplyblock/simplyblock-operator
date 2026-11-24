@@ -6,6 +6,30 @@ const DR_ONLY = (window.SB_CONFIG || {}).mode === "dr"
   // design preview only: ?mode=dr on the fixture backend shows the DR-only console
   || (!!(window.SB_CONFIG || {}).mock && new URLSearchParams(location.search).get("mode") === "dr");
 const ROOT_PATH = DR_ONLY ? [{t: "dr"}] : [{t: "clusters"}];
+
+// The location in the URL: every view is a browser history entry, so Back and
+// Forward move between views and a copied URL opens the view it came from.
+// It is a fragment, #/<segment>/<segment>, because the page loads its scripts
+// by relative URL, which a real path would break. A segment is its layer, then
+// =<id>, then ;<the remaining fields as JSON>, each URI-encoded. The log
+// explorer owns #logs?<filter> (logs.jsx), which is the logs layer.
+const hashOfPath = p => "#/" + p.map(s => {
+  const {t, id, ...rest} = s;
+  return encodeURIComponent(t) + (id != null ? "=" + encodeURIComponent(id) : "")
+    + (Object.keys(rest).length ? ";" + encodeURIComponent(JSON.stringify(rest)) : "");
+}).join("/");
+function pathOfHash(hash) {
+  const h = String(hash || "");
+  if (/^#logs\b/.test(h)) return [{t: "logs"}];
+  if (!h.startsWith("#/") || h.length < 3) return null;
+  try {
+    return h.slice(2).split("/").map(part => {
+      const [head, rest] = part.split(";");
+      const [t, id] = head.split("=");
+      return Object.assign(rest ? JSON.parse(decodeURIComponent(rest)) : {}, {t: decodeURIComponent(t)}, id != null ? {id: decodeURIComponent(id)} : {});
+    });
+  } catch (e) { return null; }
+}
 // Layers that need the storage operator: hidden in DR-only mode.
 const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "mpaths", "appgroups"];
 
@@ -678,7 +702,11 @@ class ViewBoundary extends React.Component {
 }
 
 function App() {
-  const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  // The URL decides the view when it names one; the stored path restores the
+  // last view when it does not (a bare URL, a bookmark from before).
+  const [storedPath, storePath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  const [rawPath, setRawPath] = useState(() => pathOfHash(window.location.hash) || storedPath);
+  const setPath = useCallback(p => { setRawPath(p); storePath(p); }, [storePath]);
   // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
   // in DR-only mode anything outside the DR section is unreachable
   const path = useMemo(() => {
@@ -739,6 +767,23 @@ function App() {
   const cur = path[path.length - 1];
   const viewKey = path.map(s => s.t + (s.id || "")).join("/");
   const pathRef = useRef(path); pathRef.current = path;
+  // A navigation adds a history entry; the first render only names the entry
+  // it landed on. Nothing is pushed when the URL already shows this path, which
+  // is the case after Back, Forward, and an edited address.
+  const pathHash = hashOfPath(path);
+  const landed = useRef(false);
+  useEffect(() => {
+    const shown = pathOfHash(window.location.hash);
+    if (shown && hashOfPath(shown) === pathHash) { landed.current = true; return; }
+    const url = window.location.pathname + window.location.search + pathHash;
+    try { window.history[landed.current ? "pushState" : "replaceState"](null, "", url); } catch (e) {}
+    landed.current = true;
+  }, [pathHash]);
+  useEffect(() => {
+    const h = () => setPath(pathOfHash(window.location.hash) || ROOT_PATH);
+    window.addEventListener("popstate", h);
+    return () => window.removeEventListener("popstate", h);
+  }, [setPath]);
   useEffect(() => { setQ(""); setFilters([]); }, [viewKey]);
   useEffect(() => {
     const missing = path.filter(s => s.id && !REG[s.id]);
@@ -812,7 +857,10 @@ function App() {
     logs: params => {
       const f = Object.assign({}, DEFAULT_LOG_FILTER, params || {});
       if (params && (params.from || params.to)) f.range = "";
-      try { window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
+      // its own history entry, unless the explorer is open already and only
+      // takes a new query
+      const open = pathRef.current.length === 1 && pathRef.current[0].t === "logs";
+      try { window.history[open ? "replaceState" : "pushState"](null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
       // an open explorer takes the new query; a closed one reads it from the URL
       try { window.dispatchEvent(new CustomEvent("sb-logs-query", {detail: f})); } catch (e) {}
       go([{t: "logs"}]);

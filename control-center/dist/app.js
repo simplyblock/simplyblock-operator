@@ -15531,17 +15531,14 @@ function LogsView({
     window.addEventListener("sb-logs-query", h);
     return () => window.removeEventListener("sb-logs-query", h);
   }, []);
-  // keep the URL in step: the address bar is the permalink of what is shown
+  // keep the URL in step: the address bar is the permalink of what is shown.
+  // The filter rewrites the explorer's own history entry; leaving the explorer
+  // leaves that entry as it is, so Back returns to the same query.
   useEffect(() => {
     try {
       window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f));
     } catch (e) {}
   }, [f]);
-  useEffect(() => () => {
-    try {
-      if (/^#logs\b/.test(window.location.hash)) window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    } catch (e) {}
-  }, []);
   const store = graylogOn();
   return /*#__PURE__*/React.createElement("div", {
     className: "scroll"
@@ -20256,11 +20253,13 @@ Object.assign(window, {
 // ---------------------------------------------------------------------------
 // CR HEADLINES: what matters first on each kind, and how kinds relate
 //
-// A custom resource has dozens of fields. The first tier of a detail shows
-// the ones an operator reads or changes most, in the order they are asked
-// about; the second tier shows everything. The tables here are that first
-// tier: a path into spec or status, spelled exactly as the CRD spells it, a
-// label, how to format it, and whether it may be edited in place. Every path
+// A custom resource has dozens of fields. Which spec fields the first tier
+// of a detail shows comes from the CRD, in an order of its own (cr-view.jsx);
+// the spec tables here only decorate the fields they name: a label, how to
+// format it, a link to a related object, and whether the console offers an
+// edit. They decide the spec rows only when the CRD cannot be read. The
+// status tables still choose the status rows, which the operator writes and
+// the schema cannot rank. A path is spelled exactly as the CRD spells it. Every path
 // is one of storage.simplyblock.io/v1alpha2 on main (or the core kind's own
 // schema); descriptions and enums come from the CRD at run time (cr-view.jsx)
 // and are never restated here. Immutability is read from the CRD too;
@@ -21102,9 +21101,19 @@ Object.assign(window, {
 // Field names are the CRD's own; descriptions, enums, and immutability come
 // from the CRD read through apiextensions (a field whose validation rule says
 // `self == oldSelf`, or whose parent says `!has(oldSelf.x) || has(self.x)`,
-// cannot change after creation). An edit is refused in the console for those;
-// every other edit is sent as a dry run first, so a webhook or CEL message is
-// shown verbatim before anything is written.
+// cannot change after creation). Two more properties come from the CRD's
+// annotations, which the operator's +simplyblock: field markers write
+// (operator/hack/fieldmarkers): an operator-managed field is the operator's to
+// change, an advanced one is shown in Everything only, and an invisible one is
+// not shown at all. Essentials lists the spec fields of the CRD, top-level ones
+// first and then nested ones, each in natural order, so a field added to the
+// API reaches the console without an edit here; the curated headlines of the
+// kind (cr-headlines.jsx) only decorate the fields they name, and one the CRD
+// no longer has is dropped. An edit is refused in the console for immutable
+// and operator-managed fields; every other edit is sent as a dry
+// run first, so a webhook or CEL message is shown verbatim before anything is
+// written. The YAML block stays the whole object, invisible fields included,
+// because it is what a copy or a download is made from.
 //
 // CRPanel is embedded in the curated details; CRView is the standalone page
 // for a kind without one (route segment `cr` with an object key as its id).
@@ -21143,13 +21152,7 @@ async function readCrdSchema(kind) {
   if (CRD_CACHE.has(kind)) return CRD_CACHE.get(kind);
   const name = crdNameOf(kind);
   const p = (async () => {
-    const out = {
-      immutable: new Set(STATIC_IMMUTABLE[kind] || []),
-      descriptions: {},
-      enums: {},
-      types: {},
-      source: "static"
-    };
+    const out = emptySchema(kind);
     if (!name) return out;
     let crd;
     try {
@@ -21165,11 +21168,32 @@ async function readCrdSchema(kind) {
     if (!schema) return out;
     out.source = "crd";
     out.version = version.name;
-    const walk = (node, path) => {
+    markedPaths(crd, "simplyblock.io/operator-managed-fields", version.name).forEach(p => out.managed.add(p));
+    markedPaths(crd, "simplyblock.io/invisible-fields", version.name).forEach(p => out.invisible.add(p));
+    markedPaths(crd, "simplyblock.io/advanced-fields", version.name).forEach(p => out.advanced.add(p));
+    // within is set below a list or a map: a field there names one field of
+    // every element, which has no single value to show or to patch
+    const walk = (node, path, within) => {
       if (!node || typeof node !== "object") return;
       if (path && node.description) out.descriptions[path] = node.description;
       if (path && node.enum) out.enums[path] = node.enum;
       if (path && node.type) out.types[path] = node.type;
+      if (path) out.known.add(path);
+      // a spec field Essentials can show and edit: a scalar, a list of
+      // scalars, or a string map; an object is listed through its fields
+      if (path.startsWith("spec.") && !within) out.order.push(path);
+      if (path.startsWith("spec.") && !within) {
+        const items = node.items || {};
+        const scalar = ["string", "integer", "number", "boolean"].includes(node.type);
+        const list = node.type === "array" && ["string", "integer", "number"].includes(items.type);
+        const kv = node.type === "object" && !node.properties && node.additionalProperties && node.additionalProperties.type === "string";
+        if (scalar || list || kv) out.fields.push({
+          path,
+          type: node.type,
+          list,
+          kv
+        });
+      }
       (node["x-kubernetes-validations"] || []).forEach(v => {
         const rule = String(v.rule || "");
         if (/^\s*self\s*==\s*oldSelf\s*$/.test(rule) && path) out.immutable.add(path);
@@ -21188,9 +21212,9 @@ async function readCrdSchema(kind) {
           if (m[3] === m[4]) out.immutable.add(path ? `${path}.${m[3]}` : m[3]);
         }
       });
-      Object.entries(node.properties || {}).forEach(([k, child]) => walk(child, path ? `${path}.${k}` : k));
-      if (node.items) walk(node.items, path);
-      if (node.additionalProperties && typeof node.additionalProperties === "object") walk(node.additionalProperties, path);
+      Object.entries(node.properties || {}).forEach(([k, child]) => walk(child, path ? `${path}.${k}` : k, within));
+      if (node.items) walk(node.items, path, true);
+      if (node.additionalProperties && typeof node.additionalProperties === "object") walk(node.additionalProperties, path, true);
     };
     walk(schema, "");
     return out;
@@ -21207,19 +21231,94 @@ function useCrdSchema(kind) {
       alive = false;
     };
   }, [kind]);
-  return s || {
-    immutable: new Set(STATIC_IMMUTABLE[kind] || []),
-    descriptions: {},
-    enums: {},
-    types: {},
-    source: "static",
+  return s || Object.assign(emptySchema(kind), {
     loading: true
-  };
+  });
 }
-const isImmutable = (schema, path) => {
+const emptySchema = kind => ({
+  immutable: new Set(STATIC_IMMUTABLE[kind] || []),
+  managed: new Set(),
+  invisible: new Set(),
+  advanced: new Set(),
+  known: new Set(),
+  fields: [],
+  order: [],
+  descriptions: {},
+  enums: {},
+  types: {},
+  source: "static"
+});
+// A marker annotation holds the marked paths per API version as JSON:
+// {"v1alpha2":["spec.a","status.b"]}. A malformed one marks nothing.
+const markedPaths = (crd, key, version) => {
+  try {
+    const v = JSON.parse(((crd.metadata || {}).annotations || {})[key] || "{}")[version];
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+};
+// a path is marked when it, or an object above it, is
+const marked = (set, path) => {
   const parts = path.split(".");
-  for (let i = 1; i <= parts.length; i++) if (schema.immutable.has(parts.slice(0, i).join("."))) return true;
+  for (let i = 1; i <= parts.length; i++) if (set.has(parts.slice(0, i).join("."))) return true;
   return false;
+};
+const isImmutable = (schema, path) => marked(schema.immutable, path);
+const isManaged = (schema, path) => !!schema.managed && marked(schema.managed, path);
+// An operator-managed field is, to the console, an immutable one: neither is
+// the user's to change. This is the one check every lock decision goes through.
+const isLocked = (schema, path) => !!schema && (isImmutable(schema, path) || isManaged(schema, path));
+const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisible, path);
+const isAdvanced = (schema, path) => !!schema.advanced && marked(schema.advanced, path);
+// what Essentials leaves out: an advanced field is in Everything only
+const offEssentials = (schema, path) => isInvisible(schema, path) || isAdvanced(schema, path);
+// The spec rows of Essentials. With the CRD read, they are its spec fields:
+// the top-level ones first, then the nested ones, each in natural order
+// (port2 before port10, case aside), which keeps every block together; a curated
+// headline (cr-headlines.jsx) only decorates the field it names, with a label,
+// a format, a link, or a read-only flag, and one naming an object stands in for
+// the fields below it. A headline the CRD does not have is dropped. Without
+// the CRD, the curated headlines are all there is to go by.
+function essentialSpecRows(curated, schema) {
+  if (schema.source !== "crd") return curated.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
+  const byPath = Object.fromEntries(curated.map(r => [r.path, r]));
+  const fields = Object.fromEntries(schema.fields.map(f => [f.path, f]));
+  const rows = [];
+  let inside = null; // a curated object path whose fields it stands in for
+  schema.order.forEach(path => {
+    if (inside && path.startsWith(inside + ".")) return;
+    inside = null;
+    if (byPath[path]) {
+      rows.push(byPath[path]);
+      if (!fields[path]) inside = path;
+      return;
+    }
+    const f = fields[path];
+    if (!f) return;
+    rows.push({
+      path,
+      label: path.replace(/^spec\./, ""),
+      mutable: true,
+      fmt: f.type === "boolean" ? F.bool : F.raw,
+      type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
+    });
+  });
+  return rows.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
+}
+const naturally = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base"
+});
+const essentialOrder = (a, b) => {
+  const nested = r => (r.path.match(/\./g) || []).length > 1; // beyond "spec."
+  return nested(a) - nested(b) || naturally.compare(a.path, b.path);
+};
+// the badge a locked field carries, immutability first: it binds the operator too
+const lockOf = (schema, path) => !isLocked(schema, path) ? null : isImmutable(schema, path) ? "immutable" : "operator-managed";
+const LOCK_TITLE = {
+  "immutable": "immutable once set",
+  "operator-managed": "set by the operator, not by hand"
 };
 
 // ---- the object -------------------------------------------------------------
@@ -21265,8 +21364,8 @@ function useSpecPatch(ref, onDone) {
   const [err, setErr] = React.useState(null);
   const save = async (path, value, schema) => {
     setErr(null);
-    if (schema && isImmutable(schema, path)) {
-      setErr(`${path} is immutable once set; the API server would refuse the change`);
+    if (isLocked(schema, path)) {
+      setErr(lockOf(schema, path) === "immutable" ? `${path} is immutable once set; the API server would refuse the change` : `${path} is set by the operator; a change made here would be overwritten`);
       return false;
     }
     const patch = setPath({}, path, value);
@@ -21320,7 +21419,7 @@ const editable = (type, value) => type === "list" ? Array.isArray(value) ? value
 function InlineField({
   r,
   value,
-  immutable,
+  lock,
   patch,
   schema
 }) {
@@ -21328,7 +21427,7 @@ function InlineField({
   const [draft, setDraft] = React.useState("");
   const shown = r.fmt ? r.fmt(value) : value;
   const opts = r.options || schema && schema.enums[r.path] || null;
-  const locked = immutable || r.mutable === false;
+  const badge = lock || (r.mutable === false ? "immutable" : null);
   const desc = schema && schema.descriptions[r.path] || r.path;
   if (!editing) {
     return /*#__PURE__*/React.createElement("span", {
@@ -21338,10 +21437,10 @@ function InlineField({
       style: {
         color: "var(--dim2)"
       }
-    }, "unset") : String(shown)), locked ? /*#__PURE__*/React.createElement("span", {
+    }, "unset") : String(shown)), badge ? /*#__PURE__*/React.createElement("span", {
       className: "immut",
-      title: "immutable once set"
-    }, "immutable") : /*#__PURE__*/React.createElement("button", {
+      title: LOCK_TITLE[badge]
+    }, badge) : /*#__PURE__*/React.createElement("button", {
       className: "pen",
       title: "edit",
       onClick: () => {
@@ -21495,6 +21594,8 @@ const shown = (r, v) => {
   const x = r.fmt ? r.fmt(v) : v;
   return x === null || x === undefined || x === "" ? null : String(x);
 };
+// " · 2 immutable paths" for the note above Essentials, nothing for none
+const countOf = (n, what) => n ? ` · ${n} ${what} path${n === 1 ? "" : "s"}` : "";
 function EssentialsTab({
   obj,
   cref: ref,
@@ -21510,7 +21611,7 @@ function EssentialsTab({
   };
   const st = obj.status || {};
   // a spec row is shown even when unset (it can be set); a status row only when the operator wrote it
-  const rows = (list, isSpec) => list.filter(r => !hiddenPath(ref.kind, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
+  const rows = (list, isSpec) => list.filter(r => !offEssentials(schema, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
     const v = getPath(obj, r.path);
     return [/*#__PURE__*/React.createElement("span", {
       className: "mono",
@@ -21529,7 +21630,7 @@ function EssentialsTab({
     }, isSpec ? /*#__PURE__*/React.createElement(InlineField, {
       r: r,
       value: v,
-      immutable: isImmutable(schema, r.path),
+      lock: lockOf(schema, r.path),
       patch: patch,
       schema: schema
     }) : /*#__PURE__*/React.createElement("span", {
@@ -21547,7 +21648,7 @@ function EssentialsTab({
       nav: nav
     }))];
   });
-  const specRows = rows(h.spec, true),
+  const specRows = rows(essentialSpecRows(h.spec, schema), true),
     statusRows = rows(h.status, false);
   const anns = (h.annotations || []).map(k => [k, (obj.metadata.annotations || {})[k]]).filter(([, v]) => v !== undefined);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(DriftBanner, {
@@ -21573,7 +21674,7 @@ function EssentialsTab({
     style: {
       marginBottom: 8
     }
-  }, "Field names are the CRD's. Descriptions on hover ", schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies", schema.immutable.size ? ` · ${schema.immutable.size} immutable path${schema.immutable.size === 1 ? "" : "s"}` : "", ". Edits are dry-run against the API server first."), /*#__PURE__*/React.createElement("div", {
+  }, "Field names are the CRD's. Descriptions on hover ", schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies", countOf(schema.immutable.size, "immutable"), countOf(schema.managed.size, "operator-managed"), ". Edits are dry-run against the API server first."), /*#__PURE__*/React.createElement("div", {
     className: "dcols"
   }, /*#__PURE__*/React.createElement("div", {
     className: "card"
@@ -21623,9 +21724,10 @@ function EssentialsTab({
     }
   }, /*#__PURE__*/React.createElement(ConditionsCard, {
     conditions: st.conditions
-  })))), (h.tables || []).map(t => {
+  })))), (h.tables || []).filter(t => !offEssentials(schema, t.path)).map(t => {
     const rowsT = getPath(obj, t.path);
     if (!Array.isArray(rowsT) || !rowsT.length) return null;
+    const columns = t.columns.filter(c => !isInvisible(schema, `${t.path}.${c}`));
     return /*#__PURE__*/React.createElement("div", {
       key: t.path,
       className: "card",
@@ -21641,13 +21743,13 @@ function EssentialsTab({
       }
     }, /*#__PURE__*/React.createElement("table", {
       className: "dt"
-    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, t.columns.map(c => /*#__PURE__*/React.createElement("th", {
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, columns.map(c => /*#__PURE__*/React.createElement("th", {
       key: c,
       className: "mono",
       title: schema.descriptions[`${t.path}.${c}`] || `${t.path}[].${c}`
     }, c)))), /*#__PURE__*/React.createElement("tbody", null, rowsT.map((x, i) => /*#__PURE__*/React.createElement("tr", {
       key: i
-    }, t.columns.map(c => /*#__PURE__*/React.createElement("td", {
+    }, columns.map(c => /*#__PURE__*/React.createElement("td", {
       key: c,
       className: "mono",
       style: {
@@ -21674,7 +21776,8 @@ function JsonTree({
   if (typeof data !== "object") return /*#__PURE__*/React.createElement("span", {
     className: "v"
   }, typeof data === "string" ? `"${data}"` : String(data));
-  const entries = Array.isArray(data) ? data.map((v, i) => [String(i), v]) : Object.entries(data);
+  // an invisible field is left out before anything is counted, so the {n} does not give it away
+  const entries = Array.isArray(data) ? data.map((v, i) => [String(i), v]) : Object.entries(data).filter(([k]) => !(schema && isInvisible(schema, path ? `${path}.${k}` : k)));
   if (!entries.length) return /*#__PURE__*/React.createElement("span", {
     className: "v",
     style: {
@@ -21690,15 +21793,16 @@ function JsonTree({
     className: "n"
   }, entries.map(([k, v]) => {
     const p = path ? Array.isArray(data) ? path : `${path}.${k}` : k;
-    const imm = schema && !Array.isArray(data) && isImmutable(schema, p);
+    const lock = !Array.isArray(data) && lockOf(schema, p);
     return /*#__PURE__*/React.createElement("div", {
       key: k,
       title: schema && schema.descriptions[p] ? schema.descriptions[p] : p
     }, /*#__PURE__*/React.createElement("span", {
       className: "k"
-    }, k), imm && /*#__PURE__*/React.createElement("span", {
-      className: "immut"
-    }, "immutable"), ": ", /*#__PURE__*/React.createElement(JsonTree, {
+    }, k), lock && /*#__PURE__*/React.createElement("span", {
+      className: "immut",
+      title: LOCK_TITLE[lock]
+    }, lock), ": ", /*#__PURE__*/React.createElement(JsonTree, {
       data: v,
       path: p,
       schema: schema,
@@ -22153,7 +22257,7 @@ Object.assign(window, {
   downloadText,
   useCrdSchema,
   readCrdSchema,
-  isImmutable,
+  isLocked,
   useSpecPatch,
   refOfVm,
   objKey,
@@ -43146,6 +43250,41 @@ const ROOT_PATH = DR_ONLY ? [{
 }] : [{
   t: "clusters"
 }];
+
+// The location in the URL: every view is a browser history entry, so Back and
+// Forward move between views and a copied URL opens the view it came from.
+// It is a fragment, #/<segment>/<segment>, because the page loads its scripts
+// by relative URL, which a real path would break. A segment is its layer, then
+// =<id>, then ;<the remaining fields as JSON>, each URI-encoded. The log
+// explorer owns #logs?<filter> (logs.jsx), which is the logs layer.
+const hashOfPath = p => "#/" + p.map(s => {
+  const {
+    t,
+    id,
+    ...rest
+  } = s;
+  return encodeURIComponent(t) + (id != null ? "=" + encodeURIComponent(id) : "") + (Object.keys(rest).length ? ";" + encodeURIComponent(JSON.stringify(rest)) : "");
+}).join("/");
+function pathOfHash(hash) {
+  const h = String(hash || "");
+  if (/^#logs\b/.test(h)) return [{
+    t: "logs"
+  }];
+  if (!h.startsWith("#/") || h.length < 3) return null;
+  try {
+    return h.slice(2).split("/").map(part => {
+      const [head, rest] = part.split(";");
+      const [t, id] = head.split("=");
+      return Object.assign(rest ? JSON.parse(decodeURIComponent(rest)) : {}, {
+        t: decodeURIComponent(t)
+      }, id != null ? {
+        id: decodeURIComponent(id)
+      } : {});
+    });
+  } catch (e) {
+    return null;
+  }
+}
 // Layers that need the storage operator: hidden in DR-only mode.
 const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "mpaths", "appgroups"];
 const LAYER_META = {
@@ -45255,7 +45394,14 @@ class ViewBoundary extends React.Component {
   }
 }
 function App() {
-  const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  // The URL decides the view when it names one; the stored path restores the
+  // last view when it does not (a bare URL, a bookmark from before).
+  const [storedPath, storePath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  const [rawPath, setRawPath] = useState(() => pathOfHash(window.location.hash) || storedPath);
+  const setPath = useCallback(p => {
+    setRawPath(p);
+    storePath(p);
+  }, [storePath]);
   // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
   // in DR-only mode anything outside the DR section is unreachable
   const path = useMemo(() => {
@@ -45334,6 +45480,28 @@ function App() {
   const viewKey = path.map(s => s.t + (s.id || "")).join("/");
   const pathRef = useRef(path);
   pathRef.current = path;
+  // A navigation adds a history entry; the first render only names the entry
+  // it landed on. Nothing is pushed when the URL already shows this path, which
+  // is the case after Back, Forward, and an edited address.
+  const pathHash = hashOfPath(path);
+  const landed = useRef(false);
+  useEffect(() => {
+    const shown = pathOfHash(window.location.hash);
+    if (shown && hashOfPath(shown) === pathHash) {
+      landed.current = true;
+      return;
+    }
+    const url = window.location.pathname + window.location.search + pathHash;
+    try {
+      window.history[landed.current ? "pushState" : "replaceState"](null, "", url);
+    } catch (e) {}
+    landed.current = true;
+  }, [pathHash]);
+  useEffect(() => {
+    const h = () => setPath(pathOfHash(window.location.hash) || ROOT_PATH);
+    window.addEventListener("popstate", h);
+    return () => window.removeEventListener("popstate", h);
+  }, [setPath]);
   useEffect(() => {
     setQ("");
     setFilters([]);
@@ -45481,8 +45649,11 @@ function App() {
     logs: params => {
       const f = Object.assign({}, DEFAULT_LOG_FILTER, params || {});
       if (params && (params.from || params.to)) f.range = "";
+      // its own history entry, unless the explorer is open already and only
+      // takes a new query
+      const open = pathRef.current.length === 1 && pathRef.current[0].t === "logs";
       try {
-        window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f));
+        window.history[open ? "replaceState" : "pushState"](null, "", window.location.pathname + window.location.search + hashOfFilter(f));
       } catch (e) {}
       // an open explorer takes the new query; a closed one reads it from the URL
       try {
