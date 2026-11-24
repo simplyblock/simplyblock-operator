@@ -28,6 +28,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -347,7 +348,7 @@ func (r *StorageClusterOpsReconciler) advance(
 
 	done, err := r.perform(ctx, ops, current)
 	if errors.Is(err, errNodeSkipped) {
-		return r.advanceWalk(ctx, ops, machine, true)
+		return r.advanceWalk(ctx, ops, machine)
 	}
 	if err != nil {
 		var reverted *activationRevertedError
@@ -372,7 +373,7 @@ func (r *StorageClusterOpsReconciler) advance(
 		// A rolling restart's terminal step ends one node rather than the
 		// operation. Every other action is finished when its graph is.
 		if ops.Spec.Action == simplyblockv1alpha2.StorageClusterOpsActionRollingRestart {
-			return r.advanceWalk(ctx, ops, machine, false)
+			return r.advanceWalk(ctx, ops, machine)
 		}
 		return r.finish(ctx, ops, simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded,
 			r.successMessage(ops))
@@ -900,16 +901,17 @@ func equalOpsStatus(a, b simplyblockv1alpha2.StorageClusterOpsStatus) bool {
 	if a.RollingRestart == nil {
 		return true
 	}
-	if a.RollingRestart.NodeIndex != b.RollingRestart.NodeIndex ||
-		len(a.RollingRestart.Nodes) != len(b.RollingRestart.Nodes) {
-		return false
-	}
-	for i := range a.RollingRestart.Nodes {
-		if a.RollingRestart.Nodes[i] != b.RollingRestart.Nodes[i] {
-			return false
-		}
-	}
-	return true
+	// Every field of the walk is compared. One left out is a write that is
+	// taken for no change and dropped, which is how a skip recorded on its own
+	// would never have reached the object.
+	return a.RollingRestart.NodeIndex == b.RollingRestart.NodeIndex &&
+		a.RollingRestart.BatchSize == b.RollingRestart.BatchSize &&
+		slices.Equal(a.RollingRestart.Nodes, b.RollingRestart.Nodes) &&
+		slices.Equal(a.RollingRestart.Skipped, b.RollingRestart.Skipped) &&
+		slices.EqualFunc(a.RollingRestart.Calls, b.RollingRestart.Calls,
+			func(x, y simplyblockv1alpha2.RollingRestartCall) bool {
+				return x.Node == y.Node && x.Step == y.Step && x.LeaseUntil.Equal(&y.LeaseUntil)
+			})
 }
 
 func equalTime(a, b *metav1.Time) bool {

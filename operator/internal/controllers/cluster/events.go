@@ -116,6 +116,11 @@ const (
 	// after the walk was planned.
 	NodeSkipped = "NodeSkipped"
 
+	// BatchShortened says the control plane refused to shut down a later node
+	// of a failure domain the walk was taking down together, so the nodes
+	// already down are restarted without it and it is walked afterward.
+	BatchShortened = "BatchShortened"
+
 	// FailureDomainNotReady says an activation is waiting because the cluster's
 	// failure domains do not yet hold an equal number of hosts.
 	FailureDomainNotReady = "FailureDomainNotReady"
