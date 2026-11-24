@@ -68,6 +68,11 @@ button:focus-visible, .opt:focus-within, input:focus-visible { outline: 2px soli
 .crumbs { font-size: 0.9rem; color: var(--muted); }
 .crumbs a { color: inherit; }
 
+/* The learner bar and the sign-in form */
+.learner { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: baseline; padding: 10px 14px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); font-size: 0.95rem; }
+.learner a { margin-left: auto; font-size: 0.85rem; color: var(--muted); }
+input.name { font: inherit; padding: 9px 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--fg); min-width: 16rem; flex: 1; }
+
 /* Index: the chapter list */
 .chapters { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 12px; }
 .chapter { display: flex; flex-direction: column; gap: 6px; padding: 16px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); color: inherit; text-decoration: none; }
@@ -76,8 +81,19 @@ button:focus-visible, .opt:focus-within, input:focus-visible { outline: 2px soli
 .chapter .t { font-weight: 600; line-height: 1.25; }
 .chapter .s { font-size: 0.9rem; color: var(--muted); }
 .chapter .st { font-size: 0.8rem; font-weight: 500; margin-top: auto; padding-top: 6px; }
-.chapter .st.pass { color: var(--good); }
+.chapter .st.completed { color: var(--good); }
+.chapter .st.in-progress { color: var(--warn); }
+.chapter .st.open { color: var(--muted); }
 .chapter.prereq { border-style: dashed; }
+
+/* The overview (admin.html) */
+.overview { border-collapse: collapse; width: 100%; font-size: 0.85rem; }
+.overview th, .overview td { text-align: left; vertical-align: top; padding: 6px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.overview thead th { font-weight: 600; color: var(--muted); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.04em; }
+.overview tbody th { font-weight: 600; }
+.overview tfoot td, .overview tfoot th { border-top: 2px solid var(--line); border-bottom: 0; }
+.overview .cell.completed .mk { color: var(--good); }
+.overview .cell.in-progress .mk { color: var(--warn); }
 
 /* Chapter: lesson */
 .toc { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 0.9rem; }

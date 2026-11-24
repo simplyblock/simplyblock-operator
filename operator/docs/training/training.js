@@ -7,6 +7,12 @@
 // its previous and next links. What differs between the two pages is one call
 // at the bottom, chosen by the body's data-page attribute.
 //
+// A learner starts the curriculum by typing a name, which the browser then
+// remembers. From then on the API keeps, under that name, which chapters were
+// opened, the time spent on each (counted while the page is visible and the
+// reader active, sent in small increments), and every finished test. Without a
+// name the chapters can be read and the tests taken, and nothing is recorded.
+//
 // The test is the quiz's test with a second half. Fifteen questions are drawn
 // from the chapter's bank and scored as crd-quiz.html scores them: every answer
 // is judged, a right judgment is +1 and a wrong one is −1. Then two to four
@@ -22,8 +28,13 @@
   const PER_QUESTION = 5;
   const MAX_POINTS = PER_RUN * PER_QUESTION;
   const PASS_POINTS = 45;
-  const API = 'api/results';
+  const API = 'api';
   const QUIZ_PAGE = 'crd-quiz.html';
+  // Time is counted in ticks of TICK_SECONDS while the page is visible and the
+  // reader was active within IDLE_SECONDS, and sent every FLUSH_SECONDS.
+  const TICK_SECONDS = 5;
+  const IDLE_SECONDS = 120;
+  const FLUSH_SECONDS = 30;
 
   const chapters = [];
   window.TRAINING = { register: ch => chapters.push(ch) };
@@ -41,6 +52,9 @@
   const catHint = c => c === 'field' ? 'Field meaning' : c === 'action' ? 'Operation' : 'Concept';
   const slug = s => String(s).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
   const plural = (n, one, many) => n === 1 ? one : many;
+  // Seconds as "1 h 05 min" or "12 min".
+  const fmtTime = s => { const m = Math.round(s / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`; };
+  const statusLabel = { open: 'Open', 'in-progress': 'In progress', completed: 'Completed' };
 
   // ---- scoring -------------------------------------------------------------
   const judge = (options, picked) => {
@@ -60,18 +74,29 @@
   }
   const taskRight = (task, values) => Object.keys(task.blanks).every(n => blankRight(task.blanks[n], values[n]));
 
-  // ---- storage and API -----------------------------------------------------
-  function bestGet(id) { try { return JSON.parse(localStorage.getItem('training.' + id + '.best') || 'null'); } catch (e) { return null; } }
-  function bestSet(id, v) { try { localStorage.setItem('training.' + id + '.best', JSON.stringify(v)); } catch (e) { /* storage may be unavailable */ } }
-
+  // ---- the learner, the API, and the statistics ---------------------------
+  let learner = null;      // { key, name, chapters } from the API, or null
   let stats = null;        // the last answer of GET api/results, or null
   let apiAvailable = false;
 
+  function storedLearner() { try { return JSON.parse(localStorage.getItem('training.learner') || 'null'); } catch (e) { return null; } }
+  function storeLearner(v) { try { if (v) localStorage.setItem('training.learner', JSON.stringify(v)); else localStorage.removeItem('training.learner'); } catch (e) { /* storage may be unavailable */ } }
+
+  async function call(path, body, keepalive) {
+    const r = await fetch(API + path, body === undefined
+      ? { cache: 'no-store' }
+      : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), keepalive: !!keepalive });
+    if (!r.ok) {
+      let msg = 'The server answered ' + r.status + '.';
+      try { const e = await r.json(); if (e && e.error) msg = e.error; } catch (x) { /* no body */ }
+      throw new Error(msg);
+    }
+    return r.json();
+  }
+
   async function fetchStats() {
     try {
-      const r = await fetch(API, { cache: 'no-store' });
-      if (!r.ok) throw new Error(String(r.status));
-      stats = await r.json();
+      stats = await call('/results');
       apiAvailable = stats && typeof stats.chapters === 'object';
     } catch (e) {
       apiAvailable = false;
@@ -79,14 +104,21 @@
     return apiAvailable;
   }
 
-  async function sendResult(id, points, passed) {
-    const r = await fetch(API + '/' + encodeURIComponent(id), {
-      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ points, passed }),
-    });
-    if (!r.ok) throw new Error('The server answered ' + r.status + '.');
-    const summary = await r.json();
-    if (stats && stats.chapters) stats.chapters[id] = summary;
+  async function signIn(name) {
+    learner = await call('/learners', { name });
+    storeLearner({ key: learner.key, name: learner.name });
   }
+
+  async function loadLearner() {
+    const stored = storedLearner();
+    if (!stored || !apiAvailable) { learner = null; return; }
+    try { learner = await call('/learners/' + encodeURIComponent(stored.key)); }
+    catch (e) { learner = null; }
+  }
+
+  function signOut() { learner = null; storeLearner(null); }
+
+  const progressOf = id => (learner && learner.chapters && learner.chapters[id]) || null;
 
   function chapterStats(id) {
     const s = stats && stats.chapters && stats.chapters[id];
@@ -97,26 +129,65 @@
     const s = chapterStats(id);
     if (!s) return '<p class="note">Statistics could not be loaded.</p>';
     const n = s.scores.length;
-    if (n === 0) return '<p class="note">No result has been sent in for this chapter yet.</p>';
+    if (n === 0) return '<p class="note">No test of this chapter has been finished yet.</p>';
     const avg = s.scores.reduce((a, b) => a + b.points, 0) / n;
     const passed = s.scores.filter(x => x.passed).length;
     const chips = s.scores.map(x => `<span class="${x.passed ? 'p' : ''}">${signed(x.points)}</span>`);
     if (mine) {
-      // The sender's own result is highlighted once, on the last matching entry.
+      // The learner's own result is highlighted once, on the last matching entry.
       for (let i = chips.length - 1; i >= 0; i--) {
         if (s.scores[i].points === mine.points && s.scores[i].passed === mine.passed) { chips[i] = `<span class="mine${mine.passed ? ' p' : ''}">${signed(mine.points)}</span>`; break; }
       }
     }
     return `
       <div class="score">
-        <div><div class="n">${signed(Math.round(avg * 10) / 10)}</div><div class="l">average question points over ${n} ${plural(n, 'test', 'tests')} sent in (out of ${MAX_POINTS})</div></div>
+        <div><div class="n">${signed(Math.round(avg * 10) / 10)}</div><div class="l">average question points over ${n} ${plural(n, 'test', 'tests')} (out of ${MAX_POINTS})</div></div>
         <div><div class="n">${Math.round((passed / n) * 100)}%</div><div class="l">passed: ${passed} of ${n}</div></div>
       </div>
       <div class="stack tight">
-        <p class="eyebrow">Every test sent in</p>
+        <p class="eyebrow">Every finished test of this chapter</p>
         <div class="scores">${chips.join('')}</div>
-        <p class="note">Each entry is one finished test whose taker chose to send it; a check mark means it was passed. No name, address, or time is stored with it.</p>
+        <p class="note">Each entry is one finished test; a check mark means it was passed. No name is shown here.</p>
       </div>`;
+  }
+
+  // ---- the sign-in form and the learner bar --------------------------------
+  function signInForm(intro) {
+    return `
+      <form class="stack tight" id="signInForm">
+        <p>${intro}</p>
+        <div class="row">
+          <input class="name" id="nameInput" type="text" maxlength="60" autocomplete="name" placeholder="Your name" required aria-label="Your name">
+          <button class="primary" type="submit">Start the curriculum</button>
+        </div>
+        <p class="note" id="signInNote">The name is what your progress, the time per chapter, and your test results are recorded under, and what the curriculum's overview lists you by. There is no password: type the same name on another device to continue.</p>
+      </form>`;
+  }
+
+  function wireSignIn(after) {
+    const form = document.getElementById('signInForm');
+    if (!form) return;
+    form.addEventListener('submit', async e => {
+      e.preventDefault();
+      const name = document.getElementById('nameInput').value.trim();
+      const note = document.getElementById('signInNote');
+      if (!name) return;
+      form.querySelector('button').disabled = true;
+      try { await signIn(name); after(); }
+      catch (err) { note.textContent = 'Signing in failed: ' + err.message; note.style.color = 'var(--bad)'; form.querySelector('button').disabled = false; }
+    });
+  }
+
+  function learnerBar() {
+    if (!learner) return '';
+    const done = chapters.filter(c => (progressOf(c.id) || {}).status === 'completed').length;
+    const seconds = chapters.reduce((s, c) => s + ((progressOf(c.id) || {}).seconds || 0), 0);
+    return `<div class="learner"><span><strong>${esc(learner.name)}</strong> · ${done} of ${chapters.length} chapters completed · ${fmtTime(seconds)} spent</span><a href="#" id="signOut">Not you?</a></div>`;
+  }
+
+  function wireLearnerBar(after) {
+    const a = document.getElementById('signOut');
+    if (a) a.addEventListener('click', e => { e.preventDefault(); signOut(); after(); });
   }
 
   // ---- loading the chapter files ------------------------------------------
@@ -149,14 +220,23 @@
   function renderIndex(problems) {
     const app = document.getElementById('app');
     const cards = chapters.map(ch => {
-      const best = bestGet(ch.id);
+      const p = progressOf(ch.id);
       const s = chapterStats(ch.id);
       let st = '';
-      if (best && best.passed) st = '<span class="st pass">Passed on this device</span>';
-      else if (best) st = `<span class="st muted">Best on this device: ${signed(best.points)} points, not yet passed</span>`;
-      else if (s && s.scores.length) st = `<span class="st muted">${s.scores.length} ${plural(s.scores.length, 'test', 'tests')} sent in, ${Math.round(100 * s.scores.filter(x => x.passed).length / s.scores.length)}% passed</span>`;
+      if (p) {
+        const best = p.best ? `, best ${signed(p.best.points)} points and ${p.best.tasksRight} of ${p.best.tasksTotal} ${plural(p.best.tasksTotal, 'manifest', 'manifests')}` : '';
+        st = `<span class="st ${p.status}">${statusLabel[p.status]} · ${fmtTime(p.seconds)}${best}</span>`;
+      } else if (learner) {
+        st = '<span class="st open">Open</span>';
+      } else if (s && s.scores.length) {
+        st = `<span class="st muted">${s.scores.length} ${plural(s.scores.length, 'test', 'tests')} finished, ${Math.round(100 * s.scores.filter(x => x.passed).length / s.scores.length)}% passed</span>`;
+      }
       return `<a class="chapter" href="chapter.html?c=${encodeURIComponent(ch.id)}"><span class="num">Chapter ${ch.number}</span><span class="t">${esc(ch.title)}</span><span class="s">${fmt(ch.summary)}</span>${st}</a>`;
     });
+    let start;
+    if (!apiAvailable) start = '<p class="note">This copy is not connected to a results server, so the chapters can be read and the tests taken, and nothing is recorded.</p>';
+    else if (learner) start = learnerBar();
+    else start = `<div class="card">${signInForm('Start the curriculum with your name, and come back to it from any device by typing the same name.')}</div>`;
     app.innerHTML = `
       ${problemsBlock(problems)}
       <div class="stack">
@@ -164,6 +244,7 @@
         <h1>Operator training by use case</h1>
         <p class="muted">Each chapter takes one deployment or operation the way it is done in practice: the objects a user writes, in the order they are written, what the operator does with each, and what goes wrong. It ends in a test of fifteen questions and a few manifests to complete. Passing a chapter takes ${PASS_POINTS} of ${MAX_POINTS} question points and every manifest right.</p>
       </div>
+      ${start}
       <div class="card stack">
         <h2>Before the chapters</h2>
         <p>The chapters assume the vocabulary of the custom resources: which kinds are entities and which are operations, what <code>status.activeOpsRef</code> locks, and how the ownership spine runs from the ControlPlane down to the devices. The CRD quiz is the fastest way to find out whether that is in place.</p>
@@ -172,8 +253,49 @@
       <div class="stack">
         <h2>Chapters</h2>
         <div class="chapters">${cards.join('')}</div>
-        <p class="note">${apiAvailable ? 'Results sent in from any copy of a chapter are counted in that chapter\'s statistics, anonymously.' : 'This copy is not connected to a results server, so tests can be taken but not sent in.'}</p>
+        ${learner ? '<p class="note">A chapter is in progress once it is opened and completed once its test is passed. The time is counted while the chapter is on screen and you are active.</p>' : ''}
       </div>`;
+    const again = () => renderIndex(problems);
+    wireSignIn(again);
+    wireLearnerBar(again);
+  }
+
+  // ---- time spent on a chapter --------------------------------------------
+  // Ticks accumulate while the page is visible and the reader was active, and
+  // are sent every FLUSH_SECONDS and when the page is hidden or left.
+  let tracked = 0;
+  let lastActivity = Date.now();
+  let trackingFor = null;
+
+  function flushTime(final) {
+    if (!learner || !trackingFor || tracked < 1) return;
+    const seconds = tracked;
+    tracked = 0;
+    call('/learners/' + encodeURIComponent(learner.key) + '/chapters/' + encodeURIComponent(trackingFor) + '/time', { seconds }, final)
+      .then(p => { if (learner && learner.chapters) learner.chapters[trackingFor] = p; })
+      .catch(() => { tracked += seconds; });
+  }
+
+  function startTracking(id) {
+    trackingFor = id;
+    for (const ev of ['mousemove', 'keydown', 'scroll', 'click', 'touchstart']) document.addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true });
+    setInterval(() => {
+      if (document.visibilityState !== 'visible' || Date.now() - lastActivity > IDLE_SECONDS * 1000) return;
+      tracked += TICK_SECONDS;
+      if (tracked >= FLUSH_SECONDS) flushTime(false);
+    }, TICK_SECONDS * 1000);
+    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushTime(true); });
+    window.addEventListener('pagehide', () => flushTime(true));
+  }
+
+  async function markOpened(id) {
+    if (!learner) return;
+    const p = progressOf(id);
+    if (p && p.openedAt) return;
+    try {
+      const view = await call('/learners/' + encodeURIComponent(learner.key) + '/chapters/' + encodeURIComponent(id) + '/open', {});
+      if (learner.chapters) learner.chapters[id] = view;
+    } catch (e) { /* recorded on the next pass */ }
   }
 
   // ---- the chapter page: lesson --------------------------------------------
@@ -218,11 +340,20 @@
       (notes.length ? `<ul class="notes">${notes.map((n, i) => `<li><span class="m">${i + 1}</span><span>${fmt(n.text)}</span></li>`).join('')}</ul>` : '');
   }
 
+  function chapterHead(ch) {
+    let bar = '';
+    if (apiAvailable && learner) bar = learnerBar();
+    else if (apiAvailable) bar = `<div class="card">${signInForm('Reading without a name records nothing. Start the curriculum with your name to have this chapter, the time on it, and its test recorded.')}</div>`;
+    return `
+      <p class="crumbs"><a href="index.html">Operator training</a> · Chapter ${ch.number} of ${chapters.length}</p>
+      ${bar}`;
+  }
+
   function renderLesson(ch, problems) {
     const app = document.getElementById('app');
     const prev = chapters[ch.number - 2];
     const next = chapters[ch.number];
-    const best = bestGet(ch.id);
+    const p = progressOf(ch.id);
     let exIdx = 0;
     const examples = [];
     const sections = ch.sections.map((s, i) => {
@@ -230,10 +361,12 @@
       const exs = (s.examples || []).map(ex => { const html = renderExample(ex, exIdx); examples.push([ex, exIdx]); exIdx++; return html; });
       return `<section class="section card" id="${id}"><h2>${fmt(s.heading)}</h2>${s.body.map(renderItem).join('')}${exs.join('')}</section>`;
     });
+    let standing = '';
+    if (p && p.best) standing = `<span class="small ${p.status === 'completed' ? 'st completed' : 'muted'}">${statusLabel[p.status]}: best ${signed(p.best.points)} points and ${p.best.tasksRight} of ${p.best.tasksTotal} ${plural(p.best.tasksTotal, 'manifest', 'manifests')} over ${p.attempts.length} ${plural(p.attempts.length, 'attempt', 'attempts')}</span>`;
     app.innerHTML = `
       ${problemsBlock(problems)}
       <div class="stack">
-        <p class="crumbs"><a href="index.html">Operator training</a> · Chapter ${ch.number} of ${chapters.length}</p>
+        ${chapterHead(ch)}
         <h1>${esc(ch.title)}</h1>
         <p class="muted">${fmt(ch.summary)}</p>
         <div class="callout"><strong>After this chapter</strong> ${fmt(ch.goal)}</div>
@@ -246,7 +379,7 @@
         <div class="row">
           <button class="primary" id="startBtn">Start the test</button>
           ${apiAvailable ? '<button id="statsBtn">Statistics</button>' : ''}
-          ${best ? `<span class="small muted">${best.passed ? 'Passed on this device' : 'Best on this device: ' + signed(best.points) + ' points, not yet passed'}</span>` : ''}
+          ${standing}
         </div>
       </section>
       <div class="row">
@@ -256,6 +389,8 @@
     document.getElementById('startBtn').addEventListener('click', () => startTest(ch));
     const sb = document.getElementById('statsBtn');
     if (sb) sb.addEventListener('click', async () => { await fetchStats(); state.screen = 'stats'; render(); window.scrollTo({ top: 0 }); });
+    wireSignIn(async () => { await markOpened(ch.id); render(); });
+    wireLearnerBar(render);
     examples.forEach(([ex, i]) => fillExample(ex, i));
   }
 
@@ -283,7 +418,7 @@
   }
 
   function startTest(ch) {
-    state = { screen: 'question', run: pickRun(ch), i: 0, picked: [], revealed: false, results: [], t: 0, taskValues: {}, taskChecked: false, taskResults: [], sent: false };
+    state = { screen: 'question', run: pickRun(ch), i: 0, picked: [], revealed: false, results: [], t: 0, taskValues: {}, taskChecked: false, taskResults: [], recorded: null, recordError: null };
     render();
     window.scrollTo({ top: 0 });
   }
@@ -422,24 +557,39 @@
     }
   }
 
-  function renderResults(ch, sendError) {
+  // A finished test is recorded under the learner once, the moment the results
+  // screen is first drawn.
+  async function recordAttempt(ch, points, tasksRight, passed) {
+    if (!learner || state.recorded || state.recording) return;
+    state.recording = true;
+    try {
+      const view = await call('/learners/' + encodeURIComponent(learner.key) + '/chapters/' + encodeURIComponent(ch.id) + '/attempts',
+        { points, tasksRight, tasksTotal: ch.tasks.length, passed });
+      if (learner.chapters) learner.chapters[ch.id] = view;
+      state.recorded = { points, passed };
+      await fetchStats();
+    } catch (e) {
+      state.recordError = e.message;
+    }
+    state.recording = false;
+    if (state.screen === 'results') renderResults(ch);
+  }
+
+  function renderResults(ch) {
     const app = document.getElementById('app');
     const points = totalPoints(state.results);
     const fully = state.results.filter(r => r.fullyRight).length;
     const tasksRight = state.taskResults.filter(r => r.right).length;
     const passed = points >= PASS_POINTS && tasksRight === ch.tasks.length;
-    const prevBest = bestGet(ch.id);
-    if (!prevBest || passed && !prevBest.passed || passed === !!prevBest.passed && points > prevBest.points) bestSet(ch.id, { points, passed });
     const why = passed ? 'Passed.' : points < PASS_POINTS && tasksRight < ch.tasks.length ? `Not passed: ${PASS_POINTS} points and every manifest right are needed.` : points < PASS_POINTS ? `Not passed: the manifests are right, but ${PASS_POINTS} question points are needed.` : 'Not passed: the questions are fine, but every manifest has to be right.';
-    let share;
-    if (!apiAvailable) share = '<p class="note">This copy is not connected to a results server, so results cannot be sent in.</p>';
-    else if (state.sent) share = `<div class="stack"><p><strong>Sent.</strong> Your result is counted in the statistics of this chapter.</p>${statsBlock(ch.id, { points, passed })}</div>`;
-    else share = `
-        <div class="stack tight">
-          <p>Count this test in the chapter's shared statistics? Only the question points (${signed(points)}) and whether the chapter was passed are sent. No name, address, or time goes with it, and everyone can see the statistics.</p>
-          <div class="row"><button class="primary" id="sendBtn">Send my result anonymously</button><button id="statsBtn">Show statistics without sending</button></div>
-          ${sendError ? `<p class="note" style="color:var(--bad)">Sending failed: ${esc(sendError)} You can try again.</p>` : ''}
-        </div>`;
+    let record;
+    if (!apiAvailable) record = '<p class="note">This copy is not connected to a results server, so the result is not recorded.</p>';
+    else if (!learner) record = '<p class="note">No name is signed in, so this result is not recorded. Start the curriculum with your name on the index page to have the next one recorded.</p>';
+    else if (state.recorded) {
+      const p = progressOf(ch.id);
+      record = `<div class="stack"><p><strong>Recorded for ${esc(learner.name)}.</strong> ${p && p.status === 'completed' ? 'This chapter is completed.' : 'The chapter stays in progress until a test is passed.'} ${p ? fmtTime(p.seconds) + ' spent on it so far.' : ''}</p>${statsBlock(ch.id, state.recorded)}</div>`;
+    } else if (state.recordError) record = `<p class="note" style="color:var(--bad)">Recording failed: ${esc(state.recordError)} <a href="#" id="retryRecord">Try again</a>.</p>`;
+    else record = '<p class="note">Recording…</p>';
     app.innerHTML = `
       <div class="stack">
         <p class="crumbs"><a href="index.html">Operator training</a> · Chapter ${ch.number}: ${esc(ch.title)}</p>
@@ -452,7 +602,7 @@
           <div><div class="n">${fully}<span class="muted" style="font-size:1.2rem">/${PER_RUN}</span></div><div class="l">questions with all five answers judged right</div></div>
           <div><div class="n">${tasksRight}<span class="muted" style="font-size:1.2rem">/${ch.tasks.length}</span></div><div class="l">manifests with every blank right</div></div>
         </div>
-        ${share}
+        ${record}
         <div class="row"><button class="primary" id="againBtn">Take the test again</button><button id="lessonBtn">Back to the chapter</button>${chapters[ch.number] ? `<a href="chapter.html?c=${encodeURIComponent(chapters[ch.number].id)}" style="margin-left:auto">Next chapter →</a>` : ''}</div>
       </div>
       <div class="stack">
@@ -472,14 +622,9 @@
       </div>`;
     document.getElementById('againBtn').addEventListener('click', () => startTest(ch));
     document.getElementById('lessonBtn').addEventListener('click', () => { state = { screen: 'lesson' }; render(); window.scrollTo({ top: 0 }); });
-    const send = document.getElementById('sendBtn');
-    if (send) send.addEventListener('click', async () => {
-      send.disabled = true; send.textContent = 'Sending…';
-      try { await sendResult(ch.id, points, passed); state.sent = true; renderResults(ch); }
-      catch (e) { renderResults(ch, e.message || 'network error.'); }
-    });
-    const sb = document.getElementById('statsBtn');
-    if (sb) sb.addEventListener('click', async () => { await fetchStats(); state.screen = 'stats'; render(); window.scrollTo({ top: 0 }); });
+    const retry = document.getElementById('retryRecord');
+    if (retry) retry.addEventListener('click', e => { e.preventDefault(); state.recordError = null; renderResults(ch); });
+    if (learner && !state.recorded && !state.recordError) recordAttempt(ch, points, tasksRight, passed);
   }
 
   function renderStats(ch) {
@@ -488,7 +633,7 @@
       <div class="stack">
         <p class="crumbs"><a href="index.html">Operator training</a> · Chapter ${ch.number}: ${esc(ch.title)}</p>
         <h1>Statistics</h1>
-        <p class="muted">Every test of this chapter that was taken to the end and sent in, anonymously.</p>
+        <p class="muted">Every test of this chapter that was taken to the end, by anyone.</p>
       </div>
       <div class="card stack">
         ${statsBlock(ch.id)}
@@ -512,7 +657,7 @@
     loadProblems = await loadChapters();
     if (page === 'index') {
       renderIndex(loadProblems);
-      if (await fetchStats()) renderIndex(loadProblems);
+      if (await fetchStats()) { await loadLearner(); renderIndex(loadProblems); }
       return;
     }
     const id = new URLSearchParams(location.search).get('c');
@@ -522,8 +667,13 @@
     document.title = `${current.number}. ${current.title} · Operator training`;
     render();
     // The first render goes out before the API answers; the test section gains
-    // its Statistics button once it has.
-    if (await fetchStats() && state.screen === 'lesson') render();
+    // its Statistics button, and the page its learner bar, once it has.
+    if (await fetchStats()) {
+      await loadLearner();
+      await markOpened(current.id);
+      startTracking(current.id);
+      if (state.screen === 'lesson') render();
+    }
   }
   boot();
 })();

@@ -10,20 +10,21 @@ deployment or operation, each with the objects a user writes in the order they
 are written, annotated example manifests, and a test. The CRD quiz is the
 prerequisite that covers the vocabulary.
 
-| File                   | What it is                                                             |
-|------------------------|------------------------------------------------------------------------|
-| `index.html`           | The front page: the quiz as prerequisite, the chapter list             |
-| `chapter.html?c=<id>`  | One chapter: lesson, examples, test                                    |
-| `training.js`          | The engine both pages run                                              |
-| `training.css`         | Their stylesheet                                                       |
-| `chapter-schema.js`    | What a chapter file has to contain; run by the page and by the checker |
-| `chapters/index.js`    | The ordered list of chapter files                                      |
-| `chapters/NN-<id>.js`  | One chapter each                                                       |
-| `examples/<id>/*.yaml` | The example manifests a chapter shows                                  |
-| `check-chapters.js`    | Checks every chapter file under node                                   |
-| `crd-quiz.html`        | The prerequisite quiz, a single page with its question bank inline     |
-| `results-api.py`       | The anonymous statistics of the quiz and of every chapter test         |
-| `training-host.sh`     | EC2 user data setting up a public copy with nginx and the API          |
+| File                   | What it is                                                                 |
+|------------------------|----------------------------------------------------------------------------|
+| `index.html`           | The front page: the quiz as prerequisite, the chapter list                 |
+| `chapter.html?c=<id>`  | One chapter: lesson, examples, test                                        |
+| `training.js`          | The engine both pages run                                                  |
+| `training.css`         | Their stylesheet                                                           |
+| `chapter-schema.js`    | What a chapter file has to contain; run by the page and by the checker     |
+| `chapters/index.js`    | The ordered list of chapter files                                          |
+| `chapters/NN-<id>.js`  | One chapter each                                                           |
+| `examples/<id>/*.yaml` | The example manifests a chapter shows                                      |
+| `check-chapters.js`    | Checks every chapter file under node                                       |
+| `admin.html`           | The overview of every learner's progress, behind the admin token           |
+| `crd-quiz.html`        | The prerequisite quiz, a single page with its question bank inline         |
+| `results-api.py`       | The learners' progress, time, and test attempts, and the quiz's statistics |
+| `training-host.sh`     | EC2 user data setting up a public copy with nginx and the API              |
 
 ## Reading it locally
 
@@ -35,7 +36,26 @@ cd operator/docs/training && python3 -m http.server 8000
 ```
 
 Then open http://localhost:8000/. Without `results-api.py` behind `/api/`, the
-tests run but cannot be sent in, and the statistics stay hidden.
+chapters can be read and the tests taken, and nothing is recorded.
+
+## Learners, progress, and the overview
+
+A learner starts the curriculum by typing a name on the index page. There is no
+password: the training is internal, and the same name typed on another device
+continues the same record. From then on the API keeps, under that name, which
+chapters were opened, the time spent on each, and every finished test. A
+chapter is `open` until it is opened, `in-progress` from then on, and
+`completed` once a test of it is passed. The time is counted while the chapter
+page is visible and the reader was active within the last two minutes, in ticks
+of five seconds sent every half minute, so a tab left open in the background
+counts nothing.
+
+The chapter statistics the pages show carry no name. The names are read in two
+places only: by their owner, and by `admin.html`, which lists every learner with
+the status, the time, the attempts, and the best test per chapter, and exports
+the table as CSV. It asks for the admin token the host was launched with and
+keeps it for the browser session. Without a token in the API's environment the
+endpoint answers 503.
 
 ## Adding a chapter
 
@@ -81,6 +101,8 @@ count, because that count becomes guessable.
 ## Hosting a public copy
 
 `training-host.sh` is EC2 user data for Amazon Linux 2023. Its usage note says
-how to pack the directory and substitute the archive's URL. The results store on
-the host is one JSON file of integers and booleans under `/var/lib/crd-quiz`,
-and nginx keeps no access log for `/api/`.
+how to pack the directory and substitute the archive's URL and the admin token.
+The results store on the host is one JSON file under `/var/lib/crd-quiz`, and
+nginx keeps no access log for `/api/`. The host serves plain HTTP, so the
+learners' names and the admin token travel in the clear on the network between
+the browser and the host.

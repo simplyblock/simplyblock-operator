@@ -1,0 +1,138 @@
+<!--
+The overview of every learner of the operator training: per learner and
+chapter the status, the time spent, the best test result, and the number of
+attempts, with totals per chapter. It reads the results API's admin endpoint
+with the token training-host.sh was launched with, which the page asks for and
+keeps for the browser session only.
+
+It is a page of its own rather than a view of index.html because it shows
+names, which the index and the chapters never do.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Training overview</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="training.css">
+</head>
+<body data-page="admin">
+<div class="wrap stack" id="app"><p class="note">Loading…</p></div>
+<script src="chapters/index.js"></script>
+<script>
+(function () {
+  const chapters = [];
+  window.TRAINING = { register: ch => chapters.push(ch) };
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+  const signed = n => (n > 0 ? '+' : '') + n;
+  const fmtTime = s => { const m = Math.round(s / 60); return m >= 60 ? `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min` : `${m} min`; };
+  const fmtDate = t => t ? new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ') : '';
+  const statusMark = { open: '', 'in-progress': '◐', completed: '●' };
+  const app = document.getElementById('app');
+
+  function tokenGet() { try { return sessionStorage.getItem('training.adminToken') || ''; } catch (e) { return ''; } }
+  function tokenSet(v) { try { sessionStorage.setItem('training.adminToken', v); } catch (e) { /* storage may be unavailable */ } }
+
+  function loadScript(src) {
+    return new Promise((resolve, reject) => { const s = document.createElement('script'); s.src = src; s.onload = resolve; s.onerror = () => reject(new Error(src)); document.head.appendChild(s); });
+  }
+
+  function renderForm(message) {
+    app.innerHTML = `
+      <div class="stack">
+        <p class="crumbs"><a href="index.html">Operator training</a> · Overview</p>
+        <h1>Training overview</h1>
+        <p class="muted">Every learner, with the status, the time spent, and the best test result per chapter.</p>
+      </div>
+      <div class="card">
+        <form class="stack tight" id="tokenForm">
+          <p>The overview needs the admin token the host was launched with.</p>
+          <div class="row"><input class="name" id="tokenInput" type="password" autocomplete="off" placeholder="Admin token" required aria-label="Admin token"><button class="primary" type="submit">Show the overview</button></div>
+          ${message ? `<p class="note" style="color:var(--bad)">${esc(message)}</p>` : ''}
+        </form>
+      </div>`;
+    document.getElementById('tokenForm').addEventListener('submit', e => { e.preventDefault(); const t = document.getElementById('tokenInput').value.trim(); tokenSet(t); load(t); });
+  }
+
+  async function load(token) {
+    let data;
+    try {
+      const r = await fetch('api/admin/learners', { cache: 'no-store', headers: { 'X-Admin-Token': token } });
+      if (!r.ok) { let m = 'The server answered ' + r.status + '.'; try { m = (await r.json()).error || m; } catch (x) { /* no body */ } throw new Error(m); }
+      data = await r.json();
+    } catch (e) {
+      renderForm(e.message);
+      return;
+    }
+    renderTable(data.learners || []);
+  }
+
+  function csv(learners) {
+    const rows = [['learner', 'chapter', 'status', 'minutes', 'attempts', 'best points', 'best manifests right', 'manifests', 'completed at']];
+    for (const l of learners) for (const ch of chapters) {
+      const p = l.chapters[ch.id];
+      rows.push([l.name, ch.title, p ? p.status : 'open', p ? Math.round(p.seconds / 60) : 0, p ? p.attempts.length : 0,
+        p && p.best ? p.best.points : '', p && p.best ? p.best.tasksRight : '', p && p.best ? p.best.tasksTotal : '', p ? fmtDate(p.completedAt) : '']);
+    }
+    return rows.map(r => r.map(c => '"' + String(c).replace(/"/g, '""') + '"').join(',')).join('\n');
+  }
+
+  function renderTable(learners) {
+    const head = chapters.map(ch => `<th title="${esc(ch.title)}">${ch.number}</th>`).join('');
+    const body = learners.map(l => {
+      const cells = chapters.map(ch => {
+        const p = l.chapters[ch.id];
+        if (!p) return '<td class="muted">–</td>';
+        const best = p.best ? `${signed(p.best.points)} · ${p.best.tasksRight}/${p.best.tasksTotal}` : 'no test yet';
+        return `<td class="cell ${p.status}" title="${esc(ch.title)}: ${p.status}, ${p.attempts.length} attempt(s), last activity ${fmtDate(p.lastAt)}"><span class="mk">${statusMark[p.status]}</span> ${fmtTime(p.seconds)}<br><span class="small">${best}</span></td>`;
+      }).join('');
+      const done = chapters.filter(ch => (l.chapters[ch.id] || {}).status === 'completed').length;
+      const seconds = chapters.reduce((s, ch) => s + ((l.chapters[ch.id] || {}).seconds || 0), 0);
+      return `<tr><th scope="row">${esc(l.name)}<br><span class="small muted">since ${fmtDate(l.createdAt)}</span></th>${cells}<td><strong>${done}</strong> of ${chapters.length}<br><span class="small">${fmtTime(seconds)}</span></td></tr>`;
+    }).join('');
+    const totals = chapters.map(ch => {
+      const ps = learners.map(l => l.chapters[ch.id]).filter(Boolean);
+      const completed = ps.filter(p => p.status === 'completed').length;
+      const attempts = ps.reduce((s, p) => s + p.attempts.length, 0);
+      const seconds = ps.reduce((s, p) => s + p.seconds, 0);
+      return `<td><strong>${completed}</strong> done<br><span class="small">${ps.length} opened, ${attempts} ${attempts === 1 ? 'test' : 'tests'}, ${fmtTime(seconds)}</span></td>`;
+    }).join('');
+    app.innerHTML = `
+      <div class="stack">
+        <p class="crumbs"><a href="index.html">Operator training</a> · Overview</p>
+        <h1>Training overview</h1>
+        <p class="muted">${learners.length} ${learners.length === 1 ? 'learner' : 'learners'}. Per chapter: ● completed, ◐ in progress, the time spent, and the best test as question points and manifests right.</p>
+        <div class="row"><button id="csvBtn">Download as CSV</button><button id="reloadBtn">Reload</button></div>
+      </div>
+      <div class="card" style="overflow-x:auto">
+        <table class="overview">
+          <thead><tr><th>Learner</th>${head}<th>Completed</th></tr></thead>
+          <tbody>${body || `<tr><td colspan="${chapters.length + 2}" class="muted">Nobody has started the curriculum yet.</td></tr>`}</tbody>
+          <tfoot><tr><th scope="row">All learners</th>${totals}<td></td></tr></tfoot>
+        </table>
+      </div>
+      <div class="stack tight">
+        <p class="eyebrow">Chapters</p>
+        <ol class="small muted" style="margin:0;padding-left:20px">${chapters.map(ch => `<li>${esc(ch.title)}</li>`).join('')}</ol>
+      </div>`;
+    document.getElementById('reloadBtn').addEventListener('click', () => load(tokenGet()));
+    document.getElementById('csvBtn').addEventListener('click', () => {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(new Blob([csv(learners)], { type: 'text/csv' }));
+      a.download = 'training-overview.csv';
+      a.click();
+      URL.revokeObjectURL(a.href);
+    });
+  }
+
+  (async () => {
+    for (const f of CHAPTER_FILES) { try { await loadScript('chapters/' + f); } catch (e) { /* the overview still lists what loaded */ } }
+    chapters.forEach((ch, i) => { ch.number = i + 1; });
+    const t = tokenGet();
+    if (t) load(t); else renderForm('');
+  })();
+})();
+</script>
+</body>
+</html>
