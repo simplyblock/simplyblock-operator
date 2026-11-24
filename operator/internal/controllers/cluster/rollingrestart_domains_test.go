@@ -42,12 +42,12 @@ type domainFleet struct {
 	restarts  []string
 }
 
-// newDomainFleet builds a fleet of perDomain nodes in each of domains failure
+// newDomainFleet builds a fleet of two nodes in each of domains failure
 // domains, listed by the control plane with the domains interleaved, so a walk
 // that restarts a failure domain together has to group them itself.
-func newDomainFleet(domains, perDomain int) *domainFleet {
+func newDomainFleet(domains int) *domainFleet {
 	f := &domainFleet{domain: map[string]int{}, status: map[string]string{}}
-	for n := range perDomain {
+	for n := range 2 {
 		for d := range domains {
 			id := domainNode(d, n)
 			f.order = append(f.order, id)
@@ -154,7 +154,7 @@ func walkDomains(
 // down. The walk takes each failure domain down together and restarts its
 // nodes together.
 func TestARollingRestartTakesAWholeFailureDomainDownTogether(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	api := domainAPI(fleet)
 	rec := &recorder{}
 	r := newOpsReconciler(t, api, rec, domainCluster(),
@@ -192,7 +192,7 @@ func TestARollingRestartTakesAWholeFailureDomainDownTogether(t *testing.T) {
 // and losing it loses more than the one parity chunk covers. The walk restarts
 // such a cluster one node at a time.
 func TestTooFewFailureDomainsAreRestartedOneNodeAtATime(t *testing.T) {
-	fleet := newDomainFleet(2, 2)
+	fleet := newDomainFleet(2)
 	r := newOpsReconciler(t, domainAPI(fleet), &recorder{}, domainCluster(),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
 
@@ -209,7 +209,7 @@ func TestTooFewFailureDomainsAreRestartedOneNodeAtATime(t *testing.T) {
 // A cluster that is not in failure-domain mode places its chunks without
 // regard to the index a node happens to carry, so the index groups nothing.
 func TestAClusterOutsideFailureDomainModeIsRestartedOneNodeAtATime(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	r := newOpsReconciler(t, domainAPI(fleet), &recorder{}, newTestCluster(),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
 
@@ -225,7 +225,7 @@ func TestAClusterOutsideFailureDomainModeIsRestartedOneNodeAtATime(t *testing.T)
 // The peer gate is drawn around the failure domain: a node that is not online
 // in another failure domain holds the walk, and nothing is sent to the batch.
 func TestANodeDownInAnotherFailureDomainHoldsTheBatch(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	fleet.status["c-1"] = utils.NodeStatusOffline
 	api := domainAPI(fleet)
 	rec := &recorder{}
@@ -248,7 +248,7 @@ func TestANodeDownInAnotherFailureDomainHoldsTheBatch(t *testing.T) {
 // A node of the batch that is already down does not hold the batch it belongs
 // to, which is what lets a walk resumed with half a failure domain down go on.
 func TestANodeOfTheBatchAlreadyDownDoesNotHoldIt(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	fleet.status["a-2"] = utils.NodeStatusOffline
 	r := newOpsReconciler(t, domainAPI(fleet), &recorder{}, domainCluster(),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart))
@@ -268,7 +268,7 @@ func TestANodeOfTheBatchAlreadyDownDoesNotHoldIt(t *testing.T) {
 // the refused node is walked afterward: holding for it would leave part of a
 // failure domain down for as long as the refusal lasts.
 func TestARefusedShutdownEndsTheBatchAtTheNodesAlreadyDown(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	api := domainAPI(fleet)
 	accept := api.shutdownNode
 	refused := false
@@ -304,7 +304,7 @@ func TestARefusedShutdownEndsTheBatchAtTheNodesAlreadyDown(t *testing.T) {
 // node's status moves, so the passes that follow still read every node of the
 // batch as offline, and only the record of the call tells them it was made.
 func TestEachNodeOfABatchIsAskedToRestartOnce(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	api := domainAPI(fleet)
 	pending := map[string]bool{}
 	api.restartNode = func(_, id string) error {
@@ -355,7 +355,7 @@ func TestTheWalkReportsABatchByItsRange(t *testing.T) {
 // Regression: an object written before status.rollingRestart.batchSize existed
 // carries none, and it is walked one node at a time as it was planned.
 func TestAWalkPlannedBeforeBatchesIsWalkedOneNodeAtATime(t *testing.T) {
-	fleet := newDomainFleet(3, 2)
+	fleet := newDomainFleet(3)
 	ops := newTestOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
 		func(o *simplyblockv1alpha2.StorageClusterOps) {
 			o.Status.RollingRestart = &simplyblockv1alpha2.RollingRestartStatus{
