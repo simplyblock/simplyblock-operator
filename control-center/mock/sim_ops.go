@@ -107,6 +107,7 @@ func (s *Simulator) advanceGraphOp(d ResourceDef, obj map[string]any) {
 		setPath(obj, "status.message", fmt.Sprintf("%s has no action %s", d.Kind, action))
 		setPath(obj, "status.completedAt", nowS)
 		s.st.Update(d, ns, obj)
+		s.st.operatorLog.Reconcile("ERROR", d.Kind, ns, name, "the action is not one the kind declares", "action", action)
 		return
 	}
 	step := getStr(obj, "status.step.state")
@@ -128,11 +129,13 @@ func (s *Simulator) advanceGraphOp(d ResourceDef, obj map[string]any) {
 		if contains(graph.abortable, step) {
 			finish("Aborted", "aborted at step "+step+" on request")
 			s.emitEvent(d.Kind, name, ns, "Normal", "Aborted", d.Kind+" "+name+" aborted at "+step)
+			s.st.operatorLog.Reconcile("INFO", d.Kind, ns, name, "spec.abort honored, the operation is Aborted", "step", step)
 			return
 		}
 		if !s.refused[uid] {
 			s.refused[uid] = true
 			s.emitEvent(d.Kind, name, ns, "Warning", "AbortRefused", fmt.Sprintf("%s %s cannot be aborted at step %s", d.Kind, name, step))
+			s.st.operatorLog.Reconcile("INFO", d.Kind, ns, name, "spec.abort is set but the step does not honor it; carrying on", "step", step)
 		}
 	}
 
@@ -141,6 +144,7 @@ func (s *Simulator) advanceGraphOp(d ResourceDef, obj map[string]any) {
 		setPath(obj, "status.phase", "Pending")
 		setPath(obj, "status.message", "waiting for the target's lock")
 		s.st.Update(d, ns, obj)
+		s.st.operatorLog.Reconcile("INFO", d.Kind, ns, name, "admitted; the operation is Pending until its target's activeOpsRef is free", "action", action)
 	case "Pending":
 		if !s.takeTarget(d, obj) {
 			return
@@ -151,6 +155,7 @@ func (s *Simulator) advanceGraphOp(d ResourceDef, obj map[string]any) {
 		setPath(obj, "status.message", "step "+graph.steps[0])
 		s.st.Update(d, ns, obj)
 		s.emitEvent(d.Kind, name, ns, "Normal", "Started", d.Kind+" "+name+" started at "+graph.steps[0])
+		s.st.operatorLog.Reconcile("INFO", d.Kind, ns, name, "took the target's activeOpsRef; entering the first step", "action", action, "step", graph.steps[0])
 	case "Running":
 		s.ticks[uid]++
 		if s.ticks[uid] < ticksPerStep {
@@ -166,6 +171,7 @@ func (s *Simulator) advanceGraphOp(d ResourceDef, obj map[string]any) {
 		if s.rng.Float64() < s.failRate {
 			finish("Failed", fmt.Sprintf("step %s failed (simulated)", step))
 			s.emitEvent(d.Kind, name, ns, "Warning", "Failed", d.Kind+" "+name+" failed at "+step)
+			s.st.operatorLog.Reconcile("ERROR", d.Kind, ns, name, "the step failed; the operation is Failed and releases its target", "step", step, "error", "simulated failure")
 			return
 		}
 		if idx+1 < len(graph.steps) {
@@ -173,10 +179,12 @@ func (s *Simulator) advanceGraphOp(d ResourceDef, obj map[string]any) {
 			s.enterStep(obj, next, now)
 			setPath(obj, "status.message", "step "+next)
 			s.st.Update(d, ns, obj)
+			s.st.operatorLog.Reconcile("INFO", d.Kind, ns, name, "step done; entering the next", "from", step, "step", next)
 			return
 		}
 		finish("Succeeded", "completed")
 		s.emitEvent(d.Kind, name, ns, "Normal", "Completed", d.Kind+" "+name+" completed")
+		s.st.operatorLog.Reconcile("INFO", d.Kind, ns, name, "the last step is done; the operation is Succeeded and releases its target", "step", step)
 		s.onGraphSuccess(d, obj)
 	}
 }
@@ -215,6 +223,7 @@ func (s *Simulator) takeTarget(d ResourceDef, obj map[string]any) bool {
 		if !s.refused["queued:"+getStr(obj, "metadata.uid")] {
 			s.refused["queued:"+getStr(obj, "metadata.uid")] = true
 			s.emitEvent(d.Kind, getStr(obj, "metadata.name"), getStr(obj, "metadata.namespace"), "Normal", "OperationQueued", "queued behind "+holder)
+			s.st.operatorLog.Reconcile("INFO", d.Kind, getStr(obj, "metadata.namespace"), getStr(obj, "metadata.name"), "the target is held by another operation; requeue", "holder", holder, "target", getStr(target, "metadata.name"))
 		}
 		return false
 	}

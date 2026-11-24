@@ -56,4 +56,3 @@ func TestContextsServeSeparateWorlds(t *testing.T) {
 		t.Errorf("a reserved name must be refused")
 	}
 }
-

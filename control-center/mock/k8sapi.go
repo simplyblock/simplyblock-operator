@@ -202,7 +202,7 @@ func (a *K8sAPI) serveGroup(w http.ResponseWriter, r *http.Request, group, versi
 	case sub == "status":
 		a.serveObject(w, r, d, ns, name) // the mock applies status writes to the object itself
 	case sub == "log" && d.Resource == "pods":
-		a.servePodLog(w, d, ns, name)
+		a.servePodLog(w, r, d, ns, name)
 	default:
 		a.writeStatus(w, &apiError{404, "NotFound", "subresource " + sub + " is not served by the mock"})
 	}
@@ -348,13 +348,28 @@ func (a *K8sAPI) servePatch(w http.ResponseWriter, r *http.Request, d ResourceDe
 	writeJSON(w, 200, updated)
 }
 
-func (a *K8sAPI) servePodLog(w http.ResponseWriter, d ResourceDef, ns, name string) {
-	if _, err := a.store.Get(d, ns, name); err != nil {
+func (a *K8sAPI) servePodLog(w http.ResponseWriter, r *http.Request, d ResourceDef, ns, name string) {
+	pod, err := a.store.Get(d, ns, name)
+	if err != nil {
 		a.writeStatus(w, err)
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain")
 	now := time.Now().UTC()
+	// the operator pod's log is what the simulator wrote about the operations
+	// it drove (operatorlog.go); with timestamps=true the kubelet prefixes each
+	// line with its own time, so the console's parser sees the same shape it
+	// does on a cluster
+	if getStr(pod, "metadata.labels.app") == "simplyblock-operator" {
+		tail := 0
+		if t := r.URL.Query().Get("tailLines"); t != "" {
+			fmt.Sscan(t, &tail)
+		}
+		for _, line := range a.store.operatorLog.Tail(tail) {
+			fmt.Fprintf(w, "%s %s\n", line[:strings.IndexByte(line, '\t')], line)
+		}
+		return
+	}
 	for i := 60; i > 0; i-- {
 		ts := now.Add(-time.Duration(i) * 7 * time.Second).Format(time.RFC3339)
 		level := "INFO"

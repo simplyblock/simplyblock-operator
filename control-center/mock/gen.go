@@ -279,9 +279,6 @@ func (g *genCtx) k8sNodes() {
 	}
 }
 
-
-
-
 func (g *genCtx) volumes() {
 	for i := 0; i < g.sc.Volumes; i++ {
 		appNs := g.sc.AppNamespaces[i%len(g.sc.AppNamespaces)]
@@ -368,10 +365,6 @@ func (g *genCtx) snapshots() {
 			map[string]any{"readyToUse": true, "snapshotHandle": g.uuid()}, nil)
 	}
 }
-
-
-
-
 
 func (g *genCtx) replicationChain() {
 	cond := func(typ, reason, msg string) []any {
@@ -660,7 +653,6 @@ func (g *genCtx) secrets() {
 	})
 }
 
-
 func (g *genCtx) events() {
 	n := 25
 	if g.sc.EventStorm {
@@ -735,7 +727,6 @@ func (g *genCtx) tenancyScaffold() {
 		},
 		map[string]any{"phase": "Ready"}, nil)
 }
-
 
 // drApplications creates the DR-application main object (one per app namespace)
 // in the tenant namespace, plus a completed ApplicationFailover for the app

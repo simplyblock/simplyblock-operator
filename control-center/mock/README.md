@@ -84,6 +84,11 @@ deploys the mock next to the console and wires those overrides automatically.
   overflow so clients relist), label selectors (equality, existence, set-based)
   and dotted-path field selectors
 - `/status` subresources (writes apply to the object) and `pods/{name}/log`
+- the operator pod's log (`app=simplyblock-operator`) is what the simulator
+  wrote about the operations it drove, one reconcile line per move in the
+  shape controller-runtime's console encoder gives it, the object's key
+  included, so the console's activity view filters it as on a cluster
+  (`operatorlog.go`); every other pod's log is a generic tail
 - `metadata.generation` bumps only on spec changes; UI-created objects get
   fresh `uid`/`creationTimestamp`
 

@@ -331,7 +331,7 @@ func (g *genCtx) backups() {
 	g.add(sbGroup, "storagebackuppolicies", g.ns, "nightly",
 		map[string]any{
 			"clusterRef": g.clusterName, "schedule": "0 2 * * *",
-			"maxVersions":   float64(7), "maxAge": "168h",
+			"maxVersions": float64(7), "maxAge": "168h",
 			"claimSelector": map[string]any{"matchLabels": map[string]any{"simplyblock.io/backup-policy": "nightly"}},
 		},
 		map[string]any{
