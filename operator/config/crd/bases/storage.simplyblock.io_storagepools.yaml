@@ -345,10 +345,15 @@ spec:
                       description: |-
                         IOPS is the pool-wide ceiling on operations per second, both directions
                         together. Zero is unlimited, which is the control plane's own convention
-                        for these values.
+                        for these values. Not yet settable: the rule on PoolLimits refuses it, and
+                        it is immutable so the console shows it locked rather than offering an
+                        edit the API server refuses.
                       format: int32
                       minimum: 0
                       type: integer
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     maxVolumeSize:
                       description: |-
                         MaxVolumeSize is the largest single logical volume the pool will create.
@@ -378,6 +383,8 @@ spec:
                       type: object
                   type: object
                   x-kubernetes-validations:
+                    - message: field iops is immutable once set
+                      rule: '!has(oldSelf.iops) || has(self.iops)'
                     - message: limits.iops and limits.throughput are not yet supported in beta1
                       rule: '!has(self.iops) && !has(self.throughput)'
                 volumeDefaults:
