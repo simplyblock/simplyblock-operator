@@ -11,7 +11,7 @@ import (
 )
 
 func TestCollectResolvesEveryMarkedPath(t *testing.T) {
-	kinds, err := collect(".", "./testdata/fixture/...")
+	kinds, err := collect("./testdata/fixture/...")
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestCollectResolvesEveryMarkedPath(t *testing.T) {
 }
 
 func TestCollectRefusesAnUnknownMarker(t *testing.T) {
-	_, err := collect(".", "./testdata/typo/...")
+	_, err := collect("./testdata/typo/...")
 	if err == nil || !strings.Contains(err.Error(), "+simplyblock:operatorManged") {
 		t.Fatalf("collect error = %v, want one naming the unknown marker", err)
 	}
@@ -41,7 +41,7 @@ func TestCollectRefusesAnUnknownMarker(t *testing.T) {
 // make manifests runs before make generate, so an API package whose deepcopy
 // still names a removed field has to resolve all the same.
 func TestCollectToleratesTypeErrors(t *testing.T) {
-	kinds, err := collect(".", "./testdata/stale/...")
+	kinds, err := collect("./testdata/stale/...")
 	if err != nil {
 		t.Fatalf("collect: %v", err)
 	}
