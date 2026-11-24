@@ -193,6 +193,8 @@ function NodeDetail({o: n, nav}) {
   const [tab, setTab] = useState("overview");
   const res = n.resources, ports = n.ports, cap = n.capacity;
   // the StorageNode CRD's field markers decide which spec.config fields the card shows (cr-view.jsx)
+  // FIXME: remove together with the spec.config card below, which is all this
+  // CRD lookup serves.
   const schema = window.useCrdSchema ? useCrdSchema("StorageNode") : null;
   const items = [{k: "overview", label: "Overview", icon: "node"}, {k: "logs", label: "Storage plane logs", icon: "list"}];
   return (
@@ -215,6 +217,11 @@ function NodeDetail({o: n, nav}) {
         </div>
         <div className="dcols">
           <div className="card"><h3>status.ports</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}><Props rows={[["management", ports.management], ["nvmeof", ports.nvmeof], ["rpc", ports.rpc], ["lvol", ports.lvol]].map(([k, v]) => [<span className="mono">{k}</span>, v === undefined ? null : <span className="mono">{String(v)}</span>])} /></div></div>
+          {/* FIXME: remove this card. Its rows are a hand-written list, so a field
+              added to the API never appears here and a removed one stays (this
+              one still lists pcieAllowList), which the isInvisible filter cannot
+              catch. The CRSection below already shows spec.config from the CRD,
+              in order and with the field markers applied. */}
           <div className="card"><h3>spec.config</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}><Props rows={[
             ["mgmtInterface", n.config.mgmtInterface], ["dataInterfaces", (n.config.dataInterfaces || []).join(", ")], ["pcieAllowList", (n.config.pcieAllowList || []).join(", ")],
             ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)]

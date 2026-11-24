@@ -22954,6 +22954,8 @@ function NodeDetail({
     ports = n.ports,
     cap = n.capacity;
   // the StorageNode CRD's field markers decide which spec.config fields the card shows (cr-view.jsx)
+  // FIXME: remove together with the spec.config card below, which is all this
+  // CRD lookup serves.
   const schema = window.useCrdSchema ? useCrdSchema("StorageNode") : null;
   const items = [{
     k: "overview",
