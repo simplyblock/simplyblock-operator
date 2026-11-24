@@ -162,11 +162,6 @@ func (g *genCtx) nodesAndDevices() {
 				"expand": false,
 			},
 		}
-		var pcie []any
-		for d := 0; d < g.sc.DevicesPerNode; d++ {
-			pcie = append(pcie, fmt.Sprintf("0000:%02x:00.0", 0x17+d))
-		}
-		spec["config"].(map[string]any)["pcieAllowList"] = pcie
 		if g.sc.Workers >= 6 {
 			spec["config"].(map[string]any)["failureDomain"] = fds[i%3]
 		}

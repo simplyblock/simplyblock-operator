@@ -120,6 +120,13 @@ func TestStorageNodeShape(t *testing.T) {
 		if getPath(n, "spec.storageNodeSetRef") != nil || getPath(n, "status.postedAt") != nil {
 			t.Errorf("%s: v1alpha1 fields present", name)
 		}
+		// The node's own device selectors are gone from the API: a node states its
+		// devices in spec.config.deviceNames.
+		for _, gone := range []string{"pcieAllowList", "pcieDenyList", "pcieModel", "driveSizeRange", "spdkSystemMemory"} {
+			if getPath(n, "spec.config."+gone) != nil {
+				t.Errorf("%s: spec.config.%s is not a StorageNode field", name, gone)
+			}
+		}
 		if getStr(n, "spec.workerNode") == "" || getPath(n, "spec.config.sizing.vcpuCount") == nil {
 			t.Errorf("%s: spec.workerNode and spec.config.sizing.vcpuCount are required", name)
 		}
