@@ -3,7 +3,7 @@
   for, how the entity and Ops halves fit together, and what individual spec and
   status fields mean. Open the file in a browser. It needs no server, except
   for sending results in and the statistics, which need the results API that
-  crd-quiz-host.sh sets up beside the page and stay hidden without it.
+  training-host.sh sets up beside the page and stay hidden without it.
 
   It lives under docs because it is training material derived from the API
   types in operator/api and from docs/designs/crd-redesign/design-crd-model.md,
@@ -1277,7 +1277,7 @@ const QUESTIONS = QUESTIONS_A.concat(QUESTIONS_B);
   const PER_RUN = 15;
   const PER_QUESTION = 5;
   const MAX_POINTS = PER_RUN * PER_QUESTION;
-  // The results API is served beside the page by the host (see crd-quiz-host.sh). When it is not
+  // The results API is served beside the page by the host (see training-host.sh). When it is not
   // there, as for a copy opened from disk, the sharing and statistics views stay hidden.
   const API = 'api/results';
   const app = document.getElementById('app');

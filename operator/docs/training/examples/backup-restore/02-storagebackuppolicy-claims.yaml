@@ -1,0 +1,21 @@
+# A scheduled backup of independent claims. The policy lives in its cluster's
+# namespace, because clusterRef is resolved there, and it selects claims in
+# that same namespace: the controller lists the PersistentVolumeClaims of the
+# policy's namespace against claimSelector. An absent selector selects
+# nothing, which the controller reports with a SelectorEmpty event rather than
+# refusing. The schedule, maxVersions, and maxAge are passed to the control
+# plane, which runs the schedule and prunes, and all three are immutable
+# because the control plane has no call that applies a change.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupPolicy
+metadata:
+  name: nightly
+  namespace: simplyblock
+spec:
+  clusterRef: prod
+  claimSelector:
+    matchLabels:
+      backup: nightly
+  schedule: 15m,4 60m,11 24h,7
+  maxVersions: 22
+  maxAge: 30d

@@ -1,0 +1,17 @@
+# A discovery run over a fleet whose cabinets are labeled on the Node objects.
+# failureDomainLabel names the label the run reads each worker's failure domain
+# from, in place of topology.kubernetes.io/zone, and enableFailureDomains
+# states the mode rather than leaving the run to decide it from the topology.
+# The run is named cabinets, so the draft is discovered-cabinets and the
+# proposed cluster discovered-cabinets-cluster.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: cabinets
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    failureDomainLabel: cabinet
+    enableFailureDomains: true
+    enablePartitionedDevices: true

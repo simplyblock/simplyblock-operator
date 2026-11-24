@@ -1,0 +1,15 @@
+# The first volume. The cluster wrote its default pool, compact-default, and
+# the StorageClass simplyblock-compact for it, so nothing is authored between
+# the cluster coming Online and this claim.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: first-volume
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-compact
+  resources:
+    requests:
+      storage: 10Gi

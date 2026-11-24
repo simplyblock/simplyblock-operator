@@ -1,0 +1,21 @@
+# The control plane of a Talos cluster, written by hand. The Helm chart's
+# standalone profile hands the operator the same object through the bootstrap
+# ConfigMap. Off OpenShift the issuer is cert-manager, which is the CRD's
+# default provider, and cert-manager issues client certificates as well, so
+# mutual TLS stays on. Only a ControlPlane named simplyblock in the operator's
+# namespace is reconciled.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+      tls:
+        enableTLS: true
+        enableMutualTLS: true
+        provider: cert-manager

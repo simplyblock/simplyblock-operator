@@ -1,0 +1,52 @@
+# The draft the discovery run wrote, as it reads after review. The run named it
+# discovered-eks and proposed the cluster discovered-eks-cluster, concluded EKS
+# from the kubelet version and the node labels, read Amazon Linux 2023 off the
+# workers, and found no huge pages reserved, so it left minHugePagesSize unset.
+# The reviewer shortened the cluster's name, raised vcpuCount from the proposed
+# minimum of 5, added the backup store that authenticates through the IAM role
+# rather than through a Secret, and set approved. Everything below is immutable
+# from that moment.
+#
+# The three workers sit in one availability zone, so every one of them carries
+# the zone label and the draft still wrote enableFailureDomains false: a 1+1
+# stripe needs three distinct domains, and the fleet is in one.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-eks
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: EKS
+  hostOS:
+    distro: amzn
+    family: RedHat
+  cluster:
+    name: eks
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    enableFailureDomains: false
+    nodeProvisioningBudget: 1
+    backup:
+      endpoint: https://s3.us-east-1.amazonaws.com
+      bucket: simplyblock-eks-backups
+      region: us-east-1
+      credentials:
+        source: ProviderChain
+  nodeSets:
+    - name: discovered
+      groups:
+        - name: group-1-nvme-2x3.4T
+          workers:
+            - ip-10-0-1-11.ec2.internal
+            - ip-10-0-1-12.ec2.internal
+            - ip-10-0-1-13.ec2.internal
+          mgmtInterface: ens5
+          devices:
+            nvme:
+              - "0000:00:1e.0"
+              - "0000:00:1f.0"

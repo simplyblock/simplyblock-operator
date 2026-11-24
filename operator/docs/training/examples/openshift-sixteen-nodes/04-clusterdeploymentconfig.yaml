@@ -1,0 +1,97 @@
+# The draft of the sixteen-worker tier as it reads after review. The run wrote
+# one node set, discovered, with two groups, because the tier has two hardware
+# variants: ten workers with eight 7.68 TB drives and six with four 15.36 TB
+# drives. The run listed the drives of one NUMA node per worker, and the
+# reviewer added the other node's drives and set socketsToUse to both, so each
+# worker runs two storage nodes and the cluster holds thirty-two, which is the
+# most one cluster may hold. The reviewer also widened the stripe to 4+2,
+# raised the provisioning budget to four workers at once, named the custom
+# machine-config role the tier's workers sit in, and sized the storage-node
+# container for a hundred subsystems. Everything below is immutable once
+# approved.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-tier
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  cluster:
+    name: tier
+    maxSubsystemCount: 100
+    vcpuCount: 16
+    minHugePagesSize: 64G
+    stripe:
+      dataChunks: 4
+      parityChunks: 2
+    socketsToUse:
+      - "0"
+      - "1"
+    nodesPerSocket: 1
+    nodeProvisioningBudget: 4
+    enableDriveFormat: true
+    fabricType: tcp
+    openshift:
+      machineConfigPool: storage
+    tolerations:
+      - key: storage.simplyblock.io/dedicated
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    containerResources:
+      requests:
+        cpu: "1"
+        memory: 2Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+  nodeSets:
+    - name: discovered
+      groups:
+        - name: eight-drive
+          workers:
+            - storage-01
+            - storage-02
+            - storage-03
+            - storage-04
+            - storage-05
+            - storage-06
+            - storage-07
+            - storage-08
+            - storage-09
+            - storage-10
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - ens2f0
+          spdkSystemMemory: 8G
+          reservedSystemCPU: 0-3
+          devices:
+            nvme:
+              - "0000:5e:00.0"
+              - "0000:5f:00.0"
+              - "0000:60:00.0"
+              - "0000:61:00.0"
+              - "0000:af:00.0"
+              - "0000:b0:00.0"
+              - "0000:b1:00.0"
+              - "0000:b2:00.0"
+        - name: four-drive
+          workers:
+            - storage-11
+            - storage-12
+            - storage-13
+            - storage-14
+            - storage-15
+            - storage-16
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - ens2f0
+          spdkSystemMemory: 6G
+          reservedSystemCPU: 0-3
+          devices:
+            nvme:
+              - "0000:5e:00.0"
+              - "0000:5f:00.0"
+              - "0000:af:00.0"
+              - "0000:b0:00.0"

@@ -1,0 +1,27 @@
+# A discovery run over a dedicated, tainted storage tier. The selector is what
+# keeps the run to the sixteen storage workers, the toleration is what lets a
+# probe land on a tainted one at all, and the device filter is what keeps the
+# boot disk out of every group of the draft. The run copies the toleration into
+# the draft's cluster template, because a taint a probe had to tolerate is one
+# the storage-node pods have to tolerate as well.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: tier
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    configName: discovered-tier
+    nodeSelector:
+      node-role.kubernetes.io/storage: ""
+    tolerations:
+      - key: storage.simplyblock.io/dedicated
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    enablePartitionedDevices: true
+    deviceFilter:
+      pcieDenyList:
+        - "0000:01:00.0"
+      driveSizeRange: 3T-16T

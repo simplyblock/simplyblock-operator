@@ -1,0 +1,15 @@
+# A discovery run for a compact cluster. The Helm chart raises one like it on
+# a fresh standalone install, named after discovery.name; an OperatorHub
+# install writes it by hand. The one line that matters on a compact cluster is
+# enableControlPlaneNodes: without it the run reports every node as a
+# control-plane node it is not allowed to use, and the draft is empty.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: compact
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    enableControlPlaneNodes: true
+    enablePartitionedDevices: true

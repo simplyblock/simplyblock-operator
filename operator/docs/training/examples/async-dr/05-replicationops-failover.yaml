@@ -1,0 +1,15 @@
+# The unplanned failover: site-a is down, and every volume under dr-policy is
+# promoted on site-b from its last replicated snapshot. Nothing raises this on
+# its own. A person writes it, after deciding that the source is lost, and the
+# writes since the last snapshot are lost with it. The operation is one call
+# to the control plane that answers per volume, so the outcome is per volume
+# in status.results, and the name of the operation is recorded on each slot.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: failover-dr-policy
+  namespace: simplyblock
+spec:
+  action: failover
+  scope: policy
+  ref: dr-policy

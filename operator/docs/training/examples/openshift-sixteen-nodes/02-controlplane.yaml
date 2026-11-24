@@ -1,0 +1,31 @@
+# The control plane of a sixteen-node deployment, with the FoundationDB
+# processes confined to three labeled workers. What is new against the compact
+# chapter is the `foundationDB` block's own placement: a worker that runs a
+# FoundationDB pod is added to the storage cluster on its own whatever the
+# provisioning budget allows, so confining the database to three workers is
+# what leaves the other thirteen free to be added together. The three carry
+# the storage tier's taint, so the database tolerates it, and the rest of the
+# control plane, which does not follow the database there, does not.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      replicas: 2
+      foundationDB:
+        replicas: 3
+        nodeSelector:
+          storage.simplyblock.io/foundationdb: ""
+        tolerations:
+          - key: storage.simplyblock.io/dedicated
+            operator: Equal
+            value: "true"
+            effect: NoSchedule
+      tls:
+        enableTLS: true
+        enableMutualTLS: false
+        provider: OpenShift

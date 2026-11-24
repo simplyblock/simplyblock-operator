@@ -1,0 +1,35 @@
+# A second pool on the sixteen-node cluster, beside the default pool tier-default
+# the cluster wrote on its own. A pool is the tenancy unit a cluster is carved
+# into: this one is held to a capacity and a largest volume, and every volume in
+# it is formatted with ext4. The operator writes a StorageClass for the default
+# pool only, so the class for this pool is written by hand and tied to it by the
+# three assignment labels. The cluster id in its parameters is the cluster's
+# status.uuid, read after the cluster is Online.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: databases
+  namespace: simplyblock
+spec:
+  clusterRef: tier
+  limits:
+    capacity: 200T
+    maxVolumeSize: 4T
+  volumeDefaults:
+    filesystem: ext4
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-tier-databases
+  labels:
+    storage.simplyblock.io/namespace: simplyblock
+    storage.simplyblock.io/cluster: tier
+    storage.simplyblock.io/pool: databases
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 7c1c0b2e-6a0e-4d0a-9e2b-2f4e1b3c5d6f
+  pool_name: databases
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

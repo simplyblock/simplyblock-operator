@@ -1,0 +1,17 @@
+# The way back, once site-a is up again: for every failed-over volume, the
+# final snapshot is synced from site-b back to the source, then a commit
+# switches the active path back. The operation stays Running until every slot
+# reports replicating toward site-b again, so Succeeded means the volumes are
+# home. sourceClusterID names the cluster to recover to, as the control plane
+# knows it, and is left out to recover to the original source. Failback takes
+# scope policy or volume, never target.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: failback-dr-policy
+  namespace: simplyblock
+spec:
+  action: failback
+  scope: policy
+  ref: dr-policy
+  sourceClusterID: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e

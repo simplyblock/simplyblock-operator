@@ -1,0 +1,20 @@
+# A claim that opts into replication by itself, through the cluster's plain
+# default class. The annotation on a claim wins over the one on its class, so
+# this is also how one claim of a replicated class follows another policy, or
+# none. The slot the operator creates is named dr-policy-orders-db, lives in
+# this namespace beside the claim, and is owned by it: deleting the claim
+# detaches the volume from the policy before the slot goes.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-db
+  namespace: shop
+  annotations:
+    storage.simplyblock.io/replication-policy: simplyblock/dr-policy
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-site-a
+  resources:
+    requests:
+      storage: 50Gi

@@ -1,0 +1,26 @@
+# The Helm values of a standalone install on a Talos cluster: the operator
+# hosts its own control plane, serving and client certificates come from
+# cert-manager through the self-signed ClusterIssuer the chart creates, and the
+# first discovery run inspects the schedulable workers, which on a Talos cluster
+# with a separate control plane are the three storage machines. Nothing here is
+# Talos-specific: the chart carries no Talos value, and what Talos changes is
+# stated on the draft the run writes.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
+deployment:
+  profile: standalone
+
+tls:
+  enabled: true
+  provider: cert-manager
+  cert-manager:
+    createSelfSignedIssuer: true
+    cluster-issuer: selfsigned
+  mutual_enabled: true
+
+discovery:
+  enabled: true
+  name: talos
+  enableControlPlaneNodes: false
+  enablePartitionedDevices: true

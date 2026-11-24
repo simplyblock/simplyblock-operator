@@ -1,0 +1,12 @@
+# The CSI driver, as the object the operator builds it from. Nothing in it is
+# EKS's: the driver reaches the control plane over the pod network and the
+# storage nodes over NVMe/TCP, on any distribution alike. It reports Unavailable
+# until a storage cluster exists, which is expected on a fresh install.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  enableVolumeSnapshots: true

@@ -1,0 +1,20 @@
+# The Helm values of a standalone install on a compact OpenShift cluster: the
+# operator hosts its own control plane, serving certificates come from the
+# OpenShift service CA, and the first discovery run is allowed to inspect the
+# control-plane nodes, which on a compact cluster are the only nodes there are.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 02-helm-values.yaml
+deployment:
+  profile: standalone
+
+tls:
+  enabled: true
+  provider: openshift
+  mutual_enabled: false
+
+discovery:
+  enabled: true
+  name: compact
+  enableControlPlaneNodes: true
+  enablePartitionedDevices: true

@@ -1,0 +1,15 @@
+# The two clusters of the replication relationship: the local StorageCluster
+# site-a as the source, and the cluster at the second site as the target. One
+# control plane serves both clusters, so the target is addressed by what the
+# control plane knows it as: the name of a StorageCluster in this namespace, or
+# the backend UUID when the target cluster's StorageCluster object lives on
+# another Kubernetes cluster and cannot be looked up here. The pair is reused
+# by every policy that replicates between these two clusters.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPair
+metadata:
+  name: site-a-to-site-b
+  namespace: simplyblock
+spec:
+  sourceCluster: site-a
+  targetCluster: 2b7f3a9e-5c1d-4e8a-9f20-6d4c1b0a7e55

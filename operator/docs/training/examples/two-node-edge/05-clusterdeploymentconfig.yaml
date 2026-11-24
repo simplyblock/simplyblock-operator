@@ -1,0 +1,44 @@
+# The draft the run wrote, as it reads after review. The run proposed
+# clusterMode Dual and the 1+1 stripe from the fleet of two. The reviewer
+# turned on the central control plane's arbitration and its host fencing,
+# bounded the hold and the lease, shortened the cluster's name, and set
+# approved. Everything below is immutable from that moment. edgeCluster is a
+# statement about the deployment that no controller reads.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-edge
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  edgeCluster: true
+  cluster:
+    name: edge
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    minHugePagesSize: 32G
+    clusterMode: Dual
+    enableArbitration: true
+    arbitration:
+      holdMs: 3000
+      leaseTtlMs: 1500
+      hostFencing: true
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+  nodeSets:
+    - name: edge
+      groups:
+        - name: default
+          workers:
+            - edge-0
+            - edge-1
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

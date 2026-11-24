@@ -1,0 +1,18 @@
+# The ControlPlane of the edge cluster, as the chart's managed profile hands it
+# to the operator. spec.source.managed installs nothing: the operator resolves
+# the endpoint, probes it, and reports Available or Unavailable. The source
+# cannot change afterward, because the clusters and their volumes live in the
+# FoundationDB behind the control plane this names. Only a ControlPlane named
+# simplyblock in the operator's namespace is reconciled.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    managed:
+      endpoint: https://control.central.example.com
+      credentialsSecretRef:
+        name: central-control-plane
+      storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4

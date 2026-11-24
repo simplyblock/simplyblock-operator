@@ -1,0 +1,38 @@
+# The Helm values of a standalone install on a three-node GKE cluster: the
+# operator hosts its own control plane, serving and client certificates come
+# from cert-manager through the self-signed ClusterIssuer the chart creates,
+# the coordinators' volumes name GKE's persistent-disk class, and the first
+# discovery run inspects the storage node pool alone, by the label GKE puts on
+# every node of a pool.
+#
+# cert-manager has to be installed before this, because the chart refuses to
+# render with tls.provider cert-manager on a cluster that does not serve
+# cert-manager.io/v1:
+#
+#   helm repo add jetstack https://charts.jetstack.io
+#   helm install cert-manager jetstack/cert-manager \
+#     --namespace cert-manager --create-namespace --set crds.enabled=true
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
+deployment:
+  profile: standalone
+
+tls:
+  enabled: true
+  provider: cert-manager
+  mutual_enabled: true
+  cert-manager:
+    createSelfSignedIssuer: true
+    cluster-issuer: selfsigned
+
+controlplane:
+  storageclass:
+    name: standard-rwo
+
+discovery:
+  enabled: true
+  name: gke
+  nodeSelector:
+    cloud.google.com/gke-nodepool: simplyblock-storage
+  enablePartitionedDevices: true

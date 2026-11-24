@@ -1,0 +1,29 @@
+# The NodeHealthCheck that turns the StorageFenced condition into a
+# StorageFenceRemediation. It is a medik8s object, which the operator neither
+# installs nor validates. The selector names the two storage nodes by hostname,
+# so an OpenShift arbiter node, which carries no storage node and is never
+# storage-fenced, is not among the nodes the check counts. maxUnhealthy is the
+# line that makes the check act at all: with its default of 51% healthy, one
+# node out of two is never remediated.
+apiVersion: remediation.medik8s.io/v1alpha1
+kind: NodeHealthCheck
+metadata:
+  name: simplyblock-storage-fenced
+spec:
+  selector:
+    matchExpressions:
+      - key: kubernetes.io/hostname
+        operator: In
+        values:
+          - edge-0
+          - edge-1
+  maxUnhealthy: 1
+  unhealthyConditions:
+    - type: StorageFenced
+      status: "True"
+      duration: 2s
+  remediationTemplate:
+    apiVersion: storage.simplyblock.io/v1alpha2
+    kind: StorageFenceRemediationTemplate
+    namespace: simplyblock
+    name: storage-fence

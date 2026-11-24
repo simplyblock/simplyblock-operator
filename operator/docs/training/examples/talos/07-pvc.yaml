@@ -1,0 +1,16 @@
+# The first volume. The cluster wrote its default pool, talos-default, and the
+# StorageClass simplyblock-talos for it, so nothing is authored between the
+# cluster coming Online and this claim. The node plugin attaches it over
+# NVMe-oF TCP with the initiator modules the Talos kernel builds in.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: first-volume
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-talos
+  resources:
+    requests:
+      storage: 10Gi

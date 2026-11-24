@@ -1,0 +1,28 @@
+# The control plane of a 96-node OpenShift deployment. What differs from the
+# compact and the sixteen-node chapters is where FoundationDB sits: its
+# processes are confined to the three infrastructure nodes, which carry no NVMe
+# devices and are never drafted as storage nodes. A worker running a
+# FoundationDB process is added to its cluster on its own whatever the
+# provisioning budget says, so a database spread over the storage workers would
+# serialize part of the fleet's node adds behind it.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+        nodeSelector:
+          node-role.kubernetes.io/infra: ""
+        tolerations:
+          - key: node-role.kubernetes.io/infra
+            operator: Exists
+            effect: NoSchedule
+      tls:
+        enableTLS: true
+        enableMutualTLS: false
+        provider: OpenShift

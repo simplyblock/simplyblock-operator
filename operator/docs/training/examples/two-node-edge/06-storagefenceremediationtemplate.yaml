@@ -1,0 +1,16 @@
+# The remediation template a NodeHealthCheck names for storage-fenced nodes.
+# NodeHealthCheck creates one StorageFenceRemediation per fenced node from it,
+# and the operator's remediation reconciler applies the out-of-service taint
+# once the control plane confirms the fence. With allowForeignVolumes false, a
+# node that still has a volume of another CSI driver attached is left to an
+# administrator in phase Blocked, because the taint would force-detach a volume
+# nothing fenced.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageFenceRemediationTemplate
+metadata:
+  name: storage-fence
+  namespace: simplyblock
+spec:
+  template:
+    spec:
+      allowForeignVolumes: false

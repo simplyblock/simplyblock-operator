@@ -1,0 +1,24 @@
+# A discovery run confined to the storage node group. The Helm chart raises one
+# like it on a fresh standalone install, and an install without the chart
+# writes it by hand. The node selector is the label Amazon EKS puts on the
+# nodes of a managed node group, so a cluster that also runs a general-purpose
+# node group is not probed there. The model filter keeps the draft to the
+# devices whose model string contains the text: on an EC2 Nitro instance the
+# instance-store disks and every attached EBS volume are NVMe controllers
+# alike, and the probe tells them apart by nothing but what each device
+# reports. The string to match is read from a probe report, under the
+# ConfigMaps labeled storage.simplyblock.io/nodeprobe-run=<run>, and a filter
+# that matches nothing fails the run rather than writing an empty draft.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: eks
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: storage
+    enablePartitionedDevices: true
+    deviceFilter:
+      pcieModel: Instance Storage

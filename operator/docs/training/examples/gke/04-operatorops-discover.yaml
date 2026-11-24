@@ -1,0 +1,17 @@
+# A discovery run confined to the storage node pool. GKE labels every node of
+# a pool with cloud.google.com/gke-nodepool, so the selector is the pool's
+# name, and the run leaves the cluster's other pools alone. The control-plane
+# flag is not needed: Google's control plane is not a node, and no GKE node
+# carries the control-plane role. The chart raises a run like this one on a
+# fresh standalone install, named after discovery.name.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: gke
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    nodeSelector:
+      cloud.google.com/gke-nodepool: simplyblock-storage
+    enablePartitionedDevices: true

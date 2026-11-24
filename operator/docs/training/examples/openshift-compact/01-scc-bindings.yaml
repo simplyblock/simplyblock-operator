@@ -1,0 +1,37 @@
+# What OpenShift needs before the operator is installed: the simplyblock
+# namespace's service accounts bound to the privileged and anyuid security
+# context constraints. The storage-node pods drive NVMe devices and huge pages
+# on the host, which no restricted SCC allows, and the operator grants nothing
+# of this itself.
+#
+# The namespace also needs the privileged Pod Security level:
+#
+#   oc label namespace simplyblock \
+#     pod-security.kubernetes.io/enforce=privileged \
+#     pod-security.kubernetes.io/audit=privileged \
+#     pod-security.kubernetes.io/warn=privileged
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-scc-privileged
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:serviceaccounts:simplyblock
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-scc-anyuid
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+subjects:
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: system:serviceaccounts:simplyblock

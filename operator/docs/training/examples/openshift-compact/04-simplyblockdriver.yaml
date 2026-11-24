@@ -1,0 +1,12 @@
+# The CSI driver, as the object the operator builds it from. It reports
+# Unavailable until a storage cluster exists, which is expected on a fresh
+# install: it is written before the cluster so that the first volume can be
+# provisioned the moment the cluster is Online.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  enableVolumeSnapshots: true

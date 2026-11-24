@@ -1,0 +1,18 @@
+# The shape of the machine-config patch a Preprovisioned deployment applies to
+# every Talos worker before the draft is approved. In that mode, the default,
+# the node agent writes nothing to the host: it verifies that the huge-page pool
+# (machine.sysfs) and the kubelet's CPU topology (machine.kubelet.extraConfig)
+# are in the machine config, and fails the node's add naming the patch to apply
+# when they are not. The agent is not in this repository, so the values it
+# expects are the ones its failure message names: the two sections below are
+# the sections the operator's API documents, not a finished patch.
+#
+#   talosctl --nodes <worker> patch machineconfig --patch @05-machine-config-patch.yaml
+machine:
+  # sysfs:
+  #   <the huge-page pool entry the agent's message names>: "<count>"
+  kubelet:
+    extraConfig:
+      # CPU pinning holds only on a kubelet running the static CPU manager.
+      cpuManagerPolicy: static
+      # reservedSystemCPUs: "<the cores the agent's message names>"

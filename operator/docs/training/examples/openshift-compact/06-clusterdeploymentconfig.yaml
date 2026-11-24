@@ -1,0 +1,38 @@
+# The draft the discovery run wrote, as it reads after review. The run named
+# it discovered-compact and proposed the cluster discovered-compact-cluster;
+# the reviewer shortened the cluster's name, checked the three workers and
+# their devices, and set approved. Everything below is immutable from that
+# moment, because the document is then the record of what was deployed.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-compact
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  cluster:
+    name: compact
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    minHugePagesSize: 32G
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    nodeProvisioningBudget: 1
+  nodeSets:
+    - name: compact
+      groups:
+        - name: default
+          workers:
+            - master-0
+            - master-1
+            - master-2
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

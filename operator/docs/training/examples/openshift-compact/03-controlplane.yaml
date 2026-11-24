@@ -1,0 +1,20 @@
+# The control plane of a compact OpenShift cluster, written by hand. An install
+# through OperatorHub applies nothing on its own, and the Helm chart's standalone
+# profile hands the operator the same object through the bootstrap ConfigMap, so
+# this is what the operator reconciles either way. Only a ControlPlane named
+# simplyblock in the operator's namespace is reconciled.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+      tls:
+        enableTLS: true
+        enableMutualTLS: false
+        provider: OpenShift

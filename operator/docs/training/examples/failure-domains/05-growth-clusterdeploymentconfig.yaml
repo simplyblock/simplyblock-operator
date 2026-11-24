@@ -1,0 +1,54 @@
+# A growth document, written later: three more workers, one per cabinet, added
+# to the cluster this chapter created. clusterRef names the cluster in place of
+# a cluster template, and the cluster's enableFailureDomains, which is
+# immutable, is what requires every group here to carry a failure domain. The
+# activation layout rule is not applied to a growth document, since the control
+# plane checks it at a fresh activation alone, but the control plane refuses an
+# add that leaves the domains differing by more than one host, so the growth is
+# dealt one worker per cabinet. The labels are ones the cluster already maps,
+# so status.failureDomains gains no entry.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: cabinets-growth
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  clusterRef: cabinets
+  nodeSets:
+    - name: cabinets-growth
+      groups:
+        - name: cabinet-a
+          failureDomain: cabinet-a
+          workers:
+            - worker-6
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: cabinet-b
+          failureDomain: cabinet-b
+          workers:
+            - worker-7
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: cabinet-c
+          failureDomain: cabinet-c
+          workers:
+            - worker-8
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

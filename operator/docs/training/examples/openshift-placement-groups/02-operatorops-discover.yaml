@@ -1,0 +1,16 @@
+# The discovery run over the 96 storage workers. Nothing in it names the
+# placement groups: the run reads the storage.simplyblock.io/placement-group
+# label off every worker it inspects, and workers carrying one value become
+# one node set named by it. The control-plane nodes are left out by default,
+# and the infrastructure nodes are inspected and refused because they hold no
+# NVMe device, so neither reaches the draft.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: prod
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    configName: discovered-prod
+    enablePartitionedDevices: true

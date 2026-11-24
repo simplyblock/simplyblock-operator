@@ -1,0 +1,38 @@
+# Restoring a consistency group from a group snapshot that is still in the
+# cluster, with no bucket involved. A VolumeGroupSnapshot takes one generation
+# of the group through the CSI GroupController and materializes one
+# VolumeSnapshot per member. The VolumeGroupSnapshotOps creates one claim per
+# member snapshot, named <namePrefix>-<source claim>, and waits for every claim
+# to bind. The class is written by hand: the chart installs the group snapshot
+# CRDs and enables the feature gate, but no class instance.
+apiVersion: groupsnapshot.storage.k8s.io/v1beta1
+kind: VolumeGroupSnapshotClass
+metadata:
+  name: simplyblock-groups
+driver: csi.simplyblock.io
+deletionPolicy: Delete
+---
+apiVersion: groupsnapshot.storage.k8s.io/v1beta1
+kind: VolumeGroupSnapshot
+metadata:
+  name: orders-gen
+  namespace: app-a
+spec:
+  volumeGroupSnapshotClassName: simplyblock-groups
+  source:
+    selector:
+      matchLabels:
+        storage.simplyblock.io/consistency-group: orders
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: VolumeGroupSnapshotOps
+metadata:
+  name: restore-orders-gen
+  namespace: app-a
+spec:
+  volumeGroupSnapshotRef: orders-gen
+  action: Restore
+  restore:
+    namePrefix: restored
+    consistencyGroup: orders-restored
+    enablePartialRestore: false

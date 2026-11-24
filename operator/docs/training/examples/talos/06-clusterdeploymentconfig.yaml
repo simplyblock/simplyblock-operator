@@ -1,0 +1,47 @@
+# The draft the discovery run wrote, as it reads after review. The run named
+# it discovered-talos and proposed the cluster discovered-talos-cluster. The
+# reviewer shortened the cluster's name, checked the three workers and their
+# devices, and set approved. What is Talos about it: the environment the run
+# detected, the host OS it read from every worker's os-release with no
+# packaging family, the machine-config mode, and the talosctl image the nodes
+# run as a Job to reach the Talos API. The mode is written out although it is
+# the default, so the reviewer sees who is expected to write the machine config.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-talos
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: Talos
+  hostOS:
+    distro: talos
+  images:
+    talosctl:
+      image: ghcr.io/siderolabs/talosctl:v1.13.8
+  cluster:
+    name: talos
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    minHugePagesSize: 32G
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    nodeProvisioningBudget: 1
+    talosMachineConfig: Preprovisioned
+  nodeSets:
+    - name: default
+      groups:
+        - name: default
+          workers:
+            - worker-0
+            - worker-1
+            - worker-2
+          mgmtInterface: eth0
+          dataInterfaces:
+            - eth0
+          devices:
+            nvme:
+              - "0000:01:00.0"
+              - "0000:02:00.0"
