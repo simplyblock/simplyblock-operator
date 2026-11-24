@@ -18,7 +18,8 @@ import (
 // <fixtures>/v1/foo/bar.json when the file exists, falling back to
 // <fixtures>/v1/foo/bar/index.json, and POST/PUT/PATCH/DELETE first try a
 // method-suffixed file (bar.post.json). Anything without a fixture answers
-// {"status":"success","data":[]} and is recorded, so /mockctl/info shows
+// {"results":[]}, which the console reads as an empty collection, and is
+// recorded, so /mockctl/info shows
 // exactly which endpoints the UI called that nobody has modeled yet — that
 // list is the to-do list for new fixtures.
 type OperatorAPI struct {
@@ -64,7 +65,8 @@ func (o *OperatorAPI) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	o.record(r.Method + " /" + rel)
-	writeJSON(w, 200, map[string]any{"status": "success", "data": []any{}})
+	// The console's envelope for a collection (api.jsx, preq): an empty one.
+	writeJSON(w, 200, map[string]any{"results": []any{}})
 }
 
 func (o *OperatorAPI) record(req string) {
