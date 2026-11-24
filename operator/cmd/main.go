@@ -1241,12 +1241,12 @@ func main() {
 	if siteLinkEnabled {
 		driverSiteLink = &driver.SiteLinkConfig{Address: siteLinkAddr, AgentNamespace: siteLinkNamespace}
 	}
-	// The metadata server's state volume and allowed hosts go through the same
-	// control-plane client the data-protection band writes through, since the
-	// API serves every storage cluster and the cluster is part of each call.
+	// The metadata server's state volume and allowed hosts go through the
+	// control plane of the volume's cluster: a remote cluster's own endpoint,
+	// or the local one the data-protection band writes through.
 	mdsStateCoordinator := &mdsstate.Coordinator{
 		Client: mgr.GetClient(),
-		APIFor: func(context.Context, string) (mdsstate.VolumeAPI, error) { return backupAPI, nil },
+		APIFor: driver.StateVolumeAPI(mgr.GetClient(), backupAPI),
 	}
 	if mdsFailover != nil {
 		mdsStateCoordinator.Switchover = mdsFailover
