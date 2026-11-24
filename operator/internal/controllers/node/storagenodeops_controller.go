@@ -301,7 +301,7 @@ func (r *StorageNodeOpsReconciler) Reconcile(
 		case node.IsRemote():
 			// The lock refuses a remote node's operation; the gate does not hold it.
 		default:
-			ready, reason, err := r.clusterReady(ctx, node)
+			ready, reason, err := r.clusterReady(ctx, &ops, node)
 			if err != nil {
 				return ctrl.Result{RequeueAfter: opsRetry}, r.hold(ctx, &ops, err.Error())
 			}
@@ -863,7 +863,9 @@ func running(ops *simplyblockv1alpha2.StorageNodeOps) bool {
 }
 
 func (r *StorageNodeOpsReconciler) clusterReady(
-	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	node *simplyblockv1alpha2.StorageNode,
 ) (bool, string, error) {
 	var cluster simplyblockv1alpha2.StorageCluster
 	key := types.NamespacedName{Name: node.Spec.ClusterRef, Namespace: node.Namespace}
@@ -897,14 +899,50 @@ func (r *StorageNodeOpsReconciler) clusterReady(
 			"the control plane no longer reports cluster %s", cluster.Name), nil
 	}
 	if reading.Status != utils.ClusterStatusActive {
-		return false, fmt.Sprintf("cluster %s is %s rather than active",
-			cluster.Name, reading.Status), nil
+		admitted, err := r.degradedByOwnDomain(ctx, ops, node, &cluster, reading.Status)
+		if err != nil {
+			return false, "", err
+		}
+		if !admitted {
+			return false, fmt.Sprintf("cluster %s is %s rather than active",
+				cluster.Name, reading.Status), nil
+		}
 	}
 	if reading.Rebalancing {
 		return false, fmt.Sprintf(
 			"cluster %s is rebalancing; the operation resumes when it settles", cluster.Name), nil
 	}
 	return true, "", nil
+}
+
+// degradedByOwnDomain reports a maintenance window whose cluster is degraded
+// only by nodes of the window's own failure domain, on a cluster where a
+// domain holds one chunk of a stripe at most (maintenancedomains.go).
+//
+// Such a cluster can take one more node of that domain down: the stripes the
+// node holds a chunk of have lost nothing to the nodes already down. Holding
+// the window on it is what made the maintenance of a failure domain one worker
+// at a time, because the first worker's shutdown is what degrades the cluster
+// the second worker's window is then held on.
+//
+// Only a maintenance window is admitted this way. The other operation the gate
+// holds moves data into the cluster, which a degraded cluster cannot take.
+func (r *StorageNodeOpsReconciler) degradedByOwnDomain(
+	ctx context.Context,
+	ops *simplyblockv1alpha2.StorageNodeOps,
+	node *simplyblockv1alpha2.StorageNode,
+	cluster *simplyblockv1alpha2.StorageCluster,
+	status string,
+) (bool, error) {
+	if ops.Spec.Action != simplyblockv1alpha2.StorageNodeOpsActionHostMaintenance ||
+		status != utils.ClusterStatusDegraded {
+		return false, nil
+	}
+	layout, err := r.maintenanceLayout(ctx, cluster)
+	if err != nil {
+		return false, err
+	}
+	return layout.downOnlyIn(node), nil
 }
 
 // clusterLabel is the metric label for the operation's cluster. It is the object

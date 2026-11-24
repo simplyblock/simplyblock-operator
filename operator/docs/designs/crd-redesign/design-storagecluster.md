@@ -298,6 +298,9 @@ minimum of 1 and a default of 1 when unset. The effective value is
 `min(spec.maxConcurrentWorkerRestarts, status.maxFaultTolerance)`, computed by
 `effectiveConcurrentRestarts` and published to `status` so tooling reads one
 authoritative number rather than recomputing it.
+On a cluster whose failure domains each hold one chunk of a stripe at most, the
+number counts failure domains rather than workers
+([`design-storagenode.md`](design-storagenode.md) §10).
 
 **Two separate migration policies, deliberately not one.**
 `volumeMigrationSettings` controls manual migration and the post-migration data
@@ -1324,11 +1327,11 @@ status, and a restart brings the node back into service mid-removal. Such a node
 left out of `nodes`, and a planned node whose removal starts mid-walk is skipped,
 the same as one the control plane stops listing.
 
-**A skip is recorded as a skip.** The walk advances past a skipped node at once,
-records it in `status.rollingRestart.skipped` in the same write that moves
-`nodeIndex`, and emits `NodeSkipped` rather than `NodeRestarted`. The success
-message counts only the nodes restarted and names the ones skipped, so a walk that
-passed over a node does not report it as restarted.
+**A skip is recorded as a skip.** The walk records a skipped node in
+`status.rollingRestart.skipped` when the skip is first seen, emits `NodeSkipped`
+rather than `NodeRestarted`, and advances at once past a batch (§7.4) with no node
+left to act on. The success message counts only the nodes restarted and names the
+ones skipped, so a walk that passed over a node does not report it as restarted.
 
 ### 7.2 The steps
 
@@ -1372,7 +1375,74 @@ because the cluster is degraded from one holding because of a bug.
 
 `status.message` carries `Node 2/5 (uuid): restarting`, read off `nodeIndex` and
 `len(nodes)`, so `kubectl describe scops` shows the position in the walk without
-reading the cluster CR.
+reading the cluster CR. A batch of several nodes (§7.4) reads `Nodes 5-8/12:
+restarting`, by its range: a failure domain can hold more nodes than a message has
+room for, and `status.rollingRestart.nodes` lists them.
+
+### 7.4 Batches: a failure domain is restarted together
+
+The walk moves a batch at a time, and everything above reads "node" for a batch of
+one, which is every batch of a cluster outside failure-domain mode. The graph is
+unchanged. Each step acts on every node of the batch and completes when it has for
+all of them.
+
+**A batch is the nodes of one failure domain when a whole failure domain may be
+down.** That is a cluster with `spec.enableFailureDomains` set, every node in a
+failure domain, and at least as many failure domains as a stripe has chunks
+(`ndcs + npcs`). The chunks of a stripe are spread as evenly as possible over the
+failure domains, so each then holds one chunk, and every node of one failure
+domain down costs a stripe no more than one node down does. With fewer failure
+domains one of them holds several chunks of a stripe, the control plane refuses
+the second shutdown in it, and the walk stays at one node per batch. This is the
+control plane's own rule read ahead of time, and the control plane still decides
+every shutdown when it is asked for.
+
+```go
+// BatchSize is how many nodes, starting at NodeIndex, are being restarted
+// together. Zero is an object written before the field existed and reads as one.
+BatchSize int32 `json:"batchSize,omitempty"`
+
+// Calls are the control-plane calls made for the batch's nodes in the current
+// step, each trusted to be in flight until its lease runs out.
+Calls []RollingRestartCall `json:"calls,omitempty"`
+```
+
+`nodes` lists the nodes of one failure domain next to each other, so a batch is a
+position and a length. The size is written with `nodeIndex`, in the write that
+plans the walk and in each write that advances it, from the fleet as it stands
+then. The two are one position, and a walk resumed with the index and not the size
+would take the rest of its own batch for offline peers.
+
+| Step               | Over a batch                                                                                                                   |
+|--------------------|--------------------------------------------------------------------------------------------------------------------------------|
+| `CheckingPeers`    | The peers are every node outside the batch. A node of the batch already down holds nothing                                     |
+| `ShuttingDownNode` | One node after another, because the control plane refuses a shutdown while another node of the cluster is shutting down        |
+| `RefreshingPod`    | Every pod of the batch                                                                                                         |
+| `AwaitingPod`      | Every replacement pod is `Ready`                                                                                               |
+| `RestartingNode`   | Every node is asked on the same pass. The control plane restarts the nodes of a failure domain that is wholly down in parallel |
+| `Rebalancing`      | Once for the batch, which is what makes a large fleet take a walk per failure domain instead of a walk per node                |
+
+**One call per node needs one record per node.** `status.step.claim` holds one
+claim for the step, and a batch makes one call per node in it. The passes that
+follow a restart still read every node of the batch as offline until the control
+plane has moved them, so each of those passes would ask again. `calls` holds a
+record per node, written before the call at the version the pass read the
+operation at, with the same lease a step's claim has. The records go when the walk
+advances.
+
+**A refused shutdown ends the batch at the nodes already down.** The control plane
+can refuse a later node of a batch for a reason that was not there when the batch
+was sized: a rebalance that started, a journal still replicating, a migration
+running on some node. Holding there would keep part of a failure domain down for
+as long as the refusal lasted. The walk writes the smaller `batchSize` instead,
+emits `BatchShortened`, restarts the nodes already down, and walks the refused node
+next as a batch of its own, where a refusal holds the walk with nothing down, as it
+does for any first node. A call that failed for a passing reason is treated the
+same way, because the two cannot be told apart and a shorter batch costs only time.
+
+The step deadlines are per batch. A batch's shutdowns run in sequence inside one
+`ShuttingDownNode` budget, which is the limit on how large a failure domain one
+walk takes down together before that budget has to grow with the batch.
 
 ---
 

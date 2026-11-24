@@ -30,6 +30,10 @@ type NodeStatusResponse struct {
 	IP     string `json:"mgmt_ip"`
 	// Site is the node's sync-replication site, empty off a sync cluster.
 	Site string `json:"site"`
+	// FailureDomain is the node's failure-domain index. Nil, like a negative
+	// value, is a node in no failure domain: a control plane that does not
+	// report the field leaves it unset.
+	FailureDomain *int `json:"failure_domain,omitempty"`
 }
 
 type Lvol struct {

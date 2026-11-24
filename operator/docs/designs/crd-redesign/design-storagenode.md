@@ -1481,6 +1481,15 @@ layout. The operation holds rather than fails, emits `ClusterNotReady`, and is
 admitted when the cluster is ready. It applies to the two actions that move data,
 `Migrate` and `HostMaintenance`, and to no others.
 
+**A maintenance window is admitted to a cluster its own failure domain degraded.**
+On a cluster where a failure domain is the unit of unavailability (§10), a window
+is admitted to a `degraded` cluster when every node that is not `online` belongs
+to the failure domain of the window's own node. The first worker of a domain to
+be shut down is what degrades the cluster, and a gate that held the second
+worker's window on that reading made the maintenance of a failure domain one
+worker at a time. A cluster that is rebalancing still holds the window, and so
+does one degraded by a node of another domain.
+
 **The gate is an admission check, asked once and never of an admitted
 operation.** A held operation stays `Pending` and holds nothing: it has not taken
 the node's lock, so an operation queued on the same node is not queued behind a
@@ -2037,6 +2046,22 @@ cluster ([`design-storagecluster.md`](design-storagecluster.md) §3.3). Counting
 operations rather than nodes is what makes the gate correct across a multi-socket
 worker: two nodes on one host go into maintenance together, and the pair is one
 worker's worth of unavailability.
+
+**A failure domain is counted as one unit where it holds one chunk of a stripe at
+most.** That is a cluster with `enableFailureDomains` set, whose every node
+declares a failure domain, and which has at least `ndcs + npcs` domains. Every
+worker of one domain being down then costs a stripe what one worker being down
+costs it, so the workers of a domain are admitted together and the limit counts
+domains: at a fault tolerance of one, one whole failure domain may be in
+maintenance at once. With fewer domains a domain holds several chunks of a
+stripe, and the count stays by worker. How many workers of the domain are
+cordoned at once is what the drain decides, a MachineConfigPool's
+`maxUnavailable` for example, and the gate does not add a second cap.
+
+The workers of a domain still go down one after another, because the control
+plane takes one node through a shutdown at a time. A window waits at `Holding`
+while another window of its domain is at `ShuttingDown`, and `ShuttingDown` sends
+no shutdown while any other node of the cluster is `in_shutdown` or `in_restart`.
 
 **The PodDisruptionBudget is the throttle, and it runs backward from the usual
 one.** A per-node PDB with no disruption allowed is created *before* the shutdown,

@@ -664,7 +664,7 @@ Files: `operator/internal/controllers/node/migrate_test.go`,
 ### Operation: The Host Maintenance Graph (design §10)
 
 Files: `operator/internal/controllers/node/hostmaintenance_test.go`,
-`selfbudget_test.go`, `syncstatus_test.go`
+`hostmaintenance_domains_test.go`, `selfbudget_test.go`, `syncstatus_test.go`
 
 | #     | Scenario                                                                            | Type       | Test                                                        |
 |-------|-------------------------------------------------------------------------------------|------------|-------------------------------------------------------------|
@@ -706,6 +706,18 @@ Files: `operator/internal/controllers/node/hostmaintenance_test.go`,
 | U-363 | The window lets the manager go when it lets the storage pod go                      | Regression | `TestTheWindowLetsTheManagerGoWhenItLetsTheStoragePodGo`    |
 | U-364 | A step of another action reached under this one: terminal rather than stalled       | Negative   | `TestAStepOfAnotherActionEndsTheWindow`                     |
 | U-532 | The step ends only when the worker is uncordoned and its API answers                | Regression | `TestAWindowWaitsForTheWorkerToBeUncordoned`                |
+| U-535 | Two workers of one failure domain: the second is admitted beside the first          | Positive   | `TestWorkersOfOneFailureDomainEnterMaintenanceTogether`     |
+| U-536 | A worker of another failure domain holds at `Holding`                               | Negative   | `TestAWorkerOfAnotherFailureDomainWaitsItsTurn`             |
+| U-537 | The limit counts failure domains: two admit a second domain and not a third         | Boundary   | `TestTheLimitCountsFailureDomains`                          |
+| U-538 | Fewer failure domains than a stripe has chunks: the count is by worker              | Boundary   | `TestTooFewFailureDomainsAreCountedByWorker`                |
+| U-539 | A cluster outside failure-domain mode: the count is by worker                       | Negative   | `TestAClusterOutsideFailureDomainModeIsCountedByWorker`     |
+| U-540 | A node that declares no failure domain: the count is by worker                      | Boundary   | `TestANodeWithNoFailureDomainMakesTheCountByWorker`         |
+| U-541 | A window holds while another window of its domain is at `ShuttingDown`              | Boundary   | `TestAWindowWaitsWhileAWorkerOfItsDomainIsStillGoingDown`   |
+| U-542 | No shutdown is sent while another node is `in_shutdown` or `in_restart`             | Negative   | `TestAShutdownIsNotSentWhileAnotherNodeIsInTransition`      |
+| U-543 | A cluster degraded only by the window's own failure domain admits the window        | Positive   | `TestAWindowIsAdmittedToAClusterItsOwnDomainDegraded`       |
+| U-544 | A cluster degraded by another failure domain holds the window                       | Negative   | `TestAWindowWaitsOnAClusterAnotherDomainDegraded`           |
+| U-545 | A degraded cluster with too few failure domains holds the window                    | Boundary   | `TestAWindowWaitsOnADegradedClusterWithTooFewDomains`       |
+| U-546 | A relocation is still held on a cluster its own failure domain degraded             | Negative   | `TestOnlyAMaintenanceWindowIsAdmittedToADegradedCluster`    |
 
 ### Ops Shape: The Step Machine (design §6.3)
 
