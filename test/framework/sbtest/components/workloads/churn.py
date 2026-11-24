@@ -247,6 +247,7 @@ class ChurnWorkload(Component):
             if time.monotonic() > deadline:
                 record.error = (f"not Running within {self.opt('ready_timeout_s')}s "
                                 f"({_phase(ns, inst.pod) or 'absent'})")
+                self._keep_evidence(ctx, ns, inst)
                 return
             time.sleep(3)
         record.node = kube.short(_node(ns, inst.pod))
@@ -255,6 +256,7 @@ class ChurnWorkload(Component):
                                              "--tail=8"], check=False, timeout=30).stdout or ""):
             if time.monotonic() > deadline:
                 record.error = f"fio not in its timed run within {self.opt('io_timeout_s')}s"
+                self._keep_evidence(ctx, ns, inst)
                 return
             time.sleep(3)
         record.io_started = datetime.now(UTC)
@@ -271,6 +273,25 @@ class ChurnWorkload(Component):
             record.error = "fio still running past its lifetime"
         # Collected before the pod goes: the evidence is on its emptyDir.
         fio.collect_instance(ctx, ns, inst, [])
+
+    def _keep_evidence(self, ctx: RunContext, ns: str, inst: fio.FioInstance) -> None:
+        """What the pod and its node say about a pod that never reached I/O, kept before
+        the pod is deleted: its description with the events, its log, and the state each
+        process is in (a process in D shows what it waits for)."""
+        # Not under the pod's fio evidence directory: the analysis reads every directory
+        # named for fio as a pod that ran, and this pod did not.
+        d = ctx.dir(inst.evidence.replace("-fio-", "-diag-"))
+        for name, text in (
+            ("describe.txt", kube.run(["-n", ns, "describe", "pod", inst.pod], check=False,
+                                      timeout=60).stdout),
+            ("logs.txt", kube.run(["-n", ns, "logs", inst.pod, "-c", inst.container,
+                                   "--tail=200"], check=False, timeout=60).stdout),
+            ("processes.txt", kube.exec_sh(ns, inst.pod, "ps -eo pid,stat,wchan:32,args",
+                                           container=inst.container, timeout=30)),
+        ):
+            if text:
+                with open(f"{d}/{name}", "w") as fh:
+                    fh.write(text)
 
     def _leave(self, ctx: RunContext, ns: str, inst: fio.FioInstance, record: _Record) -> None:
         """Delete the pod, and an own volume's claim after it, recording when each delete

@@ -277,3 +277,23 @@ const (
 	// volume is released.
 	Finalizer = "storage.simplyblock.io/lvol-protection"
 )
+
+// The pNFS metadata server's record, kept on its StatefulSet: which pod is the
+// active guest, under which boot and epoch, and the state volume the active
+// mounts. The driver controller, the state volume, and the takeover all write
+// them.
+const (
+	// AnnoMDSActive names the pod that is the active guest.
+	AnnoMDSActive = "storage.simplyblock.io/mds-active"
+	// AnnoMDSActiveInstance is the active's pod UID and runner container ID.
+	AnnoMDSActiveInstance = "storage.simplyblock.io/mds-active-instance"
+	// AnnoMDSEpoch is the current promotion epoch, a decimal integer.
+	AnnoMDSEpoch = "storage.simplyblock.io/mds-epoch"
+	// AnnoMDSStateVolume is the handle of the state volume.
+	AnnoMDSStateVolume = "storage.simplyblock.io/mds-state-volume"
+	// AnnoMDSHostOrdinals is how many ordinals' host NQNs the volumes allow,
+	// so a scale-down knows which hosts to remove.
+	AnnoMDSHostOrdinals = "storage.simplyblock.io/mds-host-ordinals"
+	// FinalizerMDSStateVolume deletes the state volume with the StatefulSet.
+	FinalizerMDSStateVolume = "storage.simplyblock.io/mds-state-volume"
+)

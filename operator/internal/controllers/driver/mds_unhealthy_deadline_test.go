@@ -15,7 +15,7 @@ import (
 func TestMDSRunnerTakesTheUnhealthyDeadline(t *testing.T) {
 	d := withMDS(testDriver("simplyblock"))
 	d.Spec.PNFS.MDS.UnhealthyDeadline = &metav1.Duration{Duration: 0}
-	_, sts, err := MDSObjects(d, testClusterID, "simplyblock-state", nil)
+	_, sts, err := MDSObjects(d, testClusterID, nil)
 	if err != nil {
 		t.Fatalf("MDSObjects: %v", err)
 	}
@@ -24,7 +24,7 @@ func TestMDSRunnerTakesTheUnhealthyDeadline(t *testing.T) {
 	}
 
 	d.Spec.PNFS.MDS.UnhealthyDeadline = &metav1.Duration{Duration: 10 * time.Minute}
-	_, sts, _ = MDSObjects(d, testClusterID, "simplyblock-state", nil)
+	_, sts, _ = MDSObjects(d, testClusterID, nil)
 	if args := runnerContainer(t, sts).Args; !slices.Contains(args, "--unhealthy-deadline=10m0s") {
 		t.Errorf("runner args = %v, want --unhealthy-deadline=10m0s", args)
 	}
@@ -32,7 +32,7 @@ func TestMDSRunnerTakesTheUnhealthyDeadline(t *testing.T) {
 
 // Unset leaves the runner's own default in force.
 func TestMDSRunnerWithoutAnUnhealthyDeadlineKeepsItsDefault(t *testing.T) {
-	_, sts, err := MDSObjects(withMDS(testDriver("simplyblock")), testClusterID, "simplyblock-state", nil)
+	_, sts, err := MDSObjects(withMDS(testDriver("simplyblock")), testClusterID, nil)
 	if err != nil {
 		t.Fatalf("MDSObjects: %v", err)
 	}

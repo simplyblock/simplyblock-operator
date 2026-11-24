@@ -5,8 +5,7 @@ csiConfig.simplybk or multiCluster.clusters, that names a pool.
 Such a cluster has no StorageCluster or StoragePool object on this Kubernetes
 cluster, so the pool reconciler, which writes the classes of the clusters it
 manages, never writes one for it. Without a class nothing can provision from
-the cluster, and the pNFS metadata server finds no class of the cluster to
-derive its state disk's class from.
+the cluster.
 
 Whether the chart writes simplyblock-csi-secret-v2 does not decide this:
 externallyManagedSecret.create=false means the Secret comes from elsewhere, not
