@@ -26,7 +26,7 @@ spec:
       serviceAccountName: simplyblock-operator
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
-        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
       {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
@@ -83,6 +83,9 @@ spec:
             # make a new CRD rather than a new version, so an in-flight
             # migration cannot be carried across and is drained instead.
             - --legacy-volume-migration
+            {{- end }}
+            {{- if .Values.operatorMetrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.operatorMetrics.port }}
             {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
@@ -198,6 +201,11 @@ spec:
             {{- if .Values.metricsAPI.enabled }}
             - name: metrics-api
               containerPort: {{ .Values.metricsAPI.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.operatorMetrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.operatorMetrics.port }}
               protocol: TCP
             {{- end }}
           livenessProbe:

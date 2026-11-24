@@ -212,6 +212,20 @@ type DiscoverSpec struct {
 	// +optional
 	FailureDomainLabel string `json:"failureDomainLabel,omitempty"`
 
+	// EnableFailureDomains overrides whether the draft proposes failure-domain
+	// mode, which a run otherwise decides from the workers' topology: on when
+	// every worker carries a failure-domain label in a layout the control plane
+	// accepts, and off otherwise.
+	//
+	// false turns the mode off and reads no failure domains at all, so a fleet
+	// spread over zones it does not want treated as failure domains is grouped by
+	// hardware alone, into one cluster the draft marks enableFailureDomains false.
+	// true proposes the mode on; the layout still has to pass the control plane's
+	// activation rules, which approval checks. Unset leaves the decision to the
+	// run, and is the usual first run.
+	// +optional
+	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
 	// EnableLogicalBlockDevices scans a worker's available logical block devices
 	// instead of its available NVMe devices. It selects the class rather than
 	// adding one, because the draft a run writes describes one cluster and a
@@ -308,6 +322,13 @@ type DiscoverSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Images are the container images the draft pins, copied into its
+	// spec.images, so that an installation testing an SPDK or SPDK proxy build
+	// states it once rather than editing every draft before approving it.
+	// Unstated, each takes the default the draft's own field documents.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
 }
 
 // OperatorOpsSpec is one operation to perform against the operator itself.

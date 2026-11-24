@@ -25,6 +25,7 @@ import (
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	atlaskube "github.com/simplyblock/atlas/kube"
 	"github.com/simplyblock/atlas/ptr"
@@ -434,5 +435,62 @@ func replaceNode(t *testing.T, apiClient client.Client, node *simplyblockv1alpha
 	node.Status = status
 	if err := apiClient.Status().Update(context.Background(), node); err != nil {
 		t.Fatalf("seeding the case's node status: %v", err)
+	}
+}
+
+// The promote re-points the node and then releases the worker it left. The
+// release learns where the cluster's nodes are from the informer cache, which
+// may still hold the moved node as it was before the re-point of the same
+// pass. Decided from that copy, the release stripped the target instead of the
+// origin: the DaemonSet then deleted the target's agent pod, and the node read
+// unreachable for the ~50 s the replacement's init containers took (Talos lab,
+// 2026-11-12, at every promote).
+func TestTheReleaseAfterThePromoteTrustsTheRepointOverTheCache(t *testing.T) {
+	origin := aWorker(opsWorker, true)
+	origin.Labels = map[string]string{atlaskube.LabelStorageNodeSet: opsCluster}
+	target := aWorker(opsTarget, true)
+	target.Labels = map[string]string{atlaskube.LabelStorageNodeSet: opsCluster}
+
+	// The cache: every list of the cluster's nodes still shows the moved node on
+	// the worker it left, whatever the pass has written since.
+	stale := interceptor.Funcs{
+		List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if err := c.List(ctx, list, opts...); err != nil {
+				return err
+			}
+			if nodes, ok := list.(*simplyblockv1alpha2.StorageNodeList); ok {
+				for i := range nodes.Items {
+					if nodes.Items[i].Name == opsNodeName {
+						nodes.Items[i].Spec.WorkerNode = opsWorker
+					}
+				}
+			}
+			return nil
+		},
+	}
+	r, apiClient := anOpsWorldWith(t, aControlPlane(), stale, origin, target)
+
+	done, err := performing(t, r, aRelocation(), stepPromoting)
+	if err != nil {
+		t.Fatalf("promoting: %v", err)
+	}
+	if !done {
+		t.Fatal("the step did not finish although the promote landed")
+	}
+
+	var worker corev1.Node
+	if err := apiClient.Get(context.Background(), client.ObjectKey{Name: opsTarget}, &worker); err != nil {
+		t.Fatalf("reading the target worker: %v", err)
+	}
+	if worker.Labels[atlaskube.LabelStorageNodeSet] != opsCluster {
+		t.Errorf("the target lost the storage-plane label (%v), so the DaemonSet would take its agent pod away",
+			worker.Labels)
+	}
+	if err := apiClient.Get(context.Background(), client.ObjectKey{Name: opsWorker}, &worker); err != nil {
+		t.Fatalf("reading the origin worker: %v", err)
+	}
+	if _, still := worker.Labels[atlaskube.LabelStorageNodeSet]; still {
+		t.Errorf("the origin still carries the storage-plane label (%v) although no node is on it",
+			worker.Labels)
 	}
 }

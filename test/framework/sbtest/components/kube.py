@@ -133,3 +133,22 @@ def pod_mounting(namespace: str, claim: str) -> tuple[str, str] | None:
 
 def short(node: str) -> str:
     return node.split(".")[0]
+
+
+def node_names() -> list[str]:
+    """The cluster's node names, as `nodeName` spells them."""
+    out = read(["get", "nodes", "-o", "name"]).stdout.split()
+    return [n.removeprefix("node/") for n in out]
+
+
+def full_node_name(node: str, nodes: list[str]) -> str:
+    """The name of the node `node` stands for, among `nodes`.
+
+    The runs name nodes by their short name, and a pod's `nodeName` has to be the full one:
+    a pod pinned to a name no node has is never scheduled and never reports why. A name that
+    matches no node, or more than one by its short form, is returned as given.
+    """
+    if node in nodes:
+        return node
+    hits = [n for n in nodes if short(n) == short(node)]
+    return hits[0] if len(hits) == 1 else node

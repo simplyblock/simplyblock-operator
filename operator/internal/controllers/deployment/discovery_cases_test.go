@@ -14,7 +14,10 @@
 // The expectations are files rather than assertions in Go. A case that produces
 // a different document produces a diff a reviewer reads, which is the only form
 // in which 171 outcomes can be reviewed at all. The same run with -update
-// rewrites them, so recording a new case is not transcription.
+// rewrites them, so recording a new case is not transcription. A case records
+// its document as the difference from the values most cases share, which are
+// recorded once in baseline.yaml (see discovery_baseline_test.go), so a change
+// every fleet's draft makes the same way is one line rather than one per case.
 //
 // What that buys is a record of today's behavior and nothing more. A recorded
 // file is evidence that the output has not changed since somebody read it; it
@@ -26,10 +29,12 @@ package deployment
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -45,12 +50,23 @@ import (
 )
 
 // update rewrites every expectation from what the run produced, for recording a
-// case rather than checking one.
+// case rather than checking one. The baseline is rewritten too, but only by a
+// run that reached every case: one narrowed by -run has not seen enough to say
+// what most cases share, and records its cases against the baseline as it is.
 var update = flag.Bool("update", false,
 	"rewrite the expected files of every discovery case from what the run produced")
 
-// caseRoot is the tree the cases live in.
-const caseRoot = "testdata/discovery"
+// caseRoot is the tree the cases live in, and baselineFile the values most of
+// their documents share.
+const (
+	caseRoot     = "testdata/discovery"
+	baselineFile = "testdata/discovery/baseline.yaml"
+)
+
+// baselineHeader opens the baseline file, which is written rather than edited.
+const baselineHeader = "# The values most discovery cases' documents share. Each case's\n" +
+	"# expected.yaml is a JSON merge patch against this file. Written by\n" +
+	"# `go test ./internal/controllers/deployment/ -run TestDiscoveryCases -update`.\n"
 
 // The files a case directory holds. The inputs are written by
 // hack/discoveryfixtures and the expectations by this test.
@@ -85,11 +101,25 @@ func TestDiscoveryCases(t *testing.T) {
 		t.Fatalf("no cases under %s: the tree is written by hack/discoveryfixtures", caseRoot)
 	}
 
+	baseline, err := readBaseline()
+	if err != nil {
+		t.Fatalf("read %s: %v", baselineFile, err)
+	}
+
+	outcomes := map[string]outcome{}
 	for _, c := range cases {
 		t.Run(c.Name, func(t *testing.T) {
-			outcome := runDiscoveryCase(t, c)
-			compareDiscoveryOutcome(t, c, outcome)
+			got := runDiscoveryCase(t, c)
+			if *update {
+				outcomes[c.Name] = got
+				return
+			}
+			compareDiscoveryOutcome(t, c, got, baseline)
 		})
+	}
+
+	if *update {
+		recordDiscoveryCases(t, cases, outcomes, baseline)
 	}
 }
 
@@ -182,29 +212,36 @@ func eventMessage(line string) string {
 	return parts[2]
 }
 
-// compareDiscoveryOutcome checks one case against its recorded expectations, or
-// records them.
-func compareDiscoveryOutcome(t *testing.T, c discoveryCase, got outcome) {
+// recordDiscoveryCases writes what the run produced: the baseline when every
+// case ran, then each case's files against it.
+func recordDiscoveryCases(
+	t *testing.T, cases []discoveryCase, outcomes map[string]outcome, baseline map[string]any,
+) {
 	t.Helper()
 
-	document := ""
-	if got.Config != nil {
-		rendered, err := yaml.Marshal(comparableConfig(got.Config))
-		if err != nil {
-			t.Fatalf("render the document: %v", err)
+	if len(outcomes) == len(cases) {
+		var documents []map[string]any
+		for _, c := range cases {
+			if document := outcomeDocument(t, outcomes[c.Name]); document != nil {
+				documents = append(documents, document)
+			}
 		}
-		document = string(rendered)
+		baseline = discoveryBaseline(documents)
+		rendered, err := yaml.Marshal(baseline)
+		if err != nil {
+			t.Fatalf("render the baseline: %v", err)
+		}
+		if err := os.WriteFile(baselineFile, append([]byte(baselineHeader), rendered...), 0o644); err != nil {
+			t.Fatalf("write %s: %v", baselineFile, err)
+		}
 	}
 
-	files := map[string]string{
-		expectedFile: document,
-		refusalsFile: lines(got.Refusals),
-		notesFile:    lines(got.Notes),
-		errorFile:    trailing(got.Failure),
-	}
-
-	if *update {
-		for name, content := range files {
+	for _, c := range cases {
+		got, ran := outcomes[c.Name]
+		if !ran {
+			continue
+		}
+		for name, content := range caseFiles(t, got, baseline) {
 			path := filepath.Join(c.Dir, name)
 			if content == "" {
 				if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
@@ -216,10 +253,14 @@ func compareDiscoveryOutcome(t *testing.T, c discoveryCase, got outcome) {
 				t.Fatalf("write %s: %v", path, err)
 			}
 		}
-		return
 	}
+}
 
-	for name, content := range files {
+// compareDiscoveryOutcome checks one case against its recorded expectations.
+func compareDiscoveryOutcome(t *testing.T, c discoveryCase, got outcome, baseline map[string]any) {
+	t.Helper()
+
+	for name, content := range caseFiles(t, got, baseline) {
 		path := filepath.Join(c.Dir, name)
 		want, err := os.ReadFile(path)
 		if err != nil && !os.IsNotExist(err) {
@@ -228,11 +269,99 @@ func compareDiscoveryOutcome(t *testing.T, c discoveryCase, got outcome) {
 		if string(want) == content {
 			continue
 		}
+		produced := content
+		if name == expectedFile {
+			produced = fmt.Sprintf("%s--- the document it stands for ---\n%s", content, renderDocument(t, got))
+		}
 		t.Errorf("%s does not match.\n--- recorded ---\n%s\n--- produced ---\n%s\n"+
 			"Run `go test ./internal/controllers/deployment/ -run TestDiscoveryCases -update` "+
 			"to record this, and read the result against the row in case.md before committing it.",
-			name, want, content)
+			name, want, produced)
 	}
+}
+
+// caseFiles is what a case records of an outcome: its document as a delta from
+// the baseline, the notes that differ from it, the refusals, and the failure.
+// An empty entry is a file the case does not have.
+func caseFiles(t *testing.T, got outcome, baseline map[string]any) map[string]string {
+	t.Helper()
+
+	document := outcomeDocument(t, got)
+	delta := ""
+	if document != nil {
+		patch, err := discoveryDelta(baseline, document)
+		if err != nil {
+			t.Fatalf("the document as a delta from the baseline: %v", err)
+		}
+		back, err := applyDiscoveryDelta(baseline, patch)
+		if err != nil {
+			t.Fatalf("apply the delta to the baseline: %v", err)
+		}
+		if !reflect.DeepEqual(back, document) {
+			t.Fatalf("the delta applied to the baseline does not give the document back:\n%v\n%v", back, document)
+		}
+		rendered, err := yaml.Marshal(patch)
+		if err != nil {
+			t.Fatalf("render the delta: %v", err)
+		}
+		delta = string(rendered)
+	}
+
+	return map[string]string{
+		expectedFile: delta,
+		refusalsFile: lines(got.Refusals),
+		notesFile:    lines(recordedDiscoveryNotes(got.Notes, document, baseline)),
+		errorFile:    trailing(got.Failure),
+	}
+}
+
+// outcomeDocument is the document an outcome carries as generic JSON, the form
+// a merge patch is taken in, and nil when the run wrote none.
+func outcomeDocument(t *testing.T, got outcome) map[string]any {
+	t.Helper()
+
+	if got.Config == nil {
+		return nil
+	}
+	raw, err := json.Marshal(comparableConfig(got.Config))
+	if err != nil {
+		t.Fatalf("render the document: %v", err)
+	}
+	var document map[string]any
+	if err := json.Unmarshal(raw, &document); err != nil {
+		t.Fatalf("read the document back: %v", err)
+	}
+	return document
+}
+
+// renderDocument is the whole document an outcome carries, for a reader.
+func renderDocument(t *testing.T, got outcome) string {
+	t.Helper()
+
+	if got.Config == nil {
+		return ""
+	}
+	rendered, err := yaml.Marshal(comparableConfig(got.Config))
+	if err != nil {
+		t.Fatalf("render the document: %v", err)
+	}
+	return string(rendered)
+}
+
+// readBaseline is the recorded baseline, and an empty one before any is.
+func readBaseline() (map[string]any, error) {
+	raw, err := os.ReadFile(baselineFile)
+	if os.IsNotExist(err) {
+		return map[string]any{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	baseline := map[string]any{}
+	if err := yaml.Unmarshal(raw, &baseline); err != nil {
+		return nil, err
+	}
+	return baseline, nil
 }
 
 // comparableConfig is the document with the fields a fake client invents

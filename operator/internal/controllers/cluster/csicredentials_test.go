@@ -21,7 +21,7 @@ func TestMergeCSICredentialsRegistersEveryClusterOfTheControlPlane(t *testing.T)
 	creds := CSICredentials{}
 	own := CSIClusterEntry{ClusterID: "A", ClusterEndpoint: "http://cp:5000", ClusterSecret: "sa", Local: true}
 	peers := []atlascp.Cluster{{ID: "A", Secret: "sa"}, {ID: "B", Secret: "sb"}}
-	mergeCSICredentials(&creds, own, peers, true)
+	mergeCSICredentials(&creds, own, peers, true, nil)
 	got := entryIDs(creds)
 	if len(got) != 2 || !got["A"].Local || got["B"].Local || got["B"].ClusterSecret != "sb" || got["B"].ClusterEndpoint != "http://cp:5000" {
 		t.Fatalf("entries %+v", creds.Clusters)
@@ -37,7 +37,7 @@ func TestMergeCSICredentialsKeepsAnotherLocalEntryAndPrunesStaleForeignOnes(t *t
 	own := CSIClusterEntry{ClusterID: "A", ClusterEndpoint: "http://cp:5000", ClusterSecret: "sa", Local: true}
 	// The list withholds B's secret: the recorded one stays.
 	peers := []atlascp.Cluster{{ID: "A"}, {ID: "A2"}, {ID: "B"}}
-	mergeCSICredentials(&creds, own, peers, true)
+	mergeCSICredentials(&creds, own, peers, true, nil)
 	got := entryIDs(creds)
 	if _, stale := got["OLD"]; stale {
 		t.Fatal("a cluster the control plane no longer lists stays registered")
@@ -56,9 +56,31 @@ func TestMergeCSICredentialsKeepsAnotherLocalEntryAndPrunesStaleForeignOnes(t *t
 func TestMergeCSICredentialsWithoutTheListOnlyWritesTheOwnEntry(t *testing.T) {
 	creds := CSICredentials{Clusters: []CSIClusterEntry{{ClusterID: "B", ClusterSecret: "sb"}}}
 	own := CSIClusterEntry{ClusterID: "A", ClusterSecret: "sa", Local: true}
-	mergeCSICredentials(&creds, own, nil, false)
+	mergeCSICredentials(&creds, own, nil, false, nil)
 	got := entryIDs(creds)
 	if len(got) != 2 || got["B"].ClusterSecret != "sb" || !got["A"].Local {
 		t.Fatalf("entries %+v", creds.Clusters)
 	}
+}
+
+// A peer prune leaves an entry whose cluster a SimplyblockDriver declares in
+// spec.remoteClusters, although the local control plane does not list it.
+func TestMergeKeepsTheEntriesOfRemoteClusters(t *testing.T) {
+	const remoteID = "7c1e5b0a-2f4d-4c8e-9a61-0d3b5e7f1a22"
+	creds := CSICredentials{Clusters: []CSIClusterEntry{
+		{ClusterID: remoteID, ClusterEndpoint: "https://eu.example.com", ClusterSecret: "remote-secret"},
+	}}
+	own := CSIClusterEntry{ClusterID: "own", ClusterEndpoint: "http://local", ClusterSecret: "s", Local: true}
+
+	mergeCSICredentials(&creds, own, nil, true, map[string]bool{remoteID: true})
+
+	for _, e := range creds.Clusters {
+		if e.ClusterID == remoteID {
+			if e.ClusterEndpoint != "https://eu.example.com" || e.ClusterSecret != "remote-secret" {
+				t.Errorf("remote entry rewritten: %+v", e)
+			}
+			return
+		}
+	}
+	t.Errorf("remote entry pruned: %+v", creds.Clusters)
 }

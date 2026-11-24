@@ -105,6 +105,53 @@ func (shellFilesystem) IsMountPoint(_ context.Context, path string) (bool, error
 	return hereSys.Dev != upSys.Dev, nil
 }
 
+// OtherMounts lists the mount points other than path that hold the filesystem
+// mounted at path, read from this process's mount table.
+func (shellFilesystem) OtherMounts(_ context.Context, path string) ([]string, error) {
+	table, err := os.ReadFile("/proc/self/mountinfo")
+	if err != nil {
+		return nil, fmt.Errorf("read the mount table: %w", err)
+	}
+	return otherMountsIn(string(table), path), nil
+}
+
+// otherMountsIn finds path in a mountinfo table and returns every other mount
+// point carrying the same device number, which a bind mount of it does.
+// Fields are id, parent, major:minor, root, mount point, with the mount point
+// octal-escaped.
+func otherMountsIn(table, path string) []string {
+	type mount struct{ device, point string }
+	var mounts []mount
+	device := ""
+	for line := range strings.Lines(table) {
+		fields := strings.Fields(line)
+		if len(fields) < 5 {
+			continue
+		}
+		m := mount{device: fields[2], point: unescapeMountPoint(fields[4])}
+		mounts = append(mounts, m)
+		if m.point == path {
+			device = m.device
+		}
+	}
+	if device == "" {
+		return nil
+	}
+	var others []string
+	for _, m := range mounts {
+		if m.device == device && m.point != path {
+			others = append(others, m.point)
+		}
+	}
+	return others
+}
+
+// unescapeMountPoint undoes the kernel's octal escaping of space, tab,
+// newline, and backslash in a mountinfo field.
+func unescapeMountPoint(field string) string {
+	return strings.NewReplacer(`\040`, " ", `\011`, "\t", `\012`, "\n", `\134`, `\`).Replace(field)
+}
+
 // runTool executes one of the node's storage tools and folds its output into
 // the error, because the layers above match on what a tool said.
 func runTool(ctx context.Context, name string, args ...string) error {

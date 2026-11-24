@@ -129,6 +129,16 @@ const (
 	ParamClientCompression   = "client_compression"
 	ParamClientDeduplication = "client_deduplication"
 
+	// ParamStripeWidth opts a volume into striping: the CSI driver creates that
+	// many logical volumes of equal size, each on a different storage node of
+	// the class's cluster, and the node stripes them into one block device with
+	// LVM. Absent, empty, 0, or 1 is an ordinary volume. ParamStripeSize is the
+	// chunk each member takes before the next one does, a power of two between
+	// 4KiB and 1MiB, 64KiB when absent. Both are read by the CSI driver alone
+	// (csi-driver/docs/striped-volumes.md).
+	ParamStripeWidth = "stripe_width"
+	ParamStripeSize  = "stripe_size"
+
 	// The QoS limits' older spelling. Empty or absent means unset (0). These are
 	// read for as long as a class carrying them exists, which is indefinitely: a
 	// class's parameters are immutable, so one an older operator generated can
@@ -266,4 +276,24 @@ const (
 	// Finalizer guards a PV/PVC from deletion until the backing logical
 	// volume is released.
 	Finalizer = "storage.simplyblock.io/lvol-protection"
+)
+
+// The pNFS metadata server's record, kept on its StatefulSet: which pod is the
+// active guest, under which boot and epoch, and the state volume the active
+// mounts. The driver controller, the state volume, and the takeover all write
+// them.
+const (
+	// AnnoMDSActive names the pod that is the active guest.
+	AnnoMDSActive = "storage.simplyblock.io/mds-active"
+	// AnnoMDSActiveInstance is the active's pod UID and runner container ID.
+	AnnoMDSActiveInstance = "storage.simplyblock.io/mds-active-instance"
+	// AnnoMDSEpoch is the current promotion epoch, a decimal integer.
+	AnnoMDSEpoch = "storage.simplyblock.io/mds-epoch"
+	// AnnoMDSStateVolume is the handle of the state volume.
+	AnnoMDSStateVolume = "storage.simplyblock.io/mds-state-volume"
+	// AnnoMDSHostOrdinals is how many ordinals' host NQNs the volumes allow,
+	// so a scale-down knows which hosts to remove.
+	AnnoMDSHostOrdinals = "storage.simplyblock.io/mds-host-ordinals"
+	// FinalizerMDSStateVolume deletes the state volume with the StatefulSet.
+	FinalizerMDSStateVolume = "storage.simplyblock.io/mds-state-volume"
 )

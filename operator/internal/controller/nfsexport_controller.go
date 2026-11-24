@@ -23,6 +23,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/tools/events"
@@ -39,9 +40,10 @@ import (
 
 	"github.com/simplyblock/atlas/link"
 	exportpkg "github.com/simplyblock/atlas/nfsexport"
-	"github.com/simplyblock/atlas/nqn"
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
+	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
 // phase is an alias so the graph below reads as a table.
@@ -114,6 +116,11 @@ type NFSExportReconciler struct {
 	// server address the export no longer uses. Nil skips it, so the kind
 	// works without csi-link (design-pnfs-mds-vm.md §8.1).
 	Flows FlowForgetter
+
+	// Serving holds a binding until the active metadata server serves. Nil binds
+	// to the StatefulSet's first pod at once, which is what a deployment with no
+	// csi-link and the tests that predate the takeover rely on.
+	Serving MDSServingGate
 
 	// withdrawn is each export's address withdrawn while its pod went away,
 	// until the replacement's address replaces it.
@@ -391,14 +398,62 @@ func (r *NFSExportReconciler) reconcileHealth(
 	host link.PeerID,
 ) (ctrl.Result, error) {
 	if host.Zero() || r.Assembler == nil || !r.Assembler.HasSession(host) {
+		msg := fmt.Sprintf("no session with the metadata server %s", host)
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonMDSUnreachable, msg); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, nil
 	}
 	if err := r.Assembler.CheckExport(ctx, r.exportHost(ctx, export, host), export); err != nil {
-		r.event(export, corev1.EventTypeWarning, "MDSUnhealthy",
-			fmt.Sprintf("export on %s failed its health check: %v", host, err))
+		msg := fmt.Sprintf("export on %s failed its health check: %v", host, err)
+		r.event(export, corev1.EventTypeWarning, "MDSUnhealthy", msg)
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonHealthCheckFailed, msg); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{RequeueAfter: nfsExportUnhealthyRequeue}, nil
 	}
+	if err := r.setMDSReady(ctx, export, metav1.ConditionTrue,
+		simplyblockv1alpha2.NFSExportReasonServing, fmt.Sprintf("served by %s", host)); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{RequeueAfter: nfsExportHealthCheckInterval}, nil
+}
+
+// setMDSReady writes the MDSReady condition when it changed, and announces a
+// change of its status. An unchanged condition is not written, so the steady
+// health poll costs no status update.
+func (r *NFSExportReconciler) setMDSReady(
+	ctx context.Context,
+	export *simplyblockv1alpha2.NFSExport,
+	status metav1.ConditionStatus,
+	reason, message string,
+) error {
+	prev := meta.FindStatusCondition(export.Status.Conditions, simplyblockv1alpha2.NFSExportConditionMDSReady)
+	if prev != nil && prev.Status == status && prev.Reason == reason && prev.Message == message {
+		return nil
+	}
+	cond := metav1.Condition{
+		Type:               simplyblockv1alpha2.NFSExportConditionMDSReady,
+		Status:             status,
+		Reason:             reason,
+		Message:            message,
+		ObservedGeneration: export.Generation,
+	}
+	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {
+		meta.SetStatusCondition(&s.Conditions, cond)
+	}); err != nil {
+		return fmt.Errorf("record %s=%s: %w", cond.Type, status, err)
+	}
+	if prev == nil || prev.Status != status {
+		eventType := corev1.EventTypeNormal
+		if status != metav1.ConditionTrue {
+			eventType = corev1.EventTypeWarning
+		}
+		r.event(export, eventType, "MDSReady"+string(status), message)
+	}
+	return nil
 }
 
 // reconcileDelete tears the export down and drops the finalizer, on every
@@ -488,7 +543,11 @@ func (r *NFSExportReconciler) exportHost(
 		return host
 	}
 	if owner := metav1.GetControllerOf(&pod); owner != nil && owner.Kind == "StatefulSet" {
-		host.HostNQN = nqn.Host(string(owner.UID))
+		if _, ordinal, ok := utils.SplitMDSPodName(name); ok {
+			if n, err := mdsstate.HostNQN(owner.UID, ordinal); err == nil {
+				host.HostNQN = n
+			}
+		}
 	}
 	return host
 }

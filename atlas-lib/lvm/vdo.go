@@ -1,5 +1,7 @@
 package lvm
 
+import "fmt"
+
 // vdoProvisioning is the VolumeProvisioning handler for a VDO-backed logical
 // volume: one whose LogicalVolumeDefinition asks for client-side compression
 // or deduplication, independently of each other. It is registered by this
@@ -37,12 +39,18 @@ func (v *vdoProvisioning) Handles(def LogicalVolumeDefinition) bool {
 // volume together in one lvcreate fails on the very object this call is in
 // the middle of creating.
 func (v *vdoProvisioning) CreateVolumeArgs(def LogicalVolumeDefinition) []string {
-	return []string{
+	args := []string{
 		"--type", "vdo",
 		"--config", "activation{checks=0}",
 		"--compression", vdoBoolFlag(def.Compression),
 		"--deduplication", vdoBoolFlag(def.Deduplication),
 	}
+	// Without a virtual size, VDO sizes the volume from the physical space left
+	// after its own metadata, which is not the size the caller provisioned for.
+	if def.LogicalSizeBytes > 0 {
+		args = append(args, "-V", fmt.Sprintf("%dB", def.LogicalSizeBytes))
+	}
+	return args
 }
 
 func vdoBoolFlag(b bool) string {

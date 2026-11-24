@@ -67,12 +67,25 @@ func identifyControllerMNAN(devicePath string) (uint32, error) {
 }
 
 func identifyControllerMNANUnbounded(devicePath string) (uint32, error) {
-	// Identify Controller ignores NSID.
-	buf, err := identifyUnbounded(devicePath, 0, nvmeIdentifyCNSCtrl, identifyControllerLen)
+	buf, err := identifyControllerUnbounded(devicePath)
 	if err != nil {
 		return 0, err
 	}
 	return mnanFromIdentify(buf), nil
+}
+
+// identifyController issues an NVMe Identify Controller admin command on the
+// controller character device and returns the raw data structure, under the
+// same bound as identifyControllerMNAN.
+func identifyController(devicePath string) ([]byte, error) {
+	return bounded.Call("identify "+devicePath, bounded.ReadTimeout, func() ([]byte, error) {
+		return identifyControllerUnbounded(devicePath)
+	})
+}
+
+func identifyControllerUnbounded(devicePath string) ([]byte, error) {
+	// Identify Controller ignores NSID.
+	return identifyUnbounded(devicePath, 0, nvmeIdentifyCNSCtrl, identifyControllerLen)
 }
 
 // identifyNamespace issues an NVMe Identify Namespace admin command for nsid on

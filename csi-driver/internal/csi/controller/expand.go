@@ -39,15 +39,25 @@ func (cs *Server) ControllerExpandVolume(
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "invalid volume ID %q: %v", volumeID, err)
 	}
+	if width := csicommon.StripeWidth(volumeID); width > 1 {
+		return cs.expandStripedVolume(ctx, volumeID, spdkVol, width, updatedSize)
+	}
 
 	sbclient, err := clusters.Client(ctx, spdkVol.ClusterID, spdkVol.PoolRef)
 	if err != nil {
 		return nil, err
 	}
 
+	// A client-side compressed or deduplicated volume is staged under LVM and
+	// VDO, and is grown that much larger than it reports, the way it was
+	// created.
+	lvolBytes := capacityBytes
+	if cs.stagedUnderLVM(ctx, volumeID) {
+		lvolBytes = vdoBackedBytes(capacityBytes)
+	}
 	err = cs.onActiveVolume(ctx, volumeID, spdkVol, sbclient,
 		func(h *lvol.Handle, c *controlplane.ClusterClient) error {
-			return c.ResizeVolume(ctx, h.VolumeID, capacityBytes)
+			return c.ResizeVolume(ctx, h.VolumeID, lvolBytes)
 		})
 	if err != nil {
 		klog.Errorf("failed to resize lvol, LVolID: %s err: %v", spdkVol.VolumeID, err)

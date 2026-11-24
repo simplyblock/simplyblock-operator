@@ -19,13 +19,15 @@ Nothing here duplicates those IDs.
 
 ```text
 operator/internal/controllers/deployment/testdata/discovery/
+  baseline.yaml             # the values more than half of the cases' documents share
   net/
     net-13-bond-holds-node-address/
       case.md               # the row this directory is, copied from this document
       ops.yaml              # the OperatorOps, carrying spec.discover and its deviceFilter
       nodes.yaml            # corev1.Node objects: labels, taints, addresses, capacity
       reports/<node>.yaml   # one ConfigMap per worker, the report JSON under report.json
-      expected.yaml         # the ClusterDeploymentConfig the run should write
+      expected.yaml         # the ClusterDeploymentConfig the run should write, as a merge patch against baseline.yaml
+      expected-notes.txt    # the notes on fields the case sets differently from baseline.yaml
       expected-refusals.txt # Plan.RefusalLines(), one per line, absent when there are none
     net-14-.../
   numa/
@@ -39,6 +41,14 @@ reviews, and eleven families of a dozen is.
 
 The directory name carries the case identifier and a slug of the mutation, so
 that a failure names the case without anybody looking it up.
+
+A case records its document as a JSON merge patch (RFC 7386) against
+`baseline.yaml`, so a change every fleet's draft makes the same way is one line in
+the baseline rather than one per case. The comparison stays exact: the patch
+applied to the baseline has to give back the document the run wrote. A note is
+recorded only when the field its first word names differs from the baseline, so
+the wording of a note on a field a case shares with the baseline is not checked
+here. `-update` rewrites the baseline only when every case ran.
 
 A case with no `expected.yaml` is a refusal case: `expected-error.txt` holds the
 message the run fails with, which is what `kubectl get operatorops` shows.
@@ -109,7 +119,7 @@ constructing one directly.
 | DEV-17 | An iSCSI LUN beside virtio disks, block run, no allow list  | Only the virtio disks. A LUN is storage across a network and is never taken by default      | `CM`    |
 | DEV-18 | The same worker with the allow list naming the LUN          | Both disks. Naming it is the decision a run cannot make for a fleet                         | `CM`    |
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
-| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Drafted with the journal split: enableJournalDevice unset, every disk carries data | `CM`    |
+| DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Drafted with the journal split: enableJournalDevice unset, every disk carries data          | `CM`    |
 | DEV-21 | Blank, formatted, and unread partitions, block run          | Regression: the blank one only. `TestPlanProposesABlankPartitionInABlockRun`                | `GO`    |
 
 ## 3. NUMA topology
@@ -379,7 +389,7 @@ The question each unratified rung is really asking:
 | NET-55 | The node's `InternalIP` on one of two equal 25G NICs at MTU 9000                             | The one holding it named for management and the other for data                                                                                                                                 | `CM`    |
 | NET-56 | No node address, and the only addressed interface a 25G NIC at MTU 9000                      | The same as NET-54, reached by the ranking instead of the address                                                                                                                              | `CM`    |
 | NET-57 | Two workers with identical disks, only one with a 25G NIC at MTU 9000                        | One group, no data interface: one worker of two is no majority for a data network. See §14, gap G-29                                                                                           | `CM`    |
-| NET-58 | Four workers, three managing on 10.10.10.0/24 and the fourth on 10.10.20.0/24                | The fourth refused: management runs on the network most workers share                                                                                                                          | `CM`    |
+| NET-58 | Four workers, three managing on 10.10.10.0/24 and the fourth on 10.10.20.0/24                | The fourth refused: with no node address to go by, management runs on the network most workers share                                                                                           | `CM`    |
 | NET-59 | Two workers managing on 10.10.10.0/24 and 10.10.20.0/24                                      | **Contested.** The second refused: a tie goes to the lower network, which is determinism rather than a reading                                                                                 | `CM`    |
 | NET-60 | Three workers whose management addresses are each a /32, as GCP assigns them                 | All three kept: a host route names no network to compare                                                                                                                                       | `CM`    |
 | NET-61 | Four workers with a 25G data NIC, three on 10.20.0.0/24 and the fourth on 10.21.0.0/24       | The fourth refused: the data networks are the ones most workers share                                                                                                                          | `CM`    |
@@ -397,6 +407,9 @@ The question each unratified rung is really asking:
 | NET-73 | A run naming `storage-mgmt` on a cluster that does not serve NetworkAttachmentDefinitions    | Host networking, as without the field, and a `NetworkAttachmentsUnavailable` Warning saying the run asked for an attachment the cluster cannot provide                                         | `CM`    |
 | NET-74 | A run naming `storage-nope` in a namespace holding `storage-data` and `storage-mgmt`         | Inspecting fails the run before probing. At writing, every worker is refused by the network attachment rule, naming the missing and the held definitions                                       | `CM`    |
 | NET-75 | Two workers and a run naming `storage-data` on `eth1`, with one worker having no `eth1`      | The worker without `eth1` refused by the network attachment rule, naming the definition and the interface. The other drafted                                                                   | `CM`    |
+| NET-76 | Three workers the cluster reaches on 10.248.192.0/23, 10.248.194.0/23, and 10.248.196.0/23   | All three kept: each is managed on its node address, so the subnets are routed, as one for each availability zone is                                                                           | `CM`    |
+| NET-77 | Four workers the cluster reaches, three on 10.10.10.0/24 and the fourth on 10.10.20.0/24     | All four kept: the minority is managed on its node address as well, and a majority decides nothing the cluster already settled                                                                 | `CM`    |
+| NET-78 | Three workers reached on three subnets and a fourth, with no node address, on 172.16.0.0/24  | The fourth refused, naming the three networks the cluster reaches the others on. Its interface is a ranking's choice and is on none of them                                                    | `CM`    |
 
 ## 8. Node roles and node sets
 

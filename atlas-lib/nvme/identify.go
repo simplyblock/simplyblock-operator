@@ -23,15 +23,30 @@ import (
 //	   516     4  NN       number of namespaces (largest valid NSID)
 //	   520     2  ONCS     optional NVM command support (discard, copy, ...)
 //	   525     1  VWC      volatile write cache present
+//	   526     2  AWUN     atomic write unit, normal operation
+//	   528     2  AWUPF    atomic write unit, power fail          (decoded)
 //	   536     4  SGLS     SGL support
 //	   540     4  MNAN     maximum number of allowed namespaces  (decoded)
 //	   768   256  SUBNQN   NVM subsystem NQN
 const (
 	// identifyControllerLen is the size of the Identify Controller structure.
 	identifyControllerLen = 4096
+	// awupfOffset is the byte offset of AWUPF (uint16, little-endian, 0's
+	// based, in logical blocks).
+	awupfOffset = 528
 	// mnanOffset is the byte offset of MNAN (uint32, little-endian).
 	mnanOffset = 540
 )
+
+// awupfFromIdentify decodes AWUPF from a raw Identify Controller buffer as a
+// count of logical blocks. A buffer too short to contain the field yields 0,
+// which no controller reports: the field is 0's based.
+func awupfFromIdentify(buf []byte) uint32 {
+	if len(buf) < awupfOffset+2 {
+		return 0
+	}
+	return uint32(binary.LittleEndian.Uint16(buf[awupfOffset:])) + 1
+}
 
 // mnanFromIdentify decodes MNAN (Maximum Number of Allowed Namespaces) from a
 // raw Identify Controller buffer. SPDK sets MNAN to the subsystem's

@@ -46,24 +46,13 @@ spec:
     metadata:
       labels:
         app: simplyblock-fluent-bit
+      annotations:
+        # Restarts fluent-bit when its config changes; it reads the config only at start.
+        checksum/config: {{ include (print $.Template.BasePath "/controlplane_configmap.yaml") . | sha256sum }}
     spec:
       serviceAccountName: simplyblock-fluent-bit-sa
-      affinity:
-        nodeAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            nodeSelectorTerms:
-            # Present on every storage-plane worker the operator enrolls; it
-            # replaced io.simplyblock.node-type, which marked the same nodes.
-            - matchExpressions:
-              - key: io.simplyblock.storagenodeset
-                operator: Exists
-            {{- if .Values.controlplane.nodeSelector.create }}
-            - matchExpressions:
-              - key: {{ .Values.controlplane.nodeSelector.key }}
-                operator: In
-                values:
-                - {{ .Values.controlplane.nodeSelector.value }}
-            {{- end }}
+      # Runs on every node: the control plane, FoundationDB, and the monitoring
+      # pod also log, and the Lua filter already selects the pods to ship.
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
       {{- range .Values.controlplane.tolerations.list }}

@@ -1132,7 +1132,7 @@ func (r *StorageClusterReconciler) creationParams(
 		return atlascp.CreateClusterParams{}, err
 	}
 
-	vault, err := vaultConfig(cluster.Spec.KMS)
+	kms, err := kmsConfig(cluster.Spec.KMS)
 	if err != nil {
 		r.Recorder.Eventf(cluster, nil, corev1.EventTypeWarning,
 			InvalidConfig, InvalidConfig, "The key store is not usable: %v", err)
@@ -1157,37 +1157,38 @@ func (r *StorageClusterReconciler) creationParams(
 
 	return atlascp.CreateClusterParams{
 		StretchedControlPlane: stretch != nil,
-		Site:                  stretchedSiteOf(stretch),
-		SiteAPIEndpoint:       stretchedEndpointOf(stretch),
-		WorkloadNames:         backendWorkloadNamesOf(cluster),
-		Name:                  cluster.Name,
-		CapWarn:               capacityThreshold(cluster.Spec.WarningThreshold),
-		CapCrit:               capacityThreshold(cluster.Spec.CriticalThreshold),
-		ProvCapWarn:           provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
-		ProvCapCrit:           provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
-		NDCS:                  stripeDataChunks(cluster.Spec.Stripe),
-		NPCS:                  StripeParityChunks(cluster.Spec.Stripe),
-		SpdkVCPUCount:         ptr.IntFrom(cluster.Spec.VCPUCount, 8),
-		HugepagesMemBytes:     ptr.Int64From(hugePages, 0),
-		MaxSubsys:             ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10),
-		EnableNodeAffinity:    ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
-		Fabric:                cluster.Spec.FabricType,
-		CRName:                cluster.Name,
-		CRNamespace:           cluster.Namespace,
-		CRPlural:              "storageclusters",
-		ClientDataNIC:         cluster.Spec.ClientDataIfname,
-		NvmfBasePort:          ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
-		RPCBasePort:           ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
-		SnodeAPIPort:          ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
-		Backup:                backup,
-		VaultBaseURL:          vault,
-		EnableFailureDomain:   ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
-		InlineChecksum:        ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
-		Atomic4K:              ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
-		DeviceMode:            deviceMode(cluster.Spec.DeviceClass),
-		SingleNode:            cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
-		SyncReplication:       ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
-		LeaderSite:            creatingLeaderSite(cluster),
+		Site: stretchedSiteOf(stretch),
+		SiteAPIEndpoint: stretchedEndpointOf(stretch),
+		WorkloadNames:       backendWorkloadNamesOf(cluster),
+		Name:                cluster.Name,
+		CapWarn:             capacityThreshold(cluster.Spec.WarningThreshold),
+		CapCrit:             capacityThreshold(cluster.Spec.CriticalThreshold),
+		ProvCapWarn:         provisionedCapacityThreshold(cluster.Spec.WarningThreshold),
+		ProvCapCrit:         provisionedCapacityThreshold(cluster.Spec.CriticalThreshold),
+		NDCS:                stripeDataChunks(cluster.Spec.Stripe),
+		NPCS:                StripeParityChunks(cluster.Spec.Stripe),
+		SpdkVCPUCount:       ptr.IntFrom(cluster.Spec.VCPUCount, 8),
+		HugepagesMemBytes:   ptr.Int64From(hugePages, 0),
+		MaxSubsys:           ptr.IntFrom(cluster.Spec.MaxSubsystemCount, 10),
+		EnableNodeAffinity:  ptr.BoolFromOrFalse(cluster.Spec.EnableNodeAffinity),
+		Fabric:              cluster.Spec.FabricType,
+		CRName:              cluster.Name,
+		CRNamespace:         cluster.Namespace,
+		CRPlural:            "storageclusters",
+		ClientDataNIC:       cluster.Spec.ClientDataIfname,
+		NvmfBasePort:        ptr.IntFrom(cluster.Spec.NvmfBasePort, 4420),
+		RPCBasePort:         ptr.IntFrom(cluster.Spec.RpcBasePort, 8080),
+		SnodeAPIPort:        ptr.IntFrom(cluster.Spec.SnodeApiPort, 50001),
+		Backup:              backup,
+		KMS:                 kms,
+		EnableFailureDomain: ptr.BoolFromOrFalse(cluster.Spec.EnableFailureDomains),
+		InlineChecksum:      ptr.BoolFromOrFalse(cluster.Spec.EnableChecksumValidation),
+		Atomic4K:            ptr.BoolFromOrFalse(cluster.Spec.EnableAtomicity4K),
+		MetadataJournal:     ptr.BoolFromOrTrue(cluster.Spec.EnableMetadataJournal),
+		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
+		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+		SyncReplication:     ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
+		LeaderSite:          creatingLeaderSite(cluster),
 	}, nil
 }
 
@@ -1269,17 +1270,28 @@ func (r *StorageClusterReconciler) backupConfig(
 	}, nil
 }
 
-// vaultConfig is the key store's endpoint. The regrouping under spec.kms is
-// Kubernetes-side only: the control plane keeps hashicorp_vault_settings.base_url,
-// and this is where the two meet.
-func vaultConfig(kms *simplyblockv1alpha2.KMSSpec) (string, error) {
-	if kms == nil || kms.Vault == nil || kms.Vault.Endpoint == "" {
-		return "", nil
+// kmsConfig is the key store's endpoint. The regrouping under spec.kms is
+// Kubernetes-side only: the control plane keeps a discriminated kms_settings
+// (provider: vault | kmip), and this is where the two meet. spec.kms itself
+// guarantees at most one of Vault/KMIP is set (immutable once set, CEL-checked
+// at the type level), so this never has to arbitrate between them.
+func kmsConfig(kms *simplyblockv1alpha2.KMSSpec) (*atlascp.ClusterKMS, error) {
+	if kms == nil {
+		return nil, nil
 	}
-	if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
-		return "", fmt.Errorf("spec.kms.vault.endpoint: %w", err)
+	if kms.Vault != nil && kms.Vault.Endpoint != "" {
+		if err := atlasnet.ValidateExternalURL(kms.Vault.Endpoint); err != nil {
+			return nil, fmt.Errorf("spec.kms.vault.endpoint: %w", err)
+		}
+		return &atlascp.ClusterKMS{VaultEndpoint: kms.Vault.Endpoint}, nil
 	}
-	return kms.Vault.Endpoint, nil
+	if kms.KMIP != nil && kms.KMIP.Endpoint != "" {
+		if err := atlasnet.ValidateExternalHostPort(kms.KMIP.Endpoint); err != nil {
+			return nil, fmt.Errorf("spec.kms.kmip.endpoint: %w", err)
+		}
+		return &atlascp.ClusterKMS{KMIPEndpoint: kms.KMIP.Endpoint}, nil
+	}
+	return nil, nil
 }
 
 // writeClusterSecret records the cluster's UUID and secret beside the object
@@ -1374,14 +1386,35 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 			Local:           true,
 			Sync:            ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
 			Site:            cluster.StretchedSite(),
-		}, peers, err == nil)
+		}, peers, err == nil, remoteClusterIDs(ctx, r.Client, r.Namespace))
 	})
+}
+
+// remoteClusterIDs is every cluster ID the SimplyblockDrivers in namespace
+// declare in spec.remoteClusters. Their entries belong to the driver, so a peer
+// prune leaves them. A failed read returns nil, and the prune then skips
+// nothing it would not have skipped before remote clusters existed.
+func remoteClusterIDs(ctx context.Context, c client.Reader, namespace string) map[string]bool {
+	var drivers simplyblockv1alpha2.SimplyblockDriverList
+	if err := c.List(ctx, &drivers, client.InNamespace(namespace)); err != nil {
+		logf.FromContext(ctx).Info("the SimplyblockDrivers could not be read; remote cluster entries "+
+			"are not protected from this sync's peer prune", "error", err.Error())
+		return nil
+	}
+	ids := map[string]bool{}
+	for _, d := range drivers.Items {
+		for _, rc := range d.Spec.RemoteClusters {
+			ids[rc.ClusterID] = true
+		}
+	}
+	return ids
 }
 
 // mergeCSICredentials writes own into creds and, when the control plane's
 // cluster list was read, one non-local entry per other cluster of that
-// list, pruning non-local entries the list no longer has.
-func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atlascp.Cluster, listed bool) {
+// list, pruning non-local entries the list no longer has. Entries of clusters
+// in remote are a SimplyblockDriver's, and are neither rewritten nor pruned.
+func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atlascp.Cluster, listed bool, remote map[string]bool) {
 	replaced := false
 	for i := range creds.Clusters {
 		if creds.Clusters[i].ClusterID == own.ClusterID {
@@ -1398,7 +1431,7 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atl
 	known := map[string]bool{}
 	for _, p := range peers {
 		known[p.ID] = true
-		if p.ID == own.ClusterID {
+		if p.ID == own.ClusterID || remote[p.ID] {
 			continue
 		}
 		entry := CSIClusterEntry{ClusterID: p.ID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
@@ -1422,7 +1455,7 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atl
 	}
 	kept := creds.Clusters[:0]
 	for _, e := range creds.Clusters {
-		if e.Local || known[e.ClusterID] {
+		if e.Local || known[e.ClusterID] || remote[e.ClusterID] {
 			kept = append(kept, e)
 		}
 	}
@@ -1449,12 +1482,22 @@ func (r *StorageClusterReconciler) removeCSICredentials(
 func (r *StorageClusterReconciler) editCSICredentials(
 	ctx context.Context, edit func(*CSICredentials),
 ) error {
+	return EditCSICredentials(ctx, r.Client, r.Namespace, edit)
+}
+
+// EditCSICredentials applies one change to the aggregate Secret in namespace,
+// creating it when absent. Every writer of the Secret goes through it: the
+// StorageCluster reconciler for local and peer entries, and the
+// SimplyblockDriver reconciler for remote ones.
+func EditCSICredentials(
+	ctx context.Context, c client.Client, namespace string, edit func(*CSICredentials),
+) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
 			Name:      csiCredentialsSecret,
-			Namespace: r.Namespace,
+			Namespace: namespace,
 		}}
-		_, err := controllerutil.CreateOrUpdate(ctx, r.Client, secret, func() error {
+		_, err := controllerutil.CreateOrUpdate(ctx, c, secret, func() error {
 			var creds CSICredentials
 			if data, ok := secret.Data["secret.json"]; ok {
 				_ = json.Unmarshal(data, &creds)

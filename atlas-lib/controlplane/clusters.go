@@ -53,6 +53,14 @@ type ClusterWorkloadNames struct {
 	NodeLabelSuffix    string
 }
 
+// ClusterKMS selects where a cluster stores volume encryption keys. At most
+// one of VaultEndpoint/KMIPEndpoint may be set; both empty means no external
+// KMS (DEKs are held in the control plane's own FoundationDB).
+type ClusterKMS struct {
+	VaultEndpoint string
+	KMIPEndpoint  string
+}
+
 // ClusterBackup is where a cluster's backups go.
 type ClusterBackup struct {
 	Endpoint        string
@@ -86,14 +94,18 @@ type CreateClusterParams struct {
 	RPCBasePort         int
 	SnodeAPIPort        int
 	Backup              *ClusterBackup
-	VaultBaseURL        string
+	KMS                 *ClusterKMS
 	EnableFailureDomain bool
 	SpdkVCPUCount       int
 	HugepagesMemBytes   int64
 	MaxSubsys           int
 	InlineChecksum      bool
 	Atomic4K            bool
-	DeviceMode          string
+	// MetadataJournal journals the lvstore metadata pages against torn
+	// writes, for devices that are not 4K-write atomic. It is always sent,
+	// because the control plane journals unless told not to.
+	MetadataJournal bool
+	DeviceMode      string
 	// SingleNode creates a cluster of one storage node, which is also created
 	// without HA.
 	SingleNode    bool
@@ -232,43 +244,45 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 }
 
 // clusterParamsOf is the create body. A zero value is left out, so the control
-// plane applies its own default for it.
+// plane applies its own default for it, except where that default is not the
+// zero value: md_journal defaults to on, so it is always stated.
 func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 	body := cpapi.ClusterParams{
-		MaxSubsys:              p.MaxSubsys,
-		SpdkVcpuCount:          p.SpdkVCPUCount,
-		Name:                   nonEmpty(p.Name),
-		CapWarn:                nonZero(p.CapWarn),
-		CapCrit:                nonZero(p.CapCrit),
-		ProvCapWarn:            nonZero(p.ProvCapWarn),
-		ProvCapCrit:            nonZero(p.ProvCapCrit),
-		DistrNdcs:              nonZero(p.NDCS),
-		DistrNpcs:              nonZero(p.NPCS),
-		EnableNodeAffinity:     isTrue(p.EnableNodeAffinity),
-		Fabric:                 nonEmpty(p.Fabric),
-		CrName:                 nonEmpty(p.CRName),
-		CrNamespace:            nonEmpty(p.CRNamespace),
-		CrPlural:               nonEmpty(p.CRPlural),
-		ClientDataNic:          nonEmpty(p.ClientDataNIC),
-		NvmfBasePort:           nonZero(p.NvmfBasePort),
-		RpcBasePort:            nonZero(p.RPCBasePort),
-		SnodeApiPort:           nonZero(p.SnodeAPIPort),
-		EnableFailureDomain:    isTrue(p.EnableFailureDomain),
-		HugepagesMem:           nonZero(int(p.HugepagesMemBytes)),
-		InlineChecksum:         isTrue(p.InlineChecksum),
-		Atomic4k:               isTrue(p.Atomic4K),
-		IsSingleNode:           isTrue(p.SingleNode),
-		SyncReplication:        isTrue(p.SyncReplication),
-		LeaderSite:             nonEmpty(p.LeaderSite),
-		StretchedControlPlane:  isTrue(p.StretchedControlPlane),
-		Site:                   nonEmpty(p.Site),
-		SiteApiEndpoint:        nonEmpty(p.SiteAPIEndpoint),
-		SnodeApiService:        nonEmpty(p.WorkloadNames.NodeAPIService),
-		SpdkProxyService:       nonEmpty(p.WorkloadNames.SpdkProxyService),
-		SpdkProxyTlsSecret:     nonEmpty(p.WorkloadNames.SpdkProxyTLSSecret),
-		NodeLabelSuffix:        nonEmpty(p.WorkloadNames.NodeLabelSuffix),
-		HashicorpVaultSettings: vaultSettingsOf(p.VaultBaseURL),
-		BackupConfig:           backupConfigOf(p.Backup),
+		MaxSubsys:           p.MaxSubsys,
+		SpdkVcpuCount:       p.SpdkVCPUCount,
+		Name:                nonEmpty(p.Name),
+		CapWarn:             nonZero(p.CapWarn),
+		CapCrit:             nonZero(p.CapCrit),
+		ProvCapWarn:         nonZero(p.ProvCapWarn),
+		ProvCapCrit:         nonZero(p.ProvCapCrit),
+		DistrNdcs:           nonZero(p.NDCS),
+		DistrNpcs:           nonZero(p.NPCS),
+		EnableNodeAffinity:  isTrue(p.EnableNodeAffinity),
+		Fabric:              nonEmpty(p.Fabric),
+		CrName:              nonEmpty(p.CRName),
+		CrNamespace:         nonEmpty(p.CRNamespace),
+		CrPlural:            nonEmpty(p.CRPlural),
+		ClientDataNic:       nonEmpty(p.ClientDataNIC),
+		NvmfBasePort:        nonZero(p.NvmfBasePort),
+		RpcBasePort:         nonZero(p.RPCBasePort),
+		SnodeApiPort:        nonZero(p.SnodeAPIPort),
+		EnableFailureDomain: isTrue(p.EnableFailureDomain),
+		HugepagesMem:        nonZero(int(p.HugepagesMemBytes)),
+		InlineChecksum:      isTrue(p.InlineChecksum),
+		Atomic4k:            isTrue(p.Atomic4K),
+		MdJournal:           ptr.To(p.MetadataJournal),
+		IsSingleNode:        isTrue(p.SingleNode),
+		SyncReplication:     isTrue(p.SyncReplication),
+		LeaderSite:          nonEmpty(p.LeaderSite),
+		StretchedControlPlane: isTrue(p.StretchedControlPlane),
+		Site: nonEmpty(p.Site),
+		SiteApiEndpoint: nonEmpty(p.SiteAPIEndpoint),
+		SnodeApiService:     nonEmpty(p.WorkloadNames.NodeAPIService),
+		SpdkProxyService:    nonEmpty(p.WorkloadNames.SpdkProxyService),
+		SpdkProxyTlsSecret:  nonEmpty(p.WorkloadNames.SpdkProxyTLSSecret),
+		NodeLabelSuffix:     nonEmpty(p.WorkloadNames.NodeLabelSuffix),
+		KmsSettings:         kmsSettingsOf(p.KMS),
+		BackupConfig:        backupConfigOf(p.Backup),
 	}
 	if p.DeviceMode != "" {
 		body.DeviceMode = ptr.To(cpapi.ClusterParamsDeviceMode(p.DeviceMode))
@@ -282,11 +296,35 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 	return body
 }
 
-func vaultSettingsOf(baseURL string) *cpapi.HashicorpVaultSettings {
-	if baseURL == "" {
+func kmsSettingsOf(kms *ClusterKMS) *cpapi.KMSSettings {
+	if kms == nil {
 		return nil
 	}
-	return &cpapi.HashicorpVaultSettings{BaseUrl: ptr.To(baseURL)}
+	settings := &cpapi.KMSSettings{}
+	switch {
+	case kms.VaultEndpoint != "":
+		// FromVaultKMSSettings only fails if the value cannot be marshaled to
+		// JSON, which a plain string-fielded struct never does. Provider must
+		// be set explicitly (it is `omitempty`): the control plane's
+		// kms_settings is a discriminated union and resolves the variant by
+		// this field, so an absent one fails validation rather than defaulting.
+		if err := settings.FromVaultKMSSettings(cpapi.VaultKMSSettings{
+			BaseUrl:  kms.VaultEndpoint,
+			Provider: ptr.To(cpapi.Vault),
+		}); err != nil {
+			panic(fmt.Sprintf("marshal VaultKMSSettings: %v", err))
+		}
+	case kms.KMIPEndpoint != "":
+		if err := settings.FromKMIPKMSSettings(cpapi.KMIPKMSSettings{
+			ServerUrl: kms.KMIPEndpoint,
+			Provider:  ptr.To(cpapi.KMIPKMSSettingsProviderKmip),
+		}); err != nil {
+			panic(fmt.Sprintf("marshal KMIPKMSSettings: %v", err))
+		}
+	default:
+		return nil
+	}
+	return settings
 }
 
 func backupConfigOf(b *ClusterBackup) *cpapi.UnresolvedBackupConfig {

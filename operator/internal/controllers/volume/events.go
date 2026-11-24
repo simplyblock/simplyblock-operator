@@ -105,4 +105,26 @@ const (
 	// ReasonHandleUnresolved is a moved volume whose handle does not resolve
 	// to the target member after the cutover.
 	ReasonHandleUnresolved = "HandleUnresolved"
+
+	ReasonConsistencyGroupPending         = "ConsistencyGroupPending"
+	ReasonConsistencyGroupJoinRefused     = "ConsistencyGroupJoinRefused"
+	ReasonConsistencyGroupMigrationFailed = "ConsistencyGroupMigrationFailed"
+	ReasonSubsystemLimitReached           = "SubsystemLimitReached"
+	ReasonConsistencyGroupColocated       = "ConsistencyGroupColocated"
+	ReasonSubsystemSwapUnavailable        = "SubsystemSwapUnavailable"
+	ReasonSubsystemSwapDeferred           = "SubsystemSwapDeferred"
+	ReasonSubsystemSwapCompleted          = "SubsystemSwapCompleted"
+	ReasonSubsystemSwapRolledBack         = "SubsystemSwapRolledBack"
+
+	// ReasonConsistencyGroupColocationRefused is a join that completed while
+	// the control plane refused to move the group into one subsystem, as on a
+	// stretched cluster. The volume is a member in its own subsystem.
+	ReasonConsistencyGroupColocationRefused = "ConsistencyGroupColocationRefused"
+
+	// ReasonConsistencyGroupSplit is a volume relabeled to another group that
+	// was moved out of the subsystem it shared with its old group's members.
+	ReasonConsistencyGroupSplit = "ConsistencyGroupSplit"
+	// ReasonConsistencyGroupLeft is a volume that left its old group on the way
+	// to the one its claim now names.
+	ReasonConsistencyGroupLeft = "ConsistencyGroupLeft"
 )

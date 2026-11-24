@@ -1,0 +1,124 @@
+syntax = "proto3";
+
+// Package atlas.volstack.swap.v1 re-points a staged volume's device-mapper
+// node at the device its namespace has under another NVMe-oF subsystem, while
+// the volume's consumer keeps the device it opened.
+//
+// The operator is the caller and the CSI node plugin serves it, because a
+// namespace that changes subsystem changes on the control plane and on every
+// consuming host at once, and only the operator talks to both. Every call is
+// idempotent: the operator repeats a step after a restart without knowing
+// whether the first attempt landed.
+package atlas.volstack.swap.v1;
+
+option go_package = "github.com/simplyblock/atlas/volstack/swaprpc/swapv1;swapv1";
+
+// SwapService moves the volumes staged on one node between subsystems.
+service SwapService {
+  // Describe reports, per volume, whether it is staged here, whether its stack
+  // can be swapped, whether it is holding I/O, and where it points.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+
+  // Prepare connects the target subsystem's paths, before any volume moves.
+  rpc Prepare(PrepareRequest) returns (PrepareResponse);
+
+  // Suspend holds each volume's I/O until Resume, or until the deadline has
+  // passed, after which the node resumes the volume on its own.
+  rpc Suspend(SuspendRequest) returns (SuspendResponse);
+
+  // Resume points each volume at its namespace under the given subsystem and
+  // releases its I/O.
+  rpc Resume(ResumeRequest) returns (ResumeResponse);
+
+  // Release disconnects a subsystem no volume staged here points at any more.
+  rpc Release(ReleaseRequest) returns (ReleaseResponse);
+}
+
+// VolumeState is one volume as the node sees it.
+message VolumeState {
+  // volume_handle is the CSI volume handle the volume was staged under.
+  string volume_handle = 1;
+  // staged reports that the node holds a stack record for the volume.
+  bool staged = 2;
+  // swappable reports that the stack has the device-mapper indirection a swap
+  // re-points.
+  bool swappable = 3;
+  // suspended reports that the volume is holding its I/O.
+  bool suspended = 4;
+  // nqn is the subsystem whose namespace the volume points at now.
+  string nqn = 5;
+  // namespace_uuid is the namespace's UUID, which is the volume's.
+  string namespace_uuid = 6;
+}
+
+// DescribeRequest names the volumes to describe.
+message DescribeRequest {
+  repeated string volume_handles = 1;
+}
+
+// DescribeResponse answers in the order asked.
+message DescribeResponse {
+  repeated VolumeState volumes = 1;
+}
+
+// Path is one NVMe-oF path to the target subsystem, as the control plane
+// published it.
+message Path {
+  string transport = 1;
+  string address = 2;
+  int32 port = 3;
+  string host_iface = 4;
+  int32 nr_io_queues = 5;
+  int32 reconnect_delay_seconds = 6;
+  int32 keep_alive_timeout_seconds = 7;
+  optional int32 ctrl_loss_timeout_seconds = 8;
+  optional int32 fast_io_fail_timeout_seconds = 9;
+}
+
+// PrepareRequest names the volumes that will move and where to.
+message PrepareRequest {
+  repeated string volume_handles = 1;
+  string target_nqn = 2;
+  // paths are in the control plane's priority order, which is kept.
+  repeated Path paths = 3;
+}
+
+// PrepareResponse describes the volumes once the paths are up.
+message PrepareResponse {
+  repeated VolumeState volumes = 1;
+}
+
+// SuspendRequest names the volumes to hold.
+message SuspendRequest {
+  repeated string volume_handles = 1;
+  // deadline_unix_seconds is when the node stops waiting for Resume.
+  int64 deadline_unix_seconds = 2;
+}
+
+// SuspendResponse describes the volumes once they hold their I/O.
+message SuspendResponse {
+  repeated VolumeState volumes = 1;
+}
+
+// ResumeRequest names the volumes to release and the subsystem their
+// namespaces are in.
+message ResumeRequest {
+  repeated string volume_handles = 1;
+  string nqn = 2;
+}
+
+// ResumeResponse describes the volumes once released.
+message ResumeResponse {
+  repeated VolumeState volumes = 1;
+}
+
+// ReleaseRequest names the subsystem to disconnect.
+message ReleaseRequest {
+  string nqn = 1;
+}
+
+// ReleaseResponse reports whether the subsystem was disconnected, which it is
+// not while any staged volume still points at it.
+message ReleaseResponse {
+  bool disconnected = 1;
+}

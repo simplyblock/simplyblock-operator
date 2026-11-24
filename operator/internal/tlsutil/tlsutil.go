@@ -68,6 +68,28 @@ func BuildWebAPIClient(namespace, caPath, certPath, keyPath string) (*http.Clien
 	return c, nil
 }
 
+// BuildEndpointClient returns an *http.Client for a control plane reached by an
+// address other than the in-cluster webappapi Service. Its certificate is
+// verified against the address's own hostname and against the system trust
+// store plus the CA at caPath when that file exists. The client certificate
+// pair is presented when both paths are provided.
+func BuildEndpointClient(caPath, certPath, keyPath string) (*http.Client, error) {
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+	if caPEM, err := os.ReadFile(caPath); err == nil {
+		pool.AppendCertsFromPEM(caPEM)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: pool}
+	c := &http.Client{Transport: transport, Timeout: 30 * time.Second}
+	if err := applyClientCertificate(c, certPath, keyPath); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 func applyClientCertificate(c *http.Client, certPath, keyPath string) error {
 	if certPath == "" && keyPath == "" {
 		return nil

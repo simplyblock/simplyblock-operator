@@ -52,6 +52,8 @@ spec:
   # The sidecar publishes a CSIAddonsNode, so it runs only where the chart (or
   # the cluster) provides the csiaddons.openshift.io CRDs.
   enableCSIAddons: {{ .Values.csiaddons.create }}
+  # Loads nvme-tcp on Ubuntu workers before the node plugin starts.
+  enableNVMeTCPModuleInstall: {{ .Values.driver.enableNVMeTCPModuleInstall | default false }}
   {{- if .Values.driver.image.repository }}
   image: "{{ .Values.driver.image.repository }}:{{ required "driver.image.tag is required when driver.image.repository is set: the field is a full reference and an untagged one is refused by the schema" .Values.driver.image.tag }}"
   {{- end }}
@@ -92,7 +94,8 @@ spec:
     # The pNFS metadata server, configured by default so a ReadWriteMany volume
     # needs no patch of the driver after the install. An empty object turns it on
     # with the driver's defaults; a bare key would be null and leave it off.
-    {{- if not (or .nodeSelector .tolerations .resources .stateSize $networkSet) }}
+    {{- $standbysSet := not (kindIs "invalid" .standbys) }}
+    {{- if not (or .nodeSelector .tolerations .resources $standbysSet $networkSet) }}
     mds: {}
     {{- else }}
     mds:
@@ -108,8 +111,8 @@ spec:
       resources:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      {{- with .stateSize }}
-      stateSize: {{ . | quote }}
+      {{- if $standbysSet }}
+      standbys: {{ .standbys }}
       {{- end }}
       {{- with .dataNetwork }}
       {{- if or .subnet .rangeStart .rangeEnd }}

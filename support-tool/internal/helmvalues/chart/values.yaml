@@ -88,14 +88,20 @@ csiConfig:
     # The pool volumes on this cluster are created in. Set, the chart renders a
     # block StorageClass for the cluster and pool, named storageClassName or
     # simplyblock-<pool>. A cluster given here has no StorageCluster or
-    # StoragePool object, so nothing else writes a class for it, and the pNFS
-    # metadata server derives its state disk's class from one.
+    # StoragePool object, so nothing else writes a class for it.
     # -- Storage pool the volumes on this cluster are created in. When set, the chart renders a block
     # StorageClass for the cluster and pool.
     pool:
     # -- Name of the StorageClass rendered for `csiConfig.simplybk.pool`. Empty uses
     # `simplyblock-<pool>`.
     storageClassName:
+    # -- Stripes each volume of the rendered StorageClass across this many storage nodes of the
+    # cluster, 2 to 128 (`stripe_width`). Empty, 0, or 1 is an ordinary volume. See
+    # csi-driver/docs/striped-volumes.md.
+    stripeWidth:
+    # -- Chunk each member of a striped volume takes, a power of two from `4Ki` to `1Mi`
+    # (`stripe_size`). Empty uses the driver's 64Ki. Requires stripeWidth of 2 or more.
+    stripeSize:
 
 # Configuration for the csiSecret
 csiSecret:
@@ -107,15 +113,17 @@ multiCluster:
   # -- Writes one entry per item in `multiCluster.clusters` instead of the single cluster above.
   enable: false
   # -- Storage clusters the CSI driver connects to, when `multiCluster.enable` is `true`. Each entry
-  # has `cluster_id`, `secret`, `workers`, `pool`, and `storageClassName`, with the same meaning as
-  # the matching `csiConfig` and `csiSecret` values.
+  # has `cluster_id`, `secret`, `workers`, `pool`, `storageClassName`, `stripeWidth`, and
+  # `stripeSize`, with the same meaning as the matching `csiConfig` and `csiSecret` values.
   clusters:
   - cluster_id:
     secret:
     workers:
-    # As csiConfig.simplybk.pool and storageClassName, for this cluster.
+    # As csiConfig.simplybk.pool, storageClassName, stripeWidth, and stripeSize, for this cluster.
     pool:
     storageClassName:
+    stripeWidth:
+    stripeSize:
       
 deployment:
   # One of: standalone, managed, empty.
@@ -289,6 +297,19 @@ discovery:
   # fails. The draft notes which disk was taken.
   forceJournalDevice: false
 
+  # Override whether the draft proposes failure-domain mode, which the run
+  # otherwise decides from the workers' topology: on when every worker carries a
+  # failure-domain label in a layout the control plane accepts, off otherwise.
+  #
+  # Set false to turn the mode off and read no failure domains at all, so a fleet
+  # spread over zones it does not want treated as failure domains is grouped by
+  # hardware alone into one cluster. Set true to propose the mode on; the layout
+  # must still pass the control plane's activation rules. Left out (the default),
+  # the run decides.
+  #   enableFailureDomains: false
+  # -- Overrides whether the draft proposes failure-domain mode. `false` reads no failure domains and
+  # groups the fleet as one cluster; `true` proposes the mode on. Omitted leaves the decision to the run.
+
   # The cluster network the draft proposes. With neither set, the SPDK pods run on
   # the host network. The two are exclusive.
   network:
@@ -372,9 +393,11 @@ discovery:
     # -- Size range a device must fall in, for example, `1T-16T`. Applies to either device class.
     driveSizeRange: ""
 
-  # The values below are accepted and not used. The operator no longer seeds the
-  # draft from the chart, so edit the draft before approving it. They stay so that
-  # a values file written for an earlier release still installs.
+  # Of the values below, only images is used: it reaches the discovery run's
+  # spec.discover.images, which the operator copies into the draft. The rest are
+  # accepted and not used, because the operator no longer seeds the draft from
+  # the chart, so edit the draft before approving it. They stay so that a values
+  # file written for an earlier release still installs.
   # What the draft proposes, for the parts no probe can read.
   #
   # Every field here is one discovery would otherwise guess at, and the guesses
@@ -405,10 +428,12 @@ discovery:
     # about it.
     # edgeCluster: true
 
-    # Images the draft pins, as full repository:tag references. Empty leaves each
-    # to its own default, which is the pairing this release was tested as. The
-    # node agent is not here: a draft that pins none takes the ControlPlane
-    # object's image, which this chart already writes.
+    # Images the draft pins, as full repository:tag references, carried by the
+    # discovery run into the draft's spec.images and from there onto every
+    # StorageNode. Empty leaves each to its own default, which is the pairing
+    # this release was tested as. The node agent is not here: a draft that pins
+    # none takes the ControlPlane object's image, which this chart already
+    # writes.
     #
     #   images:
     #     spdk: quay.io/simplyblock-io/spdk:v26.2.6
@@ -530,6 +555,17 @@ driver:
   # -- Tolerations for the CSI node plugin.
   tolerations: []
 
+  # Workers running Ubuntu often lack nvme-tcp until linux-modules-extra for
+  # the running kernel is installed. True adds a privileged init container to
+  # the node plugin that loads the module, installs that package with apt when
+  # the module is missing, and adds nvme-tcp to /etc/modules-load.d. It reads
+  # each host's /etc/os-release and leaves any host that is not Ubuntu as it is,
+  # so a mixed fleet can turn it on.
+  # -- Loads the `nvme-tcp` kernel module on the workers running the CSI node plugin, installing
+  # `linux-modules-extra-$(uname -r)` with apt on Ubuntu hosts when the module is missing. Other
+  # distributions are left unchanged.
+  enableNVMeTCPModuleInstall: false
+
   # Where the controller plugin runs. This is ordinary pod placement for one
   # workload, unlike the pair above.
   # -- Node selector for the CSI controller plugin.
@@ -581,30 +617,27 @@ driver:
   # pNFS: ReadWriteMany volumes served by an NFS metadata server, whose clients
   # read and write the volume's NVMe-oF namespace directly.
   pnfs:
-    # The metadata server: one pod per storage cluster, running the NFS server in
-    # a QEMU guest on a node with /dev/kvm. On by default, so a ReadWriteMany
-    # volume needs nothing beyond the install. Off, no pNFS volume can be
-    # exported and its export waits in Pending.
+    # The metadata server: per storage cluster, an active pod and standby pods,
+    # each running the NFS server in a QEMU guest on a node with /dev/kvm. On by
+    # default, so a ReadWriteMany volume needs nothing beyond the install. Off,
+    # no pNFS volume can be exported and its export waits in Pending.
     mds:
-      # -- Runs the pNFS metadata server, one pod per storage cluster, which serves ReadWriteMany
+      # -- Runs the pNFS metadata server, an active and standby pods per storage cluster, which serves ReadWriteMany
       # volumes. It requires a node with `/dev/kvm`. With `false`, pNFS volumes stay `Pending`.
       enabled: true
-      # Merged with the kvm-capable label the pod always requires.
-      # -- Node selector of the metadata server, merged with the KVM-capable label the pod always
-      # requires.
+      # -- Node selector of the metadata server pods, merged with the KVM-capable label the pods
+      # always require.
       nodeSelector: {}
       # -- Tolerations of the metadata server.
       tolerations: []
-      # The pod's requests and limits. Empty takes the driver's defaults: 2 CPUs
+      # Each pod's requests and limits. Empty takes the driver's defaults: 2 CPUs
       # and 2Gi of memory as limits.
       # -- Resource requests and limits of the metadata server. Empty uses limits of 2 CPUs and 2Gi of
       # memory.
       resources: {}
-      # The guest's state disk, which holds the NFS client-recovery database.
-      # Empty takes 1Gi.
-      # -- Size of the metadata server's state disk, which holds the NFS client recovery database.
-      # Empty uses `1Gi`.
-      stateSize: ""
+      # -- Standby guests beside the active one, each on its own KVM node, 0 to 4. Unset uses the
+      # driver's default of 1. A standby without a node stays pending while the active serves.
+      # standbys: 1
       # The storage data network the metadata server is attached to, through a
       # Multus macvlan on the host interface carrying the subnet. All three are
       # needed, and the range must hold no address anything else on the network
@@ -1032,6 +1065,17 @@ metricsAPI:
   # empty value serves each volume's provisioned size and nothing measured.
   # -- Prometheus the capacity samples are read from. Empty serves provisioned sizes only.
   prometheusURL: http://simplyblock-prometheus:9090
+
+operatorMetrics:
+  # The operator's controller-runtime metrics, including the ObjectStore and
+  # S3Bucket families. Served per pod, on the container port named "metrics",
+  # over HTTPS behind Kubernetes authentication and authorization: a scraper
+  # presents a ServiceAccount token bound to the
+  # simplyblock-operator-metrics-reader ClusterRole.
+  # -- Serves the operator's own metrics. `false` closes the port.
+  enabled: false
+  # -- Container port of the operator's metrics endpoint.
+  port: 8443
 
 mongodb-kubernetes:
   # -- Name of the MongoDB operator.

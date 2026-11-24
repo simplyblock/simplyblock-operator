@@ -241,6 +241,16 @@ func (r *recorder) count(reason string) int {
 
 func (r *recorder) has(reason string) bool { return r.count(reason) > 0 }
 
+// hasTyped reports whether an event of this type carried the reason.
+func (r *recorder) hasTyped(eventType, reason string) bool {
+	for _, e := range r.events {
+		if e.Type == eventType && e.Reason == reason {
+			return true
+		}
+	}
+	return false
+}
+
 var _ events.EventRecorder = (*recorder)(nil)
 
 func objectMeta(name, namespace string) metav1.ObjectMeta {

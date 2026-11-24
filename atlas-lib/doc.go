@@ -13,6 +13,9 @@
 //
 //	nvme            Discover and look up local NVMe controllers and namespaces.
 //	nvmeof          Connect and disconnect NVMe-oF (TCP) targets.
+//	nvmepr          Register, acquire, and preempt a namespace's persistent
+//	                reservation, and read who is registered under which host;
+//	                nvmepr/test is an in-memory namespace for tests.
 //	nqn             Build and parse NVMe Qualified Names.
 //	blockdev        What a Linux block device is, and what it carries: the
 //	                reading a formatting decision rests on, plus the scan that
@@ -38,6 +41,15 @@
 //	kube            Map a logical volume to the Kubernetes objects representing it.
 //	controlplane    Client for the simplyblock control-plane API.
 //	nfsexport       Publish a pNFS export on its metadata-server host.
+//	bucketdelivery  GatewayMountRoot: the one hostPath the CSI node plugin's
+//	                bucket bind mounts and the operator's gateway pods have
+//	                to agree on without calling each other.
+//	bucketdeliveryrpc
+//	                Deliver and withdraw an S3 bucket's mount on a gateway
+//	                node, over a link (bucketdelivery/bucketdeliveryrpc). No
+//	                local action package: the node-side work is the CSI node
+//	                plugin's own NodeStageVolume/NodePublishVolume, already
+//	                written for kubelet.
 //	fiemap          What a byte range of a file is made of on disk: data,
 //	                unwritten, delalloc, or hole.
 //	nfsclient       What the kernel's NFS client says about its mounts:

@@ -14,11 +14,14 @@ ECR_REBALANCER_IMG      ?= $(ECR_REBALANCER_IMG_BASE):$(IMG_TAG)
 BUNDLE_IMG ?= quay.io/simplyblock-io/simplyblock-operator-bundle:$(VERSION)
 OPENSHIFT_VERSION ?= v4.19
 
-# Related images deployed by the operator (used in relatedImages for airgap support)
+# Related images deployed by the operator (used in relatedImages for airgap support).
+# The simplyblock and ultra tags follow the operator's: no "v", and a hotfix dash
+# as a dot (v26.3.2-1 is 26.3.2.1), as helm-charts/scripts/stamp-release-version.sh maps them.
+RELEASE_IMAGE_TAG  := $(shell printf '%s' '$(IMG_TAG)' | sed -E 's/^v//; s/-([0-9]+)$$/.\1/')
 CLUSTER_IMAGE_BASE ?= quay.io/simplyblock-io/simplyblock
-CLUSTER_IMAGE_TAG  ?= 26.4.0-beta4
+CLUSTER_IMAGE_TAG  ?= $(RELEASE_IMAGE_TAG)
 SPDK_IMAGE_BASE    ?= quay.io/simplyblock-io/ultra
-SPDK_IMAGE_TAG     ?= 26.4.0-beta4
+SPDK_IMAGE_TAG     ?= $(RELEASE_IMAGE_TAG)
 NUMA_PLUGIN_IMAGE_BASE ?= quay.io/simplyblock-io/numa-resource-plugin
 NUMA_PLUGIN_IMAGE_TAG  ?= v1.0.0
 
@@ -31,7 +34,9 @@ YQ_CSV_EXPR = .metadata.annotations.containerImage = strenv(OPERATOR_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NODEPROBE_IMAGE")).value = strenv(OPERATOR_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_OPERATOR_IMAGE")).value = strenv(OPERATOR_TAGGED_IMG) \
   | (.spec.install.spec.deployments[0].spec.template.spec.containers[0].env[] | select(.name == "SB_NUMA_PLUGIN_IMAGE")).value = strenv(NUMA_PLUGIN_IMG) \
-  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].env += [{"name": "SIMPLYBLOCK_REBALANCER_IMAGE", "value": strenv(REBALANCER_IMG)}]
+  | .spec.install.spec.deployments[0].spec.template.spec.containers[0].env += [{"name": "SIMPLYBLOCK_REBALANCER_IMAGE", "value": strenv(REBALANCER_IMG)}] \
+  | .metadata.annotations."operatorframework.io/initialization-resource" |= (from_json | .spec.source.local.image = strenv(CLUSTER_IMG) | to_json(0)) \
+  | .metadata.annotations."alm-examples" |= (from_json | (.[] | select(.kind == "ControlPlane") | .spec.source.local.image) = strenv(CLUSTER_IMG) | to_json)
 YQ_ANNOTATIONS_EXPR = .annotations."com.redhat.openshift.versions" = strenv(OPENSHIFT_VERSION)
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
@@ -84,21 +89,9 @@ help: ## Display this help.
 manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and CustomResourceDefinition objects.
 	"$(CONTROLLER_GEN)" rbac:roleName=manager-role crd:allowDangerousTypes=true webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 	@# controller-gen has no marker for spec.conversion, so the stanza is written
-	@# back after every regeneration. It runs before crd-embed so that the copy the
-	@# upgrade tool carries is the one with the stanza in it.
+	@# back after every regeneration. The upgrade tool embeds these files through
+	@# config/crd/bases/bases.go, so the stanza reaches its binary too.
 	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
-	$(MAKE) crd-embed
-
-# The upgrade tool applies the CRDs itself (design-api-upgrade.md §11) and
-# carries them in its binary, so that the CRDs a run installs are the ones the
-# conversion code in the same binary was built against. go:embed cannot reach
-# outside the directory its source file is in, so the generated CRDs are copied
-# next to the package that embeds them. The copy is committed and regenerated
-# here, which is the same arrangement helm-sync uses for the chart's copy.
-.PHONY: crd-embed
-crd-embed: ## Copy the generated CRDs next to the package that embeds them.
-	rm -f internal/upgrade/crds/manifests/*.yaml
-	cp config/crd/bases/*.yaml internal/upgrade/crds/manifests/
 
 .PHONY: generate
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

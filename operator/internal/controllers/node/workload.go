@@ -39,6 +39,8 @@ import (
 	policyv1 "k8s.io/api/policy/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
@@ -195,21 +197,30 @@ func (w *Workload) LabelWorker(ctx context.Context, namespace, cluster, worker s
 // is why the emptiness check is here rather than at the call site: a relocation
 // off a two-socket host leaves the second socket behind.
 func (w *Workload) ReleaseWorker(
-	ctx context.Context, namespace, cluster, movedNode string,
+	ctx context.Context, namespace, cluster string, moved *simplyblockv1alpha2.StorageNode,
 ) error {
 	var nodes simplyblockv1alpha2.StorageNodeList
 	if err := w.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
 		return fmt.Errorf("list the cluster's nodes: %w", err)
 	}
 
-	// The moved node's object already names the worker it went to, so the worker
-	// it left is simply one that carries the cluster's label and that no node of
-	// the cluster is on any more. Counting the occupied workers and stripping the
-	// rest finds it without having to remember where the node used to be.
-	occupied := map[string]struct{}{}
+	// The worker the node left is simply one that carries the cluster's label
+	// and that no node of the cluster is on any more. Counting the occupied
+	// workers and stripping the rest finds it without having to remember where
+	// the node used to be.
+	//
+	// The moved node is taken from the caller, who has just re-pointed it, and
+	// not from the list: the list answers from the informer cache, which may
+	// still hold the node as it was before the re-point. Decided from that copy,
+	// the release strips the worker the node went to, which unschedules the
+	// agent pod the DaemonSet runs there, and leaves the worker it left labeled.
+	// Talos lab, 2026-11-12: the target's agent pod was deleted and recreated at
+	// every promote, and the node read unreachable for the ~50 s its init
+	// containers took to bring the new pod up.
+	occupied := map[string]struct{}{moved.Spec.WorkerNode: {}}
 	for i := range nodes.Items {
 		node := &nodes.Items[i]
-		if node.Spec.ClusterRef != cluster {
+		if node.Spec.ClusterRef != cluster || node.Name == moved.Name {
 			continue
 		}
 		occupied[node.Spec.WorkerNode] = struct{}{}
@@ -422,24 +433,48 @@ func (w *Workload) agentPodOn(
 // the window with nothing to ask, which is what the operator saw on 2026-09-29
 // when its shutdown took a connection refused from the webAPI mid-flight.
 //
+// The pNFS metadata server is here because every pNFS client in the cluster goes
+// through it: evicting it stalls them all until a new one has booted and ended
+// its grace period, which a drain must not cost while the control plane has not
+// yet agreed to the maintenance.
+//
 // The node agent's DaemonSet pod is deliberately absent. A budget over it holds
 // no drain, and the agent is what the window needs answering in AwaitingHost.
-var evictionTargets = []map[string]string{
-	{utils.LabelRole: utils.LabelSpdkProxyRole},
-	{atlaskube.LabelApp: controlplane.ComponentWebAPI},
-	{utils.LabelFDBClusterName: controlplane.ComponentFDBCluster},
+var evictionTargets = []labels.Selector{
+	labels.SelectorFromSet(labels.Set{utils.LabelRole: utils.LabelSpdkProxyRole}),
+	labels.SelectorFromSet(labels.Set{atlaskube.LabelApp: controlplane.ComponentWebAPI}),
+	labels.SelectorFromSet(labels.Set{utils.LabelFDBClusterName: controlplane.ComponentFDBCluster}),
+	mdsPods,
 }
+
+// mdsPods selects every pNFS metadata server pod, by the cluster label only they
+// carry.
+var mdsPods = func() labels.Selector {
+	req, err := labels.NewRequirement(utils.LabelMDSClusterID, selection.Exists, nil)
+	if err != nil {
+		panic(err)
+	}
+	return labels.NewSelector().Add(*req)
+}()
 
 // podsMatching lists the pods on one worker that carry every given label,
 // skipping any that is already on its way out.
 func (w *Workload) podsMatching(
-	ctx context.Context, namespace, worker string, labels map[string]string,
+	ctx context.Context, namespace, worker string, set map[string]string,
+) ([]corev1.Pod, error) {
+	return w.podsSelected(ctx, namespace, worker, labels.SelectorFromSet(set))
+}
+
+// podsSelected lists the pods on one worker that the selector matches, skipping
+// any that is already on its way out.
+func (w *Workload) podsSelected(
+	ctx context.Context, namespace, worker string, selector labels.Selector,
 ) ([]corev1.Pod, error) {
 	var pods corev1.PodList
 	err := w.List(ctx, &pods,
-		client.InNamespace(namespace), client.MatchingLabels(labels))
+		client.InNamespace(namespace), client.MatchingLabelsSelector{Selector: selector})
 	if err != nil {
-		return nil, fmt.Errorf("list the pods matching %v: %w", labels, err)
+		return nil, fmt.Errorf("list the pods matching %v: %w", selector, err)
 	}
 	on := make([]corev1.Pod, 0, len(pods.Items))
 	for i := range pods.Items {
@@ -532,7 +567,7 @@ func (w *Workload) BlockEviction(
 	ctx context.Context, namespace, cluster, worker string,
 ) error {
 	for _, selector := range evictionTargets {
-		pods, err := w.podsMatching(ctx, namespace, worker, selector)
+		pods, err := w.podsSelected(ctx, namespace, worker, selector)
 		if err != nil {
 			return err
 		}

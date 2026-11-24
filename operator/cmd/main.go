@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"google.golang.org/grpc"
 
 	"github.com/simplyblock/atlas/controlplane"
+	"github.com/simplyblock/atlas/freeze/freezerpc"
 	"github.com/simplyblock/atlas/link"
 	"github.com/simplyblock/atlas/placement/placementrpc"
 	atlasprom "github.com/simplyblock/atlas/prometheus"
@@ -80,12 +82,14 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/driver"
 	nodecontroller "github.com/simplyblock/simplyblock-operator/internal/controllers/node"
+	objectstorecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/objectstore"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/vrgfollow"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/switchover"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -167,6 +171,20 @@ func init() {
 	// +kubebuilder:scaffold:scheme
 }
 
+// serverHasGroup reports whether the API server serves the named API group.
+func serverHasGroup(discoveryClient serverGroupsGetter, name string) (bool, error) {
+	groupList, err := discoveryClient.ServerGroups()
+	if err != nil {
+		return false, fmt.Errorf("discover API groups: %w", err)
+	}
+	for _, group := range groupList.Groups {
+		if group.Name == name {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func validateTLSConfiguration(discoveryClient serverGroupsGetter, providerSet bool, tlsProvider string) error {
 	if !providerSet {
 		return nil
@@ -183,14 +201,12 @@ func validateTLSConfiguration(discoveryClient serverGroupsGetter, providerSet bo
 		requiredGroup = openShiftConfigAPIGroup
 	}
 
-	groupList, err := discoveryClient.ServerGroups()
+	served, err := serverHasGroup(discoveryClient, requiredGroup)
 	if err != nil {
-		return fmt.Errorf("discover API groups: %w", err)
+		return err
 	}
-	for _, group := range groupList.Groups {
-		if group.Name == requiredGroup {
-			return nil
-		}
+	if served {
+		return nil
 	}
 	return fmt.Errorf("SB_TLS_PROVIDER=%q requires API group %q", tlsProvider, requiredGroup)
 }
@@ -471,6 +487,20 @@ func main() {
 		setupLog.Error(err, "unable to build the placement service")
 		os.Exit(1)
 	}
+	// A striped volume's freeze (atlas-lib/freeze/freezerpc) is relayed from
+	// the CSI controller to the node that stages the volume: the controller has
+	// no link to a node, and both link to here. The registry the relay reaches
+	// nodes through exists once the hub does, so it is read at call time.
+	freezeRelay := freezerpc.NewRelay(func(node string) (grpc.ClientConnInterface, []string, error) {
+		if csiPeers == nil {
+			return nil, nil, errors.New("the CSI link is not running")
+		}
+		p, err := csiPeers.Peer(link.NodePeer(node))
+		if err != nil {
+			return nil, nil, err
+		}
+		return p.Conn(), p.Capabilities, nil
+	})
 	if csiLinkEnabled {
 		var certFile, keyFile string
 		if csiLinkCertPath != "" {
@@ -491,8 +521,11 @@ func main() {
 			NodeServiceAccount:       "simplyblock-csi-node-sa",
 			ControllerServiceAccount: "simplyblock-csi-controller-sa",
 			MDSServiceAccount:        "simplyblock-csi-mds-sa",
-			Register:                 placementServer.Register,
-			Capabilities:             placementrpc.Capabilities(),
+			Register: func(r grpc.ServiceRegistrar) {
+				placementServer.Register(r)
+				freezeRelay.Register(r)
+			},
+			Capabilities: append(placementrpc.Capabilities(), freezerpc.Capabilities()...),
 		})
 		if err != nil {
 			setupLog.Error(err, "unable to set up the CSI link")
@@ -615,13 +648,64 @@ func main() {
 		Recorder:          mgr.GetEventRecorder("nfsexport-controller"),
 		OperatorNamespace: operatorNamespace,
 	}
+	// The metadata server's takeover. It needs the link to reach each guest, so
+	// it exists only with the link on; without it the driver coordinator still
+	// runs, with no switchover hook, and holds a scale-down.
+	var mdsFailover *controller.MDSFailoverReconciler
+	mdsHosts := &controller.MDSHostGate{}
 	if csiPeers != nil {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
 		nfsExportReconciler.Flows = csilink.NewFlows(csilink.RegistryNodePeers(csiPeers))
+		mdsGuests := csilink.NewMDSGuests(csiPeers)
+		nfsExportReconciler.Serving = controller.NewMDSServingGate(mgr.GetClient(), operatorNamespace, mdsGuests)
+		mdsFailover = &controller.MDSFailoverReconciler{
+			Client:            mgr.GetClient(),
+			Recorder:          mgr.GetEventRecorder("mds-failover"),
+			Guests:            mdsGuests,
+			Exports:           nfsExportReconciler,
+			OperatorNamespace: operatorNamespace,
+			Hosts:             mdsHosts,
+		}
 	}
 	if err := nfsExportReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
 		os.Exit(1)
+	}
+	// S3Bucket's own delivery step (W-12) also reaches its nodes over
+	// csi-link, the same registry NFSExport assembly uses, because both run
+	// in this manager (design-bucket-provisioning.md §7.1).
+	s3BucketReconciler := &objectstorecontrollers.S3BucketReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("s3bucket-controller"),
+	}
+	if csiPeers != nil {
+		s3BucketReconciler.Registry = csiPeers
+	}
+	if err := s3BucketReconciler.SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "S3Bucket")
+		os.Exit(1)
+	}
+	// The gateway workload S3Bucket's own mount delivery reaches
+	// (design-objectstore.md), in this manager rather than one of its own
+	// (0005-s3bucket-joins-the-main-operator-manager.md).
+	if err := (&objectstorecontrollers.ObjectStoreReconciler{
+		Client:   mgr.GetClient(),
+		Scheme:   mgr.GetScheme(),
+		Recorder: mgr.GetEventRecorder("objectstore-controller"),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ObjectStore")
+		os.Exit(1)
+	}
+	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
+		setupLog.Error(err, "unable to add the S3Bucket/ObjectStore collector")
+		os.Exit(1)
+	}
+	if mdsFailover != nil {
+		if err := mdsFailover.SetupWithManager(ctrlMgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "MDSFailover")
+			os.Exit(1)
+		}
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
@@ -717,6 +801,21 @@ func main() {
 	controlPlaneCredential := controlplanecontroller.NewCredentialResolver(
 		mgr.GetClient(), operatorNamespace)
 
+	// OpenShift is read from the API groups the cluster serves. A wrong answer
+	// gives the NUMA device plugin an SELinux type it cannot register with, or one
+	// OpenShift does not admit, so a cluster that cannot be asked stops the
+	// operator rather than being guessed at.
+	controlPlaneDiscovery, err := discovery.NewDiscoveryClientForConfig(cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to build a discovery client")
+		os.Exit(1)
+	}
+	isOpenShift, err := serverHasGroup(controlPlaneDiscovery, openShiftConfigAPIGroup)
+	if err != nil {
+		setupLog.Error(err, "unable to tell whether this is an OpenShift cluster")
+		os.Exit(1)
+	}
+
 	if err := (&controlplanecontroller.ControlPlaneReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
@@ -725,6 +824,7 @@ func main() {
 		ImageMirrorRegistry: os.Getenv("SB_IMAGE_MIRROR_REGISTRY"),
 
 		NUMAPluginImage: os.Getenv(controlplanecontroller.NUMAPluginImageEnv),
+		OpenShift:       isOpenShift,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ControlPlane")
 		os.Exit(1)
@@ -746,6 +846,15 @@ func main() {
 		Recorder: mgr.GetEventRecorder("webapi-readiness-watchdog"),
 	}); err != nil {
 		setupLog.Error(err, "unable to add the management API readiness watchdog")
+		os.Exit(1)
+	}
+	// An MDS pod that stays unready after it has served is recreated, since
+	// only a new pod stages its state volume again (mds_watchdog.go).
+	if err := mgr.Add(&driver.MDSReadinessWatchdog{
+		Client:   mgr.GetClient(),
+		Recorder: mgr.GetEventRecorder("mds-readiness-watchdog"),
+	}); err != nil {
+		setupLog.Error(err, "unable to add the pNFS metadata server readiness watchdog")
 		os.Exit(1)
 	}
 	// The site link is the elected replica's, so it runs as a leader-election
@@ -950,11 +1059,21 @@ func main() {
 	// The volume band. It shares the backup band's control-plane client because
 	// there is one control plane and one endpoint; what differs is which of its
 	// endpoints each band calls.
+	// A JoinConsistencyGroup holds a moving volume's I/O through the swap
+	// service of the CSI plugin on each consuming host, reached over the CSI
+	// link. Without the link a join fails at its swap rather than running half
+	// of one.
+	var swapPeers volumecontrollers.SwapPeers
+	if csiPeers != nil {
+		swapPeers = volumecontrollers.LinkSwapPeers(csiPeers)
+	}
 	if err := (&volumecontrollers.PersistentVolumeOpsReconciler{
 		Client:   mgr.GetClient(),
 		Scheme:   mgr.GetScheme(),
 		Recorder: mgr.GetEventRecorder("persistentvolumeops-controller"),
 		API:      backupAPI,
+		Join:     backupAPI,
+		Swap:     swapPeers,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "PersistentVolumeOps")
 		os.Exit(1)
@@ -1128,12 +1247,24 @@ func main() {
 	if siteLinkEnabled {
 		driverSiteLink = &driver.SiteLinkConfig{Address: siteLinkAddr, AgentNamespace: siteLinkNamespace}
 	}
+	// The metadata server's state volume and allowed hosts go through the
+	// control plane of the volume's cluster: a remote cluster's own endpoint,
+	// or the local one the data-protection band writes through.
+	mdsStateCoordinator := &mdsstate.Coordinator{
+		Client: mgr.GetClient(),
+		APIFor: driver.StateVolumeAPI(mgr.GetClient(), backupAPI),
+	}
+	if mdsFailover != nil {
+		mdsStateCoordinator.Switchover = mdsFailover
+	}
 	if err := (&driver.SimplyblockDriverReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
 		SiteLink:  driverSiteLink,
+		MDSState:  mdsStateCoordinator,
+		OnHosts:   mdsHosts.Update,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
@@ -1483,6 +1614,10 @@ func main() {
 				APIClient: webapi.NewClient(),
 			}})
 		setupLog.Info("registered pinned-volume validating webhook")
+
+		mgr.GetWebhookServer().Register("/validate-storage-k8s-io-v1-storageclass",
+			&webhook.Admission{Handler: &internalwebhook.StorageClassValidator{Client: mgr.GetClient()}})
+		setupLog.Info("registered storageclass validating webhook")
 
 		mgr.GetWebhookServer().Register("/validate-v1-pvc-vdo-size",
 			&webhook.Admission{Handler: &internalwebhook.VDOSizeFloorValidator{Client: mgr.GetClient()}})

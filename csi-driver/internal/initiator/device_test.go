@@ -192,6 +192,9 @@ type deviceFixture struct {
 	t       *testing.T
 	byIDDir string
 	devDir  string
+	// sysBlockDir is a fake /sys/block, linking each device a test gives a
+	// subsystem to its namespace directory under that subsystem.
+	sysBlockDir string
 }
 
 func newDeviceFixture(t *testing.T) *deviceFixture {
@@ -203,9 +206,10 @@ func newDeviceFixture(t *testing.T) *deviceFixture {
 		t.Fatalf("fixture path %q contains a glob metacharacter", root)
 	}
 	f := &deviceFixture{
-		t:       t,
-		byIDDir: filepath.Join(root, "by-id"),
-		devDir:  filepath.Join(root, "dev"),
+		t:           t,
+		byIDDir:     filepath.Join(root, "by-id"),
+		devDir:      filepath.Join(root, "dev"),
+		sysBlockDir: filepath.Join(root, "sys", "block"),
 	}
 	for _, dir := range []string{f.byIDDir, f.devDir} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -242,6 +246,27 @@ func (f *deviceFixture) link(link, blockDev string) string {
 		f.t.Fatalf("linking %s: %v", linkPath, err)
 	}
 	return linkPath
+}
+
+// setSubsystem records that blockDev belongs to the subsystem nqn the way the
+// kernel lays it out: /sys/block/<dev> links to the namespace's directory under
+// its nvme-subsystem, and subsysnqn sits in that subsystem directory.
+func (f *deviceFixture) setSubsystem(blockDev, subsystemNQN string) {
+	f.t.Helper()
+	subsys := filepath.Join(filepath.Dir(f.sysBlockDir), "devices", "virtual", "nvme-subsystem", "subsys-"+blockDev)
+	namespace := filepath.Join(subsys, blockDev)
+	if err := os.MkdirAll(namespace, 0o755); err != nil {
+		f.t.Fatalf("creating %s: %v", namespace, err)
+	}
+	if err := os.WriteFile(filepath.Join(subsys, "subsysnqn"), []byte(subsystemNQN+"\n"), 0o600); err != nil {
+		f.t.Fatalf("writing subsysnqn of %s: %v", blockDev, err)
+	}
+	if err := os.MkdirAll(f.sysBlockDir, 0o755); err != nil {
+		f.t.Fatalf("creating %s: %v", f.sysBlockDir, err)
+	}
+	if err := os.Symlink(namespace, filepath.Join(f.sysBlockDir, blockDev)); err != nil {
+		f.t.Fatalf("linking %s: %v", blockDev, err)
+	}
 }
 
 func (f *deviceFixture) remove(link string) {
@@ -312,7 +337,7 @@ func TestMatchNamespaceDeviceOnRealNode(t *testing.T) {
 		for _, nsID := range sub.namespaceIDs() {
 			t.Run(fmt.Sprintf("%s namespace %d", sub.controller, nsID), func(t *testing.T) {
 				got, err := matchNamespaceDevice(
-					context.Background(), f.byIDDir, sub.model, sub.lvolIDs[nsID], nsID, testPoll,
+					context.Background(), f.byIDDir, subsystemGate{}, sub.model, sub.lvolIDs[nsID], nsID, testPoll,
 				)
 				if err != nil {
 					t.Fatalf("unexpected error: %v", err)
@@ -419,7 +444,7 @@ func TestMatchNamespaceDeviceIgnoresSuffixlessAlias(t *testing.T) {
 
 	for _, nsID := range sub.namespaceIDs() {
 		got, err := matchNamespaceDevice(
-			context.Background(), f.byIDDir, sub.model, sub.lvolIDs[nsID], nsID, testPoll,
+			context.Background(), f.byIDDir, subsystemGate{}, sub.model, sub.lvolIDs[nsID], nsID, testPoll,
 		)
 		if err != nil {
 			t.Fatalf("namespace %d: unexpected error: %v", nsID, err)
@@ -439,7 +464,9 @@ func TestMatchNamespaceDeviceIgnoresLocalNvme(t *testing.T) {
 	f := newRealNodeFixture(t)
 	sub := realNodeSubsystems[0]
 
-	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, sub.model, sub.lvolIDs[1], 1, testPoll)
+	got, err := matchNamespaceDevice(
+		context.Background(), f.byIDDir, subsystemGate{}, sub.model, sub.lvolIDs[1], 1, testPoll,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -535,7 +562,7 @@ func TestMatchNamespaceDeviceFallbackNeedsNsidSuffix(t *testing.T) {
 		want := f.addDevice("nvme-uuid."+testLvolID, "nvme0n2")
 
 		got, err := matchNamespaceDevice(
-			context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll,
+			context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, testPoll,
 		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -549,7 +576,7 @@ func TestMatchNamespaceDeviceFallbackNeedsNsidSuffix(t *testing.T) {
 		f := newDeviceFixture(t)
 		want := f.addDevice(testLink(testLvolID, 2), "nvme0n2")
 
-		got, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll)
+		got, err := matchNamespaceDevice(context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, testPoll)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -566,7 +593,7 @@ func TestMatchNamespaceDevicePrefersModelOverLvol(t *testing.T) {
 	want := f.addDevice(testLink(testModel, 1), "nvme0n1")
 	f.addDevice(testLink(testLvolID, 1), "nvme1n1")
 
-	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 1, testPoll)
+	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 1, testPoll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -841,7 +868,7 @@ func TestMatchNamespaceDeviceAmbiguousMatch(t *testing.T) {
 	f.addDevice(testLink(testModel, 2), "nvme0n2")
 	f.addDevice("nvme-"+testModel+"_other_2", "nvme1n2")
 
-	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll)
+	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, testPoll)
 	if err == nil {
 		t.Fatal("expected an error for two matches resolving to different devices")
 	}
@@ -860,7 +887,9 @@ func TestMatchNamespaceDeviceAmbiguityResolves(t *testing.T) {
 	f.addDevice(stale, "nvme9n2")
 	f.removeAfter(5*time.Millisecond, stale)
 
-	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, 10*time.Millisecond)
+	got, err := matchNamespaceDevice(
+		context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, 10*time.Millisecond,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -878,7 +907,7 @@ func TestMatchNamespaceDeviceAliasesToSameDevice(t *testing.T) {
 		f.addDevice("nvme-"+testModel+"_alias_2", "nvme0n2"): true,
 	}
 
-	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll)
+	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, testPoll)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -899,7 +928,7 @@ func TestMatchNamespaceDeviceDanglingLink(t *testing.T) {
 	f.addDevice(testLink(testModel, 2), "nvme0n2")
 	f.addDangling("nvme-"+testModel+"_stale_2", "nvme9n2")
 
-	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll)
+	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, testPoll)
 	if err == nil {
 		t.Fatal("expected an error for an unresolvable device link")
 	}
@@ -915,7 +944,9 @@ func TestMatchNamespaceDeviceMissing(t *testing.T) {
 	sub := realNodeSubsystems[0]
 	const absent = 42
 
-	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, sub.model, testLvolID, absent, testPoll)
+	_, err := matchNamespaceDevice(
+		context.Background(), f.byIDDir, subsystemGate{}, sub.model, testLvolID, absent, testPoll,
+	)
 	if err == nil {
 		t.Fatal("expected an error when the namespace device never shows up")
 	}
@@ -938,7 +969,7 @@ func TestMatchNamespaceDeviceReportsBothFailures(t *testing.T) {
 	f.addDevice(testLink(testModel, 2), "nvme0n2")
 	f.addDevice("nvme-"+testModel+"_other_2", "nvme1n2")
 
-	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, testPoll)
+	_, err := matchNamespaceDevice(context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, testPoll)
 	if err == nil {
 		t.Fatal("expected an error")
 	}
@@ -957,7 +988,9 @@ func TestMatchNamespaceDeviceAppearsLate(t *testing.T) {
 	link := testLink(testModel, 2)
 	f.addDeviceAfter(15*time.Millisecond, link, "nvme0n2")
 
-	got, err := matchNamespaceDevice(context.Background(), f.byIDDir, testModel, testLvolID, 2, 5*time.Millisecond)
+	got, err := matchNamespaceDevice(
+		context.Background(), f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, 5*time.Millisecond,
+	)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -971,7 +1004,7 @@ func TestMatchNamespaceDeviceContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := matchNamespaceDevice(ctx, f.byIDDir, testModel, testLvolID, 2, time.Hour)
+	_, err := matchNamespaceDevice(ctx, f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, time.Hour)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("error %v does not wrap context.Canceled", err)
 	}
@@ -985,7 +1018,7 @@ func TestMatchNamespaceDeviceCanceledMidWaitDoesNotHang(t *testing.T) {
 	defer cancel()
 
 	start := time.Now()
-	if _, err := matchNamespaceDevice(ctx, f.byIDDir, testModel, testLvolID, 2, time.Hour); err == nil {
+	if _, err := matchNamespaceDevice(ctx, f.byIDDir, subsystemGate{}, testModel, testLvolID, 2, time.Hour); err == nil {
 		t.Fatal("expected an error")
 	}
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
@@ -1084,7 +1117,7 @@ func TestWaitForDeviceReadyNoAttemptsScansOnce(t *testing.T) {
 	want := f.addDevice(testLink(testModel, 1), "nvme0n1")
 	glob := namespaceDeviceGlob(f.byIDDir, testModel, 1)
 
-	got, err := waitForDeviceReady(context.Background(), glob, 0, time.Hour)
+	got, err := waitForDeviceReady(context.Background(), glob, subsystemGate{}, 0, time.Hour)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -1094,7 +1127,7 @@ func TestWaitForDeviceReadyNoAttemptsScansOnce(t *testing.T) {
 
 	// A single scan must not wait out the interval when nothing matches.
 	err = mustReturnPromptly(t, func() error {
-		_, err := waitForDeviceReady(context.Background(), glob+"-absent", 0, time.Hour)
+		_, err := waitForDeviceReady(context.Background(), glob+"-absent", subsystemGate{}, 0, time.Hour)
 		return err
 	})
 	if err == nil {
@@ -1109,7 +1142,7 @@ func TestWaitForDeviceReadyScansAttemptsTimes(t *testing.T) {
 	// Two attempts sleep once between them, so the whole call is bounded by the
 	// interval times the number of attempts.
 	start := time.Now()
-	if _, err := waitForDeviceReady(context.Background(), glob, 2, 20*time.Millisecond); err == nil {
+	if _, err := waitForDeviceReady(context.Background(), glob, subsystemGate{}, 2, 20*time.Millisecond); err == nil {
 		t.Fatal("expected a timeout error")
 	}
 	elapsed := time.Since(start)
@@ -1122,7 +1155,7 @@ func TestWaitForDeviceReadyScansAttemptsTimes(t *testing.T) {
 }
 
 func TestWaitForDeviceReadyBadPattern(t *testing.T) {
-	_, err := waitForDeviceReady(context.Background(), "/dev/disk/by-id/[", 1, testPoll)
+	_, err := waitForDeviceReady(context.Background(), "/dev/disk/by-id/[", subsystemGate{}, 1, testPoll)
 	if !errors.Is(err, filepath.ErrBadPattern) {
 		t.Errorf("error %v is not filepath.ErrBadPattern", err)
 	}
@@ -1365,4 +1398,126 @@ func TestResolveToSameDevice(t *testing.T) {
 			t.Errorf("error %q does not report the unresolvable link", err)
 		}
 	})
+}
+
+// --- the device's subsystem ------------------------------------------------
+
+const (
+	// activeNQN is the subsystem the control plane names for the volume, and
+	// staleNQN another subsystem still connected on the node: the volume's
+	// pre-failover source, or the DR clone a fail-back left behind.
+	activeNQN = "nqn.2023-02.io.simplyblock:11111111-2222-3333-4444-555555555555:lvol:" + testModel
+	staleNQN  = "nqn.2023-02.io.simplyblock:99999999-8888-7777-6666-555555555555:lvol:" + testLvolID
+)
+
+// Regression (#537): a link that a lookup pattern matches is not the volume's
+// device when it belongs to another subsystem. A stale device of the
+// pre-failover source still connected on the node carries a link the model
+// pattern matches, and the lookup took it, attaching the workload to the
+// volume it failed over from. It has to be passed over for the namespace of
+// the volume's own subsystem.
+func TestMatchNamespaceDeviceSkipsTheModelLinkOfAnotherSubsystem(t *testing.T) {
+	f := newDeviceFixture(t)
+	f.addDevice(testLink(testModel, 2), "nvme7n2")
+	f.setSubsystem("nvme7n2", staleNQN)
+	active := f.addDevice("nvme-uuid."+testLvolID, "nvme9n2")
+	f.setSubsystem("nvme9n2", activeNQN)
+
+	got, err := matchNamespaceDevice(context.Background(), f.byIDDir,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, testModel, testLvolID, 2, testPoll)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != active {
+		t.Errorf("selected %s (%s), want the volume's own device %s", got, f.resolve(got), active)
+	}
+}
+
+// The same holds for the clone-identity pattern. After a fail-back the clone
+// identity is the DR clone's, and the DR clone's own subsystem, still
+// connected, carries a link that pattern matches.
+func TestMatchNamespaceDeviceSkipsTheCloneLinkOfAnotherSubsystem(t *testing.T) {
+	f := newDeviceFixture(t)
+	f.addDevice(testLink(testLvolID, 2), "nvme7n2")
+	f.setSubsystem("nvme7n2", staleNQN)
+	active := f.addDevice("nvme-uuid."+testLvolID, "nvme9n2")
+	f.setSubsystem("nvme9n2", activeNQN)
+
+	got, err := matchNamespaceDevice(context.Background(), f.byIDDir,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, testModel, testLvolID, 2, testPoll)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != active {
+		t.Errorf("selected %s (%s), want the volume's own device %s", got, f.resolve(got), active)
+	}
+}
+
+func TestMatchNamespaceDeviceTakesTheDeviceOfItsOwnSubsystem(t *testing.T) {
+	f := newDeviceFixture(t)
+	want := f.addDevice(testLink(testModel, 2), "nvme9n2")
+	f.setSubsystem("nvme9n2", activeNQN)
+
+	got, err := matchNamespaceDevice(context.Background(), f.byIDDir,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, testModel, testLvolID, 2, testPoll)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("selected %s, want %s", got, want)
+	}
+}
+
+// A device whose subsystem cannot be read is not refused for it: the gate
+// rules out a device it knows is another subsystem's, and nothing else.
+func TestMatchNamespaceDeviceTakesADeviceWhoseSubsystemIsUnreadable(t *testing.T) {
+	f := newDeviceFixture(t)
+	want := f.addDevice(testLink(testModel, 2), "nvme9n2")
+
+	got, err := matchNamespaceDevice(context.Background(), f.byIDDir,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, testModel, testLvolID, 2, testPoll)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got != want {
+		t.Errorf("selected %s, want %s", got, want)
+	}
+}
+
+// With only another subsystem's device present, the lookup fails and says why,
+// rather than returning it.
+func TestMatchNamespaceDeviceRefusesWhenOnlyAnotherSubsystemMatches(t *testing.T) {
+	f := newDeviceFixture(t)
+	f.addDevice(testLink(testModel, 2), "nvme7n2")
+	f.setSubsystem("nvme7n2", staleNQN)
+
+	_, err := matchNamespaceDevice(context.Background(), f.byIDDir,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, testModel, testLvolID, 2, testPoll)
+	if err == nil {
+		t.Fatal("expected an error when only another subsystem's device matches")
+	}
+	if !strings.Contains(err.Error(), staleNQN) {
+		t.Errorf("error %q does not name the subsystem the device belongs to", err)
+	}
+}
+
+// Review of #963: a refusal seen in one scan must not outlive it. When the other
+// subsystem's device goes away and the later scans find nothing, the timeout
+// reports what the last scan saw, not a refusal from an earlier one.
+func TestWaitForDeviceReadyForgetsARefusalOnceTheDeviceIsGone(t *testing.T) {
+	f := newDeviceFixture(t)
+	link := testLink(testModel, 2)
+	f.addDevice(link, "nvme7n2")
+	f.setSubsystem("nvme7n2", staleNQN)
+	f.removeAfter(30*time.Millisecond, link)
+
+	glob := filepath.Join(f.byIDDir, "*"+testModel+"*")
+	_, err := waitForDeviceReady(context.Background(), glob,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, 10, 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected a timeout when no device of the subsystem appears")
+	}
+	if strings.Contains(err.Error(), staleNQN) {
+		t.Errorf("error %q reports a refusal from a scan before the device went away", err)
+	}
 }
