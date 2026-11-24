@@ -83,13 +83,10 @@ const HEADLINES = {
   StorageNode: {
     spec: [
       ro("spec.clusterRef", {link: "cluster"}), row("spec.workerNode", {link: "worker"}), ro("spec.slot", {type: "number"}), row("spec.socketId"), row("spec.nodeIndex", {type: "number"}), ro("spec.nodeSet"),
-      row("spec.config.sizing.vcpuCount", {type: "number"}), row("spec.config.sizing.minHugePagesSize"),
       ro("spec.config.mgmtInterface"), ro("spec.config.dataInterfaces", {type: "list", fmt: F.list}),
       row("spec.config.pcieAllowList", {type: "list", fmt: F.list}), ro("spec.config.pcieDenyList", {type: "list", fmt: F.list}), ro("spec.config.pcieModel"), ro("spec.config.driveSizeRange"), ro("spec.config.deviceNames", {type: "list", fmt: F.list}),
       ro("spec.config.failureDomain"), ro("spec.config.site"), ro("spec.config.expand", {type: "bool", fmt: F.bool}),
-      ro("spec.config.journalManager.count", {type: "number"}), ro("spec.config.journalManager.percentPerDevice", {type: "number"}),
-      row("spec.config.reservedSystemCPU"), row("spec.config.spdkSystemMemory"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {type: "select"}),
-      row("spec.config.spdkProxyImage"), row("spec.config.spdkProxyImagePullPolicy", {type: "select"}), ro("spec.stretched.remote", {type: "bool", fmt: F.bool})
+      ro("spec.stretched.remote", {type: "bool", fmt: F.bool})
     ],
     status: [
       row("status.uuid"), row("status.hostname"), row("status.phase"), row("status.status"), row("status.health", {fmt: F.bool}), row("status.message"), row("status.step.state"),
@@ -261,6 +258,29 @@ const HEADLINES = {
   }
 };
 
+// Fields the console does not show in either tier: paths that carry nothing a
+// user reads or changes through the console, such as the per-node sizing and
+// image overrides the deployment writes. The CRD keeps them, and the YAML view
+// shows the object as it is. A path hides itself and everything under it.
+const HIDDEN = {
+  StorageNode: ["spec.config.sizing.vcpuCount", "spec.config.sizing.minHugePagesSize", "spec.config.reservedSystemCPU", "spec.config.spdkSystemMemory",
+    "spec.config.spdkImage", "spec.config.spdkImagePullPolicy", "spec.config.spdkProxyImage", "spec.config.spdkProxyImagePullPolicy", "spec.config.journalManager"]
+};
+const hiddenPath = (kind, path) => (HIDDEN[kind] || []).some(h => path === h || path.startsWith(h + "."));
+// pruneHidden returns the object without its hidden paths, dropping a parent that ends up empty
+function pruneHidden(kind, data, path) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+  const out = {};
+  Object.entries(data).forEach(([k, v]) => {
+    const p = path ? `${path}.${k}` : k;
+    if (hiddenPath(kind, p)) return;
+    const pv = pruneHidden(kind, v, p);
+    if (pv && typeof pv === "object" && !Array.isArray(pv) && !Object.keys(pv).length && v && Object.keys(v).length) return;
+    out[k] = pv;
+  });
+  return out;
+}
+
 // static immutability, from the CRDs' `self == oldSelf` rules on main, used
 // only when the CRD itself cannot be read
 const STATIC_IMMUTABLE = {
@@ -305,4 +325,4 @@ const RELATIONS = {
   volume: [{layer: "snapshots", icon: "camera", title: "Snapshots", sub: "VolumeSnapshots of this claim"}]
 };
 
-Object.assign(window, {HEADLINES, STATIC_IMMUTABLE, VM_CR_KIND, RELATIONS, F});
+Object.assign(window, {HEADLINES, HIDDEN, hiddenPath, pruneHidden, STATIC_IMMUTABLE, VM_CR_KIND, RELATIONS, F});

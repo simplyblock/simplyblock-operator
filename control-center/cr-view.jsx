@@ -181,7 +181,7 @@ function EssentialsTab({obj, cref: ref, nav, vm, onChanged}) {
   const h = HEADLINES[ref.kind] || {spec: [], status: []};
   const st = obj.status || {};
   // a spec row is shown even when unset (it can be set); a status row only when the operator wrote it
-  const rows = (list, isSpec) => list.filter(r => isSpec || getPath(obj, r.path) !== undefined).map(r => {
+  const rows = (list, isSpec) => list.filter(r => !hiddenPath(ref.kind, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
     const v = getPath(obj, r.path);
     return [<span className="mono" style={{fontSize: 11}} title={schema.descriptions[r.path] || r.path}>{r.label}</span>,
       <span style={{display: "inline-flex", alignItems: "center", gap: 4, justifyContent: "flex-end", flexWrap: "wrap"}}>
@@ -253,12 +253,15 @@ function YamlBlock({obj}) {
 }
 function EverythingTab({obj, cref: ref}) {
   const schema = useCrdSchema(ref.kind);
-  const spec = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
+  const raw = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
+  const spec = pruneHidden(ref.kind, raw, "spec");
+  const hidden = (HIDDEN[ref.kind] || []).filter(p => getPath(obj, p) !== undefined);
   return (
     <>
       <div className="dcols">
-        <div className="card"><h3>spec</h3><div className="bd"><JsonTree data={spec} path="spec" schema={schema} depth={0} /></div></div>
-        <div className="card"><h3>status</h3><div className="bd"><JsonTree data={obj.status || {}} path="status" schema={schema} depth={0} /></div></div>
+        <div className="card"><h3>spec</h3><div className="bd"><JsonTree data={spec} path="spec" schema={schema} depth={0} />
+          {hidden.length > 0 && <div className="mdesc" style={{marginTop: 8}}>{hidden.length} set field{hidden.length === 1 ? "" : "s"} the console does not show: {hidden.map(p => p.replace(/^spec\./, "")).join(", ")}. The YAML below carries {hidden.length === 1 ? "it" : "them"}.</div>}</div></div>
+        <div className="card"><h3>status</h3><div className="bd"><JsonTree data={pruneHidden(ref.kind, obj.status || {}, "status")} path="status" schema={schema} depth={0} /></div></div>
       </div>
       <div style={{marginTop: 12}}><YamlBlock obj={obj} /></div>
     </>

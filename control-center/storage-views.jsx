@@ -214,10 +214,10 @@ function NodeDetail({o: n, nav}) {
         <div className="dcols">
           <div className="card"><h3>status.ports</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}><Props rows={[["management", ports.management], ["nvmeof", ports.nvmeof], ["rpc", ports.rpc], ["lvol", ports.lvol]].map(([k, v]) => [<span className="mono">{k}</span>, v === undefined ? null : <span className="mono">{String(v)}</span>])} /></div></div>
           <div className="card"><h3>spec.config</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}><Props rows={[
-            ["sizing.vcpuCount", (n.config.sizing || {}).vcpuCount], ["sizing.minHugePagesSize", (n.config.sizing || {}).minHugePagesSize],
             ["mgmtInterface", n.config.mgmtInterface], ["dataInterfaces", (n.config.dataInterfaces || []).join(", ")], ["pcieAllowList", (n.config.pcieAllowList || []).join(", ")],
-            ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)],
-            ["spdkSystemMemory", n.config.spdkSystemMemory], ["reservedSystemCPU", n.config.reservedSystemCPU]].map(([k, v]) => [<span className="mono">{k}</span>, v === undefined || v === null || v === "" ? null : <span className="mono">{String(v)}</span>])} /></div></div>
+            ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)]
+            // the same exception list as the CR tiers (cr-headlines.jsx HIDDEN) keeps this card in step with them
+            ].filter(([k]) => !(window.hiddenPath && hiddenPath("StorageNode", "spec.config." + k))).map(([k, v]) => [<span className="mono">{k}</span>, v === undefined || v === null || v === "" ? null : <span className="mono">{String(v)}</span>])} /></div></div>
         </div>
         {n.network.length > 0 && <div className="card" style={{marginTop: 12}}><h3>status.network</h3><div className="bd" style={{padding: 0}}>
           <table className="dt"><thead><tr><th>network</th><th>phase</th><th>address</th><th>assigned</th><th>interface</th><th>hostReachable</th></tr></thead><tbody>

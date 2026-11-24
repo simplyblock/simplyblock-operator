@@ -20440,9 +20440,7 @@ const HEADLINES = {
       type: "number"
     }), row("spec.socketId"), row("spec.nodeIndex", {
       type: "number"
-    }), ro("spec.nodeSet"), row("spec.config.sizing.vcpuCount", {
-      type: "number"
-    }), row("spec.config.sizing.minHugePagesSize"), ro("spec.config.mgmtInterface"), ro("spec.config.dataInterfaces", {
+    }), ro("spec.nodeSet"), ro("spec.config.mgmtInterface"), ro("spec.config.dataInterfaces", {
       type: "list",
       fmt: F.list
     }), row("spec.config.pcieAllowList", {
@@ -20457,14 +20455,6 @@ const HEADLINES = {
     }), ro("spec.config.failureDomain"), ro("spec.config.site"), ro("spec.config.expand", {
       type: "bool",
       fmt: F.bool
-    }), ro("spec.config.journalManager.count", {
-      type: "number"
-    }), ro("spec.config.journalManager.percentPerDevice", {
-      type: "number"
-    }), row("spec.config.reservedSystemCPU"), row("spec.config.spdkSystemMemory"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {
-      type: "select"
-    }), row("spec.config.spdkProxyImage"), row("spec.config.spdkProxyImagePullPolicy", {
-      type: "select"
     }), ro("spec.stretched.remote", {
       type: "bool",
       fmt: F.bool
@@ -20981,6 +20971,28 @@ const HEADLINES = {
   }
 };
 
+// Fields the console does not show in either tier: paths that carry nothing a
+// user reads or changes through the console, such as the per-node sizing and
+// image overrides the deployment writes. The CRD keeps them, and the YAML view
+// shows the object as it is. A path hides itself and everything under it.
+const HIDDEN = {
+  StorageNode: ["spec.config.sizing.vcpuCount", "spec.config.sizing.minHugePagesSize", "spec.config.reservedSystemCPU", "spec.config.spdkSystemMemory", "spec.config.spdkImage", "spec.config.spdkImagePullPolicy", "spec.config.spdkProxyImage", "spec.config.spdkProxyImagePullPolicy", "spec.config.journalManager"]
+};
+const hiddenPath = (kind, path) => (HIDDEN[kind] || []).some(h => path === h || path.startsWith(h + "."));
+// pruneHidden returns the object without its hidden paths, dropping a parent that ends up empty
+function pruneHidden(kind, data, path) {
+  if (!data || typeof data !== "object" || Array.isArray(data)) return data;
+  const out = {};
+  Object.entries(data).forEach(([k, v]) => {
+    const p = path ? `${path}.${k}` : k;
+    if (hiddenPath(kind, p)) return;
+    const pv = pruneHidden(kind, v, p);
+    if (pv && typeof pv === "object" && !Array.isArray(pv) && !Object.keys(pv).length && v && Object.keys(v).length) return;
+    out[k] = pv;
+  });
+  return out;
+}
+
 // static immutability, from the CRDs' `self == oldSelf` rules on main, used
 // only when the CRD itself cannot be read
 const STATIC_IMMUTABLE = {
@@ -21066,6 +21078,9 @@ const RELATIONS = {
 };
 Object.assign(window, {
   HEADLINES,
+  HIDDEN,
+  hiddenPath,
+  pruneHidden,
   STATIC_IMMUTABLE,
   VM_CR_KIND,
   RELATIONS,
@@ -21495,7 +21510,7 @@ function EssentialsTab({
   };
   const st = obj.status || {};
   // a spec row is shown even when unset (it can be set); a status row only when the operator wrote it
-  const rows = (list, isSpec) => list.filter(r => isSpec || getPath(obj, r.path) !== undefined).map(r => {
+  const rows = (list, isSpec) => list.filter(r => !hiddenPath(ref.kind, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
     const v = getPath(obj, r.path);
     return [/*#__PURE__*/React.createElement("span", {
       className: "mono",
@@ -21746,7 +21761,9 @@ function EverythingTab({
   cref: ref
 }) {
   const schema = useCrdSchema(ref.kind);
-  const spec = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
+  const raw = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
+  const spec = pruneHidden(ref.kind, raw, "spec");
+  const hidden = (HIDDEN[ref.kind] || []).filter(p => getPath(obj, p) !== undefined);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     className: "dcols"
   }, /*#__PURE__*/React.createElement("div", {
@@ -21758,12 +21775,17 @@ function EverythingTab({
     path: "spec",
     schema: schema,
     depth: 0
-  }))), /*#__PURE__*/React.createElement("div", {
+  }), hidden.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 8
+    }
+  }, hidden.length, " set field", hidden.length === 1 ? "" : "s", " the console does not show: ", hidden.map(p => p.replace(/^spec\./, "")).join(", "), ". The YAML below carries ", hidden.length === 1 ? "it" : "them", "."))), /*#__PURE__*/React.createElement("div", {
     className: "card"
   }, /*#__PURE__*/React.createElement("h3", null, "status"), /*#__PURE__*/React.createElement("div", {
     className: "bd"
   }, /*#__PURE__*/React.createElement(JsonTree, {
-    data: obj.status || {},
+    data: pruneHidden(ref.kind, obj.status || {}, "status"),
     path: "status",
     schema: schema,
     depth: 0
@@ -22855,7 +22877,9 @@ function NodeDetail({
       paddingBottom: 2
     }
   }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["sizing.vcpuCount", (n.config.sizing || {}).vcpuCount], ["sizing.minHugePagesSize", (n.config.sizing || {}).minHugePagesSize], ["mgmtInterface", n.config.mgmtInterface], ["dataInterfaces", (n.config.dataInterfaces || []).join(", ")], ["pcieAllowList", (n.config.pcieAllowList || []).join(", ")], ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)], ["spdkSystemMemory", n.config.spdkSystemMemory], ["reservedSystemCPU", n.config.reservedSystemCPU]].map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+    rows: [["mgmtInterface", n.config.mgmtInterface], ["dataInterfaces", (n.config.dataInterfaces || []).join(", ")], ["pcieAllowList", (n.config.pcieAllowList || []).join(", ")], ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)]
+    // the same exception list as the CR tiers (cr-headlines.jsx HIDDEN) keeps this card in step with them
+    ].filter(([k]) => !(window.hiddenPath && hiddenPath("StorageNode", "spec.config." + k))).map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
       className: "mono"
     }, k), v === undefined || v === null || v === "" ? null : /*#__PURE__*/React.createElement("span", {
       className: "mono"
