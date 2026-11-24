@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -669,37 +670,65 @@ func (g *Guardian) subsystemNQN(ctx context.Context, lvolID string) string {
 }
 
 // lvolsOnSubsystem returns all lvolIDs that share the subsystem identified by
-// NQN. It first tries atlas ListWithSelector on the live sysfs (most accurate,
-// picks up volumes joined since last publish). When the subsystem is not in
-// sysfs (broken path), it falls back to the guardian's own registration map,
-// which was populated at RegisterPublish time.
+// NQN. It first reads the live sysfs through atlas ListWithSelector (most
+// accurate, picks up volumes joined since the last publish). When sysfs names
+// no volume on the subsystem (a broken path, or entries that report no
+// namespace UUID), it falls back to the guardian's own registration map, which
+// was populated at RegisterPublish time.
 func (g *Guardian) lvolsOnSubsystem(ctx context.Context, nqn string) []string {
 	devs, err := g.devices.ListWithSelector(ctx, atlasnvme.DeviceSelector{NQN: nqn})
-	if err == nil && len(devs) > 0 {
-		// FIXME: the kernel may temporarily hold two sysfs entries for the same
-		// NQN, a stale subsystem awaiting reaping alongside a freshly connected
-		// one (see atlas/nvme sysfs_scan.go: subsystemControllers). DeviceSelector
-		// matches on NQN alone, so ListWithSelector returns namespaces from both.
-		// For coordinated restart this is safe (we over-count siblings, worst case
-		// an extra pod restarts). For individual restart routed through
-		// restartIndividualPod the stale UUID won't be in g.lvols so it is silently
-		// dropped, but the routing decision in restartBrokenLvols sees len > 1 and
-		// forces a coordinated path unnecessarily. The fix is to filter devs to only
-		// those whose controller state is "live" (atlas nvme.Controller.State) before
-		// collecting UUIDs, discarding namespaces that belong to a dead controller.
-		seen := make(map[string]bool, len(devs))
-		ids := make([]string, 0, len(devs))
-		for _, d := range devs {
-			if d.Namespace.UUID != "" && !seen[d.Namespace.UUID] {
-				seen[d.Namespace.UUID] = true
-				ids = append(ids, d.Namespace.UUID)
-			}
+	if err == nil {
+		if ids := namespaceUUIDs(preferLiveSubsystems(devs)); len(ids) > 0 {
+			return ids
 		}
-		return ids
 	}
+	return g.registeredLvolsOn(nqn)
+}
 
-	// Subsystem not in sysfs (broken path). Use the NQNs cached at publish
-	// time to find all registered lvols on the same subsystem.
+// controllerStateLive is the sysfs state of a controller with a working path.
+const controllerStateLive = "live"
+
+// preferLiveSubsystems drops the devices of a stale subsystem entry, one with
+// no live controller, when a live entry for the same NQN exists. The kernel can
+// briefly hold both after a reconnect, and the stale one may still carry a
+// volume the reconnected subsystem no longer exports, which would make a
+// private volume look shared (#427).
+//
+// When no entry is live, every device is kept. That is the state during a path
+// outage, which is when the guardian runs, and dropping the whole subsystem
+// then would route a shared volume to an individual restart.
+func preferLiveSubsystems(devs []atlasnvme.Device) []atlasnvme.Device {
+	var live []atlasnvme.Device
+	for _, d := range devs {
+		if slices.ContainsFunc(d.Subsystem.Controllers, func(c atlasnvme.Controller) bool {
+			return c.State == controllerStateLive
+		}) {
+			live = append(live, d)
+		}
+	}
+	if len(live) == 0 {
+		return devs
+	}
+	return live
+}
+
+// namespaceUUIDs returns the namespace UUIDs of devs, once each: without a
+// multipath head a volume appears once per controller.
+func namespaceUUIDs(devs []atlasnvme.Device) []string {
+	seen := make(map[string]bool, len(devs))
+	ids := make([]string, 0, len(devs))
+	for _, d := range devs {
+		if d.Namespace.UUID != "" && !seen[d.Namespace.UUID] {
+			seen[d.Namespace.UUID] = true
+			ids = append(ids, d.Namespace.UUID)
+		}
+	}
+	return ids
+}
+
+// registeredLvolsOn returns the registered lvols whose subsystem NQN, cached at
+// publish time, is nqn.
+func (g *Guardian) registeredLvolsOn(nqn string) []string {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	var ids []string
