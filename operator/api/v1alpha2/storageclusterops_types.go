@@ -150,24 +150,46 @@ type StorageClusterOpsSpec struct {
 }
 
 // RollingRestartStatus is the walk's position over the cluster's nodes. Where
-// the machine has got to within the node currently being restarted is
-// status.step, and neither field is complete without the other.
+// the machine has got to within the batch of nodes currently being restarted
+// is status.step, and neither field is complete without the other.
 type RollingRestartStatus struct {
 	// Nodes is the ordered list of storage node UUIDs this action covers,
 	// written once when the walk starts and not modified afterward, so a node
 	// added mid-walk is not restarted and one removed mid-walk is skipped when
-	// the walk reaches it.
+	// the walk reaches it. The nodes of one failure domain are listed next to
+	// each other.
 	// +optional
 	Nodes []string `json:"nodes,omitempty"`
 
-	// NodeIndex is the position in Nodes of the node being restarted. Advancing
-	// the walk increments it, and the walk is complete when it reaches
-	// len(Nodes).
+	// NodeIndex is the position in Nodes of the first node of the batch being
+	// restarted. Advancing the walk moves it past the batch, and the walk is
+	// complete when it reaches len(Nodes).
 	//
 	// No omitempty: zero is a valid index, and a field that disappears at zero
 	// makes "the first node" and "unset" the same wire value.
 	// +kubebuilder:validation:Minimum=0
 	NodeIndex int32 `json:"nodeIndex"`
+
+	// BatchSize is how many nodes, starting at NodeIndex, are being restarted
+	// together. It is more than one only when the cluster is in failure-domain
+	// mode with at least as many failure domains as a stripe has chunks, where
+	// a whole failure domain may be down at once: the batch is then the nodes
+	// of one failure domain, which Nodes lists next to each other. Advancing
+	// the walk moves NodeIndex past the batch and writes the next one's size
+	// in the same write. Zero is an object written before the field existed
+	// and reads as one.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	BatchSize int32 `json:"batchSize,omitempty"`
+
+	// Calls are the control-plane calls made for the batch's nodes in the
+	// current step, each trusted to be in flight until its lease runs out. A
+	// batch makes one call per node in a step, so status.step.claim, which
+	// holds one claim for the step, cannot say which of them were made.
+	// +listType=map
+	// +listMapKey=node
+	// +optional
+	Calls []RollingRestartCall `json:"calls,omitempty"`
 
 	// Skipped are the nodes of Nodes the walk passed over without restarting
 	// them, in walk order: a node the control plane stopped listing, or one
@@ -175,6 +197,24 @@ type RollingRestartStatus struct {
 	// cluster belongs to its removal, and the walk sends it nothing.
 	// +optional
 	Skipped []string `json:"skipped,omitempty"`
+}
+
+// RollingRestartCall records that a step's control-plane call was made for one
+// node of the batch, and until when that call is trusted to still be in flight.
+type RollingRestartCall struct {
+	// Node is the UUID of the storage node the call was made for.
+	// +kubebuilder:validation:Required
+	Node string `json:"node"`
+
+	// Step is the step the call belongs to. An entry of an earlier step is
+	// spent and is replaced by the next call for its node.
+	// +kubebuilder:validation:Required
+	Step StorageClusterOpsStep `json:"step"`
+
+	// LeaseUntil is when the call may be made again, which happens only when
+	// the node did not move in the meantime.
+	// +kubebuilder:validation:Required
+	LeaseUntil metav1.Time `json:"leaseUntil"`
 }
 
 // StorageClusterOpsStatus is the observed state of one cluster operation.
