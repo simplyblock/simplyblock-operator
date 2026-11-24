@@ -731,6 +731,7 @@ type ClusterTemplate struct {
 	// StorageCluster. Requires enableSyncReplication; every node group's site
 	// must equal stretched.site.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedSpec `json:"stretched,omitempty"`
 
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O

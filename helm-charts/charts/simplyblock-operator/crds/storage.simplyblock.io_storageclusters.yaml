@@ -4,7 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-    simplyblock.io/invisible-fields: '{"v1alpha2":["spec.enableMetadataJournal","spec.storageNodes.enableCpuTopology","spec.storageNodes.enableJournalDevice"]}'
+    simplyblock.io/invisible-fields: '{"v1alpha2":["spec.enableArbitration","spec.enableAtomicity4K","spec.enableMetadataJournal","spec.storageNodes.enableCpuTopology","spec.storageNodes.enableJournalDevice","spec.stretched","status.stretched"]}'
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io

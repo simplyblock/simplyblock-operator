@@ -406,6 +406,7 @@ type StorageNodeSpec struct {
 	// belongs to the other site. Unset on every node of this site and on a
 	// standalone cluster. Cannot be added or removed after creation.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedNodeSpec `json:"stretched,omitempty"`
 }
 
