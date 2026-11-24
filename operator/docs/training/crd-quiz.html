@@ -1438,8 +1438,8 @@ const QUESTIONS = QUESTIONS_A.concat(QUESTIONS_B);
     let verdict = '';
     if (state.revealed) {
       const j = judge(item.options, picked);
-      const allRight = j.misses === 0;
-      verdict = `<div class="verdict ${allRight ? 'ok' : 'miss'}"><strong>${allRight ? 'Correct: +5 points.' : `${j.hits} right, ${j.misses} wrong: ${signed(j.points)} points.`}</strong> ${fmt(q.explain)}</div>`;
+      const fullyRight = j.misses === 0;
+      verdict = `<div class="verdict ${fullyRight ? 'ok' : 'miss'}"><strong>${fullyRight ? 'Correct: +5 points.' : `${j.hits} right, ${j.misses} wrong: ${signed(j.points)} points.`}</strong> ${fmt(q.explain)}</div>`;
     }
 
     app.innerHTML = `
@@ -1464,8 +1464,8 @@ const QUESTIONS = QUESTIONS_A.concat(QUESTIONS_B);
       });
       document.getElementById('checkBtn').addEventListener('click', () => {
         state.revealed = true;
-        const allRight = item.options.every((o, idx) => state.picked.includes(idx) === o.correct);
-        state.results.push({ q, options: item.options, picked: state.picked, allRight });
+        const fullyRight = item.options.every((o, idx) => state.picked.includes(idx) === o.correct);
+        state.results.push({ q, options: item.options, picked: state.picked, fullyRight });
         renderQuestion();
       });
     } else {
@@ -1480,7 +1480,7 @@ const QUESTIONS = QUESTIONS_A.concat(QUESTIONS_B);
 
   function renderResults(sendError) {
     const points = totalPoints(state.results);
-    const fully = state.results.filter(r => r.allRight).length;
+    const fully = state.results.filter(r => r.fullyRight).length;
     const best = Number(bestGet());
     if (bestGet() === null || points > best) bestSet(String(points));
     const grade = points >= 65 ? 'You know these CRDs inside out.' : points >= 45 ? 'Solid. The misses below are worth a second look.' : points >= 15 ? 'A fair start. Read the explanations below and run it again.' : 'Plenty to learn. The explanations below say what each kind and field is for.';
@@ -1519,8 +1519,8 @@ const QUESTIONS = QUESTIONS_A.concat(QUESTIONS_B);
         <div class="review">${state.results.map(r => {
           const j = judge(r.options, r.picked);
           return `
-          <details ${r.allRight ? '' : 'open'}>
-            <summary><span class="tag ${r.allRight ? 'ok' : 'miss'}">${signed(j.points)}</span><span>${fmt(r.q.text)}</span></summary>
+          <details ${r.fullyRight ? '' : 'open'}>
+            <summary><span class="tag ${r.fullyRight ? 'ok' : 'miss'}">${signed(j.points)}</span><span>${fmt(r.q.text)}</span></summary>
             <ul>${r.options.map((o, idx) => `<li class="${o.correct ? 'c' : 'w'}">${fmt(o.text)}${r.picked.includes(idx) !== o.correct ? ' <em>(you got this one wrong)</em>' : ''}</li>`).join('')}</ul>
             <p class="small" style="margin-top:8px">${fmt(r.q.explain)}</p>
           </details>`; }).join('')}</div>
