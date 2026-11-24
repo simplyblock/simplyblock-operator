@@ -51,7 +51,7 @@ func TestTheBundleDeploymentMountsTheOperatorClientCertificate(t *testing.T) {
 	var d appsv1.Deployment
 	for _, doc := range splitYAML(raw) {
 		var probe struct{ Kind string }
-		if yaml.Unmarshal(doc, &probe) == nil && probe.Kind == "Deployment" {
+		if yaml.Unmarshal(doc, &probe) == nil && probe.Kind == kindDeployment {
 			if err := yaml.Unmarshal(doc, &d); err != nil {
 				t.Fatal(err)
 			}
@@ -101,7 +101,7 @@ func TestTheBundleDeploymentIsRecreatedOnUpgrade(t *testing.T) {
 	}
 	for _, doc := range splitYAML(raw) {
 		var d appsv1.Deployment
-		if yaml.Unmarshal(doc, &d) != nil || d.Kind != "Deployment" {
+		if yaml.Unmarshal(doc, &d) != nil || d.Kind != kindDeployment {
 			continue
 		}
 		if d.Spec.Strategy.Type != appsv1.RecreateDeploymentStrategyType {

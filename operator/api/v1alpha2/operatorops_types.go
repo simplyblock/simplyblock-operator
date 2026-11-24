@@ -137,6 +137,7 @@ type DeviceFilter struct {
 // +kubebuilder:validation:XValidation:rule="!(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.pcieAllowList) || has(self.deviceFilter.pcieDenyList) || has(self.deviceFilter.pcieModel))",message="the PCI filters select NVMe devices and cannot be combined with enableLogicalBlockDevices; use blockAllowList and blockDenyList"
 // +kubebuilder:validation:XValidation:rule="(has(self.enableLogicalBlockDevices) && self.enableLogicalBlockDevices) || !has(self.deviceFilter) || !(has(self.deviceFilter.blockAllowList) || has(self.deviceFilter.blockDenyList))",message="blockAllowList and blockDenyList select logical block devices and require enableLogicalBlockDevices"
 // +kubebuilder:validation:XValidation:rule="!(has(self.workers) && size(self.workers) > 0 && has(self.nodeSelector) && size(self.nodeSelector) > 0)",message="spec.discover names workers and also carries a nodeSelector; state one or the other"
+// +kubebuilder:validation:XValidation:rule="!has(self.network) || !has(self.network.spdkOnHostNetwork) || !self.network.spdkOnHostNetwork || !has(self.networkAttachment)",message="network.spdkOnHostNetwork cannot be combined with networkAttachment, which attaches the storage nodes through Multus"
 type DiscoverSpec struct {
 	// ConfigName is the ClusterDeploymentConfig to write. Absent generates one
 	// from the run's timestamp, so that a second discovery never overwrites the
@@ -211,6 +212,20 @@ type DiscoverSpec struct {
 	// +optional
 	FailureDomainLabel string `json:"failureDomainLabel,omitempty"`
 
+	// EnableFailureDomains overrides whether the draft proposes failure-domain
+	// mode, which a run otherwise decides from the workers' topology: on when
+	// every worker carries a failure-domain label in a layout the control plane
+	// accepts, and off otherwise.
+	//
+	// false turns the mode off and reads no failure domains at all, so a fleet
+	// spread over zones it does not want treated as failure domains is grouped by
+	// hardware alone, into one cluster the draft marks enableFailureDomains false.
+	// true proposes the mode on; the layout still has to pass the control plane's
+	// activation rules, which approval checks. Unset leaves the decision to the
+	// run, and is the usual first run.
+	// +optional
+	EnableFailureDomains *bool `json:"enableFailureDomains,omitempty"`
+
 	// EnableLogicalBlockDevices scans a worker's available logical block devices
 	// instead of its available NVMe devices. It selects the class rather than
 	// adding one, because the draft a run writes describes one cluster and a
@@ -284,6 +299,13 @@ type DiscoverSpec struct {
 	// +optional
 	NetworkAttachment *NetworkAttachmentSelection `json:"networkAttachment,omitempty"`
 
+	// Network states the cluster network the draft proposes. Absent, a run
+	// proposes spdkOnHostNetwork, binding the host's primary NIC on workers with
+	// no additional interface. Set podNetwork: true to run the SPDK pods on the
+	// pod network instead. A cluster's network is fixed once it is created.
+	// +optional
+	Network *StorageNetworkSpec `json:"network,omitempty"`
+
 	// DeviceFilter narrows which of an inspected worker's devices reach the
 	// draft. Empty reports every device the worker advertises, including the one
 	// it boots from, which is what the approval gate then has to catch.
@@ -300,6 +322,13 @@ type DiscoverSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ClusterRef string `json:"clusterRef,omitempty"`
+
+	// Images are the container images the draft pins, copied into its
+	// spec.images, so that an installation testing an SPDK or SPDK proxy build
+	// states it once rather than editing every draft before approving it.
+	// Unstated, each takes the default the draft's own field documents.
+	// +optional
+	Images *DeploymentImages `json:"images,omitempty"`
 }
 
 // OperatorOpsSpec is one operation to perform against the operator itself.

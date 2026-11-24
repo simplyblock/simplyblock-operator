@@ -10,6 +10,14 @@ on:
         required: false
         type: string
   workflow_dispatch:
+    inputs:
+      # A guest built from a vela-os branch publishes only commit-pinned
+      # pnfsos-<sha> tags, so testing it in an MDS image takes a manual run.
+      guest_image:
+        description: "pnfs-os guest image the MDS image is built from"
+        required: false
+        type: string
+        default: docker.io/simplyblock/spdkcsi:pnfsos
 
 env:
   IMAGE_NAME: docker.io/simplyblock/spdkcsi
@@ -186,7 +194,7 @@ jobs:
         file: csi-driver/deploy/image/Dockerfile.mds
         platforms: linux/amd64,linux/arm64
         build-args: |
-          GUEST_IMAGE=docker.io/simplyblock/spdkcsi:pnfsos
+          GUEST_IMAGE=${{ inputs.guest_image || 'docker.io/simplyblock/spdkcsi:pnfsos' }}
         push: true
         tags: ${{ steps.meta.outputs.tags }}
         cache-from: type=gha,scope=mds

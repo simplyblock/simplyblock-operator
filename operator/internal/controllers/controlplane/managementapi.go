@@ -37,9 +37,10 @@ import (
 )
 
 // fdbExporterImage turns FoundationDB's machine-readable status into Prometheus
-// metrics. It is upstream's rather than simplyblock's, and pinned for the same
-// reason the database's images are.
-const fdbExporterImage = "aikoven/foundationdb-exporter:3.1.0"
+// metrics. It is upstream's exporter mirrored to simplyblock's registry, named
+// with its registry like every other control-plane image, and pinned for the
+// same reason the database's images are.
+const fdbExporterImage = "quay.io/simplyblock-io/foundationdb-exporter:3.1.0"
 
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name
@@ -174,9 +175,9 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 	}
 }
 
-// podTeardownRole is the delete half of what the control plane does to pods,
-// and it is separate because it is the half that never leaves the install
-// namespace.
+// podTeardownRole is the delete half of what the control plane does to a
+// storage node's pod and Service, and it is separate because it is the half
+// that never leaves the install namespace.
 //
 // rbac-justified: a node add that fails after spdk_process_start has already
 // created snode-spdk-pod-<port>-<cluster> deletes it straight through the API
@@ -186,17 +187,23 @@ func controlPlaneClusterRole() *rbacv1.ClusterRole {
 // substitute. Left behind, the pod holds the host's hugepages, so every later
 // add on that host stays Pending on an "Insufficient hugepages-2Mi" event.
 //
-// Containment: delete on pods in one namespace, with no create beside it. The
-// account cannot replace what it removes, and the workloads it can remove are
-// recreated by their own controllers. It is capped by the manager's own
-// cluster-wide delete on pods, which the storage node and cluster Ops
-// reconcilers already hold.
+// A node on the pod network has a Service in front of that pod,
+// snode-spdk-svc-<port>-<cluster>, which the agent creates before the pod so
+// the pod can report the Service's address. The same abort, and a node removal,
+// delete it the same way (_delete_spdk_service_via_k8s), for the same reason.
+// Without the verb the teardown logs a 403 and the Service outlives the add.
+//
+// Containment: delete on pods and services in one namespace, with no create
+// beside it. The account cannot replace what it removes, and the workloads it
+// can remove are recreated by their own controllers. It is capped by the
+// manager's own cluster-wide delete on pods and services, which the storage
+// node and control plane reconcilers already hold.
 func podTeardownRole(namespace string) *rbacv1.Role {
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: podTeardownRoleName, Namespace: namespace},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
-			Resources: []string{"pods"},
+			Resources: []string{"pods", "services"},
 			Verbs:     []string{"delete"},
 		}},
 	}
@@ -303,6 +310,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Affinity:           spreadAcrossHosts(ComponentWebAPI),
+		SecurityContext:    pingSecurityContext(),
 		Containers: []corev1.Container{{
 			Name:            "webappapi",
 			Image:           localImage(cp),
@@ -312,6 +320,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 			Env:             env,
 			VolumeMounts:    append([]corev1.VolumeMount{clusterFileMount()}, tlsMount(managed)...),
 			Resources:       webAPIResources(managed),
+			LivenessProbe:   webAPILivenessProbe(managed),
 			ReadinessProbe:  webAPIReadinessProbe(managed),
 			// Removing a pod from the Service and stopping it start together, and
 			// the endpoint update takes a moment to reach every node. The pod keeps
@@ -355,21 +364,27 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	}
 }
 
-// webAPIHealthPath is the v1 API's /health/fdb under its /api/v1 mount. It answers
-// without credentials and reads one key from FoundationDB, so a pod passes only
-// once it listens and reaches the database.
-const webAPIHealthPath = "/api/v1/health/fdb"
+// webAPIHealthPath answers whether the process itself is up, with no database
+// involved. webAPIReadyPath is the one that also reads FoundationDB, so a pod
+// passes it only once it can do something meaningful. Both are the v2 API's
+// /_meta mount; the v1 API had one endpoint conflating the two questions.
+const (
+	webAPIHealthPath = "/api/v2/_meta/health"
+	webAPIReadyPath  = "/api/v2/_meta/ready"
+)
+
+// webAPILivenessProbe asks only whether the process answers. It must not depend
+// on FoundationDB: a stall there is the readiness probe's job to act on, and a
+// liveness probe that also failed on it would restart every replica into the
+// same outage instead of just taking them out of the Service.
+func webAPILivenessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIHealthPath)
+}
 
 // webAPIReadinessProbe keeps the Service from routing to a pod that does not
 // answer yet. Without it a replacement pod receives connections the moment its
 // container starts, before the API listens, and callers see connection refused
 // for the seconds that takes; a rollout or a drain does this to every pod.
-//
-// The kubelet cannot present a client certificate, so under mutual TLS the
-// probe runs curl in the container with the pod's own certificate. The server
-// is not verified: the probe connects to its own pod over loopback, and the
-// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
-// probes directly, over HTTPS when the API serves TLS.
 //
 // Six failures five seconds apart take a pod out: a FoundationDB recovery or a
 // replacement moving roles pauses the database for seconds, and a probe that
@@ -377,6 +392,18 @@ const webAPIHealthPath = "/api/v1/health/fdb"
 // into a refused connection. A pod that never comes up, the case the probe is
 // for, still stays out of the Service until it answers.
 func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev1.Probe {
+	return webAPIProbe(managed, webAPIReadyPath)
+}
+
+// webAPIProbe is the transport the liveness and readiness probes share, aimed
+// at whichever of the two endpoints the caller asks for.
+//
+// The kubelet cannot present a client certificate, so under mutual TLS the
+// probe runs curl in the container with the pod's own certificate. The server
+// is not verified: the probe connects to its own pod over loopback, and the
+// serving certificate does not name 127.0.0.1. Without mutual TLS the kubelet
+// probes directly, over HTTPS when the API serves TLS.
+func webAPIProbe(managed *simplyblockv1alpha2.LocalControlPlane, path string) *corev1.Probe {
 	probe := &corev1.Probe{
 		PeriodSeconds:    5,
 		TimeoutSeconds:   4,
@@ -389,14 +416,14 @@ func webAPIReadinessProbe(managed *simplyblockv1alpha2.LocalControlPlane) *corev
 			"curl", "--fail", "--silent", "--show-error", "--insecure", "--max-time", "3",
 			"--output", "/dev/null",
 			"--cert", tlsMountPath + "/tls.crt", "--key", tlsMountPath + "/tls.key",
-			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + webAPIHealthPath,
+			"https://127.0.0.1:" + strconv.Itoa(webAPIPort) + path,
 		}}
 	case managed.ServesTLS():
 		probe.HTTPGet = &corev1.HTTPGetAction{
-			Path: webAPIHealthPath, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
+			Path: path, Port: intstr.FromInt32(webAPIPort), Scheme: corev1.URISchemeHTTPS,
 		}
 	default:
-		probe.HTTPGet = &corev1.HTTPGetAction{Path: webAPIHealthPath, Port: intstr.FromInt32(webAPIPort)}
+		probe.HTTPGet = &corev1.HTTPGetAction{Path: path, Port: intstr.FromInt32(webAPIPort)}
 	}
 	return probe
 }
@@ -460,10 +487,6 @@ func webAPIService(cp *simplyblockv1alpha2.ControlPlane) *corev1.Service {
 	}
 }
 
-// twoNodeEventCollectorBinary is where the control-plane image installs the Go
-// event collector (sbcli docker/Dockerfile, stage event-collector).
-const twoNodeEventCollectorBinary = "/usr/local/bin/sb-event-collector"
-
 // monitoringServices are the watchers the control plane runs: one per subject it
 // keeps state about. They are one pod rather than ten because each is a small
 // polling loop and the pod is what shares the cluster file and the log level.
@@ -489,7 +512,7 @@ func monitoringServices() []service {
 		// model has no per-cluster gate, and both idle while no cluster is a
 		// two-node cluster with arbitration on.
 		{name: "two-node-arbiter", module: "simplyblock_core/services/two_node_arbiter.py"},
-		{name: "two-node-event-collector", command: []string{twoNodeEventCollectorBinary}},
+		{name: "two-node-event-collector", module: "simplyblock_core/services/two_node_event_collector.py"},
 	}
 }
 
@@ -544,6 +567,7 @@ func servicePoolDeployment(
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Containers:         containers(services, managed, localImage(cp), pullPolicyOf(managed)),
+		SecurityContext:    pingSecurityContext(),
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
 			tlsVolume(managed)...),
 	}
@@ -589,6 +613,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Affinity:           spreadAcrossHosts(ComponentAdminControl),
+		SecurityContext:    pingSecurityContext(),
 		Containers: []corev1.Container{{
 			Name:            "simplyblock-control",
 			Image:           localImage(cp),

@@ -524,3 +524,27 @@ func TestPlanProposesABlankPartitionInABlockRun(t *testing.T) {
 		t.Errorf("an NVMe run built %+v from a partition", nvme.NodeSets)
 	}
 }
+
+func TestPlanAdvisesAGKEFleetWhoseDisksAreRAIDMembers(t *testing.T) {
+	// GKE builds the array itself, from a node pool's ephemeral-storage local
+	// SSDs, so a fleet whose every disk is an array member is a fleet whose
+	// node pool was created the wrong way, and the run says which way is right.
+	member := Refusal{Worker: "worker-1", Device: "nvme0n1", Rule: "available",
+		Reason: "the probe refused it: RAIDMember (a member of the MD RAID array md0 (raid0))"}
+	mounted := Refusal{Worker: "worker-1", Device: "nvme1n1", Rule: "available",
+		Reason: "the probe refused it: Mounted"}
+
+	got := Plan{Refusals: []Refusal{member}}.Advice(simplyblockv1alpha2.KubernetesEnvironmentGKE)
+	for _, want := range []string{"ephemeral", "local-nvme-ssd-block"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the advice %q does not mention %s", got, want)
+		}
+	}
+
+	if got := (Plan{Refusals: []Refusal{mounted}}).Advice(simplyblockv1alpha2.KubernetesEnvironmentGKE); got != "" {
+		t.Errorf("advised %q on a GKE fleet with no RAID member", got)
+	}
+	if got := (Plan{Refusals: []Refusal{member}}).Advice(simplyblockv1alpha2.KubernetesEnvironmentVanilla); got != "" {
+		t.Errorf("advised %q about GKE on a fleet that is not GKE", got)
+	}
+}

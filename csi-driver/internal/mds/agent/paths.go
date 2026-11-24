@@ -1,6 +1,7 @@
 // The guest's path keeper: it keeps every export's namespace on all the paths
 // the control plane published, by reconciling each one periodically against
-// the connection its last Create carried (design-pnfs-mds-vm.md §7.6).
+// the connection its last Create carried, or Promote tracked
+// (design-pnfs-mds-vm.md §7.6).
 //
 // It runs in the guest because the guest holds the connection, secrets
 // included, from the runner's last Create, and so reconnects a path without the
@@ -17,6 +18,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -126,18 +128,34 @@ func (k *PathKeeper) keep(spec export.Spec) {
 	}
 	k.mu.Lock()
 	defer k.mu.Unlock()
+	k.store(spec.Path, *spec.Connection, spec.HostNQN)
+}
+
+// store records name's connection with k.mu held.
+func (k *PathKeeper) store(name string, conn lvol.Connection, hostNQN string) {
 	if k.exports == nil {
 		k.exports = map[string]*kept{}
 	}
-	prev := k.exports[spec.Path]
-	next := &kept{conn: *spec.Connection, hostNQN: spec.HostNQN, down: map[string]string{}}
+	prev := k.exports[name]
+	next := &kept{conn: conn, hostNQN: hostNQN, down: map[string]string{}}
 	if prev != nil {
 		// What was said about the paths stays said: a reassembly does not
 		// make a path that is still down news again.
 		next.down, next.state, next.lastErr = prev.down, prev.state, prev.lastErr
 	}
-	k.exports[spec.Path] = next
+	k.exports[name] = next
 }
+
+// Track keeps a connection that did not arrive through Create, such as the
+// state volume's, reconciled under name until Forget.
+func (k *PathKeeper) Track(name string, conn lvol.Connection, hostNQN string) {
+	k.mu.Lock()
+	defer k.mu.Unlock()
+	k.store(name, conn, hostNQN)
+}
+
+// Forget stops keeping name.
+func (k *PathKeeper) Forget(name string) { k.forget(name) }
 
 func (k *PathKeeper) forget(path string) {
 	k.mu.Lock()
@@ -244,4 +262,22 @@ func (k *PathKeeper) Run(ctx context.Context, interval time.Duration) {
 			k.Tick(ctx)
 		}
 	}
+}
+
+// CheckFilesystems runs statfs on every kept export's mount point and returns
+// the first failure. A filesystem that shut down on an I/O error fails it.
+func (k *PathKeeper) CheckFilesystems(statfs func(path string) error) error {
+	k.mu.Lock()
+	paths := make([]string, 0, len(k.exports))
+	for path := range k.exports {
+		paths = append(paths, path)
+	}
+	k.mu.Unlock()
+	sort.Strings(paths)
+	for _, path := range paths {
+		if err := statfs(path); err != nil {
+			return fmt.Errorf("export %s: its filesystem does not answer: %w", path, err)
+		}
+	}
+	return nil
 }

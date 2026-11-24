@@ -32,6 +32,8 @@ import (
 // itself.
 var everyStep = []string{
 	"AttachingPaths", "AwaitingCutover", "Committing", "Migrating", "Proceeding", "Replicating", "Validating", "Verifying",
+	"Planning", "Joining", "SelectingSubsystem", "PreparingTarget", "Suspending", "MovingNamespaces", "Resuming",
+	"ReleasingPaths", "Leaving",
 }
 
 func TestTheStepEnumCoversEveryDeclaredState(t *testing.T) {
@@ -77,7 +79,8 @@ func celRuleValues(rule string) []string {
 // cost of a rule living in a struct tag; the test above is what makes the copy
 // worth having.
 const stepCELRule = "!has(self.state) || self.state in " +
-	"['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding']"
+	"['Validating','Migrating','Verifying','Replicating','Committing','AwaitingCutover','AttachingPaths','Proceeding'," +
+	"'Planning','Joining','SelectingSubsystem','PreparingTarget','Suspending','MovingNamespaces','Resuming','ReleasingPaths','Leaving']"
 
 // Every action the API accepts needs a graph, or an operation of that action
 // fails at its first pass with ErrUnknownAction rather than doing anything.
@@ -126,7 +129,12 @@ func TestTheMigrationIsALine(t *testing.T) {
 // rather than in two places: a deletion may never express a stop that
 // spec.abort could not (design-crd-model.md §3.1).
 func TestOnlyVerifyingRefusesAnAbort(t *testing.T) {
-	want := []step{stepAttachingPaths, stepAwaitingCutover, stepCommitting, stepProceeding, stepVerifying}
+	// A join adds the steps from its join call on, except the selection and
+	// the target's preparation, which hold nothing on a host's data path.
+	want := []step{
+		stepAttachingPaths, stepAwaitingCutover, stepCommitting, stepJoining, stepLeaving, stepMovingNamespaces,
+		stepProceeding, stepReleasingPaths, stepJoinResuming, stepSuspending, stepVerifying,
+	}
 	if diff := cmp.Diff(want, UnabortableSteps()); diff != "" {
 		t.Errorf("the steps an abort cannot be honored from (-want +got):\n%s", diff)
 	}

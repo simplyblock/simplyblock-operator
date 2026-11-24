@@ -277,6 +277,13 @@ type Disk struct {
 	// software-RAID array it is a member of. A device with a holder is a device
 	// in use, and the holder is the readable reason.
 	Holders []string
+
+	// RAIDLevel is the level of a software-RAID array, raid0 or raid1 or
+	// raid5, as the md driver reports it, and is empty for anything that is
+	// not an array. It is read so that a member's refusal can say what kind
+	// of array took it: a RAID-0 is striped and every member is unrecoverable
+	// data, which is a different finding from a mirror a member could leave.
+	RAIDLevel string
 }
 
 // Scan reports every block device the host presents, ordered by kernel name so
@@ -347,6 +354,9 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 		Partitions: partitionsOf(dir, name),
 		Holders:    childNames(filepath.Join(dir, "holders")),
 	}
+	if disk.Kind == KindMDRaid {
+		disk.RAIDLevel = strings.TrimSpace(sysfs.String(dir, "md", "level"))
+	}
 
 	resolved, err := filepath.EvalSymlinks(dir)
 	if err != nil {
@@ -359,7 +369,7 @@ func scanOne(cfg ScanConfig, dir, name string) (Disk, error) {
 	disk.Virtual = sysfs.IsVirtual(resolved)
 	disk.PCIAddress = sysfs.PCIAddressOf(resolved)
 	disk.NUMANode = numaNodeOf(resolved)
-	disk.SubsystemNQN = subsystemNQNOf(resolved)
+	disk.SubsystemNQN = SubsystemNQNOf(resolved)
 	if transport, ok := nvmeSubsystemTransport(resolved); ok {
 		disk.Transport = transport
 	} else {
@@ -558,15 +568,17 @@ func nvmeSubsystemTransport(resolved string) (Transport, bool) {
 	return TransportNVMeFabric, true
 }
 
-// subsystemNQNOf reads the NQN of the NVMe subsystem a namespace belongs to,
+// SubsystemNQNOf reads the NQN of the NVMe subsystem a namespace belongs to,
 // and returns the empty string for a device that is on no NVMe subsystem.
+// resolved is the device's sysfs directory with its symlinks resolved, such as
+// filepath.EvalSymlinks("/sys/block/nvme3n1").
 //
 // One read covers both shapes the kernel presents. A namespace reached through
 // a multipath head sits under its nvme-subsysN directory, and one reached
 // through a single controller sits under that controller: in both, the
 // subsysnqn attribute is in the parent, which is why this reads the parent
 // rather than deciding which shape it is looking at first.
-func subsystemNQNOf(resolved string) string {
+func SubsystemNQNOf(resolved string) string {
 	return sysfs.String(filepath.Dir(filepath.Clean(resolved)), "subsysnqn")
 }
 

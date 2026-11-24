@@ -46,6 +46,12 @@ spec:
     # would corrupt whatever is using it.
     enablePartitionedDevices: true
 
+    # The network the draft proposes, overriding the one discovery chooses.
+    # Absent, a fleet with no additional interface is drafted on podNetwork;
+    # this keeps the SPDK pods on the host network regardless.
+    network:
+      spdkOnHostNetwork: true
+
     deviceFilter:
       # The slot the fleet boots from, kept out of every group of the draft.
       pcieDenyList:

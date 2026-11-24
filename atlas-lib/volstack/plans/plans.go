@@ -219,6 +219,26 @@ func (n *Node) LVMRawBlock(
 	return append(volstack.Plan{n.fabric(connection)}, n.lvmStackRaw(volume, options)...)
 }
 
+// IndirectLVM is `fabric` → `dmLinear` → `lvmPhysicalVolume` → `lvmVolumeGroup`
+// → `lvmLogicalVolume` → `filesystem`: the LVM row with the indirection under
+// its physical volume. The label is written through the mapping, so LVM knows
+// the physical volume as /dev/mapper/sb-<lvol> and never the namespace device,
+// and a move of the namespace to another subsystem re-points the mapping below
+// LVM while the volume group, the VDO pool, and the filesystem stay as they are.
+func (n *Node) IndirectLVM(
+	connection lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.fabric(connection), n.dmLinear(volume)}, n.lvmStack(volume, options)...)
+}
+
+// IndirectLVMRawBlock is IndirectLVM without the filesystem, for a VDO volume
+// the pod opens as a block device.
+func (n *Node) IndirectLVMRawBlock(
+	connection lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.fabric(connection), n.dmLinear(volume)}, n.lvmStackRaw(volume, options)...)
+}
+
 // Striped is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
 // `lvmLogicalVolume` → `filesystem`: several namespaces where every other plan
 // has one. It is the only plan whose bottom is not a single layer, which is the
@@ -228,11 +248,27 @@ func (n *Node) LVMRawBlock(
 func (n *Node) Striped(
 	connections []lvol.Connection, volume Volume, options LogicalVolumeOptions,
 ) volstack.Plan {
+	return append(volstack.Plan{n.members(connections)}, n.lvmStack(volume, options)...)
+}
+
+// StripedRawBlock is `members(n)` → `lvmPhysicalVolume` → `lvmVolumeGroup` →
+// `lvmLogicalVolume`: the striped row for a volume the pod opens as a block
+// device. It is Striped with the filesystem absent, for the reason LVMRawBlock
+// is LVM with the filesystem absent.
+func (n *Node) StripedRawBlock(
+	connections []lvol.Connection, volume Volume, options LogicalVolumeOptions,
+) volstack.Plan {
+	return append(volstack.Plan{n.members(connections)}, n.lvmStackRaw(volume, options)...)
+}
+
+// members is one fabric layer per connection under a composite, in the order
+// the connections are given.
+func (n *Node) members(connections []lvol.Connection) volstack.Layer {
 	members := make(volstack.Plan, 0, len(connections))
 	for _, connection := range connections {
 		members = append(members, n.fabric(connection))
 	}
-	return append(volstack.Plan{layers.NewMembers(members)}, n.lvmStack(volume, options)...)
+	return layers.NewMembers(members)
 }
 
 // lvmStack is the four layers the LVM rows share above their bottom one. The

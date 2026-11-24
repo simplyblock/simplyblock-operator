@@ -88,6 +88,30 @@ func TestServerHasManifestWork(t *testing.T) {
 	}
 }
 
+// What tells an OpenShift cluster from any other is the API group it serves.
+func TestServerHasGroup(t *testing.T) {
+	tests := []struct {
+		name   string
+		groups []string
+		want   bool
+	}{
+		{name: "an OpenShift cluster", groups: []string{"apps", openShiftConfigAPIGroup}, want: true},
+		{name: "any other cluster", groups: []string{"apps", certManagerAPIGroup}, want: false},
+		{name: "a group that only starts the same", groups: []string{openShiftConfigAPIGroup + ".example"}, want: false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := serverHasGroup(fakeServerGroupsGetter{groups: tc.groups}, openShiftConfigAPIGroup)
+			if err != nil {
+				t.Fatalf("serverHasGroup returned error: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("serverHasGroup = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestValidateTLSConfiguration(t *testing.T) {
 	tests := []struct {
 		name        string

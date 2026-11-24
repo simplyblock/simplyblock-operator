@@ -433,9 +433,6 @@ func TestTheServicePoolsRunWhatTheyDeclare(t *testing.T) {
 			}
 			seen[container.Name] = true
 
-			if len(container.Command) == 1 && container.Command[0] == twoNodeEventCollectorBinary {
-				continue // the one service the image ships as a binary
-			}
 			if len(container.Command) != 2 || container.Command[0] != "python3" {
 				t.Errorf("%s/%s runs %v, want a python3 module", tc.name, container.Name,
 					container.Command)
@@ -475,6 +472,36 @@ func TestNoControlPlaneWorkloadRunsOnTheHostNetwork(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no workload was checked")
+	}
+}
+
+// controlPlaneImageWorkloads are the Deployments that run the control plane's
+// image.
+var controlPlaneImageWorkloads = []string{
+	ComponentWebAPI, ComponentTasks, ComponentMonitoring, ComponentAdminControl,
+}
+
+// The control plane's image pings storage nodes as an unprivileged user, which
+// the kernel allows only for groups in ping_group_range. Every pod that runs the
+// image opens the range to all groups, so no sudo, setuid bit, or CAP_NET_RAW is
+// needed.
+func TestEveryControlPlaneImageWorkloadMayPingUnprivileged(t *testing.T) {
+	objects := managementAPIObjects(localControlPlane())
+
+	for _, name := range controlPlaneImageWorkloads {
+		spec := findDeployment(t, objects, name).Spec.Template.Spec
+		var sysctls []corev1.Sysctl
+		if spec.SecurityContext != nil {
+			sysctls = spec.SecurityContext.Sysctls
+		}
+		want := corev1.Sysctl{Name: "net.ipv4.ping_group_range", Value: "0 2147483647"}
+		found := false
+		for _, s := range sysctls {
+			found = found || s == want
+		}
+		if !found {
+			t.Errorf("%s: sysctls %v, want %v among them", name, sysctls, want)
+		}
 	}
 }
 
@@ -687,14 +714,13 @@ func TestNoExtraAdminServiceAccountsMeansTheOperatorAlone(t *testing.T) {
 }
 
 // The two-node arbiter and event collector must name what the control-plane
-// image ships (sbcli simplyblock_core/scripts/docker-compose-swarm.yml:
-// TwoNodeArbiter, TwoNodeEventCollector), or they crash-loop and pin the
-// monitoring pod.
+// image ships (sbcli simplyblock_core/services/two_node_arbiter.py,
+// two_node_event_collector.py), or they crash-loop and pin the monitoring pod.
 func TestTheTwoNodeServicesNameWhatTheImageShips(t *testing.T) {
 	d := findDeployment(t, managementAPIObjects(localControlPlane()), ComponentMonitoring)
 	want := map[string][]string{
 		"two-node-arbiter":         {"python3", "simplyblock_core/services/two_node_arbiter.py"},
-		"two-node-event-collector": {"/usr/local/bin/sb-event-collector"},
+		"two-node-event-collector": {"python3", "simplyblock_core/services/two_node_event_collector.py"},
 	}
 	for _, c := range d.Spec.Template.Spec.Containers {
 		if w, ok := want[c.Name]; ok {

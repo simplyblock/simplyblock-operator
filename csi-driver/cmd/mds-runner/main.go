@@ -6,9 +6,10 @@
 // It checks /dev/kvm, sizes the guest from the pod's limits, builds the
 // private network between the pod and the guest, starts QEMU, and serves the
 // pod's readiness from the guest agent's health. Once the guest is healthy it
-// dials the operator over csi-link and relays the export calls to the agent,
-// resolving each namespace's connection with the pod's own credentials. When the pod is stopped it shuts
-// the guest down through its power button. Whatever ends the guest otherwise
+// dials the operator over csi-link and relays the export and role calls to the
+// agent, resolving each namespace's connection with the pod's own credentials.
+// The guest boots as a standby and connects nothing until a Promote. When the
+// pod is stopped it drains and shuts the guest down through its power button. Whatever ends the guest otherwise
 // ends this process with an error, and kubelet restarts the pod
 // (design-pnfs-mds-vm.md §5.2).
 
@@ -47,15 +48,17 @@ import (
 
 type config struct {
 	kernel, firmware       string
-	rootDisk, stateDisk    string
+	rootDisk               string
 	kvmDevice, runDir      string
 	hostname, probeAddress string
+	podName                string
 	cpuLimitMilli          int64
 	memoryLimitMiB         int64
 	vhostNet               bool
 	zeroedLayouts          bool
 	debugSSH               bool
 	bootDeadline           time.Duration
+	unhealthyDeadline      time.Duration
 	shutdownGrace          time.Duration
 	drainWait              time.Duration
 
@@ -89,11 +92,13 @@ func parseFlags() config {
 	flag.StringVar(&c.kernel, "kernel", "/mds/kernel/vmlinuz", "Guest kernel, booted directly")
 	flag.StringVar(&c.firmware, "firmware", defaultFirmware, "UEFI firmware, arm64 only")
 	flag.StringVar(&c.rootDisk, "root-disk", "/mds/disk.qcow2", "Guest root filesystem image, attached read-only")
-	flag.StringVar(&c.stateDisk, "state-disk", "/dev/mds-state", "State PVC's block device, mounted at /var/lib/nfs")
 	flag.StringVar(&c.kvmDevice, "kvm-device", "/dev/kvm", "KVM device")
 	flag.StringVar(&c.runDir, "run-dir", "/run/mds", "Directory for the QMP socket")
-	flag.StringVar(&c.hostname, "hostname", os.Getenv("POD_NAME"),
-		"Guest hostname (downward API pod name), stable across restarts for NFSv4.1 state reclaim")
+	flag.StringVar(&c.hostname, "hostname", os.Getenv("MDS_HOSTNAME"),
+		"Guest hostname: the StatefulSet's name, the same for every pod, so NFSv4.1 clients reclaim state "+
+			"from whichever guest is active")
+	flag.StringVar(&c.podName, "pod-name", os.Getenv("POD_NAME"),
+		"This pod's name (downward API), the name it registers as a link peer under")
 	flag.Int64Var(&c.cpuLimitMilli, "cpu-limit-millis", envInt("MDS_CPU_LIMIT_MILLI"),
 		"Pod CPU limit in millicores (downward API limits.cpu, divisor 1m)")
 	flag.Int64Var(&c.memoryLimitMiB, "memory-limit-mib", envInt("MDS_MEMORY_LIMIT_MIB"),
@@ -114,6 +119,8 @@ func parseFlags() config {
 	flag.StringVar(&c.probeAddress, "probe-address", ":8080", "Address serving /readyz and /healthz")
 	flag.DurationVar(&c.bootDeadline, "boot-deadline", 120*time.Second,
 		"Time the guest has to turn healthy before the pod restarts")
+	flag.DurationVar(&c.unhealthyDeadline, "unhealthy-deadline", 90*time.Second,
+		"Time a booted guest may stay unhealthy before the pod restarts; 0 never restarts it")
 	flag.DurationVar(&c.shutdownGrace, "shutdown-grace", 20*time.Second,
 		"Time a powered-down guest has to exit; keep below the pod's termination grace period")
 	flag.DurationVar(&c.drainWait, "drain-wait", 3*time.Second,
@@ -170,6 +177,10 @@ func run(ctx context.Context, c config) error {
 	if err := runner.CheckKVM(c.kvmDevice); err != nil {
 		return err
 	}
+	peer, err := runner.PeerID(c.podName, c.hostname)
+	if err != nil {
+		return err
+	}
 	resources, err := runner.GuestResources(c.cpuLimitMilli, c.memoryLimitMiB)
 	if err != nil {
 		return err
@@ -185,12 +196,6 @@ func run(ctx context.Context, c config) error {
 	if err := netsetup.Apply(ctx, plan, netsetup.ExecIPTables); err != nil {
 		return err
 	}
-	if plan.HostPath {
-		if err := startHostPath(ctx, plan, c.hostProxy); err != nil {
-			return err
-		}
-	}
-
 	if err := os.MkdirAll(c.runDir, 0o700); err != nil {
 		return err
 	}
@@ -206,7 +211,6 @@ func run(ctx context.Context, c config) error {
 		KernelPath:    c.kernel,
 		FirmwarePath:  c.firmware,
 		RootDiskPath:  c.rootDisk,
-		StateDiskPath: c.stateDisk,
 		CPUs:          resources.CPUs,
 		MemoryMiB:     resources.MemoryMiB,
 		TapName:       plan.Tap,
@@ -224,7 +228,7 @@ func run(ctx context.Context, c config) error {
 			return fmt.Errorf("preparing debug SSH: %w", err)
 		}
 		guest.SSHAuthorizedKeysPath = keys
-		klog.Infof("debug SSH is on: kubectl exec -it %s -- ssh", c.hostname)
+		klog.Infof("debug SSH is on: kubectl exec -it %s -- ssh", c.podName)
 	}
 	agentAddress := net.JoinHostPort(plan.Guest.String(), strconv.Itoa(netsetup.AgentPort))
 	binary, err := guest.Binary()
@@ -239,6 +243,12 @@ func run(ctx context.Context, c config) error {
 		guest.Arch, guest.Hostname, guest.CPUs, guest.MemoryMiB, guest.Address, uplink)
 
 	sup := &runner.Supervisor{
+		StoragePath: func(ctx context.Context) error {
+			if !plan.HostPath {
+				return nil
+			}
+			return startHostPath(ctx, plan, c.hostProxy)
+		},
 		Start: runner.StartProcess(binary, args, os.Stdout, os.Stderr),
 		Probe: runner.GRPCHealthProbe(agentAddress),
 		Powerdown: func(ctx context.Context) error {
@@ -249,9 +259,10 @@ func run(ctx context.Context, c config) error {
 			defer deferrers.Close(client)
 			return client.SystemPowerdown(ctx)
 		},
-		BootDeadline:  c.bootDeadline,
-		ProbeInterval: 2 * time.Second,
-		ShutdownGrace: c.shutdownGrace,
+		BootDeadline:      c.bootDeadline,
+		UnhealthyDeadline: c.unhealthyDeadline,
+		ProbeInterval:     2 * time.Second,
+		ShutdownGrace:     c.shutdownGrace,
 		Drain: func(ctx context.Context) error {
 			return netsetup.EnsureRules(ctx, netsetup.ExecIPTables, []netsetup.Rule{plan.DrainRule()})
 		},
@@ -261,17 +272,17 @@ func run(ctx context.Context, c config) error {
 	probes := serveProbes(c.probeAddress, sup)
 	defer deferrers.Close(probes)
 	if c.link {
-		go linkWhenReady(ctx, c, sup, agentAddress)
+		go linkWhenReady(ctx, c, peer, sup, agentAddress)
 	}
 	return sup.Run(ctx)
 }
 
 // linkWhenReady dials the operator once the guest first turns healthy, and
-// from then on relays its export calls to the guest agent. Linking earlier
+// from then on relays its export and role calls to the guest agent. Linking earlier
 // would advertise an export service the guest cannot answer yet. The session
 // outlives later unhealthy spells: the operator reads readiness from the pod,
 // not from the link.
-func linkWhenReady(ctx context.Context, c config, sup *runner.Supervisor, agentAddress string) {
+func linkWhenReady(ctx context.Context, c config, peer link.PeerID, sup *runner.Supervisor, agentAddress string) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for !sup.Ready() {
@@ -296,9 +307,10 @@ func linkWhenReady(ctx context.Context, c config, sup *runner.Supervisor, agentA
 		},
 		Log: klog.Infof,
 	}
-	exports, err := nfsexportrpc.NewServer(tracker)
+	roles := relay.MDS{Guest: nfsexportrpc.RemoteMDS(guest), Tracker: tracker}
+	register, capabilities, err := relay.Services(tracker, roles)
 	if err != nil {
-		klog.Errorf("export relay: %v", err)
+		klog.Errorf("relay: %v", err)
 		return
 	}
 	go tracker.Run(ctx, relay.DefaultTrackInterval)
@@ -309,10 +321,10 @@ func linkWhenReady(ctx context.Context, c config, sup *runner.Supervisor, agentA
 		KeyFile:      c.linkKeyFile,
 		ServerName:   c.linkServerName,
 		TokenFile:    c.linkTokenFile,
-		ID:           link.MDSPeer(c.hostname),
+		ID:           peer,
 		InstanceUID:  c.podUID,
-		Register:     exports.Register,
-		Capabilities: nfsexportrpc.Capabilities(),
+		Register:     register,
+		Capabilities: capabilities,
 	}); err != nil {
 		klog.Errorf("csi link: %v", err)
 	}

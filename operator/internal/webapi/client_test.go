@@ -9,6 +9,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -158,6 +159,7 @@ func resetTLSClientCacheForTest(t *testing.T) {
 	tlsClientCacheMu.Lock()
 	defer tlsClientCacheMu.Unlock()
 	tlsClient = nil
+	endpointClient = nil
 }
 
 func writeNamespaceAndCertPair(t *testing.T) (string, string, string, string) {
@@ -225,5 +227,56 @@ func TestNewStreamClientHasNoTimeout(t *testing.T) {
 	// A fixed timeout would sever a long-lived stream.
 	if sc.Client.Timeout != 0 {
 		t.Errorf("Client.Timeout = %v, want 0 (no timeout for streams)", sc.Client.Timeout)
+	}
+}
+
+// Regression: 2026-11-18-mds-proxy-remote-tls. A control plane outside this
+// Kubernetes cluster presents a certificate for its own hostname. Every HTTPS
+// client checked it against the in-cluster webappapi Service name instead, so
+// every call to a remote control plane failed verification.
+func TestNewClientVerifiesARemoteControlPlaneByItsOwnHostname(t *testing.T) {
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
+	resetTLSClientCacheForTest(t)
+	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	t.Cleanup(srv.Close)
+	nsPath, _, certPath, keyPath := writeNamespaceAndCertPair(t)
+	caPath := filepath.Join(t.TempDir(), "remote-ca.crt")
+	caPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: srv.Certificate().Raw})
+	if err := os.WriteFile(caPath, caPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pointTLSPaths(t, nsPath, caPath, certPath, keyPath)
+
+	c := NewClient(srv.URL)
+	if _, _, err := c.Do(context.Background(), http.MethodGet, "/api/v2/anything", nil); err != nil {
+		t.Fatalf("request to the remote control plane at %s: %v", srv.URL, err)
+	}
+}
+
+// The in-cluster address keeps the Service name: the operator may dial it by a
+// short name or an IP, and the certificate names the Service.
+func TestNewClientPinsTheServiceNameForTheInClusterAddress(t *testing.T) {
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", "")
+	nsPath, caPath, certPath, keyPath := writeNamespaceAndCertPair(t)
+	pointTLSPaths(t, nsPath, caPath, certPath, keyPath)
+
+	for _, url := range []string{
+		"https://simplyblock-webappapi:5000",
+		"https://simplyblock-webappapi.simplyblock:5000",
+		"https://simplyblock-webappapi.simplyblock.svc:5000",
+		"https://simplyblock-webappapi.simplyblock.svc.cluster.local:5000",
+	} {
+		resetTLSClientCacheForTest(t)
+		c := NewClient(url)
+		if c.initErr != nil {
+			t.Fatalf("%s: unexpected initErr: %v", url, c.initErr)
+		}
+		tr := c.HttpClient.Transport.(*http.Transport)
+		if got := tr.TLSClientConfig.ServerName; got != "simplyblock-webappapi.simplyblock.svc" {
+			t.Errorf("%s: ServerName = %q, want the Service name", url, got)
+		}
 	}
 }

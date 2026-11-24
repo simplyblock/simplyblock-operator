@@ -91,3 +91,31 @@ func TestTheControlPlaneMayDeleteAnOrphanedSPDKPod(t *testing.T) {
 			"so the SPDK teardown after a failed node add is forbidden", cp.Namespace)
 	}
 }
+
+// A node on the pod network has a Service in front of its SPDK pod, created by
+// the agent before the pod. The same teardown deletes it straight through the
+// API server, and so does a node removal. Without delete on services the
+// control plane logs "services ... is forbidden" and the Service outlives the
+// add, which is what an aborted add on an OpenShift master logged on 2026-11-06.
+func TestTheControlPlaneMayDeleteTheServiceOfAnAbortedPodNetworkAdd(t *testing.T) {
+	cp := localControlPlane()
+
+	if !permits(managementAPIObjects(cp), cp.Namespace, "delete", "services") {
+		t.Errorf("the control plane's account cannot delete a Service in %s, "+
+			"so the teardown of a pod-network node's Service is forbidden", cp.Namespace)
+	}
+}
+
+// The teardown grant stays what it is: delete, in the install namespace, on the
+// two objects a storage node leaves behind. Create beside it would let the
+// account replace what it removes.
+func TestTheTeardownRoleGrantsOnlyDelete(t *testing.T) {
+	role := podTeardownRole("simplyblock")
+	for _, rule := range role.Rules {
+		for _, verb := range rule.Verbs {
+			if verb != "delete" {
+				t.Errorf("the teardown Role grants %q on %v, want delete only", verb, rule.Resources)
+			}
+		}
+	}
+}

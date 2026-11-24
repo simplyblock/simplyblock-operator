@@ -11,6 +11,13 @@
 // It compares networks rather than names. Two machines calling their links
 // eth0 and ens5f0 are on one network when their addresses share a prefix, and
 // two machines both calling theirs eth0 are on two networks when they do not.
+//
+// Two networks are not always two islands. A cloud fleet spread over
+// availability zones has one subnet for each zone and a router between them, and
+// the evidence that they are routed is the cluster itself: it reaches every
+// worker on its node address. So a management interface holding that address is
+// taken as reachable whatever its prefix, and only the interfaces chosen without
+// that evidence are compared.
 
 package discovery
 
@@ -45,17 +52,35 @@ func alignNetworks(workers []Worker) ([]Worker, []Refusal) {
 	return workers, append(refusals, dataRefusals...)
 }
 
-// alignManagement refuses the workers whose management interface is not on the
-// network most of the fleet's management interfaces share.
+// alignManagement refuses the workers whose management interface is on a
+// network the rest of the fleet cannot be shown to reach.
+//
+// A worker managed on the interface holding its node address is never refused.
+// The cluster reaches the machine there already, every node of a Kubernetes
+// cluster has to reach every other on that address, and so two such workers on
+// two subnets are on routed networks rather than on separate ones. That is the
+// ordinary cloud fleet: one subnet for each availability zone.
+//
+// The comparison is for the interfaces a ranking chose, where nothing says the
+// choice is reachable. Such a worker is held to the networks the cluster
+// reaches the others on, where it reaches any, and otherwise to the network most
+// of the fleet's management interfaces share.
 //
 // A worker whose management interface holds no comparable network is not
 // compared: a host route names none, and GCP assigns an instance its address as
 // one.
 func alignManagement(workers []Worker) ([]Worker, []Refusal) {
 	networks := make([][]netip.Prefix, len(workers))
+	reached := make([]bool, len(workers))
 	support := map[netip.Prefix]int{}
+	var routed []netip.Prefix
 	for i, worker := range workers {
-		networks[i] = networksOf(interfacesByName(worker.Report)[worker.Mgmt.Name])
+		iface := interfacesByName(worker.Report)[worker.Mgmt.Name]
+		networks[i] = networksOf(iface)
+		reached[i] = holdsAddress(iface, worker.Kube.InternalIP)
+		if reached[i] {
+			routed = append(routed, networks[i]...)
+		}
 		for _, network := range networks[i] {
 			support[network]++
 		}
@@ -63,6 +88,8 @@ func alignManagement(workers []Worker) ([]Worker, []Refusal) {
 	if len(support) == 0 {
 		return workers, nil
 	}
+	slices.SortFunc(routed, comparePrefixes)
+	routed = slices.Compact(routed)
 
 	// The most workers first, and the lower network for a tie, which is
 	// determinism rather than a reading: nothing says which of two equal
@@ -74,15 +101,26 @@ func alignManagement(workers []Worker) ([]Worker, []Refusal) {
 	var kept []Worker
 	var refusals []Refusal
 	for i, worker := range workers {
-		if len(networks[i]) == 0 || slices.Contains(networks[i], fleet) {
+		if reached[i] || len(networks[i]) == 0 {
 			kept = append(kept, worker)
 			continue
 		}
-		refusals = append(refusals, Refusal{
-			Worker: worker.Name, Rule: ManagementNetworkRule,
-			Reason: fmt.Sprintf("%s is on %s, and the fleet's management network is %s, held by %d of its %d workers",
-				worker.Mgmt.Name, joinPrefixes(networks[i]), fleet, support[fleet], len(workers)),
-		})
+
+		reason := fmt.Sprintf("%s is on %s, and the fleet's management network is %s, held by %d of its %d workers",
+			worker.Mgmt.Name, joinPrefixes(networks[i]), fleet, support[fleet], len(workers))
+		aligned := slices.Contains(networks[i], fleet)
+		if len(routed) > 0 {
+			reason = fmt.Sprintf("%s is on %s, and the cluster reaches the fleet's other workers on %s",
+				worker.Mgmt.Name, joinPrefixes(networks[i]), joinPrefixes(routed))
+			aligned = slices.ContainsFunc(networks[i], func(network netip.Prefix) bool {
+				return slices.Contains(routed, network)
+			})
+		}
+		if aligned {
+			kept = append(kept, worker)
+			continue
+		}
+		refusals = append(refusals, Refusal{Worker: worker.Name, Rule: ManagementNetworkRule, Reason: reason})
 	}
 	return kept, refusals
 }

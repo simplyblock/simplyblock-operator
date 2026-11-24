@@ -84,7 +84,7 @@ type Plan struct {
 	// DataNetworks is how many data interfaces most kept workers carry, which the
 	// template states as the cluster's host-interface data networks. The names are
 	// each group's own. It is zero for a fleet with no data interface, which the
-	// template puts on the pod network.
+	// template keeps on the host network, binding the primary NIC.
 	DataNetworks int
 
 	// Findings are what the draft leaves for a reviewer to correct: topology
@@ -155,6 +155,25 @@ func (p Plan) DeviceCount() int {
 		devices += len(worker.Addresses())
 	}
 	return devices
+}
+
+// Advice is what a run adds to its failure when the environment, not the
+// fleet, explains it: on GKE a disk that is a member of a software-RAID array
+// is one the node pool assembled, because that is what attaching local SSDs as
+// ephemeral storage does, and the fix is the pool's configuration rather than
+// anything on the node. Empty when nothing of the kind applies.
+func (p Plan) Advice(environment simplyblockv1alpha2.KubernetesEnvironment) string {
+	if environment != simplyblockv1alpha2.KubernetesEnvironmentGKE {
+		return ""
+	}
+	for _, refusal := range p.Refusals {
+		if refusal.Device != "" && strings.Contains(refusal.Reason, string(blockdev.ReasonRAIDMember)) {
+			return "GKE assembled the local SSDs into that array, which is what a node pool " +
+				"created with ephemeral-storage-local-ssd does; a pool created with " +
+				"local-nvme-ssd-block attaches them as raw devices instead"
+		}
+	}
+	return ""
 }
 
 // Explain says why the plan holds nothing, one line per worker.
@@ -621,7 +640,12 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	var misaligned []Refusal
 	plan.Workers, misaligned = alignNetworks(plan.Workers)
 	plan.Refusals = append(plan.Refusals, misaligned...)
-	plan.assignFailureDomains(failureDomainLabelOf(run))
+	// A run that turns failure domains off reads no topology at all, so the
+	// workers carry no domain and the grouping that follows merges them by
+	// hardware rather than splitting them per domain.
+	if run == nil || run.EnableFailureDomains == nil || *run.EnableFailureDomains {
+		plan.assignFailureDomains(failureDomainLabelOf(run))
+	}
 	plan.noteMultipath()
 
 	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {

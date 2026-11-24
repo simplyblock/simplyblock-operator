@@ -62,20 +62,26 @@ File: `operator/internal/controllers/pool/storagepool_controller_test.go`
 
 ### The StorageClass (design §5)
 
-File: `operator/internal/controllers/pool/storagepool_controller_test.go`, and
+File: `operator/internal/controllers/pool/storagepool_controller_test.go`,
+`agreement_test.go` for a class read against the pool's volume defaults, and
 `dhchap_test.go` for the node selector and the ownership.
 
-| #    | Scenario                                                                       | Type     | Test                                                 |
-|------|--------------------------------------------------------------------------------|----------|------------------------------------------------------|
-| U-15 | A non-default pool: no class is created by its reconcile, ever                 | Negative | TestANonDefaultPoolGetsNoGeneratedClass              |
-| U-16 | A class assigned to the pool sets `cluster_id` and `pool_name` consistently    | Positive | TestGeneratedParametersInventNothing                 |
-| U-17 | A class whose `parameters` disagree with its labels is reported, not rewritten | Negative | TestNeverRewritesAnAssignedClass                     |
-| U-18 | The default pool: one class is written, labeled `managed-by`, and not repeated | Positive | TestTheDefaultPoolsClassIsWrittenOnceAndNotRecreated |
-| U-19 | A class assigned after the pool is `Ready`: `StorageClassAssigned` is emitted  | Positive | TestPublishesTheClassesAssignedToThePool             |
-| U-20 | The default class deleted out of band: not recreated, `status` drops it        | Negative | TestTheDefaultPoolsClassIsWrittenOnceAndNotRecreated |
-| U-21 | The class carries no owner reference, since the scopes forbid one              | Negative | TestTheGeneratedClassCarriesNoOwnerReference         |
-| U-22 | `status.storageClassNames` lists every assigned class and nothing else         | Positive | TestPublishesTheClassesAssignedToThePool             |
-| U-23 | A class carrying both QoS spellings: new wins, `QoSParameterConflict` emitted  | Negative | TestReportsAClassThatStatesOneCeilingTwice           |
+| #     | Scenario                                                                                                                                                        | Type       | Test                                                                           |
+|-------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------------------------------|
+| U-15  | A non-default pool: no class is created by its reconcile, ever                                                                                                  | Negative   | TestANonDefaultPoolGetsNoGeneratedClass                                        |
+| U-16  | A class assigned to the pool sets `cluster_id` and `pool_name` consistently                                                                                     | Positive   | TestGeneratedParametersInventNothing                                           |
+| U-17  | A class whose `parameters` disagree with its labels is reported, not rewritten                                                                                  | Negative   | TestNeverRewritesAnAssignedClass, TestWarnsOfAClassThatProvisionsSomewhereElse |
+| U-18  | The default pool: one class is written, labeled `managed-by`, and not repeated                                                                                  | Positive   | TestTheDefaultPoolsClassIsWrittenOnceAndNotRecreated                           |
+| U-19  | A class assigned after the pool is `Ready`: `StorageClassAssigned` is emitted                                                                                   | Positive   | TestPublishesTheClassesAssignedToThePool                                       |
+| U-20  | The default class deleted out of band: not recreated, `status` drops it                                                                                         | Negative   | TestTheDefaultPoolsClassIsWrittenOnceAndNotRecreated                           |
+| U-21  | The class carries no owner reference, since the scopes forbid one                                                                                               | Negative   | TestTheGeneratedClassCarriesNoOwnerReference                                   |
+| U-22  | `status.storageClassNames` lists every assigned class and nothing else                                                                                          | Positive   | TestPublishesTheClassesAssignedToThePool                                       |
+| U-23  | A class carrying both QoS spellings: new wins, `QoSParameterConflict` emitted                                                                                   | Negative   | TestReportsAClassThatStatesOneCeilingTwice                                     |
+| U-118 | A class assigned to a striped pool that does not stripe: `StorageClassDisagreesWithPool` (pins 2026-11-17-pool-stripe-never-reaches-class, `agreement_test.go`) | Regression | TestWarnsOfAClassThatDoesNotStripeAsItsPoolDoes                                |
+| U-119 | A class stating the pool's stripe as `65536` and its IOPS under `qos_rw_iops` agrees, and nothing is reported                                                   | Positive   | TestAClassStatingThePoolsDefaultsInOtherSpellingsAgrees                        |
+| U-120 | A class reaching another cluster or pool than its labels: `StorageClassDisagreesWithPool`                                                                       | Negative   | TestWarnsOfAClassThatProvisionsSomewhereElse                                   |
+| U-121 | A class naming the pool by its UUID reaches it as well as by its name                                                                                           | Boundary   | TestAClassNamingThePoolByItsUUIDAgrees                                         |
+| U-122 | A class overriding the filesystem: a `Normal` `StorageClassOverridesPoolDefault`, no warning                                                                    | Positive   | TestReportsAnOverriddenDefaultAsInformation                                    |
 
 ### The Allowed-Node Label (today's controller)
 
@@ -217,6 +223,18 @@ File: `operator/internal/webhook/storagepool_validator_test.go`
 | U-71 | A cluster of that name in another namespace: refused                         | Negative | `TestStoragePoolValidator`                               |
 | U-72 | An update or a delete is not the validator's business                        | Negative | `TestStoragePoolValidator`                               |
 | U-73 | A pool whose namespace is carried by the request path rather than the object | Boundary | `TestStoragePoolValidatorFallsBackToTheRequestNamespace` |
+
+### The StorageClass Admission Guard (design §3.4, §5)
+
+File: `operator/internal/webhook/storageclass_validator_test.go`
+
+| #     | Scenario                                                                                                                                                                             | Type       | Test                                                                |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|---------------------------------------------------------------------|
+| U-123 | A class assigned to a striped pool with no stripe, another width, another size, or an unreadable width: refused, naming the stripe (pins 2026-11-17-pool-stripe-never-reaches-class) | Regression | `TestStorageClassValidatorRefusesAClassThatDoesNotStripeAsItsPool`  |
+| U-124 | A class reaching another cluster or another pool than its labels: refused                                                                                                            | Negative   | `TestStorageClassValidatorRefusesAClassThatProvisionsSomewhereElse` |
+| U-125 | The pool's stripe in another spelling, an overridden filesystem, no assignment, and a pool not yet there: admitted                                                                   | Positive   | `TestStorageClassValidatorAdmits`                                   |
+| U-126 | A cluster without a UUID: the cluster is not checked and the stripe still is                                                                                                         | Boundary   | `TestStorageClassValidatorChecksTheStripeBeforeTheClusterHasAUUID`  |
+| U-127 | An update leaving the assignment alone is admitted; one that assigns the class is checked                                                                                            | Boundary   | `TestStorageClassValidatorChecksAnUpdateOnlyWhenItAssigns`          |
 
 ### The QoS Vocabulary (design §5.1)
 

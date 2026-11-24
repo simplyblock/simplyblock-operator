@@ -10,9 +10,10 @@ The following components are being installed or updated:
 {{- end }}
 
 {{ if eq .Values.deployment.profile "standalone" -}}
-This deployment hosts its own control plane. The chart wrote the ControlPlane
-object and the operator installs FoundationDB, the object store, and the
-management API from it, in that order. The database has to reach quorum before
+This deployment hosts its own control plane. The chart handed the operator the
+ControlPlane object in the simplyblock-bootstrap-objects ConfigMap; the operator
+applies it and installs FoundationDB, the object store, and the management API
+from it, in that order. The database has to reach quorum before
 the management API starts, so the first install takes a few minutes.
 
 Watch it settle:
@@ -40,7 +41,8 @@ This deployment is managed by a control plane at
 {{ .Values.controlplane.managed.endpoint }}. Nothing is installed here for it:
 the operator resolves that endpoint, probes it, and reports.
 
-Check that it is reachable:
+Check that it is reachable (the operator applies the ControlPlane from the
+simplyblock-bootstrap-objects ConfigMap shortly after it starts):
 
   kubectl --namespace={{ .Release.Namespace }} get controlplane simplyblock
 {{- end }}

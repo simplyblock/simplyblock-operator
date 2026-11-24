@@ -754,10 +754,9 @@ installed is a write that can only introduce risk.
 The whole set is embedded in the installer binary so that the version of the
 CRDs always matches the version of the conversion code that converts them.
 `go:embed` cannot reach outside the directory of the file that declares it, so
-the CRDs controller-gen writes into `config/crd/bases` are copied into
-`internal/upgrade/crds/manifests` by the `crd-embed` target that
-`make -C operator manifests` runs, and the copy is committed. It is the
-arrangement the Helm chart's copy of the same files already uses.
+the embedding package is `config/crd/bases` itself, next to the files
+controller-gen writes, and `internal/upgrade/crds` imports it. The operator
+module carries one committed copy of each CRD.
 
 **Which of the three groups a CRD is in is read from the CRD rather than from a
 table**, since a list of kinds is a second place to edit when a kind is added
@@ -830,7 +829,7 @@ radius:
 |---------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------------------------------------------|
 | Control plane       | `FoundationDBCluster/simplyblock-fdb-cluster`, the `simplyblock-webappapi`, `admin-control`, `monitoring`, `tasks`, `fdb-controller-manager`, and `fdb-exporter` Deployments, `StatefulSet/simplyblock-minio`, their Services, and the `simplyblock-config`, `prometheus-config`, and `objstore-config` ConfigMaps                                                                                                                                                                             | `ControlPlane`, `design-controlplane.md` §5.1           |
 | CSI driver          | `CSIDriver/csi.simplyblock.io`, `StatefulSet/simplyblock-csi-controller`, `DaemonSet/simplyblock-csi-node`, their two ServiceAccounts and five ClusterRole and ClusterRoleBinding pairs, the `simplyblock-csi-cm` and `simplyblock-csi-nodeservercm` ConfigMaps, and `VolumeSnapshotClass/simplyblock-csi-snapshotclass`. `simplyblock-csi-secret-v2` is not in the set: the StorageCluster reconciler writes it and the driver only mounts it. `simplyblock-csi-secret` is mounted by nothing | `SimplyblockDriver`, `design-simplyblockdriver.md` §4.3 |
-| The adopter itself  | `ControlPlane/simplyblock`, which the chart renders from `templates/controlplane_cr.yaml`                                                                                                                                                                                                                                                                                                                                                                                                      | Nothing. It is the adopter (§12.2)                      |
+| The adopter itself  | `ControlPlane/simplyblock`, which the chart renders from `templates/_bootstrap_controlplane.tpl` into the `simplyblock-bootstrap-objects` ConfigMap the operator applies                                                                                                                                                                                                                                                                                                                                                                                                      | Nothing. It is the adopter (§12.2)                      |
 | Ecosystem subcharts | The Prometheus `StatefulSet`, its two Services and its ConfigMap, `Deployment/simplyblock-reloader`, and the MongoDB and OpenSearch releases where `controlplane.observability.enabled` is set                                                                                                                                                                                                                                                                                                 | Undecided (§32, Q5)                                     |
 | Unattributed        | `StorageClass/local-hostpath`, `DaemonSet/simplyblock-numa-resource-plugin` and its ConfigMap, and `ConfigMap/simplyblock-caching-node-restart-script-cm`                                                                                                                                                                                                                                                                                                                                      | Undecided (§32, Q5)                                     |
 | Already kept        | The three `snapshot.storage.k8s.io` CRDs and `Deployment/simplyblock-snapshot-controller`                                                                                                                                                                                                                                                                                                                                                                                                      | Helm already leaves them (§12.2)                        |
@@ -1557,7 +1556,8 @@ where four routes take two resources to one derived name (§19.8), and the targe
 model closes three of them by construction: every kind but
 `PersistentVolumeOps` is namespaced, and the names they derive are unique within
 the namespace their inputs are unique in. What is left is the default
-`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`.
+`StorageClass`, which is cluster-scoped and named `simplyblock-<ns>-<cluster>`
+(simplyblock said once, design-storagepool.md §4.4).
 The pool's reconcile already answers that one the way this row prescribes — it
 adopts the name only when the occupant is recognizably the class it would have
 written, and otherwise emits `StorageClassNameTaken` and leaves the pool without

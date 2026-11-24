@@ -3,7 +3,10 @@ package controlplane
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 
 	"github.com/simplyblock/atlas/errs"
 	"github.com/simplyblock/atlas/internal/cpapi"
@@ -25,6 +28,22 @@ const (
 	// MigrationOfSubsystem moves every namespace of one subsystem together, and
 	// reports how many members that is rather than any one volume's progress.
 	MigrationOfSubsystem MigrationKind = "subsystem"
+)
+
+var (
+	// ErrMigrationBlocked is a create the control plane cannot accept yet,
+	// because of a condition that clears by itself: the cluster is rebalancing,
+	// a node has a data migration in progress, or another migration of the
+	// subsystem is active. Waiting and asking again is the answer to it.
+	ErrMigrationBlocked = errors.New("the control plane cannot accept the migration yet")
+
+	// ErrMigrationAlreadyOnTarget is a create refused because the volume is
+	// already on the target node, which is the state the migration asks for.
+	ErrMigrationAlreadyOnTarget = errors.New("the volume is already on the target node")
+
+	// ErrMigrationNotActive is a cancel refused because the migration has
+	// already ended, done, failed, or canceled, so there is nothing to cancel.
+	ErrMigrationNotActive = errors.New("the migration is not active")
 )
 
 // Migration is a migration between storage nodes, of either kind.
@@ -222,7 +241,9 @@ func (c *Client) GetMigration(ctx context.Context, clusterID, nqn, migrationID s
 	return migrationFromJSON(what, raw)
 }
 
-// CancelMigration cancels a migration, of either kind.
+// CancelMigration cancels a migration, of either kind. A migration that has
+// already ended is refused with ErrMigrationNotActive, and one the control
+// plane no longer knows with errs.ErrNotFound.
 func (c *Client) CancelMigration(ctx context.Context, clusterID, nqn, migrationID string) error {
 	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
@@ -237,7 +258,7 @@ func (c *Client) CancelMigration(ctx context.Context, clusterID, nqn, migrationI
 	if err != nil {
 		return fmt.Errorf("cancel migration %s: %w", migrationID, err)
 	}
-	return migrationActionResult("cancel migration "+migrationID, resp.StatusCode(), resp.Body)
+	return cancelRefusal(migrationActionResult("cancel migration "+migrationID, resp.StatusCode(), resp.Body))
 }
 
 // ContinueMigration resumes a paused migration, of either kind, which is what a
@@ -261,7 +282,9 @@ func (c *Client) ContinueMigration(ctx context.Context, clusterID, nqn, migratio
 
 // CreateMigration starts migrating the subsystem with the given NQN to the
 // target storage node and returns the migration that was created, whichever
-// kind the control plane made of it.
+// kind the control plane made of it. A refusal that clears by itself is
+// ErrMigrationBlocked, and one saying the volume is already on the target is
+// ErrMigrationAlreadyOnTarget.
 func (c *Client) CreateMigration(ctx context.Context, clusterID, nqn, targetNodeID string) (Migration, error) {
 	cluster, err := parseUUID("cluster id", clusterID)
 	if err != nil {
@@ -281,9 +304,59 @@ func (c *Client) CreateMigration(ctx context.Context, clusterID, nqn, targetNode
 	what := "create migration for subsystem " + nqn
 	raw, err := decodeBody[json.RawMessage](what, resp.StatusCode(), resp.Body)
 	if err != nil {
-		return Migration{}, err
+		return Migration{}, createRefusal(err, targetNodeID)
 	}
 	return migrationFromJSON(what, raw)
+}
+
+// migrationRefusal is a control-plane answer that also carries the sentinel its
+// wording stands for. It reads as the answer itself, and matches both the
+// *StatusError, for the control plane's words, and the sentinel, for what the
+// caller does about it.
+type migrationRefusal struct {
+	*StatusError
+	sentinel error
+}
+
+func (e *migrationRefusal) Unwrap() []error { return []error{e.StatusError, e.sentinel} }
+
+// createRefusal names a refused create. Release 26.3 answers every refusal
+// with a 400 and leaves the reason in the wording, while later releases answer
+// the ones that clear by themselves with a 409, so the 400 wordings are matched
+// here and both come out as ErrMigrationBlocked. The wordings are the control
+// plane's own, from migration_controller.py, matched narrowly so that a refusal
+// no retry changes is still reported as one.
+func createRefusal(err error, targetNodeID string) error {
+	var answer *StatusError
+	if !errors.As(err, &answer) {
+		return err
+	}
+	body := strings.ToLower(answer.Body)
+	switch {
+	case answer.StatusCode == http.StatusConflict:
+		return &migrationRefusal{answer, ErrMigrationBlocked}
+	case answer.StatusCode != http.StatusBadRequest:
+		return err
+	case strings.Contains(body, "is rebalancing"),
+		strings.Contains(body, "data migration in progress"),
+		strings.Contains(body, "already exists") && strings.Contains(body, "migration"):
+		return &migrationRefusal{answer, ErrMigrationBlocked}
+	case strings.Contains(body, "is already on node "+strings.ToLower(targetNodeID)):
+		return &migrationRefusal{answer, ErrMigrationAlreadyOnTarget}
+	}
+	return err
+}
+
+// cancelRefusal names a cancel refused because the migration has already
+// ended. Every release answers it with a 400 saying the migration, or the
+// subsystem's group, is not active.
+func cancelRefusal(err error) error {
+	var answer *StatusError
+	if errors.As(err, &answer) && answer.StatusCode == http.StatusBadRequest &&
+		strings.Contains(strings.ToLower(answer.Body), "is not active") {
+		return &migrationRefusal{answer, ErrMigrationNotActive}
+	}
+	return err
 }
 
 // migrationActionResult treats any 2xx as success for the fire-and-forget

@@ -925,6 +925,24 @@ spec:
                   x-kubernetes-validations:
                     - message: field is immutable
                       rule: self == oldSelf
+                enableMetadataJournal:
+                  default: true
+                  description: |-
+                    EnableMetadataJournal journals the lvstore's metadata pages, so a write
+                    torn by a power loss cannot leave a half-written page behind. A device
+                    needs it when it does not complete a 4K write whole: its block size is
+                    under 4K, and the atomic write unit it reports does not cover 4K.
+
+                    It is on unless stated off. Turning it off is safe only when every device
+                    is known to complete a 4K write whole, which a discovery run checks
+                    before it writes false.
+
+                    The data plane records the choice in the lvstore's super block when the
+                    cluster's lvstores are created, so it cannot change under a live cluster.
+                  type: boolean
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 enableNodeAffinity:
                   description: |-
                     EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -971,6 +989,20 @@ spec:
                     provider's endpoint, which is why the whole block is immutable rather
                     than its members.
                   properties:
+                    kmip:
+                      description: KMIP stores keys in a KMIP-speaking appliance.
+                      properties:
+                        endpoint:
+                          description: |-
+                            Endpoint is the KMIP server address, host:port, for example,
+                            kmip.example.com:5696. Rejected unless it resolves to an external
+                            address. No URL scheme: KMIP is a binary TTLV protocol over TLS, not
+                            an HTTP API, so it has no scheme convention to validate against.
+                          pattern: ^[a-zA-Z0-9.-]+:[0-9]{1,5}$
+                          type: string
+                      required:
+                        - endpoint
+                      type: object
                     vault:
                       description: Vault stores keys in HashiCorp Vault.
                       properties:
@@ -1491,6 +1523,37 @@ spec:
                       items:
                         type: string
                       type: array
+                    talos:
+                      description: |-
+                        Talos states that the workers run Talos Linux: an immutable host with no
+                        shell, which the node therefore never touches directly. It reserves the
+                        huge pages a worker needs through the Talos API instead, and skips the
+                        host-configuration Jobs that would nsenter into the host. The expansion
+                        sets it from spec.environment, as it sets OpenShift; the node agent reads
+                        it as TALOS_CLUSTER.
+                      type: boolean
+                    talosMachineConfig:
+                      description: |-
+                        TalosMachineConfig is who writes a Talos worker's machine config: the
+                        huge-page pool (machine.sysfs) and the kubelet's CPU topology
+                        (machine.kubelet.extraConfig). Preprovisioned, the default, is the
+                        cluster's operator, before the node is added: the node verifies both,
+                        applies nothing, and fails the add with the patch to apply, so no Talos
+                        API credentials exist in the namespace. Managed is the node itself,
+                        through the Talos API as talosctl Jobs, which needs the os:admin Secret
+                        the Talos API access feature issues. Read only when Talos is stated; the
+                        node agent reads it as TALOS_MACHINE_CONFIG.
+                      enum:
+                        - Preprovisioned
+                        - Managed
+                      type: string
+                    talosctlImage:
+                      description: |-
+                        TalosctlImage is the talosctl image the node runs as a Job on a Talos
+                        worker to reach its Talos API. Empty keeps the node agent's own default;
+                        a deployment pins it to the cluster's Talos minor, or to a mirror on an
+                        air-gapped site. It is spec.images.talosctl on the deployment config.
+                      type: string
                     tolerations:
                       description: Tolerations are applied to the storage-node pods.
                       items:
@@ -1868,6 +1931,8 @@ spec:
                   rule: '!has(oldSelf.enableChecksumValidation) || has(self.enableChecksumValidation)'
                 - message: field enableAtomicity4K is immutable once set
                   rule: '!has(oldSelf.enableAtomicity4K) || has(self.enableAtomicity4K)'
+                - message: field enableMetadataJournal is immutable once set
+                  rule: '!has(oldSelf.enableMetadataJournal) || has(self.enableMetadataJournal)'
                 - message: field deviceClass is immutable once set
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
                 - message: kms is immutable once set

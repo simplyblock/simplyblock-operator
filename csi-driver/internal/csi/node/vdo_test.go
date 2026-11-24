@@ -15,6 +15,8 @@ import (
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/simplyblock/atlas/kube"
+
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 )
 
 // lvmRawBlockShape is the LVM row with its filesystem absent, which is what a
@@ -172,5 +174,35 @@ func TestTeardownReadsThePoolNameFromTheRecord(t *testing.T) {
 	}
 	if options.PoolName != vdoPoolName {
 		t.Errorf("the teardown would release the pool %q, want %q", options.PoolName, vdoPoolName)
+	}
+}
+
+// Regression: 2026-11-17-vdo-capacity-underreported (PR #922 review). The VDO
+// volume was created without a logical size and VDO sized it from what its
+// pool had left after its metadata, a third short of what the volume reported.
+// The context names the logical size, and the definition carries it to
+// lvcreate; a context from before it names none, and VDO sizes the volume.
+func TestVDOOptionsCarryTheLogicalSize(t *testing.T) {
+	vc := vdoContext("true", "false")
+	vc[csicommon.CtxVDOLogicalBytes] = "10737418240"
+	if got := vdoOptions(vc).Definition.LogicalSizeBytes; got != 10<<30 {
+		t.Errorf("the definition carries a logical size of %d, want 10GiB", got)
+	}
+	if got := vdoOptions(vdoContext("true", "false")).Definition.LogicalSizeBytes; got != 0 {
+		t.Errorf("a context naming no logical size produced %d, want 0", got)
+	}
+}
+
+// An expansion names the new size in the request rather than the context, and
+// the VDO volume is grown to it, in whole GiB as the controller reports it. A
+// volume that is not under VDO gets nothing it would read.
+func TestExpansionContextNamesTheNewLogicalSize(t *testing.T) {
+	vc := expansionContext(vdoContext("false", "true"), 10*1024*1024*1024+1)
+	if got := vc[csicommon.CtxVDOLogicalBytes]; got != "11811160064" {
+		t.Errorf("the expansion names a logical size of %q, want 11GiB", got)
+	}
+	plain := expansionContext(stagedContext(), 10<<30)
+	if _, ok := plain[csicommon.CtxVDOLogicalBytes]; ok {
+		t.Errorf("a plain volume's expansion named a VDO logical size: %v", plain)
 	}
 }

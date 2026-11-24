@@ -126,6 +126,29 @@ func TestStripedKeepsTheMemberOrder(t *testing.T) {
 	}
 }
 
+// TestStripedRawBlockIsTheStripedRowWithoutItsFilesystem holds the striped row
+// for a volume the pod opens as a block device: the members and the LVM layers
+// with the striped logical volume on top, and nothing that would format it.
+// Dropping the LVM layers along with the filesystem would hand the pod one
+// member's namespace instead of the stripe.
+func TestStripedRawBlockIsTheStripedRowWithoutItsFilesystem(t *testing.T) {
+	conns := []lvol.Connection{conn("nqn:a"), conn("nqn:b")}
+	options := LogicalVolumeOptions{
+		Definition: lvm.LogicalVolumeDefinition{Stripes: 2, StripeChunkBytes: 64 << 10},
+	}
+	plan := testNode().StripedRawBlock(conns, testVolume(), options)
+	assertShape(t, plan, []string{"members", "lvmPhysicalVolume", "lvmVolumeGroup", "lvmLogicalVolume"})
+
+	composite, ok := plan[0].(volstack.Composite)
+	if !ok || len(composite.Members()) != len(conns) {
+		t.Fatalf("the bottom of a striped raw block plan is %T, want a composite of %d members", plan[0], len(conns))
+	}
+	params, ok := plan[3].(volstack.Recorder).Params().(layers.LVMLogicalVolumeParams)
+	if !ok || params.Stripes != 2 || params.StripeChunkBytes != 64<<10 {
+		t.Errorf("logical volume parameters = %+v, want 2 stripes of 64KiB", params)
+	}
+}
+
 // TestFabricCarriesTheConnectionAndTheHost proves the node's identity and the
 // published connection reach the bottom layer, since a fabric built without
 // them connects as the wrong host or to nothing.
@@ -326,7 +349,7 @@ func (r *recordingLVM) run(_ context.Context, args ...string) (string, error) {
 	return reportWrap(args, r.out[args[0]]), nil
 }
 
-// reportWrap wraps out as pvs/lvs --reportformat json would, when args asked for
+// reportWrap wraps out as `pvs/lvs --reportformat json` would, when args asked for
 // it; every other answer passes through unchanged. out is treated as
 // whitespace-separated field values, matching how a test already scripts a
 // plain-text answer for the pre-JSON form of these same commands.
@@ -414,6 +437,8 @@ func (r *recordingFS) IsMountPoint(_ context.Context, path string) (bool, error)
 	r.checked = append(r.checked, path)
 	return r.isMounted, nil
 }
+
+func (r *recordingFS) OtherMounts(context.Context, string) ([]string, error) { return nil, nil }
 
 // blankDevice is a layers.ContentReader for a device carrying nothing, which is
 // the only reading that permits a format.

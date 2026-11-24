@@ -35,7 +35,7 @@ strips someone else's copyright.
 | Path                                                                                                 | Why                                                                                         |
 |------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------|
 | `*.gen.go`, `atlas-lib/internal/cpapi/cpapi.gen.go` (19,268 lines)                                   | oapi-codegen output. Change the spec or the generator config                                |
-| `**/zz_generated.deepcopy.go`, `operator/config/**`, `operator/dist/install.yaml`                    | controller-gen and installer output. See `build-system`                                     |
+| `**/zz_generated.deepcopy.go`, `operator/config/**`                                                  | controller-gen and installer output. See `build-system`                                     |
 | `helm-charts/charts/**`, `csi-driver/charts/**`                                                      | synced from the operator manifests by `make helm-sync`                                      |
 | The Arm copyright block in `csi-driver/Makefile`, `cmd/main.go`, and `internal/driver/driver.go` (3) | the attribution the fork owes upstream. Everywhere else in `csi-driver` it has been cleared |
 | Field names, types, and marker semantics under `operator/api/**`                                     | a shipped field is a contract, so renaming it is a breaking change, not a rename            |

@@ -38,8 +38,15 @@ const aliasDir = "/dev/disk/by-id"
 // byte routes through the metadata server, which looks exactly like working.
 const aliasPrefix = "nvme-eui."
 
-// nfsMountOptions are the options every pNFS mount carries. 4.1 is the floor:
-// layouts do not exist before it.
+// nfsMountOptions are the options every pNFS mount carries. 4.1 was the
+// original floor -- layouts do not exist before it -- but the gateway's
+// posix backend (design-objectstore.md, design-bucket-provisioning.md)
+// stores object/bucket metadata as user.* extended attributes, and
+// GETXATTR/SETXATTR/LISTXATTR/REMOVEXATTR do not exist before NFSv4.2
+// (RFC 8276): confirmed live against this MDS, a 4.1 mount's xattr calls
+// fail with "operation not supported." 4.2 is a strict superset of 4.1 (every
+// layout operation 4.1 has is unchanged in 4.2, RFC 7862 §3), so raising the
+// floor costs nothing pNFS itself needs.
 //
 // soft, not the default hard: this connection carries metadata only, never
 // data (that is the whole point of a layout -- see stagePNFS and
@@ -53,7 +60,7 @@ const aliasPrefix = "nvme-eui."
 // how long that takes to surface: generous enough that a real but loaded MDS
 // is not mistaken for a dead one, bounded enough that it does not hang this
 // node the same way.
-var nfsMountOptions = []string{"vers=4.1", "soft", "timeo=100", "retrans=2"}
+var nfsMountOptions = []string{"vers=4.2", "soft", "timeo=100", "retrans=2"}
 
 // aliasPath is where the alias for a namespace goes.
 func aliasPath(nguid string) string {
@@ -291,7 +298,7 @@ func (ns *Server) stagePNFSVolume(
 
 	// Read from the attached device, the only place it can come from: the
 	// target assigns it.
-	nguid, devicePath, err := ns.namespaceIdentity(ctx, req.GetVolumeId())
+	nguid, devicePath, err := namespaceIdentity(ctx, req.GetVolumeId())
 	if err != nil {
 		return err
 	}
@@ -323,8 +330,14 @@ func (ns *Server) hostNQN() nfsexport.HostNQNFunc {
 }
 
 // namespaceIdentity finds the attached namespace and reports its NGUID and
-// device node.
-func (ns *Server) namespaceIdentity(
+// device node, read fresh from sysfs on every call (see
+// nvme.SysfsDeviceResolver). A variable rather than a plain function, not for
+// staging -- it only ever had one caller -- but because the periodic alias
+// reconciliation in pnfs_prime.go reruns this same lookup on a timer for
+// every staged pNFS volume, to catch a device node changing under one after
+// a reconnect ensureDeviceAlias never ran again for (issue 10), and its tests
+// need to stand in for a live NVMe-oF attach.
+var namespaceIdentity = func(
 	ctx context.Context,
 	volumeHandle string,
 ) (nguid, devicePath string, err error) {

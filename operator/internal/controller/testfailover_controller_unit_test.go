@@ -1255,6 +1255,100 @@ func TestFailoverPlacingConfirmsInvariantHeld(t *testing.T) {
 	}
 }
 
+// atPlacingGroup is atPlacing for a group drill of "cg" with one member, lvol-a,
+// recorded as resolveSourceGroup records it: the backend's member, not a PV's
+// handle. The source cluster resolves to "C" through the sole StorageCluster.
+func atPlacingGroup() (*simplyblockv1alpha2.TestFailover, *simplyblockv1alpha2.StorageCluster) {
+	tf := atPlacing()
+	tf.Spec.Scope = simplyblockv1alpha2.TestFailoverScopeGroup
+	tf.Spec.SourceRef = "cg"
+	tf.Spec.SourceCluster = testSourceCluster
+	tf.Status.Clones[0].SourceRef = "data-1"
+	tf.Status.Clones[0].SourceHandle = "C:pool-1:lvol-a"
+	sc := &simplyblockv1alpha2.StorageCluster{
+		ObjectMeta: metav1.ObjectMeta{Name: "local-sc", Namespace: tf.Namespace},
+		Status:     simplyblockv1alpha2.StorageClusterStatus{UUID: "C"},
+	}
+	return tf, sc
+}
+
+// groupMembersAPI serves the group "cg" with the one member lvolID.
+func groupMembersAPI(t *testing.T, lvolID string) {
+	t.Helper()
+	srv := newAPIServer(t, func(w http.ResponseWriter, req *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		p := req.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/consistency-groups/") && req.URL.Query().Get("name") == "cg":
+			_, _ = w.Write([]byte(`[{"id":"g1","name":"cg","lvs_name":"lvs-a","node_id":"node-a"}]`))
+		case strings.HasSuffix(p, "/consistency-groups/g1/members"):
+			_, _ = w.Write([]byte(`[{"lvol_id":"` + lvolID + `"}]`))
+		case strings.HasSuffix(p, "/storage-pools/"):
+			_, _ = w.Write([]byte(`[{"id":"pool-1"}]`))
+		case strings.HasSuffix(p, "/storage-pools/pool-1/volumes"):
+			_, _ = w.Write([]byte(`[{"id":"` + lvolID + `","pvc_name":"app/data-1","namespace":"nvme-ns","pool_id":null,"size":1073741824}]`))
+		default:
+			t.Errorf("unexpected request %s %s", req.Method, p)
+			w.WriteHeader(http.StatusInternalServerError)
+		}
+	})
+	t.Setenv("SIMPLYBLOCK_WEBAPI_BASE_URL", srv.URL)
+}
+
+// placeGroupDrill runs the Placing reconcile of a group drill whose source PV
+// projection shows pvHandle, with the backend listing member, and returns it.
+func placeGroupDrill(t *testing.T, pvHandle, member string) simplyblockv1alpha2.TestFailover {
+	t.Helper()
+	tf, sc := atPlacingGroup()
+	view := srcPVView(tf, pvHandle)
+	mw := &workv1.ManifestWork{ObjectMeta: metav1.ObjectMeta{
+		Name: testFailoverManifestWorkName(tf), Namespace: tf.Spec.BubbleCluster,
+	}}
+	r, cl := newTestFailoverReconciler(t, tf, sc, view, mw)
+	ctx := context.Background()
+	groupMembersAPI(t, member)
+	markManifestWorkPVCBound(t, cl, getManifestWork(t, cl, tf.Spec.BubbleCluster, mw.Name))
+
+	if _, err := r.Reconcile(ctx, testFailoverRequest(tf)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	var got simplyblockv1alpha2.TestFailover
+	if err := cl.Get(ctx, testFailoverRequest(tf).NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+// TestFailoverGroupDrillOfAMovedApplicationHoldsTheInvariant: after a
+// fail-over and a relocate the member's PV keeps the handle of the volume it
+// was created on, while the group's member is the volume the move made. The
+// drill compares the members it recorded with the members now, so it passes;
+// comparing a member with the PV's handle failed it as "the source changed
+// during the drill" (realbed, 2026-11-04, WordPress).
+func TestFailoverGroupDrillOfAMovedApplicationHoldsTheInvariant(t *testing.T) {
+	got := placeGroupDrill(t, "C:pool-1:lvol-original", "lvol-a")
+
+	if got.Status.Phase != simplyblockv1alpha2.TestFailoverPhaseReady {
+		t.Errorf("phase = %q (%s), want Ready", got.Status.Phase, got.Status.Message)
+	}
+	if got.Status.Report == nil || !got.Status.Report.InvariantsHeld {
+		t.Errorf("invariantsHeld = false, want true: the group's member did not change")
+	}
+}
+
+// TestFailoverGroupDrillFailsWhenAMemberChanged: a group whose member is a
+// different volume at Ready than the drill recorded fails the drill.
+func TestFailoverGroupDrillFailsWhenAMemberChanged(t *testing.T) {
+	got := placeGroupDrill(t, "C:pool-1:lvol-a", "lvol-new")
+
+	if got.Status.Phase != simplyblockv1alpha2.TestFailoverPhaseFailed {
+		t.Errorf("phase = %q, want Failed when a member changed", got.Status.Phase)
+	}
+	if got.Status.Report == nil || got.Status.Report.InvariantsHeld {
+		t.Errorf("invariantsHeld = true, want false when a member changed")
+	}
+}
+
 // TestFailoverRefusesSecondDrillForSameSource covers the concurrency guard: a
 // second drill against the same source and bubble as an active one is refused.
 func TestFailoverRefusesSecondDrillForSameSource(t *testing.T) {

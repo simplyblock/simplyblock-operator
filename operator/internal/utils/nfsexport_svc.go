@@ -14,6 +14,7 @@
 package utils
 
 import (
+	"strconv"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -69,11 +70,11 @@ func buildEndpointSlice(namespace, serviceName, mdsNodeIP string) *discoveryv1.E
 }
 
 // MDSServiceName is the Service every export of a metadata server is mounted
-// at, named after the metadata server's StatefulSet, whose one pod is podName.
-// The StatefulSet's name leaves room for the suffix within the 63 characters a
-// Service name takes.
-func MDSServiceName(podName string) string {
-	return strings.TrimSuffix(podName, "-0") + "-nfs"
+// at, named after the metadata server's StatefulSet. It is one per StatefulSet,
+// whichever of its pods is active. The StatefulSet's name leaves room for the
+// suffix within the 63 characters a Service name takes.
+func MDSServiceName(statefulSetName string) string {
+	return statefulSetName + "-nfs"
 }
 
 // MDSEndpointSliceName names the one EndpointSlice backing a metadata server's
@@ -105,4 +106,18 @@ func BuildMDSService(namespace, name string) *corev1.Service {
 // Service's one endpoint, or none while the metadata server is going away.
 func BuildMDSEndpointSlice(namespace, serviceName, address string) *discoveryv1.EndpointSlice {
 	return buildEndpointSlice(namespace, serviceName, address)
+}
+
+// SplitMDSPodName splits a metadata server pod's name into its StatefulSet and
+// ordinal. It reports false for a name that does not end in `-<ordinal>`.
+func SplitMDSPodName(podName string) (statefulSet string, ordinal int32, ok bool) {
+	i := strings.LastIndex(podName, "-")
+	if i <= 0 || i == len(podName)-1 {
+		return "", 0, false
+	}
+	n, err := strconv.ParseUint(podName[i+1:], 10, 31)
+	if err != nil {
+		return "", 0, false
+	}
+	return podName[:i], int32(n), true
 }

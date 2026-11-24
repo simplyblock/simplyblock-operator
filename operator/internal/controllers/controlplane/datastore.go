@@ -170,8 +170,8 @@ sleep infinity
 	// The store's volume comes from the same class as FoundationDB's, for the
 	// same reason: it cannot be a class this operator provides, because the
 	// control plane has to exist before any simplyblock volume can.
-	if fdb := foundationDBSpecOf(cp); fdb != nil && fdb.StorageClassName != "" {
-		claim.Spec.StorageClassName = ptr.To(fdb.StorageClassName)
+	if class := storageClassOf(cp); class != "" {
+		claim.Spec.StorageClassName = ptr.To(class)
 	}
 
 	return &appsv1.StatefulSet{

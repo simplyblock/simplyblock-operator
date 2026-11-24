@@ -67,6 +67,9 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		// export: the write bumps the generation, which is what tells the
 		// operator to re-assemble and grow the filesystem on the host.
 		rule(simplyblock, []string{"nfsexports"}, "get", "list", "watch", "create", "update", "delete"),
+		// CreateVolume refuses a pNFS claim before allocating its volume when
+		// no driver sets spec.pnfs.mds (SFAM-2845).
+		rule(simplyblock, []string{"simplyblockdrivers"}, "get", "list"),
 		// The status carries the backing volume's identity, which only this
 		// plugin knows, and the operator reads it back.
 		rule(simplyblock, []string{"nfsexports/status"}, "get", "update", "patch"),
@@ -96,6 +99,11 @@ var clusterRoleRules = map[string][]rbacv1.PolicyRule{
 		// runs (co-location design §5). It creates and reads its own
 		// requests; it never updates or deletes one.
 		rule(simplyblock, []string{"volumemigrations"}, "get", "create"),
+		// The consistency-group watcher's join: a label added to an existing
+		// volume becomes one JoinConsistencyGroup PersistentVolumeOps, which the
+		// operator runs and whose phase the watcher reports. It never updates
+		// or deletes one.
+		rule(simplyblock, []string{"persistentvolumeops"}, "get", "list", "watch", "create"),
 	},
 	"attacher": {
 		rule(core, []string{"persistentvolumes"}, "get", "list", "watch", "update", "patch"),

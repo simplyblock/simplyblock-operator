@@ -522,16 +522,47 @@ func device(d nodeprobe.Device, opts ...devOpt) nodeprobe.Device {
 	return d
 }
 
-// refused is a device the probe declined, on the grounds given.
+// refused is a device the probe declined, on the grounds given, with the
+// detail the probe writes for each: the grounds whose detail names a thing
+// get the thing, so that the run's account reads as it does on a real fleet.
 func refused(reasons ...blockdev.Reason) devOpt {
 	return func(d *nodeprobe.Device) {
 		d.Available = false
 		d.Content = ""
 		for _, reason := range reasons {
 			d.Rejections = append(d.Rejections, nodeprobe.Rejection{
-				Reason: string(reason), Detail: "as the probe found it",
+				Reason: string(reason), Detail: refusalDetail(reason),
 			})
 		}
+	}
+}
+
+// refusalDetail is what the probe records beside each ground.
+func refusalDetail(reason blockdev.Reason) string {
+	switch reason {
+	case blockdev.ReasonStacked:
+		return "held by [dm-0]"
+	case blockdev.ReasonRAIDMember:
+		return "a member of the MD RAID array md0 (raid0)"
+	case blockdev.ReasonBusy:
+		return "the kernel refused an exclusive open: dm-0 holds it"
+	}
+	return "as the probe found it"
+}
+
+// raidMember is a disk a software-RAID array took, as a GKE node pool created
+// with ephemeral-storage-local-ssd presents every local SSD: the array holds
+// it, and the kernel refuses it for that reason.
+func raidMember() devOpt {
+	return func(d *nodeprobe.Device) {
+		d.Available = false
+		d.Content = ""
+		d.Rejections = append(d.Rejections,
+			nodeprobe.Rejection{Reason: string(blockdev.ReasonRAIDMember),
+				Detail: "a member of the MD RAID array md0 (raid0)"},
+			nodeprobe.Rejection{Reason: string(blockdev.ReasonBusy),
+				Detail: "the kernel refused an exclusive open: md0 holds it"},
+		)
 	}
 }
 

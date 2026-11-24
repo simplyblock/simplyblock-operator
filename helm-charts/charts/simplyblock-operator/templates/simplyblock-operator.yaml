@@ -26,7 +26,7 @@ spec:
       serviceAccountName: simplyblock-operator
       {{- if .Values.controlplane.nodeSelector.create }}
       nodeSelector:
-        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value }}
+        {{ .Values.controlplane.nodeSelector.key }}: {{ .Values.controlplane.nodeSelector.value | quote }}
       {{- end }}
       {{- if .Values.controlplane.tolerations.create }}
       tolerations:
@@ -69,12 +69,20 @@ spec:
             # the CSI plugins' client certificates.
             - --csi-link-client-ca-file=/etc/simplyblock/tls/ca.crt
             {{- end }}
+            {{- if and .Values.tls.enabled (eq .Values.tls.provider "cert-manager") }}
+            - --cert-manager-ca-chain
+            - --cert-manager-root-issuer={{ index .Values.tls "cert-manager" "cluster-issuer" }}
+            - --cert-manager-create-root-issuer={{ index .Values.tls "cert-manager" "createSelfSignedIssuer" }}
+            {{- end }}
             {{- if .Values.volumeMigration.legacy }}
             # An upgrade turns this on so the migrations already raised against
             # the registered kind keep being driven. A rename and a scope change
             # make a new CRD rather than a new version, so an in-flight
             # migration cannot be carried across and is drained instead.
             - --legacy-volume-migration
+            {{- end }}
+            {{- if .Values.operatorMetrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.operatorMetrics.port }}
             {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
@@ -190,6 +198,11 @@ spec:
             {{- if .Values.metricsAPI.enabled }}
             - name: metrics-api
               containerPort: {{ .Values.metricsAPI.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.operatorMetrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.operatorMetrics.port }}
               protocol: TCP
             {{- end }}
           livenessProbe:

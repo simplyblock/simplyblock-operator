@@ -1,24 +1,13 @@
-apiVersion: storage.simplyblock.io/v1alpha2
-kind: ClusterDeploymentConfig
 metadata:
   labels:
-    storage.simplyblock.io/component: nodeprobe
     storage.simplyblock.io/nodeprobe-run: discover-host-01
   name: discovered-discover-host-01
-  namespace: simplyblock
 spec:
-  approved: false
   cluster:
-    enableDriveFormat: true
-    maxSubsystemCount: 30
+    clusterMode: null
+    minHugePagesSize: null
     name: discovered-discover-host-01-cluster
-    network:
-      podNetwork: true
-    stripe:
-      dataChunks: 2
-      parityChunks: 1
-    vcpuCount: 5
-  environment: K3s
+  hostOS: null
   nodeSets:
   - groups:
     - devices:
@@ -34,5 +23,3 @@ spec:
       - githubactions-storage-node-5
       - githubactions-storage-node-6
     name: discovered
-status:
-  step: {}

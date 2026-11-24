@@ -538,3 +538,22 @@ func TestLVMVolumeClearsAStaleMarkerFromACompleteGroup(t *testing.T) {
 		}
 	}
 }
+
+// Regression: 2026-11-17-vdo-capacity-underreported. Growing a pooled volume
+// set it to the pool's size, VDO's metadata included, which is more than the
+// physical space behind it. A definition naming the logical size grows it to
+// exactly that.
+func TestLVMVolumeGrowsAPooledVolumeToItsLogicalSize(t *testing.T) {
+	f := newLVMVolume("  "+testVG+"\n", present(), "  -wi-a-----\n",
+		lvm.LogicalVolumeDefinition{Deduplication: true, LogicalSizeBytes: 6 << 30})
+	f.layer.cfg.PoolName = "vdopool"
+	f.cmds.out["lvs:lv_size"] = "12880707584"
+
+	if _, err := f.layer.Grow(context.Background(), belowArtifact()); err != nil {
+		t.Fatalf("Grow: %v", err)
+	}
+	want := "lvextend -L6442450944B " + testVG + "/" + testLV
+	if !strings.Contains(f.cmds.issued(), want) {
+		t.Errorf("the volume was not grown to its logical size, want %q among:\n%s", want, f.cmds.issued())
+	}
+}

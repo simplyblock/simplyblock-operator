@@ -31,7 +31,6 @@ package controlplane
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -109,11 +108,6 @@ func foundationDBObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	}
 	return append(objects, fdbPeerCertificate(cp)...)
 }
-
-// fdbMinimumRecoveryTimeForExclusion is the uptime, in seconds, the
-// FoundationDB operator waits for after a recovery before it excludes a process.
-// It still keeps an exclusion from following a recovery straight away.
-const fdbMinimumRecoveryTimeForExclusion = 30
 
 // foundationDBClusterScoped is the half of that set the garbage collector will
 // not remove with the ControlPlane, and which the finalizer therefore deletes.
@@ -287,12 +281,6 @@ func fdbOperatorDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploym
 			Command: []string{"/manager"},
 			Args: []string{
 				"--health-probe-bind-address=:9443",
-				// The operator excludes a process only once the database has been up
-				// this long since its last recovery. A replacement joining causes a
-				// recovery, so the default 120 s is spent on every process a drain
-				// replaces (internal/webhook/foundationdb_eviction.go) before the old
-				// one can go, and an EKS node group update gives a drain 15 minutes.
-				"--minimum-recovery-time-for-exclusion=" + strconv.Itoa(fdbMinimumRecoveryTimeForExclusion),
 			},
 			// The operator reconciles the database, so it reaches it the way its
 			// processes reach each other and needs the same material.
@@ -421,7 +409,7 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			},
 		},
 		"volumeClaimTemplate": map[string]any{
-			"spec": volumeClaimSpec(fdb),
+			"spec": volumeClaimSpec(storageClassOf(cp)),
 		},
 	}
 	if selector := foundationDBNodeSelector(cp); len(selector) > 0 {
@@ -457,11 +445,16 @@ func foundationDBCluster(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Uns
 			"databaseConfiguration": map[string]any{
 				"redundancy_mode": redundancyMode(processes),
 			},
+			// The transaction system runs on as many stateless processes as
+			// there are log processes, so that a storage process carries no
+			// role a drain of its host would kill
+			// (design-fdb-host-maintenance.md §5.12). A stateless process
+			// claims no volume.
 			"processCounts": map[string]any{
 				"cluster_controller": int64(1),
 				"log":                processes,
 				"storage":            processes,
-				"stateless":          int64(-1),
+				"stateless":          processes,
 			},
 			"processes": map[string]any{
 				"general": general,
@@ -532,15 +525,15 @@ func fdbContainer(fdb *simplyblockv1alpha2.FoundationDBSpec, peerTLS bool) map[s
 // class leaves the field out rather than writing an empty string, which is the
 // difference between the cluster's default class and a class literally named
 // nothing.
-func volumeClaimSpec(fdb *simplyblockv1alpha2.FoundationDBSpec) map[string]any {
+func volumeClaimSpec(class string) map[string]any {
 	spec := map[string]any{
 		"accessModes": []any{string(corev1.ReadWriteOnce)},
 		"resources": map[string]any{
 			"requests": map[string]any{"storage": fdbCoordinatorDisk},
 		},
 	}
-	if fdb != nil && fdb.StorageClassName != "" {
-		spec["storageClassName"] = fdb.StorageClassName
+	if class != "" {
+		spec["storageClassName"] = class
 	}
 	return spec
 }

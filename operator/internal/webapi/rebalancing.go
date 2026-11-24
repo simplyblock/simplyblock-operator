@@ -52,6 +52,11 @@ type VolumeInfo struct {
 	// non-member. The migration webhook reads it to refuse migrating a member
 	// (design §9.5, §10).
 	GroupID string `json:"group_id"`
+	// DoReplicate is the volume's do_replicate flag: whether its snapshot
+	// replication is running. The control plane clears it when replication is
+	// stopped -- a detached replication policy, a completed cutover. nil when
+	// the control plane does not report the field.
+	DoReplicate *bool `json:"do_replicate,omitempty"`
 }
 
 // StoragePoolInfo holds the fields needed from GET /api/v2/clusters/{id}/storage-pools/.

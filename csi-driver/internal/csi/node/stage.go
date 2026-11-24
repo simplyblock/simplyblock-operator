@@ -57,8 +57,24 @@ func (ns *Server) NodeStageVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	if err := ns.refuseWhileHeld(volumeID); err != nil {
+		return nil, err
+	}
 	stagingParentPath := req.GetStagingTargetPath() // where the volume context is stashed
 	stagingTargetPath := getStagingTargetPath(req)
+
+	// A node without the initiator fails every connect the same way, and what
+	// the connect says about it names nothing to do. It is refused here with
+	// the remedy, as a precondition rather than as a fault of this volume, and
+	// before the paths part: a pNFS volume's client connects its backing
+	// namespace too. The plugin does not start on such a node, so this is for a
+	// module that went away under it.
+	if ns.ensureInitiator != nil {
+		if err := ns.ensureInitiator(ctx); err != nil {
+			klog.Errorf("volume %s cannot be staged: %v", volumeID, err)
+			return nil, status.Error(codes.FailedPrecondition, err.Error())
+		}
+	}
 
 	// A pNFS volume is mounted from an export rather than a local device, so it
 	// takes its own path. The namespace is still attached, because the client
@@ -123,7 +139,7 @@ func (ns *Server) NodeStageVolume(
 	plan, err := ns.attachPlan(ctx, volumeID, stagingTargetPath, vc, req.GetVolumeCapability())
 	if err != nil {
 		klog.Errorf("failed to build the stack plan, volumeID: %s err: %v", volumeID, err)
-		return nil, status.Error(codes.Internal, err.Error())
+		return nil, stackError(err, "failed to build the stack plan for volume %s", volumeID)
 	}
 
 	artifact, err := ns.bringUp(ctx, volumeID, plan, vc)
@@ -151,6 +167,9 @@ func (ns *Server) NodeUnstageVolume(
 	unlock := ns.volumeLocks.Lock(volumeID)
 	defer unlock()
 
+	if err := ns.refuseWhileHeld(volumeID); err != nil {
+		return nil, err
+	}
 	stagingParentPath := req.GetStagingTargetPath()
 	stagingTargetPath := getStagingTargetPath(req)
 
@@ -215,6 +234,7 @@ func (ns *Server) NodeUnstageVolume(
 		// be reported as one that vanished on its own.
 		initiator.ForgetDevice(devicePath)
 	}
+	forgetNamespaces(volumeContext)
 
 	if ns.volumeIsBeingDeleted(ctx, volumeID) {
 		// The only caller of Destroy. A volume that is going away for good takes
@@ -321,7 +341,10 @@ func (ns *Server) healStack(
 	}
 	if device, ok := artifact.Device(); ok {
 		volumeContext["devicePath"] = device.Path
-		initiator.MarkDevicePresent(device.Path, deviceLvolID(volumeContext))
+		// The watch is given the namespaces under the stack (striped.go).
+		if !watchNamespaces(ctx, plan, volumeContext) {
+			watchDevice(device.Path, deviceLvolID(volumeContext))
+		}
 	}
 	if err := stashVolumeContext(volumeContext, stagingParentPath); err != nil {
 		klog.Warningf("healStack: failed to re-stash volume context for %s: %v", volumeID, err)
@@ -342,6 +365,12 @@ func (ns *Server) attachPlan(
 	vc map[string]string,
 	volCap *csi.VolumeCapability,
 ) (volstack.Plan, error) {
+	// A striped volume attaches a namespace per member (striped.go). It never
+	// takes the dm indirection, which attachShape decides only for the two
+	// shapes that have one.
+	if shape := shapeFor(vc, volCap); isStripedShape(shape) {
+		return ns.stripedAttachPlan(ctx, volumeID, stagingTargetPath, vc, volCap, shape)
+	}
 	connection, hostNQN, err := ns.publishedConnection(ctx, volumeID, vc)
 	if err != nil {
 		return nil, err
@@ -355,14 +384,15 @@ func (ns *Server) attachPlan(
 // attachShape decides whether a stage or heal builds the dmLinear indirection.
 // A volume's stack never gains or loses the layer under a staged consumer:
 // with a stack record the record decides (the layer is there or it is not),
-// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION. A
+// and only a fresh stage, which has none, follows SPDKCSI_DM_INDIRECTION and
+// whether the host has device-mapper (dm_capability.go). A
 // record that cannot be read keeps the shape without the layer, which is what
 // every volume staged before the indirection existed is.
 func (ns *Server) attachShape(volumeID string, shape stackShape) stackShape {
 	record, err := ns.stack.store.Load(volumeID)
 	switch {
 	case errors.Is(err, volstack.ErrNoRecord):
-		if dmIndirectionEnabled() {
+		if ns.dmIndirectionEnabled() {
 			return indirect(shape)
 		}
 		return shape
@@ -398,6 +428,12 @@ func (ns *Server) teardownPlan(
 
 	record, err = ns.stack.store.Load(volumeID)
 	switch {
+	case errors.Is(err, volstack.ErrNoRecord) && stripeWidth(vc) > 1:
+		// A striped stage writes its record before its first side effect, so
+		// one without a record attached nothing. The plan is built from the
+		// context anyway, and releasing it finds nothing.
+		klog.Infof("striped volume %s has no stack record; releasing the members its context lists", volumeID)
+		shape, options = shapeFor(vc, nil), stripeOptions(vc)
 	case errors.Is(err, volstack.ErrNoRecord):
 		klog.Infof("volume %s has no stack record; releasing it as fabric → filesystem", volumeID)
 	case err != nil:
@@ -416,6 +452,9 @@ func (ns *Server) teardownPlan(
 
 	if fsType != "" {
 		vc[stagedFsTypeKey] = fsType
+	}
+	if isStripedShape(shape) {
+		return ns.stripedTeardownPlan(volumeID, stagingTargetPath, vc, record, shape, options)
 	}
 	connection, err := teardownConnection(record, vc)
 	if err != nil {
@@ -599,6 +638,13 @@ func (ns *Server) publishedConnection(
 	if cpErr == nil {
 		return connection, hostNQN, nil
 	}
+	// A subsystem a consistency-group move holds is the one case the stash
+	// must not stand in for: the stash names the subsystem the move is
+	// replacing, and a path to it taken now is one the move never suspends.
+	// The refusal is transient and the stage is retried after the window.
+	if errors.Is(cpErr, controlplane.ErrVolumeHeldByMove) {
+		return lvol.Connection{}, "", fmt.Errorf("volume %s: %w", volumeID, cpErr)
+	}
 
 	connection = connectionFromContext(vc)
 	if connection.NQN == "" {
@@ -737,8 +783,11 @@ func (ns *Server) rememberStagedVolume(
 		// Registered here rather than at the next poll of the connection
 		// monitor, because a volume that attaches and loses every path inside
 		// one poll interval would otherwise never have been seen as present and
-		// its loss would go unnoticed.
-		initiator.MarkDevicePresent(device.Path, deviceLvolID(vc))
+		// its loss would go unnoticed. The watch is given the namespaces under
+		// the stack rather than the device on top (striped.go).
+		if !watchNamespaces(ctx, plan, vc) {
+			watchDevice(device.Path, deviceLvolID(vc))
+		}
 	}
 	if volCap.GetBlock() != nil {
 		return

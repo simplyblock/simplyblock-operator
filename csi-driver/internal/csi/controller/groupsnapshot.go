@@ -69,6 +69,11 @@ func (cs *Server) CreateVolumeGroupSnapshot(
 	if len(sourceIDs) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "at least one source volume id is required")
 	}
+	for _, id := range sourceIDs {
+		if err := refuseStriped(id, "a volume group snapshot"); err != nil {
+			return nil, err
+		}
+	}
 	klog.Infof("CreateVolumeGroupSnapshot: name=%s members=%d", name, len(sourceIDs))
 
 	// Every member shares the group's placement, so the first handle names the

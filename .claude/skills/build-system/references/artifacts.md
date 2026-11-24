@@ -12,7 +12,7 @@ stale copy is a defect a reviewer can see.
 | `operator/config/rbac/role.yaml` and the other `*_role*.yaml`                         | `+kubebuilder:rbac:` markers                                   | `make -C operator manifests`       | same                                                           |
 | `operator/config/webhook/manifests.yaml`                                              | `+kubebuilder:webhook:` markers                                | `make -C operator manifests`       | same                                                           |
 | `operator/api/**/zz_generated.deepcopy.go`                                            | the API structs                                                | `make -C operator generate`        | same                                                           |
-| `operator/dist/install.yaml`                                                          | `kustomize build config/default`                               | `make -C operator build-installer` | `Operator: Manifests` → `git diff`, then `kubeconform -strict` |
+| `operator/dist/install.yaml` (not committed; attached to each release)               | `kustomize build config/default`                               | `make -C operator build-installer` | `Operator: Manifests` → `kubeconform -strict`                  |
 | `helm-charts/charts/simplyblock-operator/crds/*.yaml`                                 | `operator/config/crd/bases`                                    | `make helm-sync`                   | `Operator: Manifests` → `helm-sync` job                        |
 | `helm-charts/charts/simplyblock-operator/templates/roles/*.yaml`                      | `operator/config/rbac`                                         | `make helm-sync`                   | same                                                           |
 | `helm-charts/charts/simplyblock-operator/templates/simplyblock-operator-webhook.yaml` | `kustomize build operator/config/webhook`                      | `make helm-sync`                   | same                                                           |
@@ -83,7 +83,7 @@ What every drift job does, and what to run locally before pushing:
 ```bash
 # Operator: Manifests → manifests job
 make -C operator manifests generate && git diff --exit-code
-make -C operator build-installer   && git diff --exit-code
+make -C operator build-installer   && git diff --exit-code   # only the image pin can change
 kubeconform -strict -summary \
   -skip CustomResourceDefinition,Certificate,ClusterIssuer \
   operator/dist/install.yaml

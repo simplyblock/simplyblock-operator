@@ -1,28 +1,14 @@
-apiVersion: storage.simplyblock.io/v1alpha2
-kind: ClusterDeploymentConfig
 metadata:
   labels:
-    storage.simplyblock.io/component: nodeprobe
     storage.simplyblock.io/nodeprobe-run: discover-net-61
   name: discovered-discover-net-61
-  namespace: simplyblock
 spec:
-  approved: false
   cluster:
-    enableDriveFormat: true
-    maxSubsystemCount: 30
-    minHugePagesSize: 16G
+    clusterMode: null
+    enableNodeAffinity: true
     name: discovered-discover-net-61-cluster
-    network:
-      spdkOnHostNetwork: true
     stripe:
       dataChunks: 1
-      parityChunks: 1
-    vcpuCount: 5
-  environment: K3s
-  hostOS:
-    distro: ubuntu
-    family: Debian
   nodeSets:
   - groups:
     - dataInterfaces:
@@ -40,5 +26,3 @@ spec:
       - worker-02
       - worker-03
     name: discovered
-status:
-  step: {}
