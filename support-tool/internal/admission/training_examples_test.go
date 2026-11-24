@@ -49,17 +49,29 @@ func TestTrainingExamplesAreAdmitted(t *testing.T) {
 			if strings.TrimSpace(string(doc)) == "" {
 				continue
 			}
-			obj := &unstructured.Unstructured{}
-			if err := yaml.Unmarshal(doc, &obj.Object); err != nil {
+			var probe map[string]interface{}
+			if err := yaml.Unmarshal(doc, &probe); err != nil {
 				t.Errorf("%s document %d: %v", path, i+1, err)
 				continue
 			}
-			if obj.Object == nil || obj.GetKind() == "" {
-				// A comment-only document, such as a file's opening comment
-				// before its first separator.
+			kind, _ := probe["kind"].(string)
+			apiVersion, _ := probe["apiVersion"].(string)
+			if kind == "" || !strings.HasPrefix(apiVersion, "storage.simplyblock.io/") {
+				// A comment-only document, a Helm values file, or a kind of
+				// another group.
 				continue
 			}
-			if obj.GroupVersionKind().Group != "storage.simplyblock.io" {
+			// The YAML library decodes every number as a float, which the CEL
+			// rules refuse for an integer field. Unstructured's own decoder
+			// reads integers as int64, the way the API server does.
+			jsonDoc, err := yaml.YAMLToJSON(doc)
+			if err != nil {
+				t.Errorf("%s document %d: %v", path, i+1, err)
+				continue
+			}
+			obj := &unstructured.Unstructured{}
+			if err := obj.UnmarshalJSON(jsonDoc); err != nil {
+				t.Errorf("%s document %d: %v", path, i+1, err)
 				continue
 			}
 			checked++
