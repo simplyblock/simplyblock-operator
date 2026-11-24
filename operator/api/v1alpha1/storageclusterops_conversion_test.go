@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	"testing"
+	"time"
 
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -280,6 +281,49 @@ func TestTheSkippedNodesSurviveAWriteThroughThisVersion(t *testing.T) {
 				Nodes:     []string{"node-a", "node-b", "node-c"},
 				NodeIndex: 3,
 				Skipped:   []string{"node-b"},
+			},
+		},
+	}
+
+	var stored StorageClusterOps
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageClusterOps
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if diff := cmp.Diff(hub.Status.RollingRestart, back.Status.RollingRestart); diff != "" {
+		t.Errorf("the walk changed on the way through this version (-written +read):\n%s", diff)
+	}
+	if len(back.Annotations) != 0 {
+		t.Errorf("annotations %v were left behind on the way up", back.Annotations)
+	}
+}
+
+// The batch the walk is on and the calls made for its nodes are hub fields
+// this version has nowhere to put. Losing the size mid-batch would resume a
+// walk that takes its own batch for offline peers, and losing a call would
+// make it again at once, so both survive a write through this version.
+func TestTheBatchAndItsCallsSurviveAWriteThroughThisVersion(t *testing.T) {
+	lease := metav1.NewTime(time.Date(2026, 11, 24, 10, 0, 0, 0, time.UTC))
+	hub := &v1alpha2.StorageClusterOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "ops-1", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterOpsSpec{
+			ClusterRef: "production",
+			Action:     v1alpha2.StorageClusterOpsActionRollingRestart,
+		},
+		Status: v1alpha2.StorageClusterOpsStatus{
+			Phase: v1alpha2.StorageClusterOpsPhaseRunning,
+			RollingRestart: &v1alpha2.RollingRestartStatus{
+				Nodes:     []string{"node-a", "node-b", "node-c", "node-d"},
+				NodeIndex: 2,
+				BatchSize: 2,
+				Calls: []v1alpha2.RollingRestartCall{{
+					Node:       "node-c",
+					Step:       v1alpha2.StorageClusterOpsStepRestartingNode,
+					LeaseUntil: lease,
+				}},
 			},
 		},
 	}

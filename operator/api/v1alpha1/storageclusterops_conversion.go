@@ -53,6 +53,8 @@ const (
 	annoOpsAbort     = "storage.simplyblock.io/conversion-spec.abort"
 	annoOpsCancelTsk = "storage.simplyblock.io/conversion-spec.cancelTask"
 	annoOpsSkipped   = "storage.simplyblock.io/conversion-status.rollingRestart.skipped"
+	annoOpsBatchSize = "storage.simplyblock.io/conversion-status.rollingRestart.batchSize"
+	annoOpsCalls     = "storage.simplyblock.io/conversion-status.rollingRestart.calls"
 )
 
 // storageClusterOpsActionToHub maps this version's lowercase, hyphenated
@@ -200,6 +202,8 @@ func stashOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageClusterOps) e
 		{annoOpsObserved, src.Status.ObservedGeneration},
 		{annoOpsCancelTsk, src.Spec.CancelTask},
 		{annoOpsSkipped, skippedOf(src.Status.RollingRestart)},
+		{annoOpsBatchSize, batchOf(src.Status.RollingRestart).BatchSize},
+		{annoOpsCalls, batchOf(src.Status.RollingRestart).Calls},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -279,6 +283,22 @@ func restoreOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageClusterOps)
 		dst.Status.RollingRestart.Skipped = skipped
 	}
 
+	// The batch the walk is on, and the calls made for its nodes. A walk read
+	// back without its size would take the rest of its own batch for offline
+	// peers and hold, and one read back without its calls would make each of
+	// them again at once.
+	var batch v1alpha2.RollingRestartStatus
+	if err := unstash(meta, annoOpsBatchSize, &batch.BatchSize); err != nil {
+		return err
+	}
+	if err := unstash(meta, annoOpsCalls, &batch.Calls); err != nil {
+		return err
+	}
+	if dst.Status.RollingRestart != nil {
+		dst.Status.RollingRestart.BatchSize = batch.BatchSize
+		dst.Status.RollingRestart.Calls = batch.Calls
+	}
+
 	if phase := unstashRemoved(meta, annoOpsPhase); phase != "" {
 		dst.Status.Phase = v1alpha2.StorageClusterOpsPhase(phase)
 	}
@@ -294,6 +314,16 @@ func skippedOf(walk *v1alpha2.RollingRestartStatus) []string {
 		return nil
 	}
 	return walk.Skipped
+}
+
+// batchOf is the walk, or an empty one for an operation that has none, so the
+// two fields of it this version cannot carry are read without a nil check
+// each.
+func batchOf(walk *v1alpha2.RollingRestartStatus) v1alpha2.RollingRestartStatus {
+	if walk == nil {
+		return v1alpha2.RollingRestartStatus{}
+	}
+	return *walk
 }
 
 // narrowOpsPhase maps a hub phase onto one this version's Enum accepts. Only
