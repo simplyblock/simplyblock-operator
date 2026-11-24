@@ -925,6 +925,9 @@ spec:
                     a node that is still being added reads why its own add is failing.
                   type: string
                 observedGeneration:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
                   format: int64
                   type: integer
                 phase:
@@ -962,8 +965,6 @@ spec:
                   type: object
                 remediation:
                   description: |-
-                    ObservedGeneration is the generation the rest of this status was computed
-                    from, so a stale status can be told from a current one.
                     Remediation is what Kubernetes knows about this node's host, reported
                     for the two-node arbiter as positive fencing evidence.
                   properties:
