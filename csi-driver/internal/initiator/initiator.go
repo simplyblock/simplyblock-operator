@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/simplyblock/atlas/blockdev"
 	"github.com/simplyblock/atlas/bounded"
 	"github.com/simplyblock/atlas/lvol"
 	"github.com/simplyblock/atlas/nqn"
@@ -446,22 +447,19 @@ func (g subsystemGate) admit(matches []string) (admitted []string, refused []str
 }
 
 // subsystemNQNOf reads the NQN of the subsystem the device behind link belongs
-// to, from /sys/block/<dev>/device/subsysnqn. The attribute is there for a
-// multipath head, whose device is the nvme-subsystem, and for a single-path
-// namespace, whose device is the controller.
+// to, by resolving /sys/block/<dev> to the namespace's sysfs directory and
+// reading it with blockdev.SubsystemNQNOf, which covers a multipath head and a
+// single-path namespace alike.
 func subsystemNQNOf(sysBlockDir, link string) (string, bool) {
-	resolved, err := filepath.EvalSymlinks(link)
+	dev, err := filepath.EvalSymlinks(link)
 	if err != nil {
 		return "", false
 	}
-	path := filepath.Join(sysBlockDir, filepath.Base(resolved), "device", "subsysnqn")
-	data, err := bounded.Call(path, bounded.ReadTimeout, func() ([]byte, error) {
-		return os.ReadFile(path)
-	})
+	resolved, err := filepath.EvalSymlinks(filepath.Join(sysBlockDir, filepath.Base(dev)))
 	if err != nil {
 		return "", false
 	}
-	owner := strings.TrimSpace(string(data))
+	owner := blockdev.SubsystemNQNOf(resolved)
 	return owner, owner != ""
 }
 
@@ -481,10 +479,15 @@ func waitForDeviceReady(
 		if err != nil {
 			return "", err
 		}
+		// The timeout reports what the last scan saw, so nothing an earlier
+		// scan found carries over.
+		lastErr = nil
 		matches, refused := gate.admit(matches)
 		if len(refused) > 0 {
-			lastErr = fmt.Errorf("matched only devices of other subsystems than %s: %s",
-				gate.nqn, strings.Join(refused, ", "))
+			if len(matches) == 0 {
+				lastErr = fmt.Errorf("matched only devices of other subsystems than %s: %s",
+					gate.nqn, strings.Join(refused, ", "))
+			}
 			klog.Warningf("device glob %s: passing over devices of other subsystems than %s: %s",
 				deviceGlob, gate.nqn, strings.Join(refused, ", "))
 		}

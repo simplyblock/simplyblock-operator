@@ -192,8 +192,8 @@ type deviceFixture struct {
 	t       *testing.T
 	byIDDir string
 	devDir  string
-	// sysBlockDir is a fake /sys/block, holding each block device's
-	// device/subsysnqn for the devices a test gives a subsystem.
+	// sysBlockDir is a fake /sys/block, linking each device a test gives a
+	// subsystem to its namespace directory under that subsystem.
 	sysBlockDir string
 }
 
@@ -248,16 +248,24 @@ func (f *deviceFixture) link(link, blockDev string) string {
 	return linkPath
 }
 
-// setSubsystem records that blockDev belongs to the subsystem nqn, the way the
-// kernel publishes it under /sys/block/<dev>/device/subsysnqn.
+// setSubsystem records that blockDev belongs to the subsystem nqn the way the
+// kernel lays it out: /sys/block/<dev> links to the namespace's directory under
+// its nvme-subsystem, and subsysnqn sits in that subsystem directory.
 func (f *deviceFixture) setSubsystem(blockDev, subsystemNQN string) {
 	f.t.Helper()
-	dir := filepath.Join(f.sysBlockDir, blockDev, "device")
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		f.t.Fatalf("creating %s: %v", dir, err)
+	subsys := filepath.Join(filepath.Dir(f.sysBlockDir), "devices", "virtual", "nvme-subsystem", "subsys-"+blockDev)
+	namespace := filepath.Join(subsys, blockDev)
+	if err := os.MkdirAll(namespace, 0o755); err != nil {
+		f.t.Fatalf("creating %s: %v", namespace, err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "subsysnqn"), []byte(subsystemNQN+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(subsys, "subsysnqn"), []byte(subsystemNQN+"\n"), 0o600); err != nil {
 		f.t.Fatalf("writing subsysnqn of %s: %v", blockDev, err)
+	}
+	if err := os.MkdirAll(f.sysBlockDir, 0o755); err != nil {
+		f.t.Fatalf("creating %s: %v", f.sysBlockDir, err)
+	}
+	if err := os.Symlink(namespace, filepath.Join(f.sysBlockDir, blockDev)); err != nil {
+		f.t.Fatalf("linking %s: %v", blockDev, err)
 	}
 }
 
@@ -1490,5 +1498,26 @@ func TestMatchNamespaceDeviceRefusesWhenOnlyAnotherSubsystemMatches(t *testing.T
 	}
 	if !strings.Contains(err.Error(), staleNQN) {
 		t.Errorf("error %q does not name the subsystem the device belongs to", err)
+	}
+}
+
+// Review of #963: a refusal seen in one scan must not outlive it. When the other
+// subsystem's device goes away and the later scans find nothing, the timeout
+// reports what the last scan saw, not a refusal from an earlier one.
+func TestWaitForDeviceReadyForgetsARefusalOnceTheDeviceIsGone(t *testing.T) {
+	f := newDeviceFixture(t)
+	link := testLink(testModel, 2)
+	f.addDevice(link, "nvme7n2")
+	f.setSubsystem("nvme7n2", staleNQN)
+	f.removeAfter(30*time.Millisecond, link)
+
+	glob := filepath.Join(f.byIDDir, "*"+testModel+"*")
+	_, err := waitForDeviceReady(context.Background(), glob,
+		subsystemGate{sysBlockDir: f.sysBlockDir, nqn: activeNQN}, 10, 20*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected a timeout when no device of the subsystem appears")
+	}
+	if strings.Contains(err.Error(), staleNQN) {
+		t.Errorf("error %q reports a refusal from a scan before the device went away", err)
 	}
 }
