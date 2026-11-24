@@ -4,7 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    simplyblock.io/advanced-fields: '{"v1alpha2":["spec.clientDataIfname","spec.disableDataRealignment","spec.disablePlacement","spec.enableChecksumValidation","spec.enableVolumeAutoPlacement","spec.nvmfBasePort","spec.rpcBasePort","spec.serviceClasses.classes","spec.serviceClasses.defaultWeight","spec.serviceClasses.replicationShare","spec.snodeApiPort","spec.storageNodes.enableFormat4K","spec.storageNodes.enableKubeletConfiguration","spec.storageNodes.image","spec.storageNodes.imagePullPolicy","spec.storageNodes.network.podNetwork","spec.storageNodes.network.spdkOnHostNetwork","spec.storageNodes.nodesPerSocket","spec.storageNodes.openshift.machineConfigPool","spec.storageNodes.reservedSystemCPU","spec.storageNodes.socketsToUse","spec.storageNodes.talos","spec.storageNodes.talosMachineConfig","spec.storageNodes.talosctlImage","spec.storageNodes.ubuntuHost","spec.supercluster.placement.strategy","spec.superclusterRef","spec.volumeAutoPlacement.baselineColdStart","spec.volumeAutoPlacement.baselineMinSamples","spec.volumeAutoPlacement.baselineOutlierK","spec.volumeAutoPlacement.baselineStrategy","spec.volumeAutoPlacement.baselineWindow","spec.volumeAutoPlacement.defaultCoolDownSeconds","spec.volumeAutoPlacement.disableMigration","spec.volumeAutoPlacement.enableLatencyBenchmark","spec.volumeAutoPlacement.evaluationInterval","spec.volumeAutoPlacement.imbalanceThreshold","spec.volumeAutoPlacement.iopsWeight","spec.volumeAutoPlacement.latencyBenchmarkInterval","spec.volumeAutoPlacement.maxVolumeMigrationsPerCycle","spec.volumeAutoPlacement.minHotColdDifferencePct","spec.volumeAutoPlacement.prometheusURL","spec.volumeAutoPlacement.storageNodeCandidateCount","spec.volumeAutoPlacement.throughputWeight","spec.volumeMigrationSettings.dataRealignment.interval","spec.volumeMigrationSettings.dataRealignment.minMoves","spec.volumeMigrationSettings.rebalancerImage"]}'
     simplyblock.io/invisible-fields: '{"v1alpha2":["spec.enableArbitration","spec.enableAtomicity4K","spec.enableMetadataJournal","spec.storageNodes.enableCpuTopology","spec.storageNodes.enableJournalDevice","spec.stretched","status.stretched"]}'
+    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.stretched.peerCluster","spec.stretched.role"]}'
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -715,6 +717,9 @@ spec:
                     bucket:
                       description: Bucket is the bucket backups are written to and read from.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     credentials:
                       description: |-
                         Credentials is how this store's endpoint is authenticated to. Replaces
@@ -738,6 +743,9 @@ spec:
                               type: string
                           type: object
                           x-kubernetes-map-type: atomic
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         source:
                           default: Secret
                           description: |-
@@ -750,10 +758,15 @@ spec:
                             - Secret
                             - ProviderChain
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       required:
                         - source
                       type: object
                       x-kubernetes-validations:
+                        - message: field secretRef is immutable once set
+                          rule: '!has(oldSelf.secretRef) || has(self.secretRef)'
                         - message: 'source: Secret requires secretRef'
                           rule: self.source != 'Secret' || has(self.secretRef)
                         - message: 'source: ProviderChain forbids secretRef'
@@ -779,18 +792,31 @@ spec:
                           type: string
                       type: object
                       x-kubernetes-map-type: atomic
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     endpoint:
                       description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                       pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     region:
                       description: Region is the bucket's region, for endpoints that do not imply one.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                   required:
                     - bucket
                     - endpoint
                   type: object
                   x-kubernetes-validations:
+                    - message: field region is immutable once set
+                      rule: '!has(oldSelf.region) || has(self.region)'
+                    - message: field credentialsSecretRef is immutable once set
+                      rule: '!has(oldSelf.credentialsSecretRef) || has(self.credentialsSecretRef)'
                     - message: one of credentials and the deprecated credentialsSecretRef must be set
                       rule: has(self.credentialsSecretRef) || has(self.credentials)
                     - message: credentials and the deprecated credentialsSecretRef are exclusive
@@ -802,6 +828,9 @@ spec:
                     once at cluster-add, so an edit moves the next attach onto the named
                     interface.
                   type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 clusterMode:
                   default: Standard
                   description: |-
@@ -1041,6 +1070,9 @@ spec:
                   maximum: 500
                   minimum: 10
                   type: integer
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 minHugePagesSize:
                   description: |-
                     MinHugePagesSize is the smallest huge-page allocation each storage node
@@ -1050,6 +1082,9 @@ spec:
                     count requires, so simplyblock takes more when it needs more. Omitted,
                     the computed minimum is used.
                   type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 nvmfBasePort:
                   default: 4420
                   description: |-
@@ -1224,6 +1259,9 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                           type: object
                       type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     dataInterfaces:
                       description: DataInterfaces are the data-plane network interfaces.
                       items:
@@ -1281,12 +1319,18 @@ spec:
                         configuration changes it needs. Off by default, which is the behavior the
                         retired skipKubeletConfiguration expressed by being set.
                       type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     image:
                       description: |-
                         Image is the storage-node container image. Defaults to the ControlPlane
                         singleton's spec.image when unset, so a deployment states the version once.
                       pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     imagePullPolicy:
                       default: Always
                       description: |-
@@ -1301,6 +1345,9 @@ spec:
                         - Never
                         - IfNotPresent
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     initContainerResources:
                       description: InitContainerResources does the same for the init container.
                       properties:
@@ -1360,6 +1407,9 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                           type: object
                       type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     mgmtInterface:
                       description: MgmtInterface is the management network interface storage nodes bind.
                       type: string
@@ -1451,6 +1501,9 @@ spec:
                             With data networks, the RPC stays on that interface and the data moves to the
                             networks' interfaces, whose addresses are stable, so no Service is kept.
                           type: boolean
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         spdkOnHostNetwork:
                           description: |-
                             SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
@@ -1458,10 +1511,17 @@ spec:
                             do not agree on what their NICs are called: each node names its own in
                             its spec.config.dataInterfaces, which is allowed only in this mode.
                           type: boolean
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       type: object
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
+                        - message: field podNetwork is immutable once set
+                          rule: '!has(oldSelf.podNetwork) || has(self.podNetwork)'
+                        - message: field spdkOnHostNetwork is immutable once set
+                          rule: '!has(oldSelf.spdkOnHostNetwork) || has(self.spdkOnHostNetwork)'
                         - message: one of podNetwork and spdkOnHostNetwork must be set
                           rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)
                         - message: podNetwork and spdkOnHostNetwork are exclusive
@@ -1482,6 +1542,9 @@ spec:
                       format: int32
                       minimum: 1
                       type: integer
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     nodesPerSocket:
                       default: 1
                       description: NodesPerSocket is how many storage nodes run per NUMA socket.
@@ -1513,10 +1576,19 @@ spec:
                           maxLength: 253
                           pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       type: object
+                      x-kubernetes-validations:
+                        - message: field machineConfigPool is immutable once set
+                          rule: '!has(oldSelf.machineConfigPool) || has(self.machineConfigPool)'
                     reservedSystemCPU:
                       description: ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     socketsToUse:
                       description: |-
                         SocketsToUse restricts deployment to selected NUMA sockets. Empty means
@@ -1524,6 +1596,9 @@ spec:
                       items:
                         type: string
                       type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     talos:
                       description: |-
                         Talos states that the workers run Talos Linux: an immutable host with no
@@ -1533,6 +1608,9 @@ spec:
                         sets it from spec.environment, as it sets OpenShift; the node agent reads
                         it as TALOS_CLUSTER.
                       type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     talosMachineConfig:
                       description: |-
                         TalosMachineConfig is who writes a Talos worker's machine config: the
@@ -1548,6 +1626,9 @@ spec:
                         - Preprovisioned
                         - Managed
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     talosctlImage:
                       description: |-
                         TalosctlImage is the talosctl image the node runs as a Job on a Talos
@@ -1555,6 +1636,9 @@ spec:
                         a deployment pins it to the cluster's Talos minor, or to a mirror on an
                         air-gapped site. It is spec.images.talosctl on the deployment config.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     tolerations:
                       description: Tolerations are applied to the storage-node pods.
                       items:
@@ -1595,27 +1679,59 @@ spec:
                             type: string
                         type: object
                       type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     ubuntuHost:
                       description: |-
                         UbuntuHost states that the worker's host OS is Ubuntu, which changes how
                         the node configures huge pages and the kernel modules it loads.
                       type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                   type: object
                   x-kubernetes-validations:
+                    - message: field image is immutable once set
+                      rule: '!has(oldSelf.image) || has(self.image)'
+                    - message: field imagePullPolicy is immutable once set
+                      rule: '!has(oldSelf.imagePullPolicy) || has(self.imagePullPolicy)'
                     - message: field mgmtInterface is immutable once set
                       rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
                     - message: field dataInterfaces is immutable once set
                       rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                     - message: field network is immutable once set
                       rule: '!has(oldSelf.network) || has(self.network)'
+                    - message: field socketsToUse is immutable once set
+                      rule: '!has(oldSelf.socketsToUse) || has(self.socketsToUse)'
                     - message: field nodesPerSocket is immutable once set
                       rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+                    - message: field nodeProvisioningBudget is immutable once set
+                      rule: '!has(oldSelf.nodeProvisioningBudget) || has(self.nodeProvisioningBudget)'
                     - message: field enableJournalDevice is immutable once set
                       rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
                     - message: field enableFormat4K is immutable once set
                       rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
                     - message: field enableBlockFormat is immutable once set
                       rule: '!has(oldSelf.enableBlockFormat) || has(self.enableBlockFormat)'
+                    - message: field reservedSystemCPU is immutable once set
+                      rule: '!has(oldSelf.reservedSystemCPU) || has(self.reservedSystemCPU)'
+                    - message: field enableKubeletConfiguration is immutable once set
+                      rule: '!has(oldSelf.enableKubeletConfiguration) || has(self.enableKubeletConfiguration)'
+                    - message: field ubuntuHost is immutable once set
+                      rule: '!has(oldSelf.ubuntuHost) || has(self.ubuntuHost)'
+                    - message: field talos is immutable once set
+                      rule: '!has(oldSelf.talos) || has(self.talos)'
+                    - message: field talosctlImage is immutable once set
+                      rule: '!has(oldSelf.talosctlImage) || has(self.talosctlImage)'
+                    - message: field talosMachineConfig is immutable once set
+                      rule: '!has(oldSelf.talosMachineConfig) || has(self.talosMachineConfig)'
+                    - message: field tolerations is immutable once set
+                      rule: '!has(oldSelf.tolerations) || has(self.tolerations)'
+                    - message: field containerResources is immutable once set
+                      rule: '!has(oldSelf.containerResources) || has(self.containerResources)'
+                    - message: field initContainerResources is immutable once set
+                      rule: '!has(oldSelf.initContainerResources) || has(self.initContainerResources)'
                     - message: dataInterfaces are allowed only with network.spdkOnHostNetwork
                       rule: '!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)'
                 stretched:
@@ -1719,7 +1835,13 @@ spec:
                             - LeastProvisioned
                             - LeastVolumes
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       type: object
+                      x-kubernetes-validations:
+                        - message: field strategy is immutable once set
+                          rule: '!has(oldSelf.strategy) || has(self.strategy)'
                   type: object
                 superclusterRef:
                   description: |-
@@ -1728,6 +1850,9 @@ spec:
                     created. Set at creation and never changed.
                   maxLength: 63
                   type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 vcpuCount:
                   description: |-
                     VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -1744,6 +1869,9 @@ spec:
                   format: int32
                   minimum: 4
                   type: integer
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 volumeAutoPlacement:
                   description: VolumeAutoPlacement configures automatic, latency-driven rebalancing.
                   properties:
@@ -1832,13 +1960,6 @@ spec:
                         Defaults to 10.
                       format: int32
                       type: integer
-                    metricsBackend:
-                      description: MetricsBackend selects the source of I/O metrics. Defaults to Prometheus.
-                      enum:
-                        - ControlPlane
-                        - Prometheus
-                        - Uniform
-                      type: string
                     minHotColdDifferencePct:
                       description: |-
                         MinHotColdDifferencePct is how far below the hot source, in percentage
@@ -1873,6 +1994,7 @@ spec:
                       description: DataRealignment tunes the post-migration realignment.
                       properties:
                         interval:
+                          default: 10m
                           description: |-
                             Interval is a floor on the spacing between realignment requests, and not
                             a ceiling on how long one takes: a realignment blocks every volume
@@ -1881,6 +2003,7 @@ spec:
                             to 10m.
                           type: string
                         minMoves:
+                          default: 1
                           description: |-
                             MinMoves is how many volume moves accumulate before a realignment is
                             requested. It defaults to 1, which makes migration and realignment
@@ -1897,7 +2020,13 @@ spec:
                         and the rebalancer's latency and baseline Jobs run. It must carry
                         nvme-cli, and for rebalancing also fio and jq.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                   type: object
+                  x-kubernetes-validations:
+                    - message: field rebalancerImage is immutable once set
+                      rule: '!has(oldSelf.rebalancerImage) || has(self.rebalancerImage)'
                 warningThreshold:
                   description: WarningThreshold is the capacity level at which the cluster warns.
                   properties:
@@ -1912,10 +2041,18 @@ spec:
                   type: object
               type: object
               x-kubernetes-validations:
+                - message: field maxSubsystemCount is immutable once set
+                  rule: '!has(oldSelf.maxSubsystemCount) || has(self.maxSubsystemCount)'
+                - message: field vcpuCount is immutable once set
+                  rule: '!has(oldSelf.vcpuCount) || has(self.vcpuCount)'
+                - message: field minHugePagesSize is immutable once set
+                  rule: '!has(oldSelf.minHugePagesSize) || has(self.minHugePagesSize)'
                 - message: field stripe is immutable once set
                   rule: '!has(oldSelf.stripe) || has(self.stripe)'
                 - message: field fabricType is immutable once set
                   rule: '!has(oldSelf.fabricType) || has(self.fabricType)'
+                - message: field clientDataIfname is immutable once set
+                  rule: '!has(oldSelf.clientDataIfname) || has(self.clientDataIfname)'
                 - message: field nvmfBasePort is immutable once set
                   rule: '!has(oldSelf.nvmfBasePort) || has(self.nvmfBasePort)'
                 - message: field rpcBasePort is immutable once set
@@ -1936,6 +2073,8 @@ spec:
                   rule: '!has(oldSelf.enableMetadataJournal) || has(self.enableMetadataJournal)'
                 - message: field deviceClass is immutable once set
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
+                - message: field superclusterRef is immutable once set
+                  rule: '!has(oldSelf.superclusterRef) || has(self.superclusterRef)'
                 - message: kms is immutable once set
                   rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
                 - message: enableArbitration and arbitration are only valid when clusterMode is Dual

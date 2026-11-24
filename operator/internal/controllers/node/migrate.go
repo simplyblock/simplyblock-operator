@@ -249,7 +249,7 @@ func (r *StorageNodeOpsReconciler) migratePromote(
 // the drives the migration bound on the target, and the storage-plane labels that
 // follow the worker.
 //
-// The allow-list merge is why spec.config.pcieAllowList is guarded by the webhook
+// The device-list merge is why spec.config.deviceNames is guarded by the webhook
 // rather than by an immutability marker: this is the one legitimate writer of it,
 // and the addresses have to survive a later rebuild of the node (§3.2).
 func (r *StorageNodeOpsReconciler) repointTopology(
@@ -260,7 +260,7 @@ func (r *StorageNodeOpsReconciler) repointTopology(
 ) error {
 	patch := client.MergeFrom(node.DeepCopy())
 	node.Spec.WorkerNode = target
-	node.Spec.Config.PcieAllowList = mergePCIAddresses(node.Spec.Config.PcieAllowList, newSsdPcie)
+	node.Spec.Config.DeviceNames = mergePCIAddresses(node.Spec.Config.DeviceNames, newSsdPcie)
 	if err := r.Patch(ctx, node, patch); err != nil {
 		return fmt.Errorf("re-point node %s onto worker %s: %w", node.Name, target, err)
 	}

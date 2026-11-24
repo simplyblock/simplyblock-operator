@@ -6,7 +6,7 @@
 // with --max-subsys-count=0, a long way from the cause.
 //
 // The clone edits the rendered text rather than re-rendering from the node,
-// because the node's own spec.config.pcieAllowList has not been rewritten yet —
+// because the node's own spec.config.deviceNames has not been rewritten yet —
 // that happens after the promote, and this runs before the relocation.
 //
 // design-storagenode.md §5.3 and §9.
@@ -28,8 +28,7 @@ import (
 const aRenderedEntry = "MAX_SUBSYS_COUNT=10\n" +
 	"MAX_HUGE_PAGES_SIZE=''\n" +
 	"VCPU_COUNT=8\n" +
-	"PCI_ALLOWED='0000:02:00.0,0000:03:00.0'\n" +
-	"PCI_BLOCKED=''\n"
+	"PCI_ALLOWED='0000:02:00.0,0000:03:00.0'\n"
 
 // entryFor reads one worker's entry out of the cluster's per-node configuration.
 func entryFor(t *testing.T, apiClient client.Client, worker string) (string, bool) {
@@ -220,24 +219,22 @@ func TestBothSpellingsGoWhereTheyAreRead(t *testing.T) {
 	}
 }
 
-// An explicit allow list and PCI addresses in the device list are one allow
-// list, not two, and neither silently drops the other.
-func TestTheAllowListAndTheDeviceListAreMerged(t *testing.T) {
+// The PCI addresses in the device list are the node's whole allow list.
+func TestTheDeviceListIsTheAllowList(t *testing.T) {
 	cluster := &simplyblockv1alpha2.StorageCluster{
 		Spec: simplyblockv1alpha2.StorageClusterSpec{DeviceClass: simplyblockv1alpha2.StorageClusterDeviceClassNVMe},
 	}
 	node := &simplyblockv1alpha2.StorageNode{
 		Spec: simplyblockv1alpha2.StorageNodeSpec{
 			Config: simplyblockv1alpha2.StorageNodeConfig{
-				PcieAllowList: []string{"0000:02:00.0"},
-				DeviceNames:   []string{"0000:01:00.0"},
+				DeviceNames: []string{"0000:01:00.0", "0000:02:00.0"},
 			},
 		},
 	}
 	entry := renderNodeConfig(cluster, node)
 	if !strings.Contains(entry, "PCI_ALLOWED='0000:01:00.0,0000:02:00.0'") &&
 		!strings.Contains(entry, "PCI_ALLOWED='0000:02:00.0,0000:01:00.0'") {
-		t.Errorf("the allow list and the device list did not merge:\n%s", entry)
+		t.Errorf("the device list's PCI addresses are not the allow list:\n%s", entry)
 	}
 }
 

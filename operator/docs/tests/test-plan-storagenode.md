@@ -832,7 +832,6 @@ rather than as thirty.
 | I-04 | `spec.socketId` set at creation, cleared later: rejected                                                                       | Boundary | —    |
 | I-05 | `spec.config.failureDomain` of `-rack`: rejected by the label pattern                                                          | Boundary | —    |
 | I-06 | `spec.config.failureDomain` of `0`: accepted, since a digit is a valid label                                                   | Boundary | —    |
-| I-07 | `spec.config.spdkSystemMemory` of `"4X"`: rejected by the pattern                                                              | Negative | —    |
 | I-08 | `spec.workerNode` changed by a non-operator identity: rejected by the webhook                                                  | Negative | —    |
 | I-09 | The webhook is unavailable: the update is rejected rather than admitted                                                        | Negative | —    |
 | I-10 | `spec.action` outside the enum: rejected by admission before the controller sees it                                            | Negative | —    |

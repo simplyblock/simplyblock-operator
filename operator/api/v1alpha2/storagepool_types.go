@@ -231,6 +231,7 @@ type StoragePoolSpec struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
+	// +simplyblock:advanced
 	ClusterRef string `json:"clusterRef"`
 
 	// AllowedNodes restricts which hosts may carry this pool's volumes, by

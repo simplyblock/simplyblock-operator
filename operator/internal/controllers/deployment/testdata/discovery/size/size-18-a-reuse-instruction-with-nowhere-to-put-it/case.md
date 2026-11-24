@@ -2,7 +2,7 @@
 
 **Mutation.** A run meant to take 128 of the host's 256 pre-allocated pages
 
-**Expected.** **Contested.** No field expresses it. `spec.discover` carries no huge-page input, and neither `minHugePagesSize` nor `spdkSystemMemory` is written by a run. See §14, gap G-17
+**Expected.** **Contested.** No field expresses it. `spec.discover` carries no huge-page input, and the only huge-page knob, the cluster's `minHugePagesSize`, is never written by a run. See §14, gap G-17
 
 **Harness.** `CM`
 

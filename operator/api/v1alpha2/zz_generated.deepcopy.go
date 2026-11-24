@@ -4916,16 +4916,6 @@ func (in *StorageNodeConfig) DeepCopyInto(out *StorageNodeConfig) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
-	if in.PcieAllowList != nil {
-		in, out := &in.PcieAllowList, &out.PcieAllowList
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	if in.PcieDenyList != nil {
-		in, out := &in.PcieDenyList, &out.PcieDenyList
-		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
 	if in.Expand != nil {
 		in, out := &in.Expand, &out.Expand
 		*out = new(bool)
@@ -6438,11 +6428,6 @@ func (in *VolumeAutoPlacementSettings) DeepCopyInto(out *VolumeAutoPlacementSett
 	if in.StorageNodeCandidateCount != nil {
 		in, out := &in.StorageNodeCandidateCount, &out.StorageNodeCandidateCount
 		*out = new(int32)
-		**out = **in
-	}
-	if in.MetricsBackend != nil {
-		in, out := &in.MetricsBackend, &out.MetricsBackend
-		*out = new(MetricsBackend)
 		**out = **in
 	}
 	if in.PrometheusURL != nil {

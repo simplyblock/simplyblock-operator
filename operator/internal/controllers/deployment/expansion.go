@@ -799,11 +799,10 @@ func (r *ClusterDeploymentConfigReconciler) buildNode(
 				DeviceNames: devicesOf(group),
 				// The NICs are the node's own: a fleet's workers do not agree on
 				// what their NICs are called, and the node-add is made per node.
-				MgmtInterface:    group.MgmtInterface,
-				DataInterfaces:   group.DataInterfaces,
-				FailureDomain:    group.FailureDomain,
-				Site:             groupSite(group, cluster),
-				SpdkSystemMemory: group.SpdkSystemMemory,
+				MgmtInterface:  group.MgmtInterface,
+				DataInterfaces: group.DataInterfaces,
+				FailureDomain:  group.FailureDomain,
+				Site:           groupSite(group, cluster),
 				// The core ids this group's machines hold back. It reaches the
 				// node's own entry in the per-node ConfigMap, which is where a
 				// per-node value has somewhere to go: the pod's environment
