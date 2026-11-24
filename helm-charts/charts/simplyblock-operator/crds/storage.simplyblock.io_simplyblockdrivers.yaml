@@ -29,6 +29,12 @@ spec:
     - jsonPath: .status.nodesTotal
       name: NodesTotal
       type: integer
+    - jsonPath: .status.remoteClustersTotal
+      name: RemoteClusters
+      type: integer
+    - jsonPath: .status.remoteClustersConnected
+      name: Connected
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -539,6 +545,55 @@ spec:
                         type: string
                     type: object
                 type: object
+              remoteClusters:
+                description: |-
+                  RemoteClusters are storage clusters served by a management API outside
+                  this Kubernetes cluster. The operator writes one entry per item into the
+                  Secret the CSI driver reads its clusters from.
+                items:
+                  description: |-
+                    RemoteStorageCluster is a storage cluster whose control plane runs outside
+                    this Kubernetes cluster, and which the CSI driver provisions volumes on.
+                  properties:
+                    clusterID:
+                      description: ClusterID is the storage cluster's UUID.
+                      pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                      type: string
+                    credentialsSecretRef:
+                      description: |-
+                        CredentialsSecretRef names a Secret in this namespace that holds the
+                        cluster secret under the key cluster_secret.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    endpoint:
+                      description: |-
+                        Endpoint is the base URL of the management API serving the cluster. An
+                        HTTPS endpoint must present a certificate from a publicly trusted CA.
+                      maxLength: 2048
+                      type: string
+                      x-kubernetes-validations:
+                      - message: endpoint must be an http or https URL
+                        rule: isURL(self) && url(self).getScheme() in ['https', 'http']
+                  required:
+                  - clusterID
+                  - credentialsSecretRef
+                  - endpoint
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-map-keys:
+                - clusterID
+                x-kubernetes-list-type: map
               sidecarImages:
                 description: |-
                   SidecarImages overrides the seven CSI sidecars, one field each. Unset
@@ -716,6 +771,55 @@ spec:
                 - Degraded
                 - Unavailable
                 type: string
+              remoteClusters:
+                description: |-
+                  RemoteClusters reports each remote cluster the CSI secret carries an
+                  entry for on behalf of spec.remoteClusters. It is also the record of
+                  which entries this driver wrote, so an item removed from the spec has its
+                  entry removed.
+                items:
+                  description: RemoteStorageClusterStatus is the observed state of
+                    one remote cluster.
+                  properties:
+                    clusterID:
+                      description: ClusterID is the cluster this item reports on.
+                      type: string
+                    lastProbeTime:
+                      description: LastProbeTime is when the management API was last
+                        asked.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is the reason for the state, in one sentence.
+                      type: string
+                    state:
+                      description: State is the outcome of the last check.
+                      enum:
+                      - Connected
+                      - Unreachable
+                      - Unauthorized
+                      - CredentialsMissing
+                      - Conflict
+                      type: string
+                  required:
+                  - clusterID
+                  - state
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - clusterID
+                x-kubernetes-list-type: map
+              remoteClustersConnected:
+                format: int32
+                minimum: 0
+                type: integer
+              remoteClustersTotal:
+                description: |-
+                  RemoteClustersTotal is the number of listed remote clusters, and
+                  RemoteClustersConnected how many of them are Connected.
+                format: int32
+                minimum: 0
+                type: integer
               snapshotSupport:
                 description: |-
                   SnapshotSupport is whether the cluster already had snapshot support or the
