@@ -21087,7 +21087,11 @@ Object.assign(window, {
 // cannot change after creation). Two more properties come from the CRD's
 // annotations, which the operator's +simplyblock: field markers write
 // (operator/hack/fieldmarkers): an operator-managed field is the operator's to
-// change, and an invisible one is not shown. An edit is refused in the console
+// change, an advanced one is shown in Everything only, and an invisible one is
+// not shown at all. Essentials lists the curated headlines of the kind
+// (cr-headlines.jsx) for their order, labels, and formats, then every other
+// spec field the CRD has, so a field added to the API reaches the console
+// without an edit here, and a headline the CRD no longer has is dropped. An edit is refused in the console
 // for immutable and operator-managed fields; every other edit is sent as a dry
 // run first, so a webhook or CEL message is shown verbatim before anything is
 // written. The YAML block stays the whole object, invisible fields included,
@@ -21148,11 +21152,29 @@ async function readCrdSchema(kind) {
     out.version = version.name;
     markedPaths(crd, "simplyblock.io/operator-managed-fields", version.name).forEach(p => out.managed.add(p));
     markedPaths(crd, "simplyblock.io/invisible-fields", version.name).forEach(p => out.invisible.add(p));
-    const walk = (node, path) => {
+    markedPaths(crd, "simplyblock.io/advanced-fields", version.name).forEach(p => out.advanced.add(p));
+    // within is set below a list or a map: a field there names one field of
+    // every element, which has no single value to show or to patch
+    const walk = (node, path, within) => {
       if (!node || typeof node !== "object") return;
       if (path && node.description) out.descriptions[path] = node.description;
       if (path && node.enum) out.enums[path] = node.enum;
       if (path && node.type) out.types[path] = node.type;
+      if (path) out.known.add(path);
+      // a spec field Essentials can show and edit: a scalar, a list of
+      // scalars, or a string map; an object is listed through its fields
+      if (path.startsWith("spec.") && !within) {
+        const items = node.items || {};
+        const scalar = ["string", "integer", "number", "boolean"].includes(node.type);
+        const list = node.type === "array" && ["string", "integer", "number"].includes(items.type);
+        const kv = node.type === "object" && !node.properties && node.additionalProperties && node.additionalProperties.type === "string";
+        if (scalar || list || kv) out.fields.push({
+          path,
+          type: node.type,
+          list,
+          kv
+        });
+      }
       (node["x-kubernetes-validations"] || []).forEach(v => {
         const rule = String(v.rule || "");
         if (/^\s*self\s*==\s*oldSelf\s*$/.test(rule) && path) out.immutable.add(path);
@@ -21171,9 +21193,9 @@ async function readCrdSchema(kind) {
           if (m[3] === m[4]) out.immutable.add(path ? `${path}.${m[3]}` : m[3]);
         }
       });
-      Object.entries(node.properties || {}).forEach(([k, child]) => walk(child, path ? `${path}.${k}` : k));
-      if (node.items) walk(node.items, path);
-      if (node.additionalProperties && typeof node.additionalProperties === "object") walk(node.additionalProperties, path);
+      Object.entries(node.properties || {}).forEach(([k, child]) => walk(child, path ? `${path}.${k}` : k, within));
+      if (node.items) walk(node.items, path, true);
+      if (node.additionalProperties && typeof node.additionalProperties === "object") walk(node.additionalProperties, path, true);
     };
     walk(schema, "");
     return out;
@@ -21198,6 +21220,9 @@ const emptySchema = kind => ({
   immutable: new Set(STATIC_IMMUTABLE[kind] || []),
   managed: new Set(),
   invisible: new Set(),
+  advanced: new Set(),
+  known: new Set(),
+  fields: [],
   descriptions: {},
   enums: {},
   types: {},
@@ -21222,6 +21247,26 @@ const marked = (set, path) => {
 const isImmutable = (schema, path) => marked(schema.immutable, path);
 const isManaged = (schema, path) => !!schema.managed && marked(schema.managed, path);
 const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisible, path);
+const isAdvanced = (schema, path) => !!schema.advanced && marked(schema.advanced, path);
+// what Essentials leaves out: an advanced field is in Everything only
+const offEssentials = (schema, path) => isInvisible(schema, path) || isAdvanced(schema, path);
+// The spec rows of Essentials: the curated headlines first, minus any the CRD
+// no longer has once it has been read, then every other spec field of the CRD
+// in schema order, labeled by its path as the headlines are.
+function essentialSpecRows(curated, schema) {
+  const fromCrd = schema.source === "crd";
+  const rows = curated.filter(r => !fromCrd || schema.known.has(r.path));
+  const covered = rows.map(r => r.path);
+  const under = (p, q) => p === q || p.startsWith(q + ".") || q.startsWith(p + ".");
+  schema.fields.filter(f => !covered.some(c => under(f.path, c))).forEach(f => rows.push({
+    path: f.path,
+    label: f.path.replace(/^spec\./, ""),
+    mutable: true,
+    fmt: f.type === "boolean" ? F.bool : F.raw,
+    type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
+  }));
+  return rows.filter(r => !offEssentials(schema, r.path));
+}
 // the badge a locked field carries, immutability first: it binds the operator too
 const lockOf = (schema, path) => !schema ? null : isImmutable(schema, path) ? "immutable" : isManaged(schema, path) ? "operator-managed" : null;
 const LOCK_TITLE = {
@@ -21521,7 +21566,7 @@ function EssentialsTab({
   };
   const st = obj.status || {};
   // a spec row is shown even when unset (it can be set); a status row only when the operator wrote it
-  const rows = (list, isSpec) => list.filter(r => !isInvisible(schema, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
+  const rows = (list, isSpec) => list.filter(r => !offEssentials(schema, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
     const v = getPath(obj, r.path);
     return [/*#__PURE__*/React.createElement("span", {
       className: "mono",
@@ -21558,7 +21603,7 @@ function EssentialsTab({
       nav: nav
     }))];
   });
-  const specRows = rows(h.spec, true),
+  const specRows = rows(essentialSpecRows(h.spec, schema), true),
     statusRows = rows(h.status, false);
   const anns = (h.annotations || []).map(k => [k, (obj.metadata.annotations || {})[k]]).filter(([, v]) => v !== undefined);
   return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(DriftBanner, {
@@ -21634,7 +21679,7 @@ function EssentialsTab({
     }
   }, /*#__PURE__*/React.createElement(ConditionsCard, {
     conditions: st.conditions
-  })))), (h.tables || []).filter(t => !isInvisible(schema, t.path)).map(t => {
+  })))), (h.tables || []).filter(t => !offEssentials(schema, t.path)).map(t => {
     const rowsT = getPath(obj, t.path);
     if (!Array.isArray(rowsT) || !rowsT.length) return null;
     const columns = t.columns.filter(c => !isInvisible(schema, `${t.path}.${c}`));
