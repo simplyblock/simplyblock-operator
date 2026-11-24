@@ -11,9 +11,14 @@
 // Field names are the CRD's own; descriptions, enums, and immutability come
 // from the CRD read through apiextensions (a field whose validation rule says
 // `self == oldSelf`, or whose parent says `!has(oldSelf.x) || has(self.x)`,
-// cannot change after creation). An edit is refused in the console for those;
-// every other edit is sent as a dry run first, so a webhook or CEL message is
-// shown verbatim before anything is written.
+// cannot change after creation). Two more properties come from the CRD's
+// annotations, which the operator's +simplyblock: field markers write
+// (operator/hack/fieldmarkers): an operator-managed field is the operator's to
+// change, and an invisible one is not shown. An edit is refused in the console
+// for immutable and operator-managed fields; every other edit is sent as a dry
+// run first, so a webhook or CEL message is shown verbatim before anything is
+// written. The YAML block stays the whole object, invisible fields included,
+// because it is what a copy or a download is made from.
 //
 // CRPanel is embedded in the curated details; CRView is the standalone page
 // for a kind without one (route segment `cr` with an object key as its id).
@@ -30,7 +35,7 @@ async function readCrdSchema(kind) {
   if (CRD_CACHE.has(kind)) return CRD_CACHE.get(kind);
   const name = crdNameOf(kind);
   const p = (async () => {
-    const out = {immutable: new Set(STATIC_IMMUTABLE[kind] || []), descriptions: {}, enums: {}, types: {}, source: "static"};
+    const out = emptySchema(kind);
     if (!name) return out;
     let crd;
     try { crd = await k8s.get("CustomResourceDefinition", name); } catch (e) { out.error = e; return out; }
@@ -41,6 +46,8 @@ async function readCrdSchema(kind) {
     if (!schema) return out;
     out.source = "crd";
     out.version = version.name;
+    markedPaths(crd, "simplyblock.io/operator-managed-fields", version.name).forEach(p => out.managed.add(p));
+    markedPaths(crd, "simplyblock.io/invisible-fields", version.name).forEach(p => out.invisible.add(p));
     const walk = (node, path) => {
       if (!node || typeof node !== "object") return;
       if (path && node.description) out.descriptions[path] = node.description;
@@ -71,9 +78,22 @@ async function readCrdSchema(kind) {
 function useCrdSchema(kind) {
   const [s, setS] = React.useState(null);
   React.useEffect(() => { let alive = true; readCrdSchema(kind).then(x => alive && setS(x)); return () => { alive = false; }; }, [kind]);
-  return s || {immutable: new Set(STATIC_IMMUTABLE[kind] || []), descriptions: {}, enums: {}, types: {}, source: "static", loading: true};
+  return s || Object.assign(emptySchema(kind), {loading: true});
 }
-const isImmutable = (schema, path) => { const parts = path.split("."); for (let i = 1; i <= parts.length; i++) if (schema.immutable.has(parts.slice(0, i).join("."))) return true; return false; };
+const emptySchema = kind => ({immutable: new Set(STATIC_IMMUTABLE[kind] || []), managed: new Set(), invisible: new Set(), descriptions: {}, enums: {}, types: {}, source: "static"});
+// A marker annotation holds the marked paths per API version as JSON:
+// {"v1alpha2":["spec.a","status.b"]}. A malformed one marks nothing.
+const markedPaths = (crd, key, version) => {
+  try { const v = JSON.parse(((crd.metadata || {}).annotations || {})[key] || "{}")[version]; return Array.isArray(v) ? v : []; } catch (e) { return []; }
+};
+// a path is marked when it, or an object above it, is
+const marked = (set, path) => { const parts = path.split("."); for (let i = 1; i <= parts.length; i++) if (set.has(parts.slice(0, i).join("."))) return true; return false; };
+const isImmutable = (schema, path) => marked(schema.immutable, path);
+const isManaged = (schema, path) => !!schema.managed && marked(schema.managed, path);
+const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisible, path);
+// the badge a locked field carries, immutability first: it binds the operator too
+const lockOf = (schema, path) => !schema ? null : isImmutable(schema, path) ? "immutable" : isManaged(schema, path) ? "operator-managed" : null;
+const LOCK_TITLE = {"immutable": "immutable once set", "operator-managed": "set by the operator, not by hand"};
 
 // ---- the object -------------------------------------------------------------
 function useCR(ref, rev) {
@@ -98,6 +118,7 @@ function useSpecPatch(ref, onDone) {
   const save = async (path, value, schema) => {
     setErr(null);
     if (schema && isImmutable(schema, path)) { setErr(`${path} is immutable once set; the API server would refuse the change`); return false; }
+    if (schema && isManaged(schema, path)) { setErr(`${path} is set by the operator; a change made here would be overwritten`); return false; }
     const patch = setPath({}, path, value);
     setBusy(true);
     try {
@@ -121,18 +142,18 @@ const coerce = (type, raw) => {
 };
 const editable = (type, value) => type === "list" ? (Array.isArray(value) ? value.join(", ") : "") : type === "kv" ? Object.entries(value || {}).map(([k, v]) => `${k}=${v}`).join(", ") : value === undefined || value === null ? "" : String(value);
 
-function InlineField({r, value, immutable, patch, schema}) {
+function InlineField({r, value, lock, patch, schema}) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState("");
   const shown = r.fmt ? r.fmt(value) : value;
   const opts = r.options || (schema && schema.enums[r.path]) || null;
-  const locked = immutable || r.mutable === false;
+  const badge = lock || (r.mutable === false ? "immutable" : null);
   const desc = (schema && schema.descriptions[r.path]) || r.path;
   if (!editing) {
     return (
       <span className="ifield" title={desc}>
         <span>{shown === null || shown === undefined || shown === "" ? <span style={{color: "var(--dim2)"}}>unset</span> : String(shown)}</span>
-        {locked ? <span className="immut" title="immutable once set">immutable</span>
+        {badge ? <span className="immut" title={LOCK_TITLE[badge]}>{badge}</span>
           : <button className="pen" title="edit" onClick={() => { setDraft(editable(r.type, value)); setEditing(true); patch.clear(); }}><Icon n="gauge" s={11} /></button>}
       </span>
     );
@@ -181,11 +202,11 @@ function EssentialsTab({obj, cref: ref, nav, vm, onChanged}) {
   const h = HEADLINES[ref.kind] || {spec: [], status: []};
   const st = obj.status || {};
   // a spec row is shown even when unset (it can be set); a status row only when the operator wrote it
-  const rows = (list, isSpec) => list.filter(r => isSpec || getPath(obj, r.path) !== undefined).map(r => {
+  const rows = (list, isSpec) => list.filter(r => !isInvisible(schema, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
     const v = getPath(obj, r.path);
     return [<span className="mono" style={{fontSize: 11}} title={schema.descriptions[r.path] || r.path}>{r.label}</span>,
       <span style={{display: "inline-flex", alignItems: "center", gap: 4, justifyContent: "flex-end", flexWrap: "wrap"}}>
-        {isSpec ? <InlineField r={r} value={v} immutable={isImmutable(schema, r.path)} patch={patch} schema={schema} />
+        {isSpec ? <InlineField r={r} value={v} lock={lockOf(schema, r.path)} patch={patch} schema={schema} />
           : <span title={schema.descriptions[r.path] || r.path}>{shown(r, v) === null ? <span style={{color: "var(--dim2)"}}>unset</span> : shown(r, v)}</span>}
         <LinkValue r={r} value={v} obj={Object.assign({__ctx: ref.ctx}, obj)} nav={nav} />
       </span>];
@@ -206,9 +227,9 @@ function EssentialsTab({obj, cref: ref, nav, vm, onChanged}) {
           {window.ConditionsCard && (st.conditions || []).length > 0 && <div style={{marginTop: 12}}><ConditionsCard conditions={st.conditions} /></div>}
         </div>
       </div>
-      {(h.tables || []).map(t => { const rowsT = getPath(obj, t.path); if (!Array.isArray(rowsT) || !rowsT.length) return null; return (
+      {(h.tables || []).filter(t => !isInvisible(schema, t.path)).map(t => { const rowsT = getPath(obj, t.path); if (!Array.isArray(rowsT) || !rowsT.length) return null; const columns = t.columns.filter(c => !isInvisible(schema, `${t.path}.${c}`)); return (
         <div key={t.path} className="card" style={{marginTop: 12}}><h3 title={schema.descriptions[t.path] || t.path}>{t.title}</h3><div className="bd" style={{padding: 0}}>
-          <table className="dt"><thead><tr>{t.columns.map(c => <th key={c} className="mono" title={schema.descriptions[`${t.path}.${c}`] || `${t.path}[].${c}`}>{c}</th>)}</tr></thead><tbody>{rowsT.map((x, i) => <tr key={i}>{t.columns.map(c => <td key={c} className="mono" style={{fontSize: 11}}>{x[c] === undefined || x[c] === null ? "unset" : typeof x[c] === "object" ? JSON.stringify(x[c]) : String(x[c])}</td>)}</tr>)}</tbody></table>
+          <table className="dt"><thead><tr>{columns.map(c => <th key={c} className="mono" title={schema.descriptions[`${t.path}.${c}`] || `${t.path}[].${c}`}>{c}</th>)}</tr></thead><tbody>{rowsT.map((x, i) => <tr key={i}>{columns.map(c => <td key={c} className="mono" style={{fontSize: 11}}>{x[c] === undefined || x[c] === null ? "unset" : typeof x[c] === "object" ? JSON.stringify(x[c]) : String(x[c])}</td>)}</tr>)}</tbody></table>
         </div></div>); })}
     </>
   );
@@ -219,15 +240,17 @@ function JsonTree({data, path, schema, depth}) {
   const [open, setOpen] = React.useState((depth || 0) < 2);
   if (data === null || data === undefined) return <span className="v" style={{color: "var(--dim2)"}}>null</span>;
   if (typeof data !== "object") return <span className="v">{typeof data === "string" ? `"${data}"` : String(data)}</span>;
-  const entries = Array.isArray(data) ? data.map((v, i) => [String(i), v]) : Object.entries(data);
+  // an invisible field is left out before anything is counted, so the {n} does not give it away
+  const entries = Array.isArray(data) ? data.map((v, i) => [String(i), v])
+    : Object.entries(data).filter(([k]) => !(schema && isInvisible(schema, path ? `${path}.${k}` : k)));
   if (!entries.length) return <span className="v" style={{color: "var(--dim2)"}}>{Array.isArray(data) ? "[]" : "{}"}</span>;
   return (
     <div className="jt">
       <span className="tg" onClick={() => setOpen(!open)}>{open ? "▾" : "▸"} {Array.isArray(data) ? `[${entries.length}]` : `{${entries.length}}`}</span>
       {open && <div className="n">{entries.map(([k, v]) => {
         const p = path ? (Array.isArray(data) ? path : `${path}.${k}`) : k;
-        const imm = schema && !Array.isArray(data) && isImmutable(schema, p);
-        return <div key={k} title={schema && schema.descriptions[p] ? schema.descriptions[p] : p}><span className="k">{k}</span>{imm && <span className="immut">immutable</span>}: <JsonTree data={v} path={p} schema={schema} depth={(depth || 0) + 1} /></div>;
+        const lock = !Array.isArray(data) && lockOf(schema, p);
+        return <div key={k} title={schema && schema.descriptions[p] ? schema.descriptions[p] : p}><span className="k">{k}</span>{lock && <span className="immut" title={LOCK_TITLE[lock]}>{lock}</span>}: <JsonTree data={v} path={p} schema={schema} depth={(depth || 0) + 1} /></div>;
       })}</div>}
     </div>
   );

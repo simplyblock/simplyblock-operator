@@ -1,57 +1,21 @@
 // Browser-history behavior of the console shell: Back and Forward move between
 // views, and a view's URL opens that view in a fresh browser. It drives the
-// system Chrome through playwright-core against the checked-in page and its
-// in-browser fixture backend (config.js has mock: true), so it needs no
-// cluster and no Go mock. React is served from node_modules instead of unpkg,
-// so the test also runs offline.
+// system Chrome against the checked-in page and its in-browser fixture
+// backend, through the shared harness in console.mjs.
 //
 // Run: npm test   (or: node --test test/)
 import {test, before, after} from "node:test";
 import assert from "node:assert/strict";
-import http from "node:http";
-import {createReadStream, existsSync, statSync} from "node:fs";
-import path from "node:path";
-import {fileURLToPath} from "node:url";
-import {chromium} from "playwright-core";
+import {startConsole} from "./console.mjs";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-let server, base, browser;
+let console_, base, open;
 
 before(async () => {
-  server = http.createServer((req, res) => {
-    const p = path.join(root, path.normalize(decodeURIComponent(new URL(req.url, "http://x").pathname)));
-    const file = existsSync(p) && statSync(p).isFile() ? p : path.join(root, "index.html");
-    res.writeHead(200, {"Content-Type": file.endsWith(".js") ? "application/javascript" : "text/html"});
-    createReadStream(file).pipe(res);
-  });
-  await new Promise(r => server.listen(0, "127.0.0.1", r));
-  base = `http://127.0.0.1:${server.address().port}/`;
-  browser = await chromium.launch({channel: "chrome", headless: true});
+  console_ = await startConsole();
+  ({base, open} = console_);
 });
 
-after(async () => {
-  await browser?.close();
-  server?.close();
-});
-
-// open loads the console in a fresh browser context (empty localStorage) and
-// waits for the shell to render its breadcrumb.
-async function open(url) {
-  const ctx = await browser.newContext();
-  await ctx.route("https://unpkg.com/**", route => {
-    const name = new URL(route.request().url()).pathname.split("/").pop();
-    const pkg = name.startsWith("react-dom") ? "react-dom" : "react";
-    route.fulfill({path: path.join(root, "node_modules", pkg, "umd", name), contentType: "application/javascript"});
-  });
-  const page = await ctx.newPage();
-  const errors = [];
-  page.on("pageerror", e => errors.push(e.message));
-  await page.goto(url);
-  await page.waitForSelector(".crumb.cur", {timeout: 20000}).catch(() => {
-    throw new Error("the console did not render: " + errors.join("; "));
-  });
-  return page;
-}
+after(async () => { await console_.stop(); });
 
 // crumbs is the breadcrumb as the user reads it, the shell's location.
 const crumbs = page => page.$$eval(".crumbs .crumb", els => els.map(e => e.textContent.trim()).join(" > "));
