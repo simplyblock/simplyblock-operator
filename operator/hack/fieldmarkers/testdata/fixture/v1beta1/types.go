@@ -1,5 +1,5 @@
 // A fixture API package for the field-marker generator's tests: one root kind
-// whose fields carry the two markers at every depth the walk has to resolve
+// whose fields carry the three markers at every depth the walk has to resolve
 // (direct, nested, through a pointer, a slice, a map, and an inline embed),
 // plus a List kind and a recursive type the walk must not descend forever.
 
@@ -41,6 +41,10 @@ type WidgetSpec struct {
 	// Bookkeeping is the operator's own.
 	// +simplyblock:invisible
 	Bookkeeping string `json:"bookkeeping,omitempty"`
+
+	// Tuning is for the few who need it.
+	// +simplyblock:advanced
+	Tuning *Detail `json:"tuning,omitempty"`
 
 	Parts  []Part          `json:"parts,omitempty"`
 	Detail *Detail         `json:"detail,omitempty"`

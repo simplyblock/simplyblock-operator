@@ -1,8 +1,9 @@
-// The field-marker generator: resolves the +simplyblock:operatorManaged and
-// +simplyblock:invisible field markers in the API packages to field paths, and
-// prints the CRD annotations that carry them, for `hack/apply-field-markers.sh`
-// to write after controller-gen. It lives in hack/ because it is build tooling
-// for this module's manifests and ships in no binary.
+// The field-marker generator: resolves the +simplyblock:operatorManaged,
+// +simplyblock:advanced, and +simplyblock:invisible field markers in the API
+// packages to field paths, and prints the CRD annotations that carry them, for
+// `hack/apply-field-markers.sh` to write after controller-gen. It lives in
+// hack/ because it is build tooling for this module's manifests and ships in
+// no binary.
 //
 // controller-gen has no way to carry a custom field marker into a CRD: a
 // vendor key in the schema is dropped by the API server, which knows only the
@@ -38,12 +39,14 @@ import (
 const (
 	markerOperatorManaged = "operatorManaged"
 	markerInvisible       = "invisible"
+	markerAdvanced        = "advanced"
 )
 
 // annotationKeys names the CRD annotation each marker is written to.
 var annotationKeys = map[string]string{
 	markerOperatorManaged: "simplyblock.io/operator-managed-fields",
 	markerInvisible:       "simplyblock.io/invisible-fields",
+	markerAdvanced:        "simplyblock.io/advanced-fields",
 }
 
 // Fields maps a marker to the paths it marks, per API version.
@@ -127,8 +130,8 @@ func fieldMarkers(fset *token.FileSet, file *ast.File, marks map[token.Pos][]str
 				continue
 			}
 			if _, known := annotationKeys[m[1]]; !known {
-				err = fmt.Errorf("%s: unknown marker +simplyblock:%s (known: +simplyblock:%s, +simplyblock:%s)",
-					fset.Position(c.Pos()), m[1], markerOperatorManaged, markerInvisible)
+				err = fmt.Errorf("%s: unknown marker +simplyblock:%s (known: +simplyblock:%s, +simplyblock:%s, +simplyblock:%s)",
+					fset.Position(c.Pos()), m[1], markerOperatorManaged, markerInvisible, markerAdvanced)
 				return false
 			}
 			found = append(found, m[1])
