@@ -993,6 +993,7 @@ type StorageClusterSpec struct {
 	// cluster leaves it unset. Requires enableSyncReplication, and cannot be added
 	// to or removed from an existing cluster.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedSpec `json:"stretched,omitempty"`
 
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -1042,6 +1043,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// EnableMetadataJournal journals the lvstore's metadata pages, so a write
@@ -1166,6 +1168,7 @@ type StorageClusterSpec struct {
 	// grants may continue alone. Without it a Dual cluster tolerates the loss
 	// of either node without arbitration. Only valid when clusterMode is Dual.
 	// +optional
+	// +simplyblock:invisible
 	EnableArbitration *bool `json:"enableArbitration,omitempty"`
 
 	// Arbitration tunes the two-node arbitration that enableArbitration turns
@@ -1441,6 +1444,7 @@ type StorageClusterStatus struct {
 	// Stretched is this site's view of its stretched cluster, read from the
 	// control plane; set only when spec.stretched is.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedStatus `json:"stretched,omitempty"`
 
 	// Role is what this cluster is within a supercluster: Standalone,
