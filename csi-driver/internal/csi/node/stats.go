@@ -75,6 +75,11 @@ func (ns *Server) NodeGetVolumeStats(
 			usedInodes = 0
 		}
 
+		condition := &csi.VolumeCondition{}
+		if isNFSMount(&s) {
+			condition = ns.exportCondition(ctx, volID)
+		}
+
 		return &csi.NodeGetVolumeStatsResponse{
 			Usage: []*csi.VolumeUsage{
 				{
@@ -90,7 +95,7 @@ func (ns *Server) NodeGetVolumeStats(
 					Available: availInodes,
 				},
 			},
-			VolumeCondition: &csi.VolumeCondition{},
+			VolumeCondition: condition,
 		}, nil
 	}
 
