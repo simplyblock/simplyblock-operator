@@ -454,9 +454,9 @@ func TestBackupShapes(t *testing.T) {
 
 func TestCRDsAreServedFromTheOperator(t *testing.T) {
 	srv, ts := newTestServer(t, "small-healthy")
-	n, err := srv.loadCRDs("../../operator/config/crd/bases")
+	n, err := srv.crdSyncFor("../../operator/config/crd/bases").pass()
 	if err != nil {
-		t.Fatalf("loadCRDs: %v", err)
+		t.Fatalf("load the CRDs: %v", err)
 	}
 	if n < 30 {
 		t.Fatalf("loaded %d CRDs, want the operator's full set", n)
