@@ -71,6 +71,11 @@ type objectNames struct {
 	// every PersistentVolume records in spec.csi.driver, so it is the cluster's
 	// to know and not this object's to pick.
 	csiDriver string
+
+	// csiAddonsRole names the one namespaced Role the deployment applies. The
+	// suffix matches clusterRole's, because the two are different kinds and
+	// share no namespace.
+	csiAddonsRole string
 }
 
 // ControllerServiceAccountName is the service account the CSI controller of d
@@ -98,6 +103,7 @@ func names(d *simplyblockv1alpha2.SimplyblockDriver) objectNames {
 		controllerClientSecret:   p + "controller-client-tls",
 		nodeClientSecret:         p + "node-client-tls",
 		csiDriver:                driverName(d),
+		csiAddonsRole:            p + csiAddonsComponent + "-role",
 	}
 }
 
@@ -109,13 +115,8 @@ func (n objectNames) clusterRoleBinding(component string) string {
 	return n.prefix + component + "-binding"
 }
 
-// role and roleBinding name the namespaced counterparts. Only csiAddonsComponent
-// uses these today; the suffixes match clusterRole/clusterRoleBinding because
-// the two are different Kinds and do not share a namespace with each other.
-func (n objectNames) role(component string) string {
-	return n.prefix + component + "-role"
-}
-
+// roleBinding names a namespaced binding; the suffix matches
+// clusterRoleBinding's, because the two are different kinds.
 func (n objectNames) roleBinding(component string) string {
 	return n.prefix + component + "-binding"
 }

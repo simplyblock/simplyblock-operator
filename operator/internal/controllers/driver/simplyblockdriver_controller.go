@@ -800,7 +800,7 @@ func (r *SimplyblockDriverReconciler) pruneCSIAddons(ctx context.Context, d *sim
 	if err := r.deleteOwned(ctx, d, &rbacv1.RoleBinding{}, n.roleBinding(csiAddonsComponent)); err != nil {
 		return err
 	}
-	if err := r.deleteOwned(ctx, d, &rbacv1.Role{}, n.role(csiAddonsComponent)); err != nil {
+	if err := r.deleteOwned(ctx, d, &rbacv1.Role{}, n.csiAddonsRole); err != nil {
 		return err
 	}
 	binding := &rbacv1.ClusterRoleBinding{}

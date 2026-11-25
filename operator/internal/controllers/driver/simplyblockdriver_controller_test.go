@@ -151,7 +151,7 @@ func TestCSIAddonsIsDeployedOnlyWhenEnabled(t *testing.T) {
 			for _, obj := range objects {
 				switch o := obj.(type) {
 				case *rbacv1.Role:
-					role = role || o.Name == n.role(csiAddonsComponent)
+					role = role || o.Name == n.csiAddonsRole
 				case *rbacv1.RoleBinding:
 					binding = binding || o.Name == n.roleBinding(csiAddonsComponent)
 				case *rbacv1.ClusterRoleBinding:
@@ -434,7 +434,7 @@ func TestTurningCSIAddonsOffRemovesItsRBAC(t *testing.T) {
 	n := names(d)
 	objects := func() []client.Object {
 		return []client.Object{
-			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: n.role(csiAddonsComponent), Namespace: d.Namespace}},
+			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: n.csiAddonsRole, Namespace: d.Namespace}},
 			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: n.roleBinding(csiAddonsComponent), Namespace: d.Namespace}},
 			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: n.clusterRoleBinding("csi-addons-auth-delegator")}},
 		}
