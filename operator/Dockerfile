@@ -81,7 +81,9 @@ ARG RELEASE=1
 # Apply all available security patches from the UBI10 repositories. iputils is
 # what the storage network probe runs: arping for the duplicate-address check,
 # and ping for the peers. The probe pods run this image.
-RUN microdnf update -y && microdnf install -y iputils && microdnf clean all
+# Changes daily in CI, so the package update below is not served from cache forever.
+ARG CACHE_KEY
+RUN echo "cache key: ${CACHE_KEY}" && microdnf update -y && microdnf install -y iputils && microdnf clean all
 
 # Required labels for Red Hat certification (preflight check operator).
 LABEL name="simplyblock-operator" \

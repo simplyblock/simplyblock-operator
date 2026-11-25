@@ -75,6 +75,10 @@ jobs:
           fi
           echo "names=${names}" >> "$GITHUB_OUTPUT"
 
+      # Rebuilds the OS package layer once a day, in step with the daily image scan.
+      - name: Set the package layer cache key
+        run: echo "CACHE_KEY=$(date -u +%F)" >> "$GITHUB_ENV"
+
       - name: Build and push ${{ matrix.name }} (${{ matrix.arch }}) by digest
         id: build
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
@@ -86,8 +90,9 @@ jobs:
           build-args: |
             VERSION=${{ steps.image_tag.outputs.label_version }}
             RELEASE=1
-          cache-from: type=gha,scope=${{ matrix.name }}-${{ matrix.arch }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}-${{ matrix.arch }}
+            CACHE_KEY=${{ env.CACHE_KEY }}
+          cache-from: type=registry,ref=${{ matrix.internal_image_name }}:cache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ matrix.internal_image_name }}:cache-${{ matrix.arch }},mode=max
 
       - name: Record the digest
         run: mkdir -p digests && echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.arch }}"
