@@ -328,9 +328,11 @@ type StorageDeviceSpec struct {
 	NodeRef string `json:"nodeRef"`
 
 	// DeviceID is the control plane's identifier for the device. With NodeRef it
-	// is the whole of this object's identity.
+	// is the whole of this object's identity, and the device mirror writes it the
+	// same way.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
+	// +simplyblock:operatorManaged
 	DeviceID string `json:"deviceID"`
 }
 

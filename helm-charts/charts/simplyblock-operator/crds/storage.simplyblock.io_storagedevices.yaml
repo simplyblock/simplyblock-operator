@@ -4,7 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
-    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.nodeRef"]}'
+    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.deviceID","spec.nodeRef"]}'
   name: storagedevices.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -93,7 +93,8 @@ spec:
                 deviceID:
                   description: |-
                     DeviceID is the control plane's identifier for the device. With NodeRef it
-                    is the whole of this object's identity.
+                    is the whole of this object's identity, and the device mirror writes it the
+                    same way.
                   type: string
                   x-kubernetes-validations:
                     - message: field is immutable

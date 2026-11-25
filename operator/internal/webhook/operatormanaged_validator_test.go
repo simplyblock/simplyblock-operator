@@ -242,6 +242,13 @@ func TestTheGeneratedTableGuardsTheMarkedFields(t *testing.T) {
 			new:  &simplyblockv1alpha2.StorageDevice{Spec: simplyblockv1alpha2.StorageDeviceSpec{NodeRef: "n2", DeviceID: "d1"}},
 			path: "spec.nodeRef",
 		},
+		{
+			name: "StorageDevice deviceID",
+			gvk:  simplyblockv1alpha2.GroupVersion.WithKind("StorageDevice"),
+			old:  &simplyblockv1alpha2.StorageDevice{Spec: simplyblockv1alpha2.StorageDeviceSpec{NodeRef: "n1", DeviceID: "d1"}},
+			new:  &simplyblockv1alpha2.StorageDevice{Spec: simplyblockv1alpha2.StorageDeviceSpec{NodeRef: "n1", DeviceID: "d2"}},
+			path: "spec.deviceID",
+		},
 	}
 	v := operatorManagedValidator(t)
 	for _, c := range cases {

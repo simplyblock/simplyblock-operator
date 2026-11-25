@@ -27,6 +27,7 @@ var generatedOperatorManagedFields = map[schema.GroupVersionKind][]OperatorManag
 		{Path: "spec.stretched.role", Segments: []string{"spec", "stretched", "role"}, Writers: []string{"hub"}},
 	},
 	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "StorageDevice"}: {
+		{Path: "spec.deviceID", Segments: []string{"spec", "deviceID"}},
 		{Path: "spec.nodeRef", Segments: []string{"spec", "nodeRef"}},
 	},
 	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "StorageNode"}: {
