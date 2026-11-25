@@ -297,3 +297,79 @@ func TestOnlyAMaintenanceWindowIsAdmittedToADegradedCluster(t *testing.T) {
 		t.Error("a relocation was admitted to a degraded cluster")
 	}
 }
+
+// spec.maxConcurrentWorkerRestarts is the owner's cap for the sake of whatever
+// else runs on the workers, and that is counted in workers whatever the storage
+// can afford: a second worker of the domain already in maintenance waits.
+func TestTheWorkerCapHoldsASecondWorkerOfTheSameFailureDomain(t *testing.T) {
+	other, itsNode := aWindowIn("another-window", "another-node", opsElsewhere, rackA)
+	r, apiClient := anOpsWorld(t, aControlPlane(), other, itsNode,
+		aNodeIn("node-b", "worker-b", rackB), aNodeIn("node-c", "worker-c", rackC))
+	laidOutInDomains(t, apiClient, "2x1")
+	cappedAt(t, apiClient, 1)
+
+	if !held(t, r, aWindow("a-window")) {
+		t.Error("two workers went down together on a cluster capped at one worker")
+	}
+}
+
+// The cap counts workers, so a cap of two admits a second worker of the domain
+// and holds a third.
+func TestTheWorkerCapCountsWorkersInsideAFailureDomain(t *testing.T) {
+	other, itsNode := aWindowIn("another-window", "another-node", opsElsewhere, rackA)
+	r, apiClient := anOpsWorld(t, aControlPlane(), other, itsNode,
+		aNodeIn("node-b", "worker-b", rackB), aNodeIn("node-c", "worker-c", rackC))
+	laidOutInDomains(t, apiClient, "2x1")
+	cappedAt(t, apiClient, 2)
+
+	if held(t, r, aWindow("a-window")) {
+		t.Error("the second worker waited on a cluster capped at two workers")
+	}
+
+	third, thirdNode := aWindowIn("window-a3", "node-a3", "worker-a3", rackA)
+	for _, object := range []client.Object{thirdNode, third} {
+		if err := apiClient.Create(context.Background(), object); err != nil {
+			t.Fatalf("raising a third window in the domain: %v", err)
+		}
+	}
+	if !held(t, r, aWindow("a-window")) {
+		t.Error("a third worker went down on a cluster capped at two workers")
+	}
+}
+
+// The cap narrows and never widens: a cap above what the storage can afford
+// does not let a second failure domain in.
+func TestTheWorkerCapDoesNotWidenWhatTheStorageCanAfford(t *testing.T) {
+	other, itsNode := aWindowIn("another-window", "another-node", opsElsewhere, rackB)
+	r, apiClient := anOpsWorld(t, aControlPlane(), other, itsNode,
+		aNodeIn("node-c", "worker-c", rackC))
+	laidOutInDomains(t, apiClient, "2x1")
+	cappedAt(t, apiClient, 5)
+
+	if !held(t, r, aWindow("a-window")) {
+		t.Error("a cap of five workers let two failure domains down at a fault tolerance of one")
+	}
+}
+
+// A cluster that states no cap is limited by its storage alone. What the
+// storage can afford is its fault tolerance, and it is not the smaller of that
+// and a cap nobody stated.
+func TestAnUnstatedCapLeavesTheFaultToleranceAsTheOnlyLimit(t *testing.T) {
+	other, itsNode := aRunningWindow("another-window", "another-node", opsElsewhere)
+	r, apiClient := anOpsWorld(t, aControlPlane(), other, itsNode)
+	allowing(t, apiClient, 2)
+
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: opsNamespace, Name: opsCluster}
+	if err := apiClient.Get(context.Background(), key, &cluster); err != nil {
+		t.Fatalf("reading the cluster: %v", err)
+	}
+	cluster.Status.MaxConcurrentWorkerRestarts = ptr.To(int32(1))
+	if err := apiClient.Status().Update(context.Background(), &cluster); err != nil {
+		t.Fatalf("publishing the old effective limit: %v", err)
+	}
+
+	if held(t, r, aWindow("a-window")) {
+		t.Error("a second worker waited at a fault tolerance of two with no cap stated")
+	}
+}

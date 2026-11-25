@@ -1085,17 +1085,16 @@ type StorageClusterSpec struct {
 	// +optional
 	CriticalThreshold *CapacityThresholdSpec `json:"criticalThreshold,omitempty"`
 
-	// MaxConcurrentWorkerRestarts caps how many Kubernetes workers the operator
-	// may drain and restart at once. The effective value is the smaller of this
-	// and status.maxFaultTolerance, published as
-	// status.maxConcurrentWorkerRestarts so tooling reads one authoritative
-	// number rather than recomputing it.
+	// MaxConcurrentWorkerRestarts caps how many Kubernetes workers may be in
+	// maintenance at once, for the sake of whatever else runs on them. It is
+	// counted in workers on every cluster, and a cluster that states none has no
+	// cap of this kind.
 	//
-	// On a cluster with enableFailureDomains set and at least as many failure
-	// domains as a stripe has chunks, the workers of one failure domain count
-	// as one, so the number caps failure domains rather than workers.
+	// It is applied on top of what the storage can afford and cannot widen it.
+	// That limit is status.maxFaultTolerance, counted in failure domains on a
+	// cluster with enableFailureDomains set and at least as many failure domains
+	// as a stripe has chunks, and in workers everywhere else.
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=1
 	// +optional
 	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 
@@ -1345,9 +1344,9 @@ type StorageClusterStatus struct {
 	// +optional
 	MaxFaultTolerance *int32 `json:"maxFaultTolerance,omitempty"`
 
-	// MaxConcurrentWorkerRestarts is the effective limit, the smaller of
-	// spec.maxConcurrentWorkerRestarts and maxFaultTolerance. It counts failure
-	// domains where spec.maxConcurrentWorkerRestarts does.
+	// MaxConcurrentWorkerRestarts is the smaller of
+	// spec.maxConcurrentWorkerRestarts and maxFaultTolerance, in workers. The
+	// maintenance gate does not read it: it applies the two limits apart.
 	// +optional
 	MaxConcurrentWorkerRestarts *int32 `json:"maxConcurrentWorkerRestarts,omitempty"`
 

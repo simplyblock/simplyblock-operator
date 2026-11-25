@@ -58,9 +58,8 @@ func aRunningWindow(
 	return ops, node
 }
 
-// allowing states how many workers the cluster can afford to have down at once,
-// which is the smaller of what it asks for and the fault tolerance the control
-// plane reports.
+// allowing states how many units the storage can afford to have down at once,
+// which is the fault tolerance the control plane reports.
 func allowing(t *testing.T, apiClient client.Client, windows int32) {
 	t.Helper()
 	var cluster simplyblockv1alpha2.StorageCluster
@@ -68,9 +67,24 @@ func allowing(t *testing.T, apiClient client.Client, windows int32) {
 	if err := apiClient.Get(context.Background(), key, &cluster); err != nil {
 		t.Fatalf("reading the cluster: %v", err)
 	}
-	cluster.Status.MaxConcurrentWorkerRestarts = ptr.To(windows)
+	cluster.Status.MaxFaultTolerance = ptr.To(windows)
 	if err := apiClient.Status().Update(context.Background(), &cluster); err != nil {
-		t.Fatalf("stating the cluster's concurrency: %v", err)
+		t.Fatalf("stating the cluster's fault tolerance: %v", err)
+	}
+}
+
+// cappedAt states how many workers the cluster's owner lets restart at once,
+// which is spec.maxConcurrentWorkerRestarts.
+func cappedAt(t *testing.T, apiClient client.Client, workers int32) {
+	t.Helper()
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := client.ObjectKey{Namespace: opsNamespace, Name: opsCluster}
+	if err := apiClient.Get(context.Background(), key, &cluster); err != nil {
+		t.Fatalf("reading the cluster: %v", err)
+	}
+	cluster.Spec.MaxConcurrentWorkerRestarts = ptr.To(workers)
+	if err := apiClient.Update(context.Background(), &cluster); err != nil {
+		t.Fatalf("capping the cluster's worker restarts: %v", err)
 	}
 }
 

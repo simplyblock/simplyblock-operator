@@ -87,18 +87,23 @@ func (r *StorageNodeOpsReconciler) performMaintenanceStep(
 // guardWaitingWindow gives: a window waiting for its turn with no budget up is a
 // queue the drain does not stand in.
 //
-// How many workers may be in maintenance at once is
-// StorageCluster.status.maxConcurrentWorkerRestarts, which is the smaller of what
-// the cluster asks for and the fault tolerance the control plane reports. Counting
-// operations rather than nodes is what makes the gate correct across a
-// multi-socket worker: two nodes on one host go into maintenance together, and the
-// pair is one worker's worth of unavailability — so the count is by distinct
-// worker.
+// It applies two limits, and a window passes only when both let it.
 //
-// A failure domain is counted the same way on a cluster where a domain holds
-// one chunk of a stripe at most (maintenancedomains.go): every worker of one
-// domain is one domain's worth of unavailability, so the workers of a domain
-// are admitted together and the limit counts domains.
+// The first is what the storage can afford, which is the fault tolerance the
+// control plane reports (StorageCluster.status.maxFaultTolerance) and nobody's
+// to configure. Counting operations rather than nodes is what makes it correct
+// across a multi-socket worker: two nodes on one host go into maintenance
+// together, and the pair is one worker's worth of unavailability, so the count
+// is by distinct worker. A failure domain is counted the same way on a cluster
+// where a domain holds one chunk of a stripe at most (maintenancedomains.go):
+// every worker of one domain is one domain's worth of unavailability, so the
+// workers of a domain are admitted together and this limit counts domains.
+//
+// The second is spec.maxConcurrentWorkerRestarts, the owner's cap for the sake
+// of whatever else runs on those workers. It is counted in workers on every
+// cluster, because a worker is what that other software loses, and a cluster
+// that states none has none. It narrows what the storage allows and cannot
+// widen it.
 func (r *StorageNodeOpsReconciler) maintenanceHold(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
@@ -114,16 +119,18 @@ func (r *StorageNodeOpsReconciler) maintenanceHold(
 		return false, err
 	}
 
+	// A cluster whose fault tolerance is unknown is read as one that can afford
+	// one unit down, which is the safe reading.
 	limit := int32(1)
-	if effective := cluster.Status.MaxConcurrentWorkerRestarts; effective != nil && *effective > 0 {
-		limit = *effective
+	if tolerance := cluster.Status.MaxFaultTolerance; tolerance != nil && *tolerance > 0 {
+		limit = *tolerance
 	}
 
 	layout, err := r.maintenanceLayout(ctx, &cluster)
 	if err != nil {
 		return false, err
 	}
-	inFlight, goingDown, err := r.unitsInMaintenance(ctx, ops, node, layout)
+	inFlight, workers, goingDown, err := r.unitsInMaintenance(ctx, ops, node, layout)
 	if err != nil {
 		return false, err
 	}
@@ -131,6 +138,13 @@ func (r *StorageNodeOpsReconciler) maintenanceHold(
 		return false, blockedf(MaintenanceQueued,
 			"%d of %d maintenance slots are taken by %v; this window waits its turn",
 			len(inFlight), limit, inFlight)
+	}
+	if capped := cluster.Spec.MaxConcurrentWorkerRestarts; capped != nil && *capped > 0 &&
+		int32(len(workers)) >= *capped {
+		return false, blockedf(MaintenanceQueued,
+			"%d of the %d workers spec.maxConcurrentWorkerRestarts lets restart at once "+
+				"are in maintenance (%v); this window waits its turn",
+			len(workers), *capped, workers)
 	}
 	// The workers of one failure domain are admitted together and still go down
 	// one after another, because the control plane refuses a shutdown while
@@ -247,8 +261,10 @@ func (r *StorageNodeOpsReconciler) guardWorker(
 
 // unitsInMaintenance names the distinct units, workers or failure domains as
 // the layout says, whose maintenance window has passed Holding, excluding this
-// operation's own unit. goingDown names the workers of this operation's own
-// failure domain whose window has not finished shutting its node down.
+// operation's own unit. workers names the distinct workers whose window has
+// passed Holding, in any unit, excluding this operation's own worker. goingDown
+// names the workers of this operation's own failure domain whose window has
+// not finished shutting its node down.
 //
 // A window still in Holding holds no slot: it is queued behind the same gate, and
 // counting it would let a deployment deadlock with every window waiting for every
@@ -258,13 +274,14 @@ func (r *StorageNodeOpsReconciler) unitsInMaintenance(
 	ops *simplyblockv1alpha2.StorageNodeOps,
 	node *simplyblockv1alpha2.StorageNode,
 	layout maintenanceLayout,
-) (inFlight, goingDown []string, err error) {
+) (inFlight, workers, goingDown []string, err error) {
 	var operations simplyblockv1alpha2.StorageNodeOpsList
 	if err := r.List(ctx, &operations, client.InNamespace(ops.Namespace)); err != nil {
-		return nil, nil, fmt.Errorf("list the namespace's node operations: %w", err)
+		return nil, nil, nil, fmt.Errorf("list the namespace's node operations: %w", err)
 	}
 
 	units := map[string]struct{}{}
+	busy := map[string]struct{}{}
 	for i := range operations.Items {
 		other := &operations.Items[i]
 		if other.Name == ops.Name ||
@@ -288,6 +305,7 @@ func (r *StorageNodeOpsReconciler) unitsInMaintenance(
 		if target.Spec.WorkerNode == node.Spec.WorkerNode {
 			continue
 		}
+		busy[target.Spec.WorkerNode] = struct{}{}
 		// A worker of this operation's own failure domain holds no second slot
 		// either, where a domain is the unit. It is still waited for while its
 		// node is on the way down.
@@ -304,9 +322,14 @@ func (r *StorageNodeOpsReconciler) unitsInMaintenance(
 	for unit := range units {
 		inFlight = append(inFlight, unit)
 	}
+	workers = make([]string, 0, len(busy))
+	for worker := range busy {
+		workers = append(workers, worker)
+	}
 	slices.Sort(inFlight)
+	slices.Sort(workers)
 	slices.Sort(goingDown)
-	return inFlight, goingDown, nil
+	return inFlight, workers, goingDown, nil
 }
 
 // maintenanceShutDown blocks the eviction and takes the backend node down.
