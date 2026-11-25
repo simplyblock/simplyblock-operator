@@ -32,6 +32,9 @@
 #   SNAPSHOT_CLASS   its VolumeSnapshotClass (default simplyblock-csi-snapshotclass)
 #   TESTS_IMAGE      override the tests image (default: oc adm release info --image-for=tests)
 #   RESULTS_DIR      where run directories go (default: results/ next to this script)
+#   LUN_STRESS_PODS  lower the LUN stress test's pod count (ocp-manifest.yaml) for
+#                    a rehearsal on a cluster that cannot hold the full count; a
+#                    run with it set is recorded as such and is not a submission
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -86,7 +89,12 @@ RUN_DIR="${RESULTS_DIR:-$SCRIPT_DIR/results}/level1-$PROFILE-$(date -u +%Y%m%dT%
 mkdir -p "$RUN_DIR"
 sed -e "s|\${STORAGE_CLASS}|$STORAGE_CLASS|g" -e "s|\${SNAPSHOT_CLASS}|$SNAPSHOT_CLASS|g" \
   "$MANIFEST" >"$RUN_DIR/manifest.yaml"
-cp "$SCRIPT_DIR/ocp-manifest.yaml" "$RUN_DIR/ocp-manifest.yaml"
+if [[ -n "${LUN_STRESS_PODS:-}" ]]; then
+  [[ "$LUN_STRESS_PODS" =~ ^[1-9][0-9]*$ ]] || { echo "LUN_STRESS_PODS must be a positive number" >&2; exit 2; }
+  sed -e "s|^\(  PodsTotal:\).*|\1 $LUN_STRESS_PODS|" "$SCRIPT_DIR/ocp-manifest.yaml" >"$RUN_DIR/ocp-manifest.yaml"
+else
+  cp "$SCRIPT_DIR/ocp-manifest.yaml" "$RUN_DIR/ocp-manifest.yaml"
+fi
 
 {
   echo "OpenShift:      $VERSION"
@@ -95,6 +103,7 @@ cp "$SCRIPT_DIR/ocp-manifest.yaml" "$RUN_DIR/ocp-manifest.yaml"
   echo "storage class:  $STORAGE_CLASS"
   echo "snapshot class: $SNAPSHOT_CLASS"
   echo "extra args:     ${EXTRA_ARGS[*]-}"
+  echo "LUN stress:     $(sed -n 's/^  PodsTotal: //p' "$RUN_DIR/ocp-manifest.yaml") pods${LUN_STRESS_PODS:+ (lowered: rehearsal, not a submission)}"
 } | tee "$RUN_DIR/run-info.txt"
 
 LOG_PID=""

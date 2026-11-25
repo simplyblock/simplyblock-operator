@@ -46,4 +46,9 @@ JUnit files under `junit/`, and the monitor output. `results/` is not committed.
 Run one suite at a time on a cluster: the LUN stress test in `ocp-manifest.yaml`
 expects nothing else to run beside it.
 
+The LUN stress test provisions 260 volumes at once, which Red Hat recommends
+for a submission. On a cluster that cannot hold that many, a rehearsal can lower
+the count with `LUN_STRESS_PODS=<n>`; `run-info.txt` then marks the run as a
+rehearsal.
+
 A filesystem ReadWriteMany run over a pNFS class is not part of this yet.
