@@ -1,8 +1,6 @@
-# The policy that carries volumes from site-a to site-b in migration mode:
-# replication that ends in a planned cutover, not a standby that waits for a
-# failover. The mode is sent to the control plane with the backend policy.
-# The one-minute interval is the cadence a supercluster Relocate sets for its
-# own moves, and a retention of two is the least the CRD accepts.
+# Replication that ends in a planned cutover to site-b.
+# A one-minute interval keeps the copy close behind the source.
+# A retention of 2 is the lowest value the CRD accepts.
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: ReplicationPolicy
 metadata:

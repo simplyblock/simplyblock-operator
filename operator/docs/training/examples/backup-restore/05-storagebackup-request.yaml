@@ -1,10 +1,6 @@
-# One backup of one claim, now. A StorageBackup is normally a record the
-# operator writes for a copy the store holds, and a webhook refuses one a user
-# creates. The exception is this shape: spec.source makes the object a request,
-# the way a VolumeSnapshot is a request, and a CEL rule admits exactly one of
-# source and clusterRef. The request sits beside its claim, and the cluster is
-# the one that provisioned the claim's volume. Deleting the request afterward
-# leaves the copy in the store, and the mirror records it beside the cluster.
+# A request for one copy of one claim, now. spec.source makes the object a
+# request rather than a record. It sits beside the claim, and the cluster is
+# found from the claim's volume.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageBackup
 metadata:

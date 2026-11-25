@@ -1,0 +1,14 @@
+# A Talos machine-config document, not a Kubernetes object: it is applied to
+# the control-plane machines with talosctl and is needed only for Managed mode.
+# It lets pods in the simplyblock namespace reach the Talos API with the
+# os:admin role, which the storage node's talosctl Jobs use to patch a worker's
+# machine config. This is the form for Talos 1.14 and later. Earlier releases
+# set machine.features.kubernetesTalosAPIAccess instead.
+#
+#   talosctl --nodes <control-plane ip> patch machineconfig --patch @05a-talos-api-access-config.yaml
+apiVersion: v1alpha1
+kind: KubeTalosAPIAccessConfig
+allowedRoles:
+  - os:admin
+allowedKubernetesNamespaces:
+  - simplyblock

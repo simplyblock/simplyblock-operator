@@ -1,10 +1,5 @@
-# An encrypted StorageClass for the cluster's default pool. The operator wrote
-# the class simplyblock-secure for that pool, without encryption, and a
-# class's parameters cannot be edited, so encryption is a second class drawing
-# from the same pool. The three labels are the assignment to the pool, and
-# cluster_id and pool_name are what the driver needs, both as the operator
-# writes them on the default class. encryption is the one addition, and it is
-# a quoted string because StorageClass parameters are strings.
+# An encrypted StorageClass for the cluster's default pool. The labels assign
+# it to the pool, and encryption is a quoted string.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:

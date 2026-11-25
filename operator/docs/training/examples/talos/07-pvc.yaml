@@ -1,7 +1,7 @@
-# The first volume. The cluster wrote its default pool, talos-default, and the
-# StorageClass simplyblock-talos for it, so nothing is authored between the
-# cluster coming Online and this claim. The node plugin attaches it over
-# NVMe-oF TCP with the initiator modules the Talos kernel builds in.
+# The first volume. Once the cluster is Online it creates its default pool,
+# talos-default, and the StorageClass simplyblock-talos, so nothing else has to
+# be created first. The CSI node plugin connects the volume over NVMe/TCP with
+# the initiator built into the Talos kernel.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

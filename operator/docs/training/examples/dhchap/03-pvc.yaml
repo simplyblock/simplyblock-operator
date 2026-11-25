@@ -1,6 +1,5 @@
-# A claim against the DHCHAP class. Nothing in it mentions DHCHAP: the class
-# carries the restriction, and the volume provisioned for this claim gets a
-# PersistentVolume whose node affinity requires the pool's node label.
+# A claim against the DHCHAP class. The class carries the restriction, so the
+# claim names no DHCHAP setting.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

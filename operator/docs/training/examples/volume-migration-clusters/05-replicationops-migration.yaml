@@ -1,10 +1,6 @@
-# The move itself: the same scope without dryRun, and with deleteSource. The
-# operation waits until every slot of the policy is replicating, creates one
-# migration plan, and reads it back every 30 seconds until each volume has
-# cut over. deleteSource deletes each source volume after its cutover, and the
-# operator then writes storage.simplyblock.io/relocated-to on the volume's
-# PersistentVolume, the handle the CSI driver stages and deletes it through
-# from then on.
+# The move: the same scope as the dry run, without dryRun.
+# deleteSource deletes each source volume after its cutover, and the
+# operator then marks the PersistentVolume with relocated-to.
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: ReplicationOps
 metadata:

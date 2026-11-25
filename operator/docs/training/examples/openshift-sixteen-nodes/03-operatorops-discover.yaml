@@ -1,9 +1,9 @@
-# A discovery run over a dedicated, tainted storage tier. The selector is what
-# keeps the run to the sixteen storage workers, the toleration is what lets a
-# probe land on a tainted one at all, and the device filter is what keeps the
-# boot disk out of every group of the draft. The run copies the toleration into
-# the draft's cluster template, because a taint a probe had to tolerate is one
-# the storage-node pods have to tolerate as well.
+# A discovery run over a tainted storage tier. The selector limits it to the
+# tier, the toleration lets the probes run there, and the filter keeps the boot
+# disk out. The draft copies the toleration for the storage-node pods.
+#
+#   oc apply -f 03-operatorops-discover.yaml
+#   oc get oops tier -n simplyblock -w
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: OperatorOps
 metadata:

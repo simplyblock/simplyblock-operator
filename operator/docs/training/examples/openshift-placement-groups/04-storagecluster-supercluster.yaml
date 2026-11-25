@@ -1,9 +1,6 @@
-# The supercluster, which the expansion creates before any member. The operator
-# writes it with spec.supercluster empty, and the placement strategy and the
-# two capacity thresholds below were added by an administrator afterward: they
-# are the only fields a supercluster may carry beside spec.supercluster, since
-# it has no nodes for any other field to describe. The sizing every other
-# StorageCluster requires is not required here.
+# The supercluster. The operator creates it with spec.supercluster empty. An
+# administrator then set the placement strategy and the two thresholds, the
+# only other fields a supercluster allows.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:

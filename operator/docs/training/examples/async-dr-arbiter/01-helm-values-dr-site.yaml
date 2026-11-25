@@ -1,12 +1,6 @@
-# The Helm values of one DR site, site-a. The same file with the names of
-# site-b is installed on the second site. The managed profile installs the
-# operator and the CSI driver here and no control plane: both sites register
-# with the one control plane on the third site, so a volume replicated from
-# site-a can be promoted on site-b by a call that does not need site-a. The
-# two lines that make the site a Ramen DR cluster are csiaddons.create, which
-# installs the VolumeReplication CRDs, the csi-addons controller-manager, and
-# the driver's csi-addons sidecar, and ramen.drCluster.enabled, which runs
-# Ramen's DR cluster operator. The S3 profiles are the same on all three sites.
+# Helm values of the DR site site-a. Site-b uses the same file. The managed
+# profile installs the operator and the CSI driver and no control plane: both
+# sites register with the control plane on the third site.
 #
 #   helm install simplyblock-operator simplyblock/simplyblock-operator \
 #     --namespace simplyblock --create-namespace --values 01-helm-values-dr-site.yaml
@@ -27,14 +21,14 @@ ramen:
     enabled: true
   s3StoreProfiles:
     - s3ProfileName: site-a-s3
-      s3Bucket: ramen-metadata
-      s3CompatibleEndpoint: https://s3.site-a.example.com
-      s3Region: east
+      s3Bucket: ramen-site-a
+      s3CompatibleEndpoint: https://s3.offsite.example.com
+      s3Region: us-east-1
       s3SecretRef:
-        name: ramen-s3-site-a
+        name: ramen-s3
     - s3ProfileName: site-b-s3
-      s3Bucket: ramen-metadata
-      s3CompatibleEndpoint: https://s3.site-b.example.com
-      s3Region: west
+      s3Bucket: ramen-site-b
+      s3CompatibleEndpoint: https://s3.offsite.example.com
+      s3Region: us-east-1
       s3SecretRef:
-        name: ramen-s3-site-b
+        name: ramen-s3

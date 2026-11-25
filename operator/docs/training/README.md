@@ -95,11 +95,26 @@ Without a token in the API's environment the admin endpoints answer 503.
    .claude/skills/house-style/scripts/quality-gate.sh --changed
    ```
 
-What a chapter teaches is what the operator does today. The surveys behind the
-first ten chapters found the sources that no longer match the code, and a
-chapter reads the code rather than those: the kind table in `operator/README.md`,
-the `Ready` phase in `helm-charts/README.md`, and the `v1alpha1` version in the
-cluster-config asset of the CRD redesign.
+A chapter teaches what the released product does. Its facts come from, in order
+of authority:
+
+1. The code on `main`: this operator, the control plane and storage-node agent
+   in `simplyblock/sbcli`, and the storage engine on the `new_md_journal` branch
+   of simplyblock's SPDK.
+2. The public documentation on `main` of `simplyblock/documentation`.
+
+Where the two disagree, the chapter follows the code, and the documentation
+gets a fix of its own. A chapter teaches only fields on `main`, never ones that
+exist only in open pull requests.
+
+How a chapter is written:
+
+- For a platform engineer who knows Kubernetes and is new to simplyblock,
+  addressed as you. Short sentences, everyday words, one idea per sentence.
+- Facts about the product, never about where they came from: no talk of the
+  code, the design, or this repository.
+- Every section that explains something shows it: a command with the output to
+  expect, a short YAML snippet, or a worked number.
 
 ## Questions and scoring
 

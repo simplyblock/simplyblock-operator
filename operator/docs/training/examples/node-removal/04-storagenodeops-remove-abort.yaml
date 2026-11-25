@@ -1,9 +1,6 @@
-# The removal of example 01 after spec.abort was set, which is how a removal
-# held in Validating is called off. Validating has changed nothing on the
-# node, so the operation ends Aborted and the node keeps serving. From
-# ShuttingDown on, the same edit is refused with an AbortRefused event and the
-# removal runs on. spec.abort is the only field of the spec that can change
-# after creation.
+# The removal of example 01 after spec.abort is set. In Validating, nothing
+# has changed yet, so the operation ends Aborted and the node keeps serving.
+# From ShuttingDown on, the abort is refused with an AbortRefused event.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:

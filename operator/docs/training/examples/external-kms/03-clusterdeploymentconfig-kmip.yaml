@@ -1,8 +1,5 @@
-# The same document with a KMIP appliance as the key store instead of Vault.
-# It is an alternative to the previous file, not a second document: one
-# cluster has one key store, chosen before it is created. The endpoint is a
-# host and a port with no scheme, because KMIP is a binary protocol over TLS
-# rather than an HTTP API. It is the only KMIP setting the API has.
+# The same document with a KMIP appliance instead of Vault. Use one or the
+# other. The endpoint is host:port with no scheme.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

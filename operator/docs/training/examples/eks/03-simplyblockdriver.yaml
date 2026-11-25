@@ -1,7 +1,5 @@
-# The CSI driver, as the object the operator builds it from. Nothing in it is
-# EKS's: the driver reaches the control plane over the pod network and the
-# storage nodes over NVMe/TCP, on any distribution alike. It reports Unavailable
-# until a storage cluster exists, which is expected on a fresh install.
+# The CSI driver. Nothing in it is specific to EKS. It reports Unavailable
+# until a storage cluster exists.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: SimplyblockDriver
 metadata:

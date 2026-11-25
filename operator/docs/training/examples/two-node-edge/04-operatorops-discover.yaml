@@ -1,10 +1,4 @@
-# The discovery run of the edge cluster, written by hand because the chart
-# renders none for the managed profile. It names the two storage nodes, so
-# the run inspects those two and nothing else: an OpenShift arbiter node, or
-# any other machine on the site, is never inspected and never proposed. A fleet
-# of exactly two is proposed as a two-node cluster, clusterMode Dual with a 1+1
-# stripe. The two nodes carry the control-plane role on a two-node OpenShift
-# cluster, so the run has to be allowed to use control-plane nodes as well.
+# The discovery run, written by hand because the managed profile renders none.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: OperatorOps
 metadata:
@@ -13,7 +7,9 @@ metadata:
 spec:
   action: Discover
   discover:
+    # Only these two nodes are inspected. Every other node stays out.
     workers:
       - edge-0
       - edge-1
+    # Both nodes carry the control-plane role on a two-node OpenShift cluster.
     enableControlPlaneNodes: true

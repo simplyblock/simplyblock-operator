@@ -1,7 +1,6 @@
-# A pool whose volumes only two named hosts may connect to. DHCHAP is decided
-# here, at creation, inside volumeDefaults, which is immutable once set. The
-# allowedNodes list is the part that stays editable, and the operator turns it
-# into node labels and into the control plane's allowed hosts for this pool.
+# A storage pool whose volumes only two nodes may connect to, each with
+# DHCHAP authentication. volumeDefaults is fixed once set, and allowedNodes
+# stays editable.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:

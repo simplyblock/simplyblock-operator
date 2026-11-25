@@ -1,7 +1,4 @@
-# A claim against the encrypted class. It names no Secret and no key: the
-# control plane creates the volume's data encryption key and stores it in the
-# cluster's key store, and the CSI driver never handles key material. What the
-# claim decides is only which class, and so whether the volume is encrypted.
+# A claim against the encrypted class. It names no key and no Secret.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,8 +1,6 @@
-# The class for the pool, written by hand. The operator writes a class only for
-# a cluster's default pool, so a DHCHAP pool's class is authored, and the
-# dhchap_node_selector parameter is what keeps its volumes on the allowed
-# hosts. The parameter's value contains the pool's status.uuid, so the class is
-# written after the pool is Ready. The cluster id is the cluster's status.uuid.
+# The StorageClass for the DHCHAP pool, written by hand after the pool is
+# Ready. dhchap_node_selector carries the pool's status.uuid and keeps the
+# volumes on the allowed nodes. cluster_id is the cluster's status.uuid.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:

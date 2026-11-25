@@ -1,11 +1,5 @@
-# The control plane of a three-node EKS cluster, written by hand, which is what
-# the chart's standalone profile hands the operator through the bootstrap
-# ConfigMap as well. Two things are EKS's: the IAM role the ServiceAccounts are
-# annotated with, and the two prerequisites the operator consults only on EKS,
-# the AWS EBS CSI driver and a gp3 StorageClass of it for the control plane's
-# own volumes. The chart renders neither of those two flags, so a chart install
-# leaves them at the CRD's default, which is on. Only a ControlPlane named
-# simplyblock in the operator's namespace is reconciled.
+# The control plane of a three-node EKS cluster. The chart's standalone profile
+# writes this object. Without the chart, apply it yourself.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:

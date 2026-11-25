@@ -1,7 +1,5 @@
-# The first volume. The cluster wrote its default pool, eks-default, and the
-# StorageClass simplyblock-eks for it. The gp3 class the control plane chose
-# for its own volumes is a different class for a different purpose, and a
-# claim against it is an EBS volume rather than a simplyblock one.
+# The first simplyblock volume, from the class the cluster wrote for its
+# default pool.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

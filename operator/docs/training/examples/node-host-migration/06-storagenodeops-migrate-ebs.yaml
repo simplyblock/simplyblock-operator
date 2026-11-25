@@ -1,0 +1,13 @@
+# Moves a node on AWS to a new EC2 instance and takes its EBS drives along.
+# Only EBS volumes tagged simplyblock-storage or simplyblock-jm are moved.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: move-eks-node-to-new-instance
+  namespace: simplyblock
+spec:
+  nodeRef: production-ip-10-0-1-42-0
+  action: Migrate
+  reattachVolume: true
+  migrate:
+    targetWorkerNode: ip-10-0-2-17.ec2.internal

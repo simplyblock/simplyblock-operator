@@ -1,14 +1,11 @@
-# A later growth document that the schema admits and validation refuses. By
-# then prod has 30 storage nodes, one per worker, and this document adds three
-# more. Validation counts the nodes the cluster already has, and the draft is
-# held with the reason MemberTooLarge and this status.message:
+# A later growth, written when prod has 30 storage nodes. 30 + 3 = 33, over
+# the cap of 32, so the draft holds with MemberTooLarge:
 #
 #   the document adds 3 storage nodes to cluster prod, which has 30, and a
 #   cluster holds at most 32
 #
-# The admission webhook does not repeat this check, so approving the document
-# as it stands is admitted and the document then goes Failed. Two workers fit,
-# one each in two of the zones.
+# The webhook does not check the cap. Approved as it is, the document would go
+# Failed. Two workers fit.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

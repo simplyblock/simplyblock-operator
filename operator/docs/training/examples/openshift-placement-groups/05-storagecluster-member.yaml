@@ -1,9 +1,7 @@
-# One member, as the expansion writes it from node set pg-a: the template's
-# sizing, the node set's interfaces, the flags spec.environment resolved to,
-# and superclusterRef naming the supercluster. The suffix kqv was drawn when
-# the member was named and carries no meaning. Nobody writes this object by
-# hand on this path, and the fields the expansion copies from the template are
-# abbreviated to the ones the chapter reads.
+# One placement group, created by the operator from node set pg-a. It has the
+# template's sizing, the node set's interfaces, and superclusterRef naming the
+# supercluster. The suffix kqv is random. Shortened to the fields the chapter
+# discusses.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:

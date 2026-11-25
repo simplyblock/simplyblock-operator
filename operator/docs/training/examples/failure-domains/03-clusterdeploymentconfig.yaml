@@ -1,10 +1,7 @@
-# The draft the run wrote, as it reads after review: six workers in three
-# cabinets of two, one group per cabinet, and failure-domain mode on. The run
-# grouped the workers by hardware and by failure domain, so it produced three
-# groups on its own and named them group-1-nvme-2x3.49T and so on, and the
-# reviewer renamed them after their cabinets, shortened the cluster's name,
-# and set approved. The layout passes the activation rule for a 1+1 stripe:
-# three distinct domains, two workers in each.
+# The reviewed draft: six workers in three cabinets of two, one node set, one
+# group per cabinet, and failure-domain mode on. A 1+1 stripe needs three
+# domains of equal size, and this layout has them. The groups were renamed
+# after their cabinets, cluster.name was shortened, and approved was set.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

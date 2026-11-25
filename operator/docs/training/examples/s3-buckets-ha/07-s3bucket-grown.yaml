@@ -1,8 +1,7 @@
-# The same bucket grown from 200 GiB to 500 GiB. Only capacityBytes changed,
+# The same bucket grown from 200 GiB to 500 GiB. Only capacityBytes changes,
 # and only upward: the CRD refuses a decrease, and the other three spec fields
-# are immutable. The operator raises the claim's request, the CSI resizer grows
-# the volume, and the filesystem is grown on the metadata server, while the
-# bucket stays Ready.
+# are immutable. The bucket stays Ready while the claim, the volume, and the
+# filesystem grow.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: S3Bucket
 metadata:

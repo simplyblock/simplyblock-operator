@@ -1,0 +1,12 @@
+# Moves the volume of the claim orders-db from its placement group to
+# prod-pg-a-kqv, another member of the same supercluster. Cluster-scoped, like
+# the PersistentVolume it names.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: relocate-orders-db
+spec:
+  persistentVolumeName: pvc-7d2c4a91-3e5b-4f08-a6c1-9b8e2d0f5a34
+  action: Relocate
+  relocate:
+    targetClusterRef: prod-pg-a-kqv

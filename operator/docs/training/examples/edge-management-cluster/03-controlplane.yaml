@@ -1,9 +1,5 @@
-# The ControlPlane of the management cluster, as the chart's standalone profile
-# hands it to the operator through the bootstrap ConfigMap with the values of
-# 02-helm-values.yaml. The operator installs FoundationDB, the object store,
-# and the management API from it. Every edge cluster's StorageCluster becomes
-# one backend cluster in this FoundationDB. Only a ControlPlane named
-# simplyblock in the operator's namespace is reconciled.
+# The ControlPlane the chart renders from 02-helm-values.yaml. The operator
+# installs FoundationDB, the object store, and the management API from it.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
@@ -15,10 +11,12 @@ spec:
       image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
       foundationDB:
         replicas: 3
+      # Fixed once the ControlPlane exists.
       tls:
-        enableTLS: true
+        enableTLS: false
         enableMutualTLS: false
         provider: cert-manager
+      # Passed to the management API as SB_ADMIN_TOKENS.
       adminTokenSecretRef:
         name: edge-admin-token
       observability:

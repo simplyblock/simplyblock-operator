@@ -1,0 +1,18 @@
+# What the first storage node creates on a compact cluster. Do not apply it.
+# The machine-config operator then reboots the three nodes one at a time.
+#
+#   oc get kubeletconfig | grep storage-kubelet
+#   oc get mcp master -w
+apiVersion: machineconfiguration.openshift.io/v1
+kind: KubeletConfig
+metadata:
+  name: storage-kubelet-7c1c0b-master
+spec:
+  machineConfigPoolSelector:
+    matchLabels:
+      pools.operator.machineconfiguration.openshift.io/master: ""
+  kubeletConfig:
+    cpuManagerPolicy: static
+    cpuManagerReconcilePeriod: 5s
+    topologyManagerPolicy: single-numa-node
+    reservedSystemCPUs: "0,1"

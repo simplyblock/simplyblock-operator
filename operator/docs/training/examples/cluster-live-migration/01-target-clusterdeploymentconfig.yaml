@@ -1,11 +1,7 @@
-# The target cluster, which has to exist before anything moves: a second
-# StorageCluster, gen2, on three new workers, registered with the same control
-# plane as the source cluster gen1. The document is kept short: the cluster's
-# name, the two required sizing values, and one node group with its interfaces
-# and devices. The stripe, the huge-page floor, and the provisioning budget keep
-# their defaults. It can be written by hand or
-# come from a discovery run restricted to the new workers, and either way it
-# creates nothing until it is approved, as it is here.
+# The target cluster gen2 on three new workers, registered with the same
+# control plane as the source cluster gen1. Only the cluster name, the two
+# required sizing values, and one node group are set. The rest keeps its
+# defaults. Nothing is created until the document is approved.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

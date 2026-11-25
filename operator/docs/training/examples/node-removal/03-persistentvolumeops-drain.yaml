@@ -1,10 +1,8 @@
-# One volume move the drain raises in MigratingVolumes, as the operator writes
-# it: one PersistentVolumeOps per NVMe-oF subsystem on the node, named
-# drain-<drained node UUID>-<PersistentVolume>. Nobody writes this object by
-# hand during a removal. It is shown so that a reader recognizes it in
-# kubectl get pvops and knows which labels select one drain's moves. The kind
-# is cluster-scoped, so it has no namespace and names its creator in
-# spec.creatorRef instead of an owner reference.
+# One volume move that the operator creates in MigratingVolumes. There is one
+# per NVMe-oF subsystem on the node, named drain-<node UUID>-<PersistentVolume>.
+# You do not write it. It is shown so you recognize it in kubectl get pvops.
+# The kind is cluster-scoped, so spec.creatorRef names the removal instead of
+# an owner reference.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: PersistentVolumeOps
 metadata:

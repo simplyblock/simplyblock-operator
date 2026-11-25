@@ -1,9 +1,5 @@
-# The forecast, before anything is changed. Every bound claim on gen1, in every
-# namespace, is planned onto gen2: the control plane answers which volumes would
-# move, to which target nodes, how much data that is, how long it should take,
-# and which risks it sees. Nothing is enrolled, replicated, or cut over, and the
-# operation ends Succeeded once the forecast is in its status. The operation
-# lives in the policy's namespace, because that is where the policy is looked up.
+# Forecasts moving every bound claim on gen1, in every namespace, to gen2.
+# Nothing is enrolled, copied, or cut over.
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: ReplicationOps
 metadata:

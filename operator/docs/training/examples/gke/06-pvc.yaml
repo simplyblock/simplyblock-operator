@@ -1,8 +1,5 @@
-# The first volume. The cluster wrote its default pool, gke-default, and the
-# StorageClass simplyblock-gke for it, so nothing is authored between the
-# cluster coming Online and this claim. The persistent-disk class the
-# coordinators use is not involved: it is the control plane's, not the
-# workloads'.
+# The first simplyblock volume, from the class the cluster wrote for its
+# default pool.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,10 +1,6 @@
-# The Helm values of a standalone install on Amazon EKS: the operator hosts its
-# own control plane, cert-manager issues the certificates, every ServiceAccount
-# the release creates carries the IAM role the control plane and the storage
-# nodes assume, and the first discovery run is confined to the node group that
-# carries instance store. cert-manager has to exist before this install, because
-# the chart renders its Certificates as release objects and refuses to render
-# where cert-manager.io/v1 is not served.
+# Helm values for a standalone install on Amazon EKS. Install cert-manager
+# first: with TLS on, the chart stops rendering when cert-manager.io/v1 is not
+# served.
 #
 #   helm install simplyblock-operator simplyblock/simplyblock-operator \
 #     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
@@ -18,13 +14,16 @@ tls:
 
 controlplane:
   local:
+    # Annotates the control plane and storage-node ServiceAccounts with this role.
     eksRoleARN: arn:aws:iam::123456789012:role/simplyblock-storage
 
 discovery:
   enabled: true
   name: eks
+  # Probes only the nodes of the managed node group named storage.
   nodeSelector:
     eks.amazonaws.com/nodegroup: storage
   enablePartitionedDevices: true
+  # Keeps attached EBS volumes out of the draft.
   deviceFilter:
     pcieModel: Instance Storage

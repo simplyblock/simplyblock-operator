@@ -1,0 +1,33 @@
+# Moves the volumes back from gen2 to gen1: a pair and a migration policy
+# in the other direction, and a new cluster-scoped migration.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPair
+metadata:
+  name: gen2-to-gen1
+  namespace: simplyblock
+spec:
+  sourceCluster: gen2
+  targetCluster: gen1
+---
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPolicy
+metadata:
+  name: gen2-move
+  namespace: simplyblock
+spec:
+  pairRef: gen2-to-gen1
+  mode: migration
+  interval: 1m
+  snapshotRetention: 2
+---
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: move-gen2
+  namespace: simplyblock
+spec:
+  action: migration
+  scope: cluster
+  ref: gen2
+  policyRef: gen2-move
+  deleteSource: true

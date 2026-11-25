@@ -1,9 +1,7 @@
-# The Helm values of a standalone install on an OpenShift cluster whose six
-# workers stand in three cabinets. The chart's own discovery run reads failure
-# domains from topology.kubernetes.io/zone and offers no value for another
-# label, so on a fleet that labels cabinets the chart's run is turned off and
-# the run is written by hand (02-operatorops-discover.yaml). Everything else
-# is what chapter 1 installed.
+# Helm values for a standalone install on OpenShift, with the chart's own
+# discovery run turned off. The chart's run reads failure domains only from
+# topology.kubernetes.io/zone, and these workers are labeled by cabinet, so
+# the run is written by hand (02-operatorops-discover.yaml).
 #
 #   helm install simplyblock-operator simplyblock/simplyblock-operator \
 #     --namespace simplyblock --create-namespace --values 01-helm-values.yaml

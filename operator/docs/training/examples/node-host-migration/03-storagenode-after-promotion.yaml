@@ -1,8 +1,5 @@
-# The StorageNode after the second example's migration has promoted it, as
-# kubectl get prints it in YAML, with the server-written metadata left out. It is
-# shown to make the re-point visible: workerNode names the target, the allow
-# list carries the drives the migration bound, and the name, the slot, and the
-# UUID are what they were before. Only the operator may write these fields.
+# The StorageNode after the second example's migration, as kubectl prints it.
+# Server-written metadata is left out. Only the operator writes these fields.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNode
 metadata:

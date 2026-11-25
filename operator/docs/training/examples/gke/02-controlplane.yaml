@@ -1,12 +1,5 @@
-# The control plane of a three-node GKE cluster, as the chart's standalone
-# profile hands it to the operator through the bootstrap ConfigMap, and as it
-# is written by hand on an install without the chart. Only a ControlPlane named
-# simplyblock in the operator's namespace is reconciled.
-#
-# The coordinators' class is named, because the operator chooses one on its own
-# only on Amazon EKS. Left empty, the claims carry no class, the cluster's
-# default class decides, and local-path-provisioner is installed as a
-# prerequisite the deployment does not use.
+# The control plane of a three-node GKE cluster. The chart's standalone profile
+# writes this object. Without the chart, apply it yourself.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:

@@ -1,0 +1,13 @@
+# A policy that takes no copies and only prunes. It keeps at most five copies
+# of each selected claim, counting copies taken on request.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupPolicy
+metadata:
+  name: keep-five
+  namespace: simplyblock
+spec:
+  clusterRef: prod
+  claimSelector:
+    matchLabels:
+      backup: on-request
+  maxVersions: 5

@@ -1,14 +1,12 @@
-# The refusal example: the same six workers in two cabinets of three, with
-# failure-domain mode on and a 1+1 stripe. The API admits the document, because
-# nothing in its schema is wrong, and validation refuses it on every pass with
-# FailureDomainLayout, so it is held in Draft with this status.message:
+# The same six workers in two cabinets of three, with failure-domain mode on
+# and a 1+1 stripe. The API accepts the document, and validation refuses it
+# with FailureDomainLayout. It waits in Draft with this status.message:
 #
 #   failure-domain mode with 1+1 needs at least 3 distinct failure domains (the
 #   stripe's parity plus two), and the workers are in 2 (cabinet-a: 3,
 #   cabinet-b: 3)
 #
-# It is shown to be read, not applied. Approving it as it stands turns the hold
-# into a failure, because an approved document can no longer be edited.
+# Shown for reading, not for applying.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

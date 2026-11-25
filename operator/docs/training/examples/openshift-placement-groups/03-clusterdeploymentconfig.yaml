@@ -1,10 +1,7 @@
-# The draft the run wrote, as it reads after review: one cluster template and
-# three node sets, one per placement-group label value, each of 32 workers.
-# Three node sets make the document a supercluster document, so approval
-# creates the supercluster prod and one member per node set. Every group below
-# lists its first workers and a comment stands for the rest: the real document
-# names all 32 of each node set, one PCI address per device, with nothing left
-# to a filter.
+# The reviewed draft: one cluster template and three node sets of 32 workers,
+# one per label value. More than one node set creates a supercluster named
+# prod with one placement group per node set. Each group lists its first
+# workers, and a comment stands for the rest.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

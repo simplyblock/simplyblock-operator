@@ -1,9 +1,8 @@
-# A claim enrolled into the move by its annotation. It lives in the
-# simplyblock namespace beside the policy, because a migration at scope
-# policy, volume, or target sees only the ReplicationSlots of its own
-# namespace, which is the policy's. Claims in workload namespaces are moved
-# by scope cluster, which enrolls them itself. Once the claim is Bound, the
-# operator creates the slot move-to-site-b-ledger-db beside it, owned by it.
+# A claim enrolled in the move by its annotation.
+# It lives beside the policy, because scopes policy, volume, and target
+# only see claims in the namespace of the operation.
+# Once the claim is Bound, the operator creates the ReplicationSlot
+# move-to-site-b-ledger-db beside it.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

@@ -1,14 +1,6 @@
-# The draft the discovery run wrote, as it reads after review. The run named
-# it discovered-gke and proposed the cluster discovered-gke-cluster; the
-# reviewer shortened the cluster's name, checked the three nodes of the pool
-# and their two local NVMe SSDs each, and set approved. The environment is the
-# one the run detected, and it is spent on one thing: the storage nodes leave
-# the kubelet configuration alone, because GKE owns it.
-#
-# The zone is on every group because every GKE node carries
-# topology.kubernetes.io/zone. One shared zone is one failure domain, which is
-# too flat for the mode, so the draft left it off with a note and the reviewer
-# states the decision.
+# The draft the discovery run wrote, after review. The reviewer shortened the
+# cluster name, raised vcpuCount, added a backup store, and set approved. The
+# document cannot change after that.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:
@@ -17,29 +9,39 @@ metadata:
 spec:
   approved: true
   environment: GKE
+  hostOS:
+    distro: cos
   cluster:
     name: gke
+    network:
+      spdkOnHostNetwork: true
     maxSubsystemCount: 50
     vcpuCount: 8
+    enableDriveFormat: true
     stripe:
       dataChunks: 1
       parityChunks: 1
-    enableFailureDomains: false
     fabricType: tcp
+    enableFailureDomains: false
     nodeProvisioningBudget: 1
+    backup:
+      endpoint: https://s3.us-east-1.amazonaws.com
+      bucket: simplyblock-gke-backups
+      region: us-east-1
+      credentials:
+        source: Secret
+        secretRef:
+          name: simplyblock-backup-credentials
   nodeSets:
-    - name: gke
+    - name: discovered
       groups:
-        - name: simplyblock-storage
+        - name: group-1-nvme-1x750G
           workers:
             - gke-storage-simplyblock-storage-7f3e2a1b-k2xz
             - gke-storage-simplyblock-storage-7f3e2a1b-p9qw
             - gke-storage-simplyblock-storage-7f3e2a1b-v4mn
           mgmtInterface: eth0
-          dataInterfaces:
-            - eth0
           failureDomain: us-east1-b
           devices:
             nvme:
               - "0000:00:04.0"
-              - "0000:00:05.0"

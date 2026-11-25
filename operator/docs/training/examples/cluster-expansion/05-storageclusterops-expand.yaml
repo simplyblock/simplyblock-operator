@@ -1,9 +1,7 @@
-# An explicit expansion request, written by hand once every node of the growth
-# is Online. Nothing in the operator raises one: the growth document does not,
-# and neither does a node add. The operation posts to the control plane's
-# /api/v2/clusters/<uuid>/expand with no body and then waits for the cluster to
-# read active. It has no state to skip on, so every Expand written posts again.
-# What the control plane does with the request is not in this repository.
+# An Expand request. It asks the control plane to build a storage stack for
+# every online node that has none. Nodes added by a growth document carry the
+# expansion flag and get their stack when they join, so after a growth this
+# request finds nothing to do. The operator never raises one.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageClusterOps
 metadata:

@@ -1,11 +1,9 @@
-# The draft the discovery run wrote, as it reads after review. The run named
-# it discovered-talos and proposed the cluster discovered-talos-cluster. The
-# reviewer shortened the cluster's name, checked the three workers and their
-# devices, and set approved. What is Talos about it: the environment the run
-# detected, the host OS it read from every worker's os-release with no
-# packaging family, the machine-config mode, and the talosctl image the nodes
-# run as a Job to reach the Talos API. The mode is written out although it is
-# the default, so the reviewer sees who is expected to write the machine config.
+# The draft the discovery run wrote, after review. The workers have two NUMA
+# nodes with 16 cores each and two NVMe devices on each NUMA node, so every
+# worker runs two storage nodes, one per NUMA node, with 8 SPDK cores each.
+# The huge-page and kubelet patches are already on the workers, so the mode is
+# Preprovisioned. minHugePagesSize is absent because the devices span two NUMA
+# nodes, and each storage node then uses the amount it computes.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:
@@ -18,12 +16,15 @@ spec:
     distro: talos
   images:
     talosctl:
-      image: ghcr.io/siderolabs/talosctl:v1.13.8
+      image: ghcr.io/siderolabs/talosctl:v1.14.3
   cluster:
     name: talos
-    maxSubsystemCount: 50
-    vcpuCount: 8
-    minHugePagesSize: 32G
+    maxSubsystemCount: 100
+    vcpuCount: 16
+    socketsToUse:
+      - "0"
+      - "1"
+    nodesPerSocket: 1
     stripe:
       dataChunks: 1
       parityChunks: 1
@@ -41,7 +42,10 @@ spec:
           mgmtInterface: eth0
           dataInterfaces:
             - eth0
+          reservedSystemCPU: "0,1"
           devices:
             nvme:
               - "0000:01:00.0"
               - "0000:02:00.0"
+              - "0000:81:00.0"
+              - "0000:82:00.0"

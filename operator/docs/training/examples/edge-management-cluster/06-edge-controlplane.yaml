@@ -1,10 +1,5 @@
-# The ControlPlane of an edge cluster, as the managed profile hands it to the
-# operator with the values of 05-edge-helm-values.yaml. It installs nothing:
-# the operator probes the endpoint and reports Available or Unavailable. No
-# caBundleSecretRef is set, because the Ingress certificate comes from a CA in
-# the system trust store, and because the operator reads caBundleSecretRef for
-# its readiness probe only, not for the calls that create and manage the
-# cluster.
+# The ControlPlane the managed profile renders on an edge from
+# 05-edge-helm-values.yaml. The operator probes the endpoint and reports.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ControlPlane
 metadata:
@@ -13,7 +8,7 @@ metadata:
 spec:
   source:
     managed:
-      endpoint: https://control.central.example.com
+      endpoint: http://control.central.example.com
       credentialsSecretRef:
         name: central-control-plane
       storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4

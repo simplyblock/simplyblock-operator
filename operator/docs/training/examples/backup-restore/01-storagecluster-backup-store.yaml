@@ -1,11 +1,7 @@
-# The backup store of a cluster: the S3 location its copies are written to and
-# the inventory the operator mirrors into StorageBackup objects. spec.backup is
-# a block of the StorageCluster rather than an object of its own, so the whole
-# cluster is shown, reduced to the two sizing fields the API requires. The
-# block is mutable: a cluster that was created without a store gains one by
-# acquiring the field, and every copy already in the bucket, whichever cluster
-# wrote it, becomes visible. The Secret beside it holds the two keys the
-# control plane reads.
+# A storage cluster with a backup store, and the Secret with its keys.
+# spec.backup is part of the StorageCluster, so the whole cluster is shown,
+# with only the two sizing fields the API requires. The store is sent to the
+# control plane when the cluster is created.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageCluster
 metadata:

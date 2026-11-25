@@ -1,9 +1,6 @@
-# The DRPolicy, written on the hub: the two DRClusters and the interval. A
-# non-empty schedulingInterval makes the policy asynchronous, and it equals
-# the VolumeReplicationClass's schedulingInterval on both sites. The selector
-# narrows which VolumeReplicationClasses Ramen considers. All three fields are
-# immutable, so a different cadence is a new DRPolicy. Ramen's hub writes the
-# StorageClass pairs it found into status.async.peerClasses.
+# The DRPolicy, written on the hub: the two DRClusters, the interval, and the
+# label that selects the VolumeReplicationClasses. All three cannot be changed
+# later, so a different interval is a new DRPolicy.
 apiVersion: ramendr.openshift.io/v1alpha1
 kind: DRPolicy
 metadata:

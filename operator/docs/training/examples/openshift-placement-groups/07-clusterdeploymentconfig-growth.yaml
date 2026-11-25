@@ -1,10 +1,7 @@
-# A fourth placement group, added after the supercluster is Online. The
-# document names the supercluster in clusterRef, so each of its node sets
-# becomes a new member rather than nodes of an existing one. The sizing of the
-# new member is stated in spec.cluster as on a creating document: the schema
-# requires cluster.name and the expansion does not use it, because the
-# supercluster already has one. Three of the 32 workers are listed and a
-# comment stands for the rest.
+# Adds a fourth placement group to the supercluster prod. clusterRef names the
+# supercluster, so each node set becomes a new group. spec.cluster sets the new
+# group's sizing. cluster.name is required and not used. Three of the 32
+# workers are listed.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

@@ -1,0 +1,22 @@
+# A move as the rebalancer creates it. It carries labels and a creatorRef
+# that a hand-written move does not. The rebalancer deletes it once it ends.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: rebalance-9a3c7e21-4b5d-4f60-8e12-7c3b1a9d0f54
+  labels:
+    storage.simplyblock.io/rebalancer: "true"
+    storage.simplyblock.io/managed-by: StorageCluster
+    storage.simplyblock.io/target-node: c41f0d2e-8a7b-4e55-b0c3-9f2a6d1e7b84
+spec:
+  persistentVolumeName: pvc-0c7e4b19-2f6a-4d83-9e51-7a2b8c3d4f60
+  action: Migrate
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: prod-worker-5-0
+  creatorRef:
+    kind: StorageCluster
+    namespace: simplyblock
+    name: prod
+    uid: 5e2b8c41-7d3a-4f19-a6e0-2c9d8b1f4a73

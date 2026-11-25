@@ -1,9 +1,5 @@
-# The draft the run wrote, as it reads after review. The run proposed
-# clusterMode Dual and the 1+1 stripe from the fleet of two. The reviewer
-# turned on the central control plane's arbitration and its host fencing,
-# bounded the hold and the lease, shortened the cluster's name, and set
-# approved. Everything below is immutable from that moment. edgeCluster is a
-# statement about the deployment that no controller reads.
+# The draft the run wrote, after review. The run proposed Dual and 1+1. The
+# reviewer added arbitration and host fencing, named the cluster, and approved.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:
@@ -12,18 +8,21 @@ metadata:
 spec:
   approved: true
   environment: OpenShift
+  # A record that this is an edge deployment. It changes no behavior.
   edgeCluster: true
   cluster:
     name: edge
     maxSubsystemCount: 50
     vcpuCount: 8
     minHugePagesSize: 32G
+    # Exactly two storage nodes.
     clusterMode: Dual
+    # The central control plane decides which node continues.
     enableArbitration: true
     arbitration:
-      holdMs: 3000
-      leaseTtlMs: 1500
+      # Kubernetes restarts the losing node's workloads on the winner.
       hostFencing: true
+    # One copy of every chunk on each node.
     stripe:
       dataChunks: 1
       parityChunks: 1

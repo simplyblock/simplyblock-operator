@@ -1,19 +1,21 @@
-# The Helm values of the edge cluster: the managed profile, which installs the
-# operator and the CSI driver here and no control plane. The ControlPlane the
-# chart hands the operator through the bootstrap ConfigMap points at the
-# central management API, and the storage nodes take their image from
-# controlplane.managed.storageNodeImage, because a managed control plane is
-# another cluster's install and carries no image of its own to fall back to.
-# The chart renders no discovery run for this profile, so the OperatorOps is
-# written by hand (04-operatorops-discover.yaml).
+# Helm values for the edge cluster: the operator and the CSI driver run here,
+# and the control plane runs on the central site.
 #
 #   helm install simplyblock-operator simplyblock/simplyblock-operator \
 #     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
 deployment:
+  # No control plane on this cluster. The chart renders no discovery run.
   profile: managed
 
 controlplane:
   managed:
-    endpoint: https://control.central.example.com
+    # The central management API. Plain HTTP, carried over a VPN or private link.
+    endpoint: http://control.central.example.com
+    # The Secret of 02-credentials-secret.yaml, holding the admin token.
     credentialsSecretRef: central-control-plane
+    # The image the storage nodes run. A managed control plane supplies none.
     storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+
+tls:
+  # The CSI driver calls the endpoint as written instead of switching to HTTPS.
+  enabled: false

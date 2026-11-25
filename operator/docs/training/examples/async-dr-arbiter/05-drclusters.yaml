@@ -1,10 +1,5 @@
-# The two DRClusters, written on the hub, one per DR site and named after the
-# managed cluster it describes. Each names the S3 profile its site restores
-# cluster state from, which is required and immutable. The regions differ:
-# managed clusters in one region form a sync group, so two different regions
-# are what an asynchronous pair needs. The CIDR list and clusterFence are
-# left out, because the fence they drive is for sync (Metro) DR, and the CSI
-# driver's fence service fences only a site of a stretched cluster.
+# The two DRClusters, written on the hub, one per DR site and named after its
+# managed cluster. The regions differ, which makes the pair asynchronous.
 apiVersion: ramendr.openshift.io/v1alpha1
 kind: DRCluster
 metadata:

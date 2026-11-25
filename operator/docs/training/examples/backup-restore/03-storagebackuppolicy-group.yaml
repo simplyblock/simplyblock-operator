@@ -1,9 +1,6 @@
-# A scheduled backup of one consistency group as a unit. The group is named
-# rather than selected, because the membership label's key is constant and
-# only its value varies, and a CEL rule admits at most one of claimSelector
-# and consistencyGroupName. The group is resolved by name in the control plane
-# on every pass, so the policy may be applied before the group's first member
-# exists: it waits in Pending and attaches the moment the group appears.
+# An hourly backup of one consistency group as a unit. Each copy is one
+# generation of the group, and the newest 24 generations are kept. The policy
+# may be applied before the group's first claim exists.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageBackupPolicy
 metadata:
@@ -12,6 +9,6 @@ metadata:
 spec:
   clusterRef: prod
   consistencyGroupName: orders
-  schedule: 60m,24 24h,7
-  maxVersions: 31
-  maxAge: 14d
+  schedule: 60m,24
+  maxVersions: 24
+  maxAge: 2d

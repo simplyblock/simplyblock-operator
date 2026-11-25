@@ -1,9 +1,7 @@
-# The growth document as the discovery run wrote it, before review. It is a
-# draft: approved is false, the operator validates it on every pass and writes
-# what it found into status.message, and nothing is created from it. There is
-# no spec.cluster, because prod exists and its sizing, stripe, and failure-domain
-# mode are read from the live StorageCluster. The run split the workers into one
-# group per zone, since the zone is part of what a group shares.
+# The growth document as the discovery run wrote it. approved is false, so
+# nothing is created yet. The operator checks the draft on every pass and
+# writes the result into status.message. There is no spec.cluster: sizing,
+# stripe, and failure domains come from the StorageCluster prod.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

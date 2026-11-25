@@ -1,8 +1,9 @@
-# The draft the discovery run wrote, as it reads after review. The run named
-# it discovered-compact and proposed the cluster discovered-compact-cluster;
-# the reviewer shortened the cluster's name, checked the three workers and
-# their devices, and set approved. Everything below is immutable from that
-# moment, because the document is then the record of what was deployed.
+# The draft the discovery run wrote, after review. The reviewer shortened the
+# cluster name, checked the nodes and devices, and set approved. The spec cannot
+# change after that.
+#
+#   oc edit cdc discovered-compact -n simplyblock
+#   oc get cdc discovered-compact -n simplyblock -w
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:
@@ -15,16 +16,15 @@ spec:
     name: compact
     maxSubsystemCount: 50
     vcpuCount: 8
-    minHugePagesSize: 32G
     stripe:
       dataChunks: 1
       parityChunks: 1
     fabricType: tcp
     nodeProvisioningBudget: 1
   nodeSets:
-    - name: compact
+    - name: control-plane
       groups:
-        - name: default
+        - name: group-1-nvme-2x3.49T
           workers:
             - master-0
             - master-1

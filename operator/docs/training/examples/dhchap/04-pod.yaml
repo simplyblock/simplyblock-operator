@@ -1,8 +1,5 @@
-# The first consumer of the claim. The class carries no allowedTopologies, so
-# before the volume exists the scheduler knows nothing of the restriction. The
-# nodeSelector on the pool's label places the first pod on an allowed host, as
-# the repository's end-to-end test does. Once the PersistentVolume exists, its
-# node affinity keeps every later pod on an allowed host without the selector.
+# The first pod using the claim, pinned to an allowed node by the pool's
+# label. Later pods follow the PersistentVolume's node affinity.
 apiVersion: v1
 kind: Pod
 metadata:

@@ -1,8 +1,8 @@
-# What OpenShift needs before the operator is installed: the simplyblock
-# namespace's service accounts bound to the privileged and anyuid security
-# context constraints. The storage-node pods drive NVMe devices and huge pages
-# on the host, which no restricted SCC allows, and the operator grants nothing
-# of this itself.
+# Lets the simplyblock pods run privileged on OpenShift. Apply this before you
+# install the operator: the operator does not grant SCCs itself.
+#
+#   oc create namespace simplyblock
+#   oc apply -f 01-scc-bindings.yaml
 #
 # The namespace also needs the privileged Pod Security level:
 #

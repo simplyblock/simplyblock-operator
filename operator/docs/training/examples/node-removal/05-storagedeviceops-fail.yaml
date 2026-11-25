@@ -1,8 +1,7 @@
-# Taking one drive out of service instead of the whole node. Fail removes the
-# device from the data path, then fails it, and the cluster rebuilds the
-# redundancy the device held. The StorageDevice is named after its node and
-# the first eight characters of the control plane's device UUID. There is no
-# bare Remove action on a device, and Replace is refused at admission.
+# Takes one drive out of service instead of the whole node. Fail removes the
+# drive from the data path and then fails it. The other nodes rebuild its
+# data from parity. The StorageDevice is named <node>-<first eight characters
+# of the device UUID>.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageDeviceOps
 metadata:

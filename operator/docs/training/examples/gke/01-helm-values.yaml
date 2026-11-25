@@ -1,13 +1,5 @@
-# The Helm values of a standalone install on a three-node GKE cluster: the
-# operator hosts its own control plane, serving and client certificates come
-# from cert-manager through the self-signed ClusterIssuer the chart creates,
-# the coordinators' volumes name GKE's persistent-disk class, and the first
-# discovery run inspects the storage node pool alone, by the label GKE puts on
-# every node of a pool.
-#
-# cert-manager has to be installed before this, because the chart refuses to
-# render with tls.provider cert-manager on a cluster that does not serve
-# cert-manager.io/v1:
+# Helm values for a standalone install on GKE. Install cert-manager first:
+# with TLS on, the chart stops rendering when cert-manager.io/v1 is not served.
 #
 #   helm repo add jetstack https://charts.jetstack.io
 #   helm install cert-manager jetstack/cert-manager \
@@ -27,12 +19,14 @@ tls:
     cluster-issuer: selfsigned
 
 controlplane:
+  # The persistent-disk class for FoundationDB, the object store, and Prometheus.
   storageclass:
     name: standard-rwo
 
 discovery:
   enabled: true
   name: gke
+  # Probes only the nodes of the node pool named simplyblock-storage.
   nodeSelector:
     cloud.google.com/gke-nodepool: simplyblock-storage
   enablePartitionedDevices: true

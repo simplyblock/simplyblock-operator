@@ -1,0 +1,15 @@
+# Restoring a group backup that a policy took. No StorageGroupBackup exists for
+# it, so it is named by the id from the group-backup-id label of its members.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupOps
+metadata:
+  name: restore-orders-hourly
+  namespace: simplyblock
+spec:
+  clusterRef:
+    name: prod
+  groupBackupID: 9d2e4b71-5c3a-4f08-b6e1-2a7c9f0d3e15
+  action: Restore
+  restore:
+    claimName: orders-hourly-restored
+    targetPool: prod-default

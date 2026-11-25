@@ -1,16 +1,12 @@
-# A StorageClass that enrolls every claim bound through it: the annotation
-# names the policy, and the operator creates a ReplicationSlot for each claim
-# once it is Bound. The class is written by hand beside the one the cluster
-# wrote for its default pool, with the same two parameters the driver needs,
-# so that opting in is a choice of class and not an edit to every claim. The
-# policy lives in the simplyblock namespace and the claims do not, hence the
-# <namespace>/<name> form of the reference.
+# A StorageClass that enrolls every claim provisioned through it. A bare
+# policy name means a policy in the claim's own namespace, so a claim in shop
+# follows shop/dr-policy.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: simplyblock-site-a-dr
   annotations:
-    storage.simplyblock.io/replication-policy: simplyblock/dr-policy
+    storage.simplyblock.io/replication-policy: dr-policy
 provisioner: csi.simplyblock.io
 parameters:
   cluster_id: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e

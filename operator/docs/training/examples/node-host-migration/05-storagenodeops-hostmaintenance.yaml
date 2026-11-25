@@ -1,10 +1,4 @@
-# A maintenance window on the node's own host, for contrast: the host is
-# rebooted or repaired and comes back with its drives, so the node returns to
-# the worker it left. The operator raises one of these by itself, named
-# <node>-maintenance, when the worker is cordoned. Written by hand it behaves
-# the same, and it carries another name because the operator calls off a
-# window of that name while the worker is schedulable and the window has not
-# left Holding.
+# A maintenance window started by hand. The node returns to the same worker.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:
@@ -13,4 +7,3 @@ metadata:
 spec:
   nodeRef: production-worker-3-0
   action: HostMaintenance
-  reattachVolume: true

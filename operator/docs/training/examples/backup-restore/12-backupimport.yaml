@@ -1,0 +1,11 @@
+# Making one copy of the cluster prod restorable on the cluster dr. Both
+# clusters are StorageClusters in this namespace.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: BackupImport
+metadata:
+  name: import-orders-db
+  namespace: simplyblock
+spec:
+  sourceClusterName: prod
+  sourceBackupID: 3f6c2a1e-9b0d-4c7e-8a21-5d4f0e6b7c90
+  targetClusterName: dr

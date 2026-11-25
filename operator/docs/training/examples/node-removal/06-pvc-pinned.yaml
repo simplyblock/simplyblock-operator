@@ -1,0 +1,18 @@
+# A claim pinned to one storage node. The annotation holds the UUID of the
+# node the volume must stay on. A removal of that node fails in Validating and
+# names this volume. Remove the annotation, or set another node's UUID, then
+# start a new removal.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: shop
+  annotations:
+    storage.simplyblock.io/selected-storage-node: 5b1e7c42-9d3a-4f08-a6e2-1c7d9b0f4e21
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-csi-sc
+  resources:
+    requests:
+      storage: 100Gi

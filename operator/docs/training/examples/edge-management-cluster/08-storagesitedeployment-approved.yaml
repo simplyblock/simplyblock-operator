@@ -1,8 +1,4 @@
-# The same request after review. The reviewer read status.draft (the nodes,
-# the devices, and the sized cluster template) while the phase was Drafted and
-# then set approved to true. The operator applies the approval onto the draft on
-# the edge with server-side apply, and the draft expands into the StorageCluster
-# edge-north there. Approval is one-way: setting it back to false is refused.
+# The same request after review of status.draft. Approval cannot be undone.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageSiteDeployment
 metadata:
@@ -24,4 +20,5 @@ spec:
     stripe:
       dataChunks: 1
       parityChunks: 1
+  # The operator copies the approval to the draft on the edge.
   approved: true

@@ -1,11 +1,5 @@
-# A hand-written move of one volume to another storage node of the same
-# cluster, based on the repository's sample in
-# operator/config/samples/storage_v1alpha2_persistentvolumeops.yaml.
-#
-# The object is cluster-scoped because a PersistentVolume is, so it carries no
-# namespace of its own. It names the volume, not the claim, and the target as a
-# StorageNode object, not as a backend UUID. The cluster, pool, and volume UUIDs
-# are read from the volume's CSI handle, so no cluster is named here.
+# Moves one volume to another storage node of the same cluster.
+# Cluster-scoped, so there is no namespace. The cluster is read from the volume.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: PersistentVolumeOps
 metadata:

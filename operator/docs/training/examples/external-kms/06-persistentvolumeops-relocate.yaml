@@ -1,10 +1,5 @@
-# A request to move an encrypted volume from one member of a supercluster to
-# another, shown because it is refused. The manifest passes the schema and
-# the CEL rules. The admission webhook then reads the PersistentVolume, finds
-# its volume attribute encryption set to true, and denies the request with
-# EncryptedVolumeNotMovable: a move deletes the source volume, and with it the
-# only copy of the volume's key. The operation's Validating step refuses the
-# same volume again if the webhook was bypassed.
+# A request to move an encrypted volume to another member cluster. The
+# admission webhook refuses it with EncryptedVolumeNotMovable.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: PersistentVolumeOps
 metadata:

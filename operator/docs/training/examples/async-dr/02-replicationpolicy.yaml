@@ -1,13 +1,11 @@
-# The DR schedule on the pair: a replication snapshot every five minutes, the
-# last three kept on the target, in failover mode, which makes the target a
-# standby that is promoted by a ReplicationOps and never on its own. Every
-# volume that follows this policy gets one ReplicationSlot. The interval is the
-# only cadence the API states: there is no recovery-point objective field.
+# The DR schedule on the pair: a snapshot of every enrolled volume every five
+# minutes, the last three kept on site-b. In failover mode, site-b holds the
+# snapshots until a ReplicationOps fails the volumes over.
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: ReplicationPolicy
 metadata:
   name: dr-policy
-  namespace: simplyblock
+  namespace: shop
 spec:
   pairRef: site-a-to-site-b
   mode: failover

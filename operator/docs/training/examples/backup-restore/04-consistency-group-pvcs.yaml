@@ -1,9 +1,6 @@
-# Three claims forming a consistency group. The group is born from the first
-# volume provisioned with the storage.simplyblock.io/consistency-group label,
-# and every later volume carrying the same value joins it at creation and is
-# placed on the same node and logical volume store. A label added to a claim
-# whose volume already exists joins nothing today. The group is what a group
-# policy, a StorageGroupBackup, and a VolumeGroupSnapshot name.
+# Three claims forming the consistency group orders. The label is read when
+# each volume is created: the first claim creates the group, and the others
+# join it and are placed on the same node.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

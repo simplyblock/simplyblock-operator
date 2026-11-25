@@ -1,9 +1,6 @@
-# The same document after review. The reviewer read status.message, which said
-# the document is valid and waiting for spec.approved, checked one worker per
-# zone and two devices per worker, renamed the node set so the StorageNodes
-# record which growth they came from, and set approved. The approving edit is
-# checked at admission against the live cluster, and from then on the spec is
-# immutable: this document is the record of the growth.
+# The same document after review. The node set is renamed, so each new node
+# records which growth made it. approved is true, so the operator creates the
+# nodes. From now on the spec cannot change.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

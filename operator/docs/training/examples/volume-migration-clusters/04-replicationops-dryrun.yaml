@@ -1,9 +1,6 @@
-# The forecast before the move. Every volume of the policy goes into a plan
-# sent with dry_run set, and the control plane answers which target node each
-# volume would land on, how much data is left to copy, and when the move would
-# end. No plan runs and nothing is cut over. The operation ends Succeeded with
-# the answer in status.results and status.forecast, emits MigrationForecast,
-# and holds the policy's lock while it runs.
+# Asks the control plane for the plan and its forecast only.
+# Nothing is copied or cut over. The answer lands in status.results,
+# status.forecast, and status.warnings.
 apiVersion: storage.simplyblock.io/v1alpha1
 kind: ReplicationOps
 metadata:

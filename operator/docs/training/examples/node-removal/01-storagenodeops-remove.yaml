@@ -1,9 +1,7 @@
-# A removal of one storage node, written by hand. It is the same object the
-# StorageNode's finalizer raises when the StorageNode is deleted, which names it
-# <node>-remove. The name here follows that convention on purpose: a later
-# deletion of the Removed StorageNode finds this record instead of raising a
-# second one. Nothing else is needed: the regex for system volumes defaults to
-# ^sb-fio-baseline-.* when spec.remove is left out.
+# A removal of one storage node, written by hand. The name follows the
+# <node>-remove pattern the finalizer uses. A later delete of the Removed
+# StorageNode then finds this record and raises no second removal. Without
+# spec.remove, the system-volume pattern is ^sb-fio-baseline-.*.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageNodeOps
 metadata:

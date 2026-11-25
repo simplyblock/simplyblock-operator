@@ -1,11 +1,5 @@
-# Restoring a whole group backup into a new group of claims. groupBackupRef
-# names the StorageGroupBackup that took it, whose member records sit beside
-# it, so an application namespace restores its own group backup without
-# reading anything in the operator's namespace. A group backup a policy
-# scheduled has no such object and is named by groupBackupID instead. The
-# restore produces one claim per member, named <claimName>-<member>, every one
-# labeled into a new consistency group named after claimName and the
-# operation's UID. A group restore takes no lock on any record.
+# Restoring the group backup orders-now into a new group of claims, one claim
+# per member, named orders-restored-<member>.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageBackupOps
 metadata:

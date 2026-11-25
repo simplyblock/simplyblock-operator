@@ -1,0 +1,28 @@
+# A growth that puts three workers into one zone. prod has 3, 3, and 3 hosts
+# after its first growth. worker-10 brings zone-a to 4. The control plane
+# refuses worker-11, because zone-a would be two hosts ahead of the others.
+# The add is retried and holds its slot until its step runs out.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: prod-growth-3
+  namespace: simplyblock
+spec:
+  approved: true
+  clusterRef: prod
+  nodeSets:
+    - name: growth-2027-02
+      groups:
+        - name: zone-a
+          failureDomain: zone-a
+          workers:
+            - worker-10
+            - worker-11
+            - worker-12
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

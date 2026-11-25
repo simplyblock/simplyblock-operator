@@ -1,0 +1,15 @@
+# A claim on the supercluster's class. The operator chooses the placement
+# group and records it in the claim's storage.simplyblock.io/placement-member
+# annotation before the volume is created.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-db
+  namespace: shop
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-prod
+  resources:
+    requests:
+      storage: 100Gi

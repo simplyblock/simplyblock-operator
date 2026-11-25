@@ -1,10 +1,7 @@
-# A deployment document whose cluster keeps its volume keys in HashiCorp Vault.
-# The key store is stated on the cluster template, before approval, because
-# the operator reads it once: when the StorageCluster the document creates
-# posts itself to the control plane. The expansion copies the block verbatim
-# into StorageCluster.spec.kms, where it is immutable. The endpoint is the
-# whole of the configuration: mounts, role, and credentials are the control
-# plane's defaults, and Vault is prepared to match them.
+# A deployment document whose cluster keeps its volume keys in Vault. The key
+# store is set on the cluster template before approval, because the operator
+# sends it only when it creates the cluster. The endpoint is the whole Vault
+# setting.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: ClusterDeploymentConfig
 metadata:

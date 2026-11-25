@@ -1,11 +1,9 @@
-# The Helm values of a standalone install whose storage is a dedicated tier:
-# sixteen OpenShift workers that carry the label node-role.kubernetes.io/storage
-# and the taint storage.simplyblock.io/dedicated=true:NoSchedule, three of which
-# also carry the label the FoundationDB processes are confined to. The SCC
-# bindings, the namespace labels, and the TLS provider are as in the compact
-# chapter and are not repeated here.
+# Helm values for a standalone install with a dedicated storage tier: sixteen
+# workers with the label node-role.kubernetes.io/storage and the taint
+# storage.simplyblock.io/dedicated=true:NoSchedule. Three of them also carry
+# the FoundationDB label. SCCs, namespace labels, and TLS are as in chapter 1.
 #
-# The labels and the taint are the fleet's own, applied before the install:
+# Label and taint the workers before the install:
 #
 #   for n in $(seq -w 1 16); do
 #     oc label node storage-$n node-role.kubernetes.io/storage=""
@@ -16,7 +14,7 @@
 #   done
 #
 #   helm install simplyblock-operator simplyblock/simplyblock-operator \
-#     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
+#     --namespace simplyblock --values 01-helm-values.yaml
 deployment:
   profile: standalone
 
@@ -27,7 +25,9 @@ tls:
 
 controlplane:
   foundationdb:
+    # Three FoundationDB processes.
     redundancyMode: double
+    # Runs FoundationDB only on the three labeled workers.
     nodeSelector:
       storage.simplyblock.io/foundationdb: ""
     tolerations:
@@ -39,6 +39,7 @@ controlplane:
 discovery:
   enabled: true
   name: tier
+  # Inspects only the tier.
   nodeSelector:
     node-role.kubernetes.io/storage: ""
   tolerations:
@@ -48,6 +49,7 @@ discovery:
       effect: NoSchedule
   enablePartitionedDevices: true
   deviceFilter:
+    # The boot NVMe.
     pcieDenyList:
       - "0000:01:00.0"
     driveSizeRange: 3T-16T

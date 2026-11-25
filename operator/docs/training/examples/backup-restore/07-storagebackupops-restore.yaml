@@ -1,12 +1,6 @@
-# Restoring one copy into a new claim. The operation names the cluster, the
-# record of the copy, and the claim to create. The record is named after the
-# store's identifier for the copy and lives beside the cluster, so backupRef
-# carries the cluster's namespace. The claim must not exist: a restore creates
-# its claim and never adopts one, and that is refused at admission and again
-# by the operation's first step. The pool is named rather than defaulted,
-# because a copy found in a shared store may have been written by a cluster
-# whose pools this one does not have. Size, filesystem, and volume mode come
-# from the backup's status, and nothing here overrides the size.
+# Restoring one copy into a new claim in the namespace app-a. The record of
+# the copy lives beside the cluster in simplyblock. Size, filesystem, and
+# volume mode come from the record.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageBackupOps
 metadata:

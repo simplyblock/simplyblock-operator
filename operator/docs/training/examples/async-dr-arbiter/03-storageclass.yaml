@@ -1,11 +1,6 @@
-# The StorageClass on site-a. A class of the same name exists on site-b,
-# because a failover restores each claim with its original storageClassName
-# and Ramen pairs the two sites' classes by name. The storageid label differs
-# between the sites, since each site has its own storage cluster, and a
-# differing value is what marks the pair as asynchronous. The class carries
-# no storage.simplyblock.io/replication-policy annotation: that annotation
-# enrolls a volume through a ReplicationSlot, and a volume protected by Ramen
-# is owned by a VolumeReplication instead, never by both.
+# The StorageClass on site-a. Site-b has a class of the same name for its own
+# cluster and pool. No replication-policy annotation: Ramen protects these
+# claims through VolumeReplication objects.
 apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:

@@ -1,13 +1,5 @@
-# A claim pinned to one storage node. The annotation's value is the node's
-# backend UUID, the status.uuid of its StorageNode, and a validating webhook
-# refuses a value that names no storage node the control plane knows.
-#
-# At creation the CSI controller places the volume on that node. After that,
-# the pin controller is the only thing that moves the volume: changing the value
-# raises a PersistentVolumeOps to the new node, and removing the annotation
-# leaves the volume where it is. A drain, the auto-rebalancer, and a
-# hand-written PersistentVolumeOps are refused with VolumePinned, and so is a
-# move of any volume sharing this volume's NVMe-oF subsystem.
+# A claim pinned to one storage node by its UUID. Only a change to the pin
+# moves the volume. Every other move fails with VolumePinned.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:

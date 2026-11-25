@@ -1,10 +1,10 @@
-# A second pool on the sixteen-node cluster, beside the default pool tier-default
-# the cluster wrote on its own. A pool is the tenancy unit a cluster is carved
-# into: this one is held to a capacity and a largest volume, and every volume in
-# it is formatted with ext4. The operator writes a StorageClass for the default
-# pool only, so the class for this pool is written by hand and tied to it by the
-# three assignment labels. The cluster id in its parameters is the cluster's
-# status.uuid, read after the cluster is Online.
+# A second pool on the tier, next to tier-default. It has a capacity limit and a
+# largest volume, and formats every volume with ext4. The operator writes a
+# StorageClass only for the default pool, so this class is written by hand.
+# cluster_id is the cluster's status.uuid:
+#
+#   oc get stc tier -n simplyblock -o jsonpath='{.status.uuid}'
+#   oc apply -f 05-storagepool.yaml
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:

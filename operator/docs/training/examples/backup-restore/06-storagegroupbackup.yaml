@@ -1,9 +1,6 @@
-# One backup of a whole consistency group, now: one crash-consistent generation
-# of the group, every member copied, committed as one unit. It sits beside the
-# group's claims, finds them by their membership label, and takes the cluster
-# from their volumes. The member copies are recorded as StorageBackups beside
-# this object, each labeled storage.simplyblock.io/group-backup with its name.
-# Deleting it deletes no copy and no record.
+# One backup of the whole consistency group orders, now: one generation of the
+# group, every member copied, and the group restorable once all are complete.
+# The member copies are recorded beside this object.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StorageGroupBackup
 metadata:

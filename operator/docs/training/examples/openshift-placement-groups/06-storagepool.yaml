@@ -1,9 +1,5 @@
-# A pool on the supercluster. The pool controller creates it under this name
-# in every member, and the capacity limit is the pool's across all of them:
-# each member's backend pool is written an even share of it, and the shares of
-# the members that accept new volumes sum to the ceiling. The pool is Ready
-# once every placement-eligible member holds it, and a member added later
-# receives it before it takes a volume.
+# A pool on the supercluster. It is created under this name in every placement
+# group. The capacity limit is shared evenly by the groups that take volumes.
 apiVersion: storage.simplyblock.io/v1alpha2
 kind: StoragePool
 metadata:
