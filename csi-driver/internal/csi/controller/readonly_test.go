@@ -78,3 +78,24 @@ func TestReadOnlyManyMixedWithAWriterIsRefused(t *testing.T) {
 		t.Errorf("a refused create made %d volumes", n)
 	}
 }
+
+// With ReadWriteOncePod advertised, Kubernetes sends SINGLE_NODE_SINGLE_WRITER
+// for an RWOP claim and SINGLE_NODE_MULTI_WRITER for every RWO one. Both are
+// created, in either volume mode.
+func TestTheReadWriteOncePodModesAreCreated(t *testing.T) {
+	for _, mode := range []csi.VolumeCapability_AccessMode_Mode{
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
+	} {
+		for _, block := range []bool{true, false} {
+			mock := newMockSBCLI()
+			cs := newTestControllerServer(t, mock)
+			req := basicCreateVolumeRequest("pvc-rwop")
+			req.VolumeCapabilities = []*csi.VolumeCapability{capability(block, mode)}
+			if _, err := cs.CreateVolume(context.Background(), req); err != nil {
+				t.Errorf("%s (block %v): CreateVolume = %v, want it created", mode, block, err)
+			}
+			mock.Close()
+		}
+	}
+}

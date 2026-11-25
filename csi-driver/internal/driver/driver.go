@@ -68,33 +68,45 @@ import (
 	"github.com/simplyblock/csi-driver/internal/reconnect"
 )
 
+// The capabilities the controller advertises and the access modes it accepts,
+// which external-provisioner, external-attacher, and kubelet read before they
+// ask anything of the driver.
+var (
+	controllerCapabilities = []csi.ControllerServiceCapability_RPC_Type{
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
+		csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
+		csi.ControllerServiceCapability_RPC_CLONE_VOLUME,
+		csi.ControllerServiceCapability_RPC_GET_VOLUME,
+		// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
+		csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
+		// ReadWriteOncePod: with this and the node's twin advertised, Kubernetes
+		// sends SINGLE_NODE_SINGLE_WRITER for an RWOP claim and
+		// SINGLE_NODE_MULTI_WRITER for an RWO one. Both stage as a single-node
+		// writer; kubelet keeps an RWOP volume to one pod.
+		csi.ControllerServiceCapability_RPC_SINGLE_NODE_MULTI_WRITER,
+	}
+	// A ReadWriteMany claim needs this advertised or it cannot bind. A
+	// filesystem one is served by a pNFS export, and CreateVolume refuses it
+	// on any other fsType. A raw-block one takes the block path.
+	// ReadOnlyMany is raw block only, staged as a read-only dm-linear
+	// device; CreateVolume refuses it for a filesystem.
+	volumeAccessModes = []csi.VolumeCapability_AccessMode_Mode{
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_SINGLE_WRITER,
+		csi.VolumeCapability_AccessMode_SINGLE_NODE_MULTI_WRITER,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+	}
+)
+
 func Run(conf *config.Config) {
 	var (
 		cd  *csicommon.CSIDriver
 		ids *identity.Server
 		cs  *controller.Server
 		ns  *node.Server
-
-		controllerCaps = []csi.ControllerServiceCapability_RPC_Type{
-			csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-			csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
-			csi.ControllerServiceCapability_RPC_LIST_SNAPSHOTS,
-			csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
-			csi.ControllerServiceCapability_RPC_CLONE_VOLUME,
-			csi.ControllerServiceCapability_RPC_GET_VOLUME,
-			// csi.ControllerServiceCapability_RPC_LIST_VOLUMES,
-			csi.ControllerServiceCapability_RPC_VOLUME_CONDITION,
-		}
-		// A ReadWriteMany claim needs this advertised or it cannot bind. A
-		// filesystem one is served by a pNFS export, and CreateVolume refuses it
-		// on any other fsType. A raw-block one takes the block path.
-		// ReadOnlyMany is raw block only, staged as a read-only dm-linear
-		// device; CreateVolume refuses it for a filesystem.
-		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
-			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-			csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
-		}
 	)
 
 	cd = csicommon.NewCSIDriver(conf.DriverName, conf.DriverVersion, conf.NodeID)
@@ -102,8 +114,8 @@ func Run(conf *config.Config) {
 		klog.Fatalln("Failed to initialize CSI Driver.")
 	}
 	if conf.IsControllerServer {
-		cd.AddControllerServiceCapabilities(controllerCaps)
-		cd.AddVolumeCapabilityAccessModes(volumeModes)
+		cd.AddControllerServiceCapabilities(controllerCapabilities)
+		cd.AddVolumeCapabilityAccessModes(volumeAccessModes)
 		// The controller serves the GroupController service (VolumeGroupSnapshot,
 		// design §9); advertise it so the csi-snapshotter routes group snapshots here.
 		cd.EnableGroupController()
