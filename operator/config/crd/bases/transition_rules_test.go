@@ -122,6 +122,11 @@ func TestStorageNodeOpsUpdateRules(t *testing.T) {
 			s.Remove = &simplyblockv1alpha2.RemoveSpec{SystemVolumeFilterRegex: ptr.To(pattern)}
 		}
 	}
+	withTarget := func(worker string, drives ...string) func(*simplyblockv1alpha2.StorageNodeOpsSpec) {
+		return func(s *simplyblockv1alpha2.StorageNodeOpsSpec) {
+			s.Migrate = &simplyblockv1alpha2.MigrateSpec{TargetWorkerNode: worker, NewSsdPcie: drives}
+		}
+	}
 	runTransitions(t, []transition{
 		{
 			name:   "widening the system-volume pattern of a removal",
@@ -140,6 +145,18 @@ func TestStorageNodeOpsUpdateRules(t *testing.T) {
 			create: nodeOps(simplyblockv1alpha2.StorageNodeOpsActionRemove, nil),
 			mutate: asNodeOps(withPattern(".*")),
 			denied: "spec.remove is immutable",
+		},
+		{
+			name:   "changing the drives a migration binds",
+			create: nodeOps(simplyblockv1alpha2.StorageNodeOpsActionMigrate, withTarget("worker-2", "0000:01:00.0")),
+			mutate: asNodeOps(withTarget("worker-2", "0000:02:00.0")),
+			denied: "spec.migrate is immutable",
+		},
+		{
+			name:   "dropping the parameters of a migration",
+			create: nodeOps(simplyblockv1alpha2.StorageNodeOpsActionMigrate, withTarget("worker-2")),
+			mutate: asNodeOps(func(s *simplyblockv1alpha2.StorageNodeOpsSpec) { s.Migrate = nil }),
+			denied: "spec.migrate is immutable",
 		},
 		{
 			name:   "aborting a removal",

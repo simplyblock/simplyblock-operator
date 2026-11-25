@@ -133,6 +133,7 @@ type RemoveSpec struct {
 }
 
 // StorageNodeOpsSpec is one operation to perform against one StorageNode.
+// +kubebuilder:validation:XValidation:rule="has(self.migrate) == has(oldSelf.migrate) && (!has(self.migrate) || self.migrate == oldSelf.migrate)",message="spec.migrate is immutable: Preparing, Relocating, and Promoting each read it, and the placement of the relocated node follows it, so a change or a removal mid-relocation binds one set of drives and records another, or fails the operation after the restart onto the target"
 // +kubebuilder:validation:XValidation:rule="has(self.remove) == has(oldSelf.remove) && (!has(self.remove) || self.remove == oldSelf.remove)",message="spec.remove is immutable: Validating, MigratingVolumes, and Verifying each read the system-volume pattern, and Verifying deletes the volumes it matches, so a pattern changed mid-drain deletes volumes the drain should have moved"
 type StorageNodeOpsSpec struct {
 	// NodeRef names the StorageNode this operation acts on. The operation never
