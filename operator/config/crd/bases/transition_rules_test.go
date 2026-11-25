@@ -13,6 +13,7 @@ import (
 	"sync"
 	"testing"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -400,6 +401,41 @@ func TestStretchedClusterUpdateRules(t *testing.T) {
 			create: stretched(),
 			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) {
 				s.Sites[0].Role, s.Sites[1].Role = simplyblockv1alpha2.StretchedRoleFollower, simplyblockv1alpha2.StretchedRoleLeader
+			}),
+		},
+	})
+}
+
+func TestStorageBackupPolicyUpdateRules(t *testing.T) {
+	policy := func(group string, selector *metav1.LabelSelector) *simplyblockv1alpha2.StorageBackupPolicy {
+		return &simplyblockv1alpha2.StorageBackupPolicy{Spec: simplyblockv1alpha2.StorageBackupPolicySpec{
+			ClusterRef: "cluster-1", ConsistencyGroupName: group, ClaimSelector: selector,
+		}}
+	}
+	asPolicy := func(f func(*simplyblockv1alpha2.StorageBackupPolicySpec)) func(client.Object) {
+		return func(o client.Object) { f(&o.(*simplyblockv1alpha2.StorageBackupPolicy).Spec) }
+	}
+	selector := &metav1.LabelSelector{MatchLabels: map[string]string{"backup": "daily"}}
+	runTransitions(t, []transition{
+		{
+			name:   "pointing a policy at another consistency group",
+			create: policy("group-a", nil),
+			mutate: asPolicy(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) { s.ConsistencyGroupName = "group-b" }),
+			denied: "consistencyGroupName is immutable",
+		},
+		{
+			name:   "switching a claim policy to a consistency group",
+			create: policy("", selector),
+			mutate: asPolicy(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) {
+				s.ClaimSelector, s.ConsistencyGroupName = nil, "group-a"
+			}),
+			denied: "consistencyGroupName is immutable",
+		},
+		{
+			name:   "widening the claims a policy selects",
+			create: policy("", selector),
+			mutate: asPolicy(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) {
+				s.ClaimSelector = &metav1.LabelSelector{MatchLabels: map[string]string{"backup": "hourly"}}
 			}),
 		},
 	})

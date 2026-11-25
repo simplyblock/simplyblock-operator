@@ -32,6 +32,7 @@ const (
 // schedule itself, because a backup schedule that stopped when the operator was
 // down would be one nobody could rely on.
 // +kubebuilder:validation:XValidation:rule="!(has(self.claimSelector) && has(self.consistencyGroupName))",message="set at most one of claimSelector and consistencyGroupName: a policy backs up either independent claims or one whole consistency group"
+// +kubebuilder:validation:XValidation:rule="(has(self.consistencyGroupName) ? self.consistencyGroupName : '') == (has(oldSelf.consistencyGroupName) ? oldSelf.consistencyGroupName : '')",message="consistencyGroupName is immutable, set or unset: the control plane has no call that detaches a policy from a group, so the old group, or the claims a selector had attached, would stay under the policy"
 type StorageBackupPolicySpec struct {
 	// ClusterRef names the StorageCluster whose backup target this policy writes
 	// to.
