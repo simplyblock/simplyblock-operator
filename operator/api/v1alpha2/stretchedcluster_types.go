@@ -97,7 +97,8 @@ type StretchedSite struct {
 
 	// Discover is the discovery this site runs: which workers are inspected.
 	// Changing it before approval runs another discovery on this site only,
-	// which rewrites this site's draft; after approval it is refused.
+	// which finds the site's draft already written and leaves it as it is.
+	// After approval it is refused.
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 }

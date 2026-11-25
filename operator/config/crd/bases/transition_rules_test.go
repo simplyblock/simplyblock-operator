@@ -341,6 +341,14 @@ func TestStorageSiteDeploymentUpdateRules(t *testing.T) {
 			denied: "sizing cannot change once",
 		},
 		{
+			name:   "rediscovering an approved deployment",
+			create: approvedSiteDeployment(),
+			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) {
+				s.Discover.Workers = []string{"worker-9"}
+			}),
+			denied: "discover cannot change once",
+		},
+		{
 			name:   "resizing a deployment under review",
 			create: siteDeployment(),
 			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) {

@@ -90,8 +90,10 @@ spec:
                       rule: self == oldSelf
                 discover:
                   description: |-
-                    Discover is the discovery the site runs first. Changing it runs another
-                    discovery, which rewrites the draft.
+                    Discover is the discovery the site runs first. Changing it before approval
+                    runs another discovery, which finds the draft already written and leaves
+                    it as it is; a different draft takes a new draftName. After approval it is
+                    refused.
                   properties:
                     enableControlPlaneNodes:
                       description: |-
@@ -190,6 +192,8 @@ spec:
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
                 - message: 'sizing cannot change once the deployment is approved: the site''s approved draft refuses the re-apply, and the request would report Failed for a running cluster'
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || (has(self.sizing) == has(oldSelf.sizing) && (!has(self.sizing) || self.sizing == oldSelf.sizing))'
+                - message: 'discover cannot change once the deployment is approved: the approved draft is the record of the deployment, and another discovery does not rewrite it'
+                  rule: '!has(oldSelf.approved) || !oldSelf.approved || (has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover))'
             status:
               description: StorageSiteDeploymentStatus is what the site reports back, projected.
               properties:
