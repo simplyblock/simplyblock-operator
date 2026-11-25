@@ -21,9 +21,12 @@ import (
 // reading the budget sees.
 const holdSinceAnnotation = "storage.simplyblock.io/node-add-hold-since"
 
-func storageNodeIn(name string, step simplyblockv1alpha2.StorageNodeStep) *simplyblockv1alpha2.StorageNode {
+// theNode is the one storage node these tests add.
+const theNode = "node-a"
+
+func storageNodeIn(step simplyblockv1alpha2.StorageNodeStep) *simplyblockv1alpha2.StorageNode {
 	return &simplyblockv1alpha2.StorageNode{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: theNode, Namespace: testNamespace},
 		Status: simplyblockv1alpha2.StorageNodeStatus{
 			Phase: simplyblockv1alpha2.StorageNodePhaseProvisioning,
 			Step:  statemachine.KubeSnapshot{State: string(step)},
@@ -49,16 +52,16 @@ func moveCoordinators(t *testing.T, c client.Client, data string) {
 	}
 }
 
-func setStep(t *testing.T, c client.Client, name string, step simplyblockv1alpha2.StorageNodeStep) {
+func setStep(t *testing.T, c client.Client, step simplyblockv1alpha2.StorageNodeStep) {
 	t.Helper()
 	var node simplyblockv1alpha2.StorageNode
-	key := client.ObjectKey{Namespace: testNamespace, Name: name}
+	key := client.ObjectKey{Namespace: testNamespace, Name: theNode}
 	if err := c.Get(context.Background(), key, &node); err != nil {
-		t.Fatalf("read %s: %v", name, err)
+		t.Fatalf("read %s: %v", theNode, err)
 	}
 	node.Status.Step.State = string(step)
 	if err := c.Update(context.Background(), &node); err != nil {
-		t.Fatalf("move %s to %s: %v", name, step, err)
+		t.Fatalf("move %s to %s: %v", theNode, step, err)
 	}
 }
 
@@ -69,7 +72,7 @@ func TestACoordinatorMoveDuringANodeAddDoesNotRollTheTaskRunner(t *testing.T) {
 	ctx := context.Background()
 	cp := localControlPlane()
 	c := newClient(t, cp, clusterFileConfigMap("sb:abc@10.0.0.1:4500"),
-		storageNodeIn("node-a", simplyblockv1alpha2.StorageNodeStepAwaitingSlot))
+		storageNodeIn(simplyblockv1alpha2.StorageNodeStepAwaitingSlot))
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 
 	if err := r.applyEverything(ctx, cp); err != nil {
@@ -77,7 +80,7 @@ func TestACoordinatorMoveDuringANodeAddDoesNotRollTheTaskRunner(t *testing.T) {
 	}
 	before := stampOf(t, c, ComponentTasks)
 
-	setStep(t, c, "node-a", simplyblockv1alpha2.StorageNodeStepResolving)
+	setStep(t, c, simplyblockv1alpha2.StorageNodeStepResolving)
 	moveCoordinators(t, c, "sb:def@10.0.0.2:4500")
 	if err := r.applyEverything(ctx, cp); err != nil {
 		t.Fatalf("apply during the add: %v", err)
@@ -92,7 +95,7 @@ func TestACoordinatorMoveDuringANodeAddDoesNotRollTheTaskRunner(t *testing.T) {
 	}
 
 	// The add settles, and the runner catches up with the file.
-	setStep(t, c, "node-a", "")
+	setStep(t, c, "")
 	if err := r.applyEverything(ctx, cp); err != nil {
 		t.Fatalf("apply after the add: %v", err)
 	}
@@ -108,7 +111,7 @@ func TestTheTaskRunnerIsNotEvictedWhileItAddsANode(t *testing.T) {
 	ctx := context.Background()
 	cp := localControlPlane()
 	c := newClient(t, cp, clusterFileConfigMap("sb:abc@10.0.0.1:4500"),
-		storageNodeIn("node-a", simplyblockv1alpha2.StorageNodeStepAwaitingSlot))
+		storageNodeIn(simplyblockv1alpha2.StorageNodeStepAwaitingSlot))
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 
 	if err := r.applyEverything(ctx, cp); err != nil {
@@ -126,7 +129,7 @@ func TestTheTaskRunnerIsNotEvictedWhileItAddsANode(t *testing.T) {
 	for _, step := range []simplyblockv1alpha2.StorageNodeStep{
 		simplyblockv1alpha2.StorageNodeStepPosting, simplyblockv1alpha2.StorageNodeStepResolving,
 	} {
-		setStep(t, c, "node-a", step)
+		setStep(t, c, step)
 		if err := r.applyEverything(ctx, cp); err != nil {
 			t.Fatalf("apply in %s: %v", step, err)
 		}
@@ -135,7 +138,7 @@ func TestTheTaskRunnerIsNotEvictedWhileItAddsANode(t *testing.T) {
 		}
 	}
 
-	setStep(t, c, "node-a", "")
+	setStep(t, c, "")
 	if err := r.applyEverything(ctx, cp); err != nil {
 		t.Fatalf("apply after the add: %v", err)
 	}
@@ -159,7 +162,7 @@ func TestANodeThatIsNotBeingAddedHoldsNothing(t *testing.T) {
 		"",
 	} {
 		cp := localControlPlane()
-		c := newClient(t, cp, storageNodeIn("node-a", step))
+		c := newClient(t, cp, storageNodeIn(step))
 		r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
 		hold, err := r.tasksHoldNow(context.Background(), testNamespace)
 		if err != nil {
@@ -178,7 +181,7 @@ func TestTheHoldIsReleasedAfterItsLimit(t *testing.T) {
 	now := time.Date(2026, 11, 25, 19, 50, 0, 0, time.UTC)
 	cp := localControlPlane()
 	c := newClient(t, cp, clusterFileConfigMap("sb:abc@10.0.0.1:4500"),
-		storageNodeIn("node-a", simplyblockv1alpha2.StorageNodeStepResolving))
+		storageNodeIn(simplyblockv1alpha2.StorageNodeStepResolving))
 	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t), Now: func() time.Time { return now }}
 
 	if err := r.applyEverything(ctx, cp); err != nil {
@@ -225,9 +228,9 @@ func TestTheHoldIsReleasedAfterItsLimit(t *testing.T) {
 
 func TestOnlyANodeEnteringOrLeavingItsAddReconcilesTheControlPlane(t *testing.T) {
 	p := nodeAddStepChanged()
-	slot := storageNodeIn("node-a", simplyblockv1alpha2.StorageNodeStepAwaitingSlot)
-	posting := storageNodeIn("node-a", simplyblockv1alpha2.StorageNodeStepPosting)
-	resolving := storageNodeIn("node-a", simplyblockv1alpha2.StorageNodeStepResolving)
+	slot := storageNodeIn(simplyblockv1alpha2.StorageNodeStepAwaitingSlot)
+	posting := storageNodeIn(simplyblockv1alpha2.StorageNodeStepPosting)
+	resolving := storageNodeIn(simplyblockv1alpha2.StorageNodeStepResolving)
 
 	for _, tc := range []struct {
 		name     string
@@ -237,7 +240,7 @@ func TestOnlyANodeEnteringOrLeavingItsAddReconcilesTheControlPlane(t *testing.T)
 		{"takes its slot", slot, posting, true},
 		{"moves on inside the add", posting, resolving, false},
 		{"a status write inside the add", resolving, resolving, false},
-		{"settles", resolving, storageNodeIn("node-a", ""), true},
+		{"settles", resolving, storageNodeIn(""), true},
 		{"a status write outside the add", slot, slot, false},
 	} {
 		if got := p.Update(event.UpdateEvent{ObjectOld: tc.old, ObjectNew: tc.new}); got != tc.want {
