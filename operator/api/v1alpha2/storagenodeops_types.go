@@ -133,6 +133,7 @@ type RemoveSpec struct {
 }
 
 // StorageNodeOpsSpec is one operation to perform against one StorageNode.
+// +kubebuilder:validation:XValidation:rule="has(self.remove) == has(oldSelf.remove) && (!has(self.remove) || self.remove == oldSelf.remove)",message="spec.remove is immutable: Validating, MigratingVolumes, and Verifying each read the system-volume pattern, and Verifying deletes the volumes it matches, so a pattern changed mid-drain deletes volumes the drain should have moved"
 type StorageNodeOpsSpec struct {
 	// NodeRef names the StorageNode this operation acts on. The operation never
 	// owns its target, because deleting the record of an operation must not delete

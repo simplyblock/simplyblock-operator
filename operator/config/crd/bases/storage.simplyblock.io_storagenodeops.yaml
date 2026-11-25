@@ -310,6 +310,9 @@ spec:
                 - action
                 - nodeRef
               type: object
+              x-kubernetes-validations:
+                - message: 'spec.remove is immutable: Validating, MigratingVolumes, and Verifying each read the system-volume pattern, and Verifying deletes the volumes it matches, so a pattern changed mid-drain deletes volumes the drain should have moved'
+                  rule: has(self.remove) == has(oldSelf.remove) && (!has(self.remove) || self.remove == oldSelf.remove)
             status:
               description: StorageNodeOpsStatus is the observed state of one node operation.
               properties:
