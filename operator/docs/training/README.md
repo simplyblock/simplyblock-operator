@@ -129,5 +129,5 @@ a Let's Encrypt certificate through the HTTP-01 challenge, which accepts Let's
 Encrypt's subscriber agreement, redirects HTTP to HTTPS, and renews the
 certificate on a timer; port 443 has to be open beside port 80. A host without
 a DNS name of its own can use a name that resolves to its address, such as
-`<a-b-c-d>.sslip.io`. Without HTTPS the passwords, the session cookie, and the
+`<a-b-c-d>.sslip.io`, and `TLS_DOMAIN=sslip` has the host derive that name from its own public address at boot. Without HTTPS the passwords, the session cookie, and the
 admin token cross the network in the clear.

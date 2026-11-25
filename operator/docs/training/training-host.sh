@@ -45,7 +45,18 @@ TLS_DOMAIN="${TLS_DOMAIN:-__TLS_DOMAIN__}"
 case "$ALLOWED_EMAIL_DOMAINS" in __*__) ALLOWED_EMAIL_DOMAINS="" ;; esac
 case "$TLS_DOMAIN" in __*__) TLS_DOMAIN="" ;; esac
 
-dnf install -y nginx python3
+# TLS_DOMAIN=sslip names the host after its own public address, a-b-c-d.sslip.io,
+# which resolves to that address without a DNS record of its own. The address
+# is read from the instance metadata, because it is not known before launch.
+if [ "$TLS_DOMAIN" = "sslip" ]; then
+  imds_token="$(curl -fsS -X PUT http://169.254.169.254/latest/api/token \
+    -H 'X-aws-ec2-metadata-token-ttl-seconds: 60')"
+  public_ip="$(curl -fsS -H "X-aws-ec2-metadata-token: $imds_token" \
+    http://169.254.169.254/latest/meta-data/public-ipv4)"
+  TLS_DOMAIN="${public_ip//./-}.sslip.io"
+fi
+
+dnf install -y nginx python3 python3-pip
 
 rm -rf /usr/share/nginx/html/*
 curl -fsSL "$SITE_URL" | tar -xz -C /usr/share/nginx/html --strip-components=1
@@ -115,6 +126,10 @@ systemctl enable --now nginx
 # comes from PyPI into its own virtual environment, because the distribution
 # does not package it, and a timer renews the certificate.
 if [ -n "$TLS_DOMAIN" ]; then
+  # certbot finds the server block to secure by its server_name, and the
+  # distribution's default block answers to `_` only.
+  sed -i "s/server_name  *_;/server_name $TLS_DOMAIN _;/" /etc/nginx/nginx.conf
+  systemctl reload nginx
   python3 -m venv /opt/certbot
   /opt/certbot/bin/pip install --quiet certbot certbot-nginx
   /opt/certbot/bin/certbot --nginx -d "$TLS_DOMAIN" --non-interactive --agree-tos \
