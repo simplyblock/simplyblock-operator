@@ -202,6 +202,9 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 	}
 
 	current := machine.CurrentState()
+	// awaitingNodes is what the document says it is waiting on while a node it
+	// created is still being provisioned, and empty otherwise.
+	awaitingNodes := ""
 	if current == stepActivating {
 		waiting, err := r.awaitingPeerSite(ctx, config)
 		if err != nil {
@@ -222,6 +225,11 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 		// wait against this step failed the document while the nodes were on
 		// their way, and a failed document is terminal: the nodes came online
 		// with nothing left to ask for the activation.
+		//
+		// Only the deadline is held. The step is still performed: a
+		// supercluster's members are activated one by one, each as soon as its
+		// own nodes are online, and a member that is ready does not wait for
+		// another member's nodes. The step emits AwaitingNodes itself.
 		node, phase, err := r.nodeBeingProvisioned(ctx, config)
 		if err != nil {
 			return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
@@ -231,14 +239,12 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 			if err := r.rearmActivating(ctx, config); err != nil {
 				return ctrl.Result{}, err
 			}
-			r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
-				"StorageNode %s is %s rather than Online", node, phase))
-			return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
-				simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding,
-				fmt.Sprintf("waiting on %s: StorageNode %s is %s", current, node, phase))
+			awaitingNodes = fmt.Sprintf("waiting on %s: StorageNode %s is %s", current, node, phase)
 		}
 	}
-	if machine.TimeoutReached() {
+	// The machine was read before the deadline was moved, so what it says about
+	// the deadline is not asked while the step is waiting for its nodes.
+	if awaitingNodes == "" && machine.TimeoutReached() {
 		r.emit(config, corev1.EventTypeWarning, StepDeadlineExceeded,
 			fmt.Sprintf("Step %s outlived its deadline", current))
 		return r.fail(ctx, config, fmt.Sprintf("step %s outlived its deadline", current))
@@ -257,9 +263,12 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 			simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding, err.Error())
 	}
 	if !done {
+		message := fmt.Sprintf("waiting on %s", current)
+		if awaitingNodes != "" {
+			message = awaitingNodes
+		}
 		return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
-			simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding,
-			fmt.Sprintf("waiting on %s", current))
+			simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding, message)
 	}
 
 	if machine.IsTerminal() {
