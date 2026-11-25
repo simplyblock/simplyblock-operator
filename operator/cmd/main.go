@@ -86,6 +86,7 @@ import (
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/pool"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/twonode"
 	twonodecp "github.com/simplyblock/simplyblock-operator/internal/controllers/twonode/cpadapter"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/virtualization"
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/vrgfollow"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
@@ -1485,6 +1486,35 @@ func main() {
 		log: setupLog, disc: workDiscovery, register: registerVRGFollower,
 	}); err != nil {
 		setupLog.Error(err, "unable to add the Ramen VolumeReplicationGroup watcher")
+		os.Exit(1)
+	}
+
+	// CDI's StorageProfiles of simplyblock's classes, which nothing else fills
+	// and without which a VM's disk is not claimed ReadWriteMany.
+	registerStorageProfiles := func() error {
+		if err := (&virtualization.StorageProfileReconciler{
+			Client:   mgr.GetClient(),
+			Scheme:   mgr.GetScheme(),
+			Recorder: mgr.GetEventRecorder("storageprofile-controller"),
+		}).SetupWithManager(ctrlMgr); err != nil {
+			return fmt.Errorf("controller StorageProfile: %w", err)
+		}
+		return nil
+	}
+	hasCDI, err := serverHasResource(workDiscovery, cdiGroupVersion, cdiStorageProfileResource)
+	if err != nil {
+		setupLog.Error(err, "unable to determine whether CDI's StorageProfile is served")
+		os.Exit(1)
+	}
+	if hasCDI {
+		if err := registerStorageProfiles(); err != nil {
+			setupLog.Error(err, "unable to create controller")
+			os.Exit(1)
+		}
+	} else if err := mgr.Add(&cdiLateStart{
+		log: setupLog, disc: workDiscovery, register: registerStorageProfiles,
+	}); err != nil {
+		setupLog.Error(err, "unable to add the CDI StorageProfile watcher")
 		os.Exit(1)
 	}
 
