@@ -258,7 +258,10 @@ func (c *Client) GrowClusterDevices(ctx context.Context, clusterID string) (Clus
 		return ClusterDeviceGrowth{}, err
 	}
 
-	resp, err := c.api.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(ctx, cluster)
+	// No lun_factor or lun_size: the devices grow to what their block devices
+	// already offer, and no array LUN is grown first.
+	resp, err := c.api.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse(
+		ctx, cluster, &cpapi.ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams{})
 	if err != nil {
 		return ClusterDeviceGrowth{}, fmt.Errorf("grow devices of cluster %s: %w", clusterID, err)
 	}

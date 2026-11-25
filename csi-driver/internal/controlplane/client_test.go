@@ -222,6 +222,36 @@ func TestFindPoolForVolume(t *testing.T) {
 	}
 }
 
+// TestFindPoolForVolumeNotFoundIsTyped pins that a volume no pool holds is
+// ErrVolumeNotFound, and that a control plane failing to answer is not: the
+// node's reconnect loop searches other clusters on the first and must not on
+// the second.
+func TestFindPoolForVolumeNotFoundIsTyped(t *testing.T) {
+	twoPools := []StoragePool{
+		{Name: testPool1Name, UUID: testPool1UUID},
+		{Name: testPool2Name, UUID: testPool2UUID},
+	}
+	_, err := newTestClient(newFindPoolTransport(twoPools, "", testVolUUID, nil)).
+		findPoolForVolume(context.Background(), testVolUUID)
+	if !errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("not in any pool: error = %v, want ErrVolumeNotFound", err)
+	}
+
+	_, err = newTestClient(newFindPoolTransport(twoPools, "", testVolUUID, map[string]bool{testPool1UUID: true})).
+		findPoolForVolume(context.Background(), testVolUUID)
+	if err == nil || errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("500 from a pool: error = %v, want a non-not-found error", err)
+	}
+
+	cc := &ClusterClient{API: newTestClient(newFindPoolTransport(twoPools, "", testVolUUID, nil))}
+	if _, err := cc.VolumeNodeInfo(context.Background(), testVolUUID); !errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("VolumeNodeInfo: error = %v, want ErrVolumeNotFound", err)
+	}
+	if _, err := cc.LvolConnections(context.Background(), testVolUUID, ""); !errors.Is(err, ErrVolumeNotFound) {
+		t.Fatalf("LvolConnections: error = %v, want ErrVolumeNotFound", err)
+	}
+}
+
 func TestGetPoolUUIDByName(t *testing.T) {
 	pools := []StoragePool{
 		{Name: testPool1Name, UUID: testPool1UUID},
