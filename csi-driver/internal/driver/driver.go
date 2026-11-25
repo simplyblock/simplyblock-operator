@@ -87,11 +87,13 @@ func Run(conf *config.Config) {
 		}
 		// A ReadWriteMany claim needs this advertised or it cannot bind. A
 		// filesystem one is served by a pNFS export, and CreateVolume refuses it
-		// on any other fsType. A raw-block one takes the block path. The other
-		// multi-node modes are deliberately absent.
+		// on any other fsType. A raw-block one takes the block path.
+		// ReadOnlyMany is raw block only, staged as a read-only dm-linear
+		// device; CreateVolume refuses it for a filesystem.
 		volumeModes = []csi.VolumeCapability_AccessMode_Mode{
 			csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
 			csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
+			csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
 		}
 	)
 

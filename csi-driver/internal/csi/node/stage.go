@@ -378,6 +378,9 @@ func (ns *Server) attachPlan(
 	node := ns.stack.node(hostNQN, ns.priorFormat(volumeID, vc))
 	volume := stackVolume(stagingTargetPath, vc, volCap)
 	shape := ns.attachShape(volumeID, shapeFor(vc, volCap))
+	if err := refuseUnenforcedReadOnly(volume, shape); err != nil {
+		return nil, err
+	}
 	return planFor(node, connection, volume, vdoOptions(vc), shape), nil
 }
 

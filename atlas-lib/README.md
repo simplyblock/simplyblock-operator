@@ -121,6 +121,7 @@ atlas/
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params
 │   ├── params.go           String/Int/Float/BoolParam map helpers
 │   ├── stripe.go           ParseStripe: stripe_width / stripe_size, read the same by the driver and the operator
+│   ├── claimshapes.go      ClaimShapesFor / HostBound / CanBeCloneTarget: the access and volume modes a class allows
 │   ├── index.go            shared index names + pure key funcs
 │   ├── informer.go         InformerResolver: client-go informer-backed Resolver
 │   ├── live.go             LiveResolver: uncached clientset-backed Resolver

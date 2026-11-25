@@ -98,7 +98,8 @@ func TestAnOrdinaryClassIsClaimedReadWriteManyBlockFirst(t *testing.T) {
 		"claimPropertySets": claimSets(
 			[2]string{"ReadWriteMany", "Block"},
 			[2]string{"ReadWriteOnce", "Block"},
-			[2]string{"ReadWriteOnce", "Filesystem"}),
+			[2]string{"ReadWriteOnce", "Filesystem"},
+			[2]string{"ReadOnlyMany", "Block"}),
 		"cloneStrategy":              "csi-clone",
 		"dataImportCronSourceFormat": "snapshot",
 	}

@@ -25,8 +25,10 @@ type ClaimShape struct {
 // device. Every other class is a block device, which a host-bound class (see
 // HostBound) serves to one host at a time. The rest serve raw block to several
 // hosts at once, and list that first: it is what CDI gives a claim that names
-// no mode, and what a VM needs to live-migrate. A filesystem on a block device
-// is never shared, because nothing coordinates two hosts mounting it.
+// no mode, and what a VM needs to live-migrate. They also serve raw block
+// ReadOnlyMany, as a device the node makes read-only. A filesystem on a block
+// device is never shared, read-only or not, because nothing coordinates two
+// hosts mounting it.
 func ClaimShapesFor(params map[string]string) []ClaimShape {
 	rwoBlock := ClaimShape{AccessMode: corev1.ReadWriteOnce, VolumeMode: corev1.PersistentVolumeBlock}
 	rwoFS := ClaimShape{AccessMode: corev1.ReadWriteOnce, VolumeMode: corev1.PersistentVolumeFilesystem}
@@ -43,6 +45,7 @@ func ClaimShapesFor(params map[string]string) []ClaimShape {
 		{AccessMode: corev1.ReadWriteMany, VolumeMode: corev1.PersistentVolumeBlock},
 		rwoBlock,
 		rwoFS,
+		{AccessMode: corev1.ReadOnlyMany, VolumeMode: corev1.PersistentVolumeBlock},
 	}
 }
 

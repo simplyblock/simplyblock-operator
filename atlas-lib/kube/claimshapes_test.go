@@ -14,6 +14,7 @@ var (
 	rwoBlock = ClaimShape{AccessMode: corev1.ReadWriteOnce, VolumeMode: corev1.PersistentVolumeBlock}
 	rwxFS    = ClaimShape{AccessMode: corev1.ReadWriteMany, VolumeMode: corev1.PersistentVolumeFilesystem}
 	rwoFS    = ClaimShape{AccessMode: corev1.ReadWriteOnce, VolumeMode: corev1.PersistentVolumeFilesystem}
+	roxBlock = ClaimShape{AccessMode: corev1.ReadOnlyMany, VolumeMode: corev1.PersistentVolumeBlock}
 )
 
 func TestClaimShapesFor(t *testing.T) {
@@ -24,9 +25,9 @@ func TestClaimShapesFor(t *testing.T) {
 	}{
 		// ReadWriteMany raw block first: it is what a claim that names neither
 		// mode gets, and it is what a VM needs to live-migrate.
-		{"an ordinary class", map[string]string{ParamPool: "p"}, []ClaimShape{rwxBlock, rwoBlock, rwoFS}},
-		{"a stripe width of one is ordinary", map[string]string{ParamStripeWidth: "1"}, []ClaimShape{rwxBlock, rwoBlock, rwoFS}},
-		{"encryption is per host", map[string]string{ParamEncryption: "true"}, []ClaimShape{rwxBlock, rwoBlock, rwoFS}},
+		{"an ordinary class", map[string]string{ParamPool: "p"}, []ClaimShape{rwxBlock, rwoBlock, rwoFS, roxBlock}},
+		{"a stripe width of one is ordinary", map[string]string{ParamStripeWidth: "1"}, []ClaimShape{rwxBlock, rwoBlock, rwoFS, roxBlock}},
+		{"encryption is the control plane's", map[string]string{ParamEncryption: "true"}, []ClaimShape{rwxBlock, rwoBlock, rwoFS, roxBlock}},
 		{"a striped class", map[string]string{ParamStripeWidth: "3"}, []ClaimShape{rwoBlock, rwoFS}},
 		{"client-side compression", map[string]string{ParamClientCompression: "true"}, []ClaimShape{rwoBlock, rwoFS}},
 		{"client-side deduplication", map[string]string{ParamClientDeduplication: "true"}, []ClaimShape{rwoBlock, rwoFS}},
