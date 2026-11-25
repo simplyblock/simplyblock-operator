@@ -10,6 +10,7 @@
 package objectstore
 
 import (
+	"fmt"
 	"path"
 	"strconv"
 
@@ -77,6 +78,8 @@ const (
 	gatewayBucketStorageClassEnv  = "GATEWAY_BUCKET_STORAGE_CLASS"
 	gatewayBucketCapacityBytesEnv = "GATEWAY_BUCKET_CAPACITY_BYTES"
 	gatewayRegionEnv              = "GATEWAY_REGION"
+	// gatewayPortEnv is the address the gateway's S3 API binds, ":<port>".
+	gatewayPortEnv = "VGW_PORT"
 
 	// The env vars naming the serving certificate and key the gateway
 	// serves, and re-reads when the TLS Secret is rotated.
@@ -216,6 +219,7 @@ func buildDeployment(store *simplyblockv1alpha2.ObjectStore) *appsv1.Deployment 
 									Value: strconv.FormatInt(store.Spec.Buckets.CapacityBytes, 10),
 								},
 								{Name: gatewayRegionEnv, Value: store.Spec.Region},
+								{Name: gatewayPortEnv, Value: fmt.Sprintf(":%d", store.Spec.Port)},
 								{Name: gatewayTLSCertFileEnv, Value: tlsMountPath + "/tls.crt"},
 								{Name: gatewayTLSKeyFileEnv, Value: tlsMountPath + "/tls.key"},
 							},
