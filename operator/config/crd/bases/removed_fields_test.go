@@ -18,6 +18,10 @@ func TestRemovedFieldsAreGoneFromTheSchema(t *testing.T) {
 	}{
 		// No reader in the operator, the CSI driver, or the support tool.
 		{"storage.simplyblock.io_clusterdeploymentconfigs.yaml", "spec.edgeCluster"},
+		// Copied from the deployment config onto the cluster and never sent to
+		// the control plane, whose API has no such setting.
+		{"storage.simplyblock.io_storageclusters.yaml", "spec.arbitration.holdMs"},
+		{"storage.simplyblock.io_clusterdeploymentconfigs.yaml", "spec.cluster.arbitration.holdMs"},
 	}
 	for _, c := range cases {
 		raw, err := FS.ReadFile(c.crd)

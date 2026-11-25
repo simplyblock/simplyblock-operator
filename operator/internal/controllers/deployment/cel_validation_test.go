@@ -411,11 +411,11 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 		wantDenied bool
 	}{
 		{name: "dual with arbitration", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
-			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}},
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)}},
 		{name: "standard with arbitration", mode: simplyblockv1alpha2.ClusterModeStandard,
 			enable: ptr.To(true), wantDenied: true},
 		{name: "unstated mode with arbitration settings",
-			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: true},
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)}, wantDenied: true},
 		{name: "single without arbitration", mode: simplyblockv1alpha2.ClusterModeSingle},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

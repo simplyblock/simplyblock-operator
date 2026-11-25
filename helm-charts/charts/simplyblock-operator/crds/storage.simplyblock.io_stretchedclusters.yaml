@@ -476,15 +476,6 @@ spec:
                                   Arbitration tunes the two-node arbitration, and is carried to the
                                   cluster's spec.arbitration. Only valid when clusterMode is Dual.
                                 properties:
-                                  holdMs:
-                                    description: |-
-                                      HoldMs is how long a node holds writes after losing its peer before it
-                                      acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                                      (5000 ms), or clients fail I/O before the verdict arrives.
-                                    format: int32
-                                    maximum: 4500
-                                    minimum: 500
-                                    type: integer
                                   hostFencing:
                                     description: |-
                                       HostFencing lets Kubernetes follow the arbiter's fence of a node whose
@@ -506,9 +497,6 @@ spec:
                                     minimum: 500
                                     type: integer
                                 type: object
-                                x-kubernetes-validations:
-                                  - message: leaseTtlMs must be shorter than holdMs
-                                    rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs < self.holdMs'
                               backup:
                                 description: |-
                                   Backup is where this cluster's backups live, and it expands into
