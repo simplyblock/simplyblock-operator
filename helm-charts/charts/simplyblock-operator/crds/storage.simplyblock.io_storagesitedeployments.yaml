@@ -275,15 +275,6 @@ spec:
                                 winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
                                 operator.
                               type: boolean
-                            leaseTtlMs:
-                              description: |-
-                                LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                                matters while a node is holding; a healthy pair is never fenced by a
-                                late renewal.
-                              format: int32
-                              maximum: 10000
-                              minimum: 500
-                              type: integer
                           type: object
                         backup:
                           description: |-

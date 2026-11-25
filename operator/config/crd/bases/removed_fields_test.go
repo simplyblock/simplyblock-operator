@@ -22,6 +22,8 @@ func TestRemovedFieldsAreGoneFromTheSchema(t *testing.T) {
 		// the control plane, whose API has no such setting.
 		{"storage.simplyblock.io_storageclusters.yaml", "spec.arbitration.holdMs"},
 		{"storage.simplyblock.io_clusterdeploymentconfigs.yaml", "spec.cluster.arbitration.holdMs"},
+		{"storage.simplyblock.io_storageclusters.yaml", "spec.arbitration.leaseTtlMs"},
+		{"storage.simplyblock.io_clusterdeploymentconfigs.yaml", "spec.cluster.arbitration.leaseTtlMs"},
 	}
 	for _, c := range cases {
 		raw, err := FS.ReadFile(c.crd)

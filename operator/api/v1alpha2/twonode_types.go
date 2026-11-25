@@ -51,16 +51,9 @@ const (
 
 // ArbitrationSpec tunes the control plane's arbitration for a cluster of
 // exactly two storage nodes. All fields are optional; omitted values take the
-// arbiter's defaults.
+// arbiter's defaults. The arbiter's hold and lease timings are the control
+// plane's own and have no setting here, because its API takes none.
 type ArbitrationSpec struct {
-	// LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-	// matters while a node is holding; a healthy pair is never fenced by a
-	// late renewal.
-	// +optional
-	// +kubebuilder:validation:Minimum=500
-	// +kubebuilder:validation:Maximum=10000
-	LeaseTtlMs *int32 `json:"leaseTtlMs,omitempty"`
-
 	// HostFencing lets Kubernetes follow the arbiter's fence of a node whose
 	// state is unknown. The control plane revokes the node's NVMe host
 	// identities on its peer, the operator sets the StorageFenced condition on
