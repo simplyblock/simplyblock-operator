@@ -1027,12 +1027,6 @@ spec:
                     name may be: a reference between the two names nothing that can exist.
                   maxLength: 63
                   type: string
-                edgeCluster:
-                  description: |-
-                    EdgeCluster states that this is an edge deployment. An edge deployment
-                    differs from a datacenter one in topology and scale rather than in kind,
-                    so it is the same StorageCluster with fewer, smaller nodes.
-                  type: boolean
                 environment:
                   description: |-
                     Environment is the Kubernetes distribution this deployment targets. It is a

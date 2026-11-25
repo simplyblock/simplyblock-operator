@@ -911,12 +911,6 @@ type ClusterDeploymentConfigSpec struct {
 	// +optional
 	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 
-	// EdgeCluster states that this is an edge deployment. An edge deployment
-	// differs from a datacenter one in topology and scale rather than in kind,
-	// so it is the same StorageCluster with fewer, smaller nodes.
-	// +optional
-	EdgeCluster *bool `json:"edgeCluster,omitempty"`
-
 	// ClusterRef names an existing StorageCluster this document adds to: the
 	// nodes of every node set to a standalone cluster or a member, and one new
 	// member per node set to a supercluster. Absent means the document creates

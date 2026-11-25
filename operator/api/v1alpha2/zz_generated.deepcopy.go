@@ -394,11 +394,6 @@ func (in *ClusterDeploymentConfigSpec) DeepCopyInto(out *ClusterDeploymentConfig
 		*out = new(HostOSSpec)
 		**out = **in
 	}
-	if in.EdgeCluster != nil {
-		in, out := &in.EdgeCluster, &out.EdgeCluster
-		*out = new(bool)
-		**out = **in
-	}
 	if in.Cluster != nil {
 		in, out := &in.Cluster, &out.Cluster
 		*out = new(ClusterTemplate)
