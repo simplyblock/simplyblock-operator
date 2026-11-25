@@ -184,3 +184,39 @@ func TestStorageNodeOpsUpdateRules(t *testing.T) {
 		},
 	})
 }
+
+func clusterOps(action simplyblockv1alpha2.StorageClusterOpsAction,
+	spec func(*simplyblockv1alpha2.StorageClusterOpsSpec)) *simplyblockv1alpha2.StorageClusterOps {
+	ops := &simplyblockv1alpha2.StorageClusterOps{
+		Spec: simplyblockv1alpha2.StorageClusterOpsSpec{ClusterRef: "cluster-1", Action: action},
+	}
+	if spec != nil {
+		spec(&ops.Spec)
+	}
+	return ops
+}
+
+func asClusterOps(f func(*simplyblockv1alpha2.StorageClusterOpsSpec)) func(client.Object) {
+	return func(o client.Object) { f(&o.(*simplyblockv1alpha2.StorageClusterOps).Spec) }
+}
+
+func TestStorageClusterOpsUpdateRules(t *testing.T) {
+	withTask := func(id string) func(*simplyblockv1alpha2.StorageClusterOpsSpec) {
+		return func(s *simplyblockv1alpha2.StorageClusterOpsSpec) {
+			s.CancelTask = &simplyblockv1alpha2.CancelTaskSpec{TaskID: id}
+		}
+	}
+	runTransitions(t, []transition{
+		{
+			name:   "dropping the task a cancel waits on",
+			create: clusterOps(simplyblockv1alpha2.StorageClusterOpsActionCancelTask, withTask("task-1")),
+			mutate: asClusterOps(func(s *simplyblockv1alpha2.StorageClusterOpsSpec) { s.CancelTask = nil }),
+			denied: "spec.cancelTask is immutable",
+		},
+		{
+			name:   "aborting a cancel",
+			create: clusterOps(simplyblockv1alpha2.StorageClusterOpsActionCancelTask, withTask("task-1")),
+			mutate: asClusterOps(func(s *simplyblockv1alpha2.StorageClusterOpsSpec) { s.Abort = true }),
+		},
+	})
+}

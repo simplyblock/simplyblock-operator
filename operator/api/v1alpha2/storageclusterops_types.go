@@ -126,6 +126,7 @@ type CancelTaskSpec struct {
 }
 
 // StorageClusterOpsSpec is one operation to perform against one StorageCluster.
+// +kubebuilder:validation:XValidation:rule="has(self.cancelTask) == has(oldSelf.cancelTask) && (!has(self.cancelTask) || self.cancelTask == oldSelf.cancelTask)",message="spec.cancelTask is immutable: Awaiting reads the task it cancels on every pass, so removing or replacing the block mid-operation waits on no task or on another"
 type StorageClusterOpsSpec struct {
 	// ClusterRef names the StorageCluster this operation acts on. The operation
 	// never owns its target, because deleting the record of an operation must
