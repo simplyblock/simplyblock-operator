@@ -38,6 +38,10 @@ type WidgetSpec struct {
 	// +simplyblock:operatorManaged
 	Owner string `json:"owner,omitempty"`
 
+	// Steward is written by the operator and by the hub's work agent.
+	// +simplyblock:operatorManaged:writers=hub
+	Steward string `json:"steward,omitempty"`
+
 	// Bookkeeping is the operator's own.
 	// +simplyblock:invisible
 	Bookkeeping string `json:"bookkeeping,omitempty"`
