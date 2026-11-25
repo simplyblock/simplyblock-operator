@@ -20,7 +20,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
-	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/groupsnapshottest"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/test"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -116,7 +116,7 @@ func newVGSValidator(t *testing.T, version string, pvcs []vgsPVC, apiURL string)
 	}
 	objs = append(objs, vgsClass(version, "sb-class", "csi.simplyblock.io"), vgsClass(version, "foreign-class", "ebs.csi.aws.com"))
 	cl := fake.NewClientBuilder().WithScheme(scheme).
-		WithRESTMapper(groupsnapshottest.Mapper(version)).
+		WithRESTMapper(test.Mapper(version)).
 		WithObjects(objs...).Build()
 	return &VolumeGroupSnapshotValidator{Client: cl, APIClient: webapi.NewClient(apiURL)}
 }

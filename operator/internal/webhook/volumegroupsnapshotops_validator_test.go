@@ -20,7 +20,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
-	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/groupsnapshottest"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/test"
 )
 
 func opsCreateRequest(t *testing.T, ops *simplyblockv1alpha2.VolumeGroupSnapshotOps) admission.Request {
@@ -48,7 +48,7 @@ func TestVolumeGroupSnapshotOpsValidator_RefResolution(t *testing.T) {
 				t.Fatalf("add scheme: %v", err)
 			}
 			cl := fake.NewClientBuilder().WithScheme(scheme).
-				WithRESTMapper(groupsnapshottest.Mapper(version)).
+				WithRESTMapper(test.Mapper(version)).
 				WithObjects(vgsAt(version, "default", "vgs1")).Build()
 			validator := &VolumeGroupSnapshotOpsValidator{Client: cl}
 

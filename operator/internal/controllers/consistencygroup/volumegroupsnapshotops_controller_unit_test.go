@@ -24,7 +24,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
-	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/groupsnapshottest"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/test"
 )
 
 func boolPtr(b bool) *bool    { return &b }
@@ -109,7 +109,7 @@ func newGroupOpsReconcilerAt(
 		volumegroupsnapshotv1beta1.AddToScheme, snapshotv1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithRESTMapper(groupsnapshottest.Mapper(version)).
+		WithRESTMapper(test.Mapper(version)).
 		WithStatusSubresource(&simplyblockv1alpha2.VolumeGroupSnapshotOps{}, &corev1.PersistentVolumeClaim{}).
 		WithObjects(objects...).
 		Build()

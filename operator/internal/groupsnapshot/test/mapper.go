@@ -1,10 +1,10 @@
-// Package groupsnapshottest builds the REST mapping of a cluster that serves
+// Package test builds the REST mapping of a cluster that serves
 // the upstream VolumeGroupSnapshot kinds at chosen versions, for fake clients.
 //
 // A fake client starts with an empty REST mapper, which is a cluster that
 // serves no groupsnapshot.storage.k8s.io version at all. A test that means a
 // cluster with the kinds says which versions it serves through this mapper.
-package groupsnapshottest
+package test
 
 import (
 	"k8s.io/apimachinery/pkg/api/meta"

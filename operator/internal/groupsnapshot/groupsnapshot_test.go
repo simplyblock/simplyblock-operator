@@ -13,7 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
-	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/groupsnapshottest"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/test"
 )
 
 // v1Object is an object of a cluster that serves only groupsnapshot.storage.k8s.io/v1,
@@ -34,7 +34,7 @@ func v1Cluster(t *testing.T, objs ...client.Object) client.Client {
 	t.Helper()
 	return fake.NewClientBuilder().
 		WithScheme(runtime.NewScheme()).
-		WithRESTMapper(groupsnapshottest.Mapper("v1")).
+		WithRESTMapper(test.Mapper("v1")).
 		WithObjects(objs...).
 		Build()
 }
@@ -100,7 +100,7 @@ func TestReadsAClusterThatServesOnlyV1beta1(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithRESTMapper(groupsnapshottest.Mapper("v1beta1")).
+		WithRESTMapper(test.Mapper("v1beta1")).
 		WithObjects(&volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{
 			ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-group"},
 			Driver:     "csi.simplyblock.io",
@@ -118,7 +118,7 @@ func TestReadsAClusterThatServesOnlyV1beta1(t *testing.T) {
 func TestReadsTheNewestServedVersion(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(runtime.NewScheme()).
-		WithRESTMapper(groupsnapshottest.Mapper("v1beta1", "v1beta2", "v1")).
+		WithRESTMapper(test.Mapper("v1beta1", "v1beta2", "v1")).
 		WithObjects(v1Object(groupsnapshot.KindVolumeGroupSnapshotClass, "", "simplyblock-group",
 			map[string]any{"driver": "csi.simplyblock.io"})).
 		Build()
