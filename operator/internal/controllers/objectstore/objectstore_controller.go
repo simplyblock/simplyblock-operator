@@ -526,7 +526,10 @@ func (r *ObjectStoreReconciler) writeStatus(
 			return err
 		}
 		mutate(&fresh.Status)
-		fresh.Status.ObservedGeneration = fresh.Generation
+		// The generation this pass read, not the fresh one: a spec edit that
+		// landed since has not been acted on, and a Degraded store leaves on an
+		// unobserved generation. One a later pass recorded is kept.
+		fresh.Status.ObservedGeneration = max(fresh.Status.ObservedGeneration, store.Generation)
 		if err := r.Status().Update(ctx, &fresh); err != nil {
 			return err
 		}
@@ -608,18 +611,22 @@ func (r *ObjectStoreReconciler) SetupWithManager(mgr ctrl.Manager) error {
 const objectStoreDegradedCertificatePoll = time.Minute
 
 // reconcileDegraded returns the ObjectStore to Provisioning when the cause it
-// degraded on may be gone: a Secret or ConfigMap named in spec.envFrom was
-// created or changed after the ObjectStore degraded, or, when it degraded on
-// its certificate, the Certificate now reports Ready. Otherwise, it stays
+// degraded on may be gone: its spec changed since it degraded, which may be
+// the fix (a corrected image, for one), a Secret or ConfigMap named in
+// spec.envFrom was created or changed after it degraded, or, when it degraded
+// on its certificate, the Certificate now reports Ready. Otherwise, it stays
 // Degraded, so the event that explains the refusal is not buried under
 // retries.
 func (r *ObjectStoreReconciler) reconcileDegraded(
 	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
 ) (ctrl.Result, error) {
 	since, onCertificate := degradedSince(store)
-	recovered, err := r.envFromChangedSince(ctx, store, since)
-	if err != nil {
-		return ctrl.Result{}, err
+	recovered := store.Generation > store.Status.ObservedGeneration
+	var err error
+	if !recovered {
+		if recovered, err = r.envFromChangedSince(ctx, store, since); err != nil {
+			return ctrl.Result{}, err
+		}
 	}
 	if !recovered && onCertificate {
 		if recovered, err = r.certificateReady(ctx, store); err != nil {
