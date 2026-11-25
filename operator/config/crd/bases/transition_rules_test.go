@@ -231,3 +231,39 @@ func TestStorageClusterOpsUpdateRules(t *testing.T) {
 		},
 	})
 }
+
+func TestStorageBackupOpsUpdateRules(t *testing.T) {
+	restoreOps := func(restore *simplyblockv1alpha2.RestoreSpec) *simplyblockv1alpha2.StorageBackupOps {
+		return &simplyblockv1alpha2.StorageBackupOps{Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
+			ClusterRef: simplyblockv1alpha2.NamespacedDnsReference{Name: "cluster-1"},
+			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: "backup-1"},
+			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore,
+			Restore:    restore,
+		}}
+	}
+	asOps := func(f func(*simplyblockv1alpha2.StorageBackupOpsSpec)) func(client.Object) {
+		return func(o client.Object) { f(&o.(*simplyblockv1alpha2.StorageBackupOps).Spec) }
+	}
+	target := &simplyblockv1alpha2.RestoreSpec{ClaimName: "restored", TargetPool: "pool-1"}
+	runTransitions(t, []transition{
+		{
+			name:   "dropping the parameters of a running restore",
+			create: restoreOps(target),
+			mutate: asOps(func(s *simplyblockv1alpha2.StorageBackupOpsSpec) { s.Restore = nil }),
+			denied: "spec.restore is immutable",
+		},
+		{
+			name:   "labelling the restored claim after creation",
+			create: restoreOps(target),
+			mutate: asOps(func(s *simplyblockv1alpha2.StorageBackupOpsSpec) {
+				s.Restore.ClaimLabels = map[string]string{"team": "storage"}
+			}),
+			denied: "spec.restore is immutable",
+		},
+		{
+			name:   "aborting a restore",
+			create: restoreOps(target),
+			mutate: asOps(func(s *simplyblockv1alpha2.StorageBackupOpsSpec) { s.Abort = true }),
+		},
+	})
+}
