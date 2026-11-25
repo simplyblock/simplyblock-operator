@@ -134,6 +134,7 @@ type RemoveSpec struct {
 
 // StorageNodeOpsSpec is one operation to perform against one StorageNode.
 // +kubebuilder:validation:XValidation:rule="has(self.force) == has(oldSelf.force) && (!has(self.force) || self.force == oldSelf.force)",message="spec.force is immutable: it is read once, at the step that issues the restart, so a change is honored or ignored by when it lands, and the record would not say which"
+// +kubebuilder:validation:XValidation:rule="has(self.reattachVolume) == has(oldSelf.reattachVolume) && (!has(self.reattachVolume) || self.reattachVolume == oldSelf.reattachVolume)",message="spec.reattachVolume is immutable: it is read once, at the step that issues the restart, so a change is honored or ignored by when it lands, and the record would not say which"
 // +kubebuilder:validation:XValidation:rule="has(self.migrate) == has(oldSelf.migrate) && (!has(self.migrate) || self.migrate == oldSelf.migrate)",message="spec.migrate is immutable: Preparing, Relocating, and Promoting each read it, and the placement of the relocated node follows it, so a change or a removal mid-relocation binds one set of drives and records another, or fails the operation after the restart onto the target"
 // +kubebuilder:validation:XValidation:rule="has(self.remove) == has(oldSelf.remove) && (!has(self.remove) || self.remove == oldSelf.remove)",message="spec.remove is immutable: Validating, MigratingVolumes, and Verifying each read the system-volume pattern, and Verifying deletes the volumes it matches, so a pattern changed mid-drain deletes volumes the drain should have moved"
 type StorageNodeOpsSpec struct {
@@ -151,7 +152,8 @@ type StorageNodeOpsSpec struct {
 
 	// Abort asks a running operation to stop at its next step and unwind. It is
 	// the only mutable field on this spec, because it is the only thing about an
-	// operation that can legitimately be decided after it started. Whether an
+	// operation that can legitimately be decided after it started; the rules on
+	// this type freeze every parameter block and flag. Whether an
 	// abort is expressible from the current step is declared by that action's
 	// graph rather than checked here.
 	// +optional

@@ -172,6 +172,12 @@ func TestStorageNodeOpsUpdateRules(t *testing.T) {
 			denied: "spec.force is immutable",
 		},
 		{
+			name:   "asking a restart to reattach volumes after creation",
+			create: nodeOps(simplyblockv1alpha2.StorageNodeOpsActionRestart, nil),
+			mutate: asNodeOps(func(s *simplyblockv1alpha2.StorageNodeOpsSpec) { s.ReattachVolume = ptr.To(true) }),
+			denied: "spec.reattachVolume is immutable",
+		},
+		{
 			name:   "aborting a removal",
 			create: nodeOps(simplyblockv1alpha2.StorageNodeOpsActionRemove, withPattern("^sys-")),
 			mutate: asNodeOps(func(s *simplyblockv1alpha2.StorageNodeOpsSpec) { s.Abort = true }),
