@@ -1,0 +1,26 @@
+# The first consumer of the claim. The class carries no allowedTopologies, so
+# before the volume exists the scheduler knows nothing of the restriction. The
+# nodeSelector on the pool's label places the first pod on an allowed host, as
+# the repository's end-to-end test does. Once the PersistentVolume exists, its
+# node affinity keeps every later pod on an allowed host without the selector.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ledger
+  namespace: payments
+spec:
+  nodeSelector:
+    storage.simplyblock.io/storage-pool.3f9a1c2e-7b4d-4e8a-9c61-2d5f0a7b8e14: allowed
+  containers:
+    - name: app
+      image: registry.access.redhat.com/ubi9/ubi-minimal:9.4
+      command:
+        - sleep
+        - infinity
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: ledger

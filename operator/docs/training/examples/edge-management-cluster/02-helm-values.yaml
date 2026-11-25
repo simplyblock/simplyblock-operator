@@ -1,0 +1,32 @@
+# The Helm values of the management cluster: an ordinary standalone install
+# whose control plane accepts the static admin token of 01-admin-token-secret.yaml
+# and requires no client certificate, so that edge clusters on other networks
+# can reach it. The chart has no hub or management profile: what makes this
+# install a management cluster is adminTokenSecretRef, the TLS decision, and
+# the exposure in 04-ingress.yaml.
+#
+# The cluster hosts no storage of its own, so the chart's discovery run is
+# turned off. TLS cannot be changed once the ControlPlane exists, so the TLS
+# values are decided here, before the first install. Monitoring is provisioned
+# once, when the first storage cluster is created, which on a management
+# cluster is the first edge to register, so it is turned on here as well.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --values 02-helm-values.yaml
+deployment:
+  profile: standalone
+
+controlplane:
+  local:
+    adminTokenSecretRef: edge-admin-token
+  observability:
+    enabled: true
+    secret: replace-with-the-monitoring-password
+
+tls:
+  enabled: true
+  provider: cert-manager
+  mutual_enabled: false
+
+discovery:
+  enabled: false

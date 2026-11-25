@@ -15,9 +15,10 @@ prerequisite that covers the vocabulary.
 | `index.html`           | The front page: the quiz as prerequisite, the chapter list                 |
 | `chapter.html?c=<id>`  | One chapter: lesson, examples, test                                        |
 | `training.js`          | The engine both pages run                                                  |
-| `training.css`         | Their stylesheet                                                           |
+| `training.css`         | The stylesheet every page shares, after the simplyblock design system      |
+| `mark.svg`             | The simplyblock mark in white, for the navy header band                    |
 | `chapter-schema.js`    | What a chapter file has to contain; run by the page and by the checker     |
-| `chapters/index.js`    | The ordered list of chapter files                                          |
+| `chapters/index.js`    | The parts and the ordered list of chapter files                            |
 | `chapters/NN-<id>.js`  | One chapter each                                                           |
 | `examples/<id>/*.yaml` | The example manifests a chapter shows                                      |
 | `check-chapters.js`    | Checks every chapter file under node                                       |
@@ -38,24 +39,40 @@ cd operator/docs/training && python3 -m http.server 8000
 Then open http://localhost:8000/. Without `results-api.py` behind `/api/`, the
 chapters can be read and the tests taken, and nothing is recorded.
 
-## Learners, progress, and the overview
+## The look
 
-A learner starts the curriculum by typing a name on the index page. There is no
-password: the training is internal, and the same name typed on another device
-continues the same record. From then on the API keeps, under that name, which
-chapters were opened, the time spent on each, and every finished test. A
-chapter is `open` until it is opened, `in-progress` from then on, and
-`completed` once a test of it is passed. The time is counted while the chapter
-page is visible and the reader was active within the last two minutes, in ticks
-of five seconds sent every half minute, so a tab left open in the background
-counts nothing.
+Every page follows the "simplyblock team" design system: Inter at 400, 500, and
+600, one meaning per color (blue for simplyblock and links, green for an
+outcome such as a passed test, red for a gap and only as text, navy for the
+frame), tinted tiles without borders or shadows with white strips inside them,
+and the 4px blue-to-green rail across the top. `training.css` holds the tokens
+of both themes. The system is written for slides and print, and the stylesheet
+departs from it in two places a web page needs: code in a monospace font so
+YAML keeps its columns, and a thin outline on form fields.
 
-The chapter statistics the pages show carry no name. The names are read in two
-places only: by their owner, and by `admin.html`, which lists every learner with
-the status, the time, the attempts, and the best test per chapter, and exports
-the table as CSV. It asks for the admin token the host was launched with and
-keeps it for the browser session. Without a token in the API's environment the
-endpoint answers 503.
+## Learners, accounts, and the overview
+
+A learner registers on the index page with a name, an email address, and a
+password of at least ten characters, or signs in. The session is an HttpOnly
+cookie, SameSite=Strict, valid for 30 days, and marked Secure when the host
+serves HTTPS. Passwords are stored as salted PBKDF2 hashes and session tokens as
+SHA-256 hashes. The host can restrict registration to email domains. There is no
+email delivery, so a forgotten password is reset on the overview, which shows a
+temporary password once; the learner chooses a new one at the next sign-in.
+
+From then on the API keeps, under the account, which chapters were opened, the
+time spent on each, and every finished test. A chapter is `open` until it is
+opened, `in-progress` from then on, and `completed` once a test of it is passed.
+The time is counted while the chapter page is visible and the reader was active
+within the last two minutes, in ticks of five seconds sent every half minute, so
+a tab left open in the background counts nothing.
+
+The chapter statistics the pages show carry no name. Names and addresses are
+read in two places only: by their owner, and by `admin.html`, which lists every
+learner with the status, the time, the attempts, and the best test per chapter,
+exports the table as CSV, and resets or deletes an account. It asks for the
+admin token the host was launched with and keeps it for the browser session.
+Without a token in the API's environment the admin endpoints answer 503.
 
 ## Adding a chapter
 
@@ -101,8 +118,16 @@ count, because that count becomes guessable.
 ## Hosting a public copy
 
 `training-host.sh` is EC2 user data for Amazon Linux 2023. Its usage note says
-how to pack the directory and substitute the archive's URL and the admin token.
-The results store on the host is one JSON file under `/var/lib/crd-quiz`, and
-nginx keeps no access log for `/api/`. The host serves plain HTTP, so the
-learners' names and the admin token travel in the clear on the network between
-the browser and the host.
+how to pack the directory and substitute the archive's URL, the admin token,
+the optional registration domains, and the optional host name for HTTPS. The
+results store on the host is one JSON file under `/var/lib/crd-quiz`, and nginx
+keeps no access log for `/api/`. Signing in and registering are limited to six
+requests a minute per address.
+
+Serve HTTPS whenever learners register. With `TLS_DOMAIN` set the host obtains
+a Let's Encrypt certificate through the HTTP-01 challenge, which accepts Let's
+Encrypt's subscriber agreement, redirects HTTP to HTTPS, and renews the
+certificate on a timer; port 443 has to be open beside port 80. A host without
+a DNS name of its own can use a name that resolves to its address, such as
+`<a-b-c-d>.sslip.io`. Without HTTPS the passwords, the session cookie, and the
+admin token cross the network in the clear.

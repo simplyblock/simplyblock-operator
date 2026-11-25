@@ -1,0 +1,21 @@
+# The control plane of a cluster whose keys go to an external Vault. Nothing
+# in it names the key store. It is shown because Vault signs the control plane
+# in by its TLS client certificate, which is the web API's serving
+# certificate, and the operator issues that certificate with the client-auth
+# usage only when the provider is cert-manager and mutual TLS is on. Both are
+# the defaults, and both are stated here so that the dependency is visible.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+      tls:
+        enableTLS: true
+        enableMutualTLS: true
+        provider: cert-manager

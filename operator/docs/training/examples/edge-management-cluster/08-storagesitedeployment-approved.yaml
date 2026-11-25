@@ -1,0 +1,27 @@
+# The same request after review. The reviewer read status.draft (the nodes,
+# the devices, and the sized cluster template) while the phase was Drafted and
+# then set approved to true. The operator applies the approval onto the draft on
+# the edge with server-side apply, and the draft expands into the StorageCluster
+# edge-north there. Approval is one-way: setting it back to false is refused.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageSiteDeployment
+metadata:
+  name: edge-north
+  namespace: simplyblock
+spec:
+  cluster: edge-north
+  siteNamespace: simplyblock
+  draftName: site-draft
+  discover:
+    workers:
+      - edge-north-0
+      - edge-north-1
+      - edge-north-2
+  sizing:
+    name: edge-north
+    vcpuCount: 4
+    maxSubsystemCount: 50
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+  approved: true

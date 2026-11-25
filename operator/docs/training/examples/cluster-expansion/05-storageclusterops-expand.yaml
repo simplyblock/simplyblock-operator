@@ -1,0 +1,14 @@
+# An explicit expansion request, written by hand once every node of the growth
+# is Online. Nothing in the operator raises one: the growth document does not,
+# and neither does a node add. The operation posts to the control plane's
+# /api/v2/clusters/<uuid>/expand with no body and then waits for the cluster to
+# read active. It has no state to skip on, so every Expand written posts again.
+# What the control plane does with the request is not in this repository.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageClusterOps
+metadata:
+  name: prod-expand-1
+  namespace: simplyblock
+spec:
+  clusterRef: prod
+  action: Expand

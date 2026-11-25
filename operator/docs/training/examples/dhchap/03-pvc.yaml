@@ -1,0 +1,15 @@
+# A claim against the DHCHAP class. Nothing in it mentions DHCHAP: the class
+# carries the restriction, and the volume provisioned for this claim gets a
+# PersistentVolume whose node affinity requires the pool's node label.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ledger
+  namespace: payments
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-production-payments
+  resources:
+    requests:
+      storage: 50Gi

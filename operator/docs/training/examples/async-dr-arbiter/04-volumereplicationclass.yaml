@@ -1,0 +1,20 @@
+# The VolumeReplicationClass on site-a: what binds a VolumeReplication to the
+# backend policy that replicates toward site-b. replicationPolicyID is the
+# backend id the ReplicationPolicy reports in status.backendPolicyID, not the
+# policy's name. schedulingInterval is not read by the CSI driver: Ramen
+# selects the class by it, so it equals the DRPolicy's interval, and the real
+# cadence is the ReplicationPolicy's spec.interval, kept equal by hand. site-b
+# carries a class of the same name and the same replicationid label, naming
+# its own policy toward site-a. Parameters are immutable once created.
+apiVersion: replication.storage.openshift.io/v1alpha1
+kind: VolumeReplicationClass
+metadata:
+  name: simplyblock-dr-5m
+  labels:
+    ramendr.openshift.io/replicationid: simplyblock-site-a-site-b
+    dr.example.com/class: simplyblock-dr
+spec:
+  provisioner: csi.simplyblock.io
+  parameters:
+    replicationPolicyID: 4f1c8a2e-9b3d-4e7f-a1c5-6d2e8f0b3a71
+    schedulingInterval: 5m

@@ -1,0 +1,21 @@
+# The same operation with the abort requested. The abort is the one field of
+# the spec that can change after creation: the volume, the action, and the
+# target are immutable. It is honored at the steps Validating and Migrating,
+# where the operator cancels the backend migration and releases the target's
+# paths on every consuming node. At Verifying the copy has finished and the
+# volume has moved, so the request is noted and the cleanup runs to the end.
+#
+# Usually applied as a merge patch rather than as a whole object:
+#   kubectl patch pvops pg-data-to-worker-4 --type merge -p '{"spec":{"abort":true}}'
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: pg-data-to-worker-4
+spec:
+  persistentVolumeName: pvc-5b8e2f31-7c4d-4a9e-8f12-3d6b0a1c9e47
+  action: Migrate
+  abort: true
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: prod-worker-4-0

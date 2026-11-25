@@ -1,0 +1,55 @@
+# A later growth document that the schema admits and validation refuses. By
+# then prod has 30 storage nodes, one per worker, and this document adds three
+# more. Validation counts the nodes the cluster already has, and the draft is
+# held with the reason MemberTooLarge and this status.message:
+#
+#   the document adds 3 storage nodes to cluster prod, which has 30, and a
+#   cluster holds at most 32
+#
+# The admission webhook does not repeat this check, so approving the document
+# as it stands is admitted and the document then goes Failed. Two workers fit,
+# one each in two of the zones.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: prod-growth-4
+  namespace: simplyblock
+spec:
+  approved: false
+  clusterRef: prod
+  nodeSets:
+    - name: growth-2027-05
+      groups:
+        - name: zone-a
+          failureDomain: zone-a
+          workers:
+            - worker-31
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: zone-b
+          failureDomain: zone-b
+          workers:
+            - worker-32
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: zone-c
+          failureDomain: zone-c
+          workers:
+            - worker-33
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

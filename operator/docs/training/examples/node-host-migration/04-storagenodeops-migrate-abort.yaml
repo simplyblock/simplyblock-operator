@@ -1,0 +1,16 @@
+# The first example with spec.abort set, which is the one edit the API admits
+# on a StorageNodeOps. It is honored only while the operation is in Preparing,
+# where nothing has been asked of the control plane yet: the phase becomes
+# Aborted. From Relocating on, the abort is refused with an AbortRefused event
+# and the migration runs to its end.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: move-production-worker-3-0
+  namespace: simplyblock
+spec:
+  nodeRef: production-worker-3-0
+  action: Migrate
+  abort: true
+  migrate:
+    targetWorkerNode: worker-5

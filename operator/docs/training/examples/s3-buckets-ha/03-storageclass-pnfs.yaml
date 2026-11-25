@@ -1,0 +1,17 @@
+# The StorageClass every bucket volume is provisioned from. The pnfs fstype
+# turns each claim into a pNFS export, which is what lets every gateway pod on
+# every node mount the same bucket. The cluster id and the pool name are the two
+# parameters the driver needs to reach the backend, as on any other simplyblock
+# class. Expansion is allowed because growing a bucket is a claim expansion.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-pnfs
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+  pool_name: prod-default
+  csi.storage.k8s.io/fstype: pnfs
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

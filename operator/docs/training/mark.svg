@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The simplyblock mark, white for the navy frame of the training pages. The
+     same path the operator's OLM bundle ships as its icon in blue. -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 300"><path fill="#FFFFFF" d="M242.41,131.63h-51.26l-20.68,35.82h51.26l-31.02,53.73H87.59L66.9,257h144.48l51.7-89.55L242.41,131.63z M134.29,212.19l72.34-125.3h-41.36l-72.34,125.3H134.29z M165.28,131.63l-20.68,35.82h-10.38l20.68-35.82H165.28z M129.09,131.63H76.96l31.02-53.73h103.9l20.69-35.82H87.3l-51.7,89.55l20.68,35.82h52.13L129.09,131.63z"/></svg>

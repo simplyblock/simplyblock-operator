@@ -1,0 +1,25 @@
+# The S3 gateway: a Deployment of two pods on two nodes, a ClusterIP Service in
+# front of them, and a serving certificate from cert-manager. spec.buckets is
+# what every bucket created through S3 CreateBucket is provisioned with,
+# because the request carries no size or class of its own.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ObjectStore
+metadata:
+  name: s3-ha
+  namespace: simplyblock
+spec:
+  image: docker.io/simplyblock/gateway:main
+  port: 9000
+  region: us-east-1
+  replicas: 2
+  tlsProvider: cert-manager
+  envFrom:
+    - secretRef:
+        name: s3-ha-credentials
+  resources:
+    requests:
+      cpu: 500m
+      memory: 512Mi
+  buckets:
+    storageClassName: simplyblock-pnfs
+    capacityBytes: 107374182400

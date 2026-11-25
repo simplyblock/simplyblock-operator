@@ -1,0 +1,15 @@
+# The same removal with its own pattern for system volumes. A backend volume
+# whose name matches is not migrated: it is deleted during Verifying. Setting
+# the field replaces the default rather than adding to it, so the alternation
+# keeps the rebalancer's sb-fio-baseline- volumes in the pattern beside the
+# site's own perf-baseline- volumes.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: production-worker-5-0-remove
+  namespace: simplyblock
+spec:
+  nodeRef: production-worker-5-0
+  action: Remove
+  remove:
+    systemVolumeFilterRegex: '^(sb-fio-baseline-|perf-baseline-).*'

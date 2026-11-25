@@ -1,0 +1,13 @@
+# Taking one drive out of service instead of the whole node. Fail removes the
+# device from the data path, then fails it, and the cluster rebuilds the
+# redundancy the device held. The StorageDevice is named after its node and
+# the first eight characters of the control plane's device UUID. There is no
+# bare Remove action on a device, and Replace is refused at admission.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageDeviceOps
+metadata:
+  name: production-worker-5-0-3f9c2a1b-fail
+  namespace: simplyblock
+spec:
+  deviceRef: production-worker-5-0-3f9c2a1b
+  action: Fail

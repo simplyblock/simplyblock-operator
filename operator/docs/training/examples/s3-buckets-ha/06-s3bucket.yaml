@@ -1,0 +1,15 @@
+# A bucket created as an object rather than through S3 CreateBucket, for a
+# bucket that needs a size other than spec.buckets gives. The object name equals
+# the bucket name, which is what the gateway looks a bucket up by when a client
+# deletes it. A bucket made this way carries no owner annotation, and no ACL,
+# ownership, or tags are written for it.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: S3Bucket
+metadata:
+  name: team-a-reports
+  namespace: simplyblock
+spec:
+  objectStoreRef: s3-ha
+  bucketName: team-a-reports
+  capacityBytes: 214748364800
+  storageClassName: simplyblock-pnfs

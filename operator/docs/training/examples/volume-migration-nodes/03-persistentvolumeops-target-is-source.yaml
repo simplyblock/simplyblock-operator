@@ -1,0 +1,22 @@
+# An operation whose target is the node the volume's subsystem is already on.
+# Admission does not refuse it, because where a volume lives is a fact about
+# now, not about the request. The operation takes the slot and the lock, enters
+# Validating, finds the whole subsystem on the target before it creates any
+# migration, and ends Succeeded at step Completed with the event
+# TargetNodeIsSource and a message saying that the volume is already on node
+# prod-worker-2-0 and nothing was migrated. Nothing is copied and no path is
+# touched.
+#
+# A subsystem found partly on the target and partly elsewhere is a cutover in
+# progress, and the operation waits on it instead of reporting success.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: pg-data-to-worker-2
+spec:
+  persistentVolumeName: pvc-5b8e2f31-7c4d-4a9e-8f12-3d6b0a1c9e47
+  action: Migrate
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: prod-worker-2-0

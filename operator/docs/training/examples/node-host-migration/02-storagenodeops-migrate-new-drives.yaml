@@ -1,0 +1,20 @@
+# The same migration onto a target whose drives sit at PCI addresses the source
+# did not have. The addresses in newSsdPcie are bound on the target host, sent
+# to the control plane with the relocation restart, and merged into the
+# StorageNode's spec.config.pcieAllowList at the promote, so a later rebuild of
+# the node binds them again. reattachVolume is passed through to the same
+# restart call.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: move-production-worker-3-0-new-drives
+  namespace: simplyblock
+spec:
+  nodeRef: production-worker-3-0
+  action: Migrate
+  reattachVolume: true
+  migrate:
+    targetWorkerNode: worker-5
+    newSsdPcie:
+      - "0000:88:00.0"
+      - "0000:89:00.0"

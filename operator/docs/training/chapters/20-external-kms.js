@@ -1,0 +1,316 @@
+// Chapter 20: keeping volume keys in an external key store, HashiCorp Vault
+// (or OpenBao) or a KMIP appliance. The chapter follows what the code
+// implements: one endpoint on the cluster template, sent once when the cluster
+// is created, a DNS check in the operator, Vault prepared to the control
+// plane's defaults, and encryption chosen per StorageClass. Most of the
+// interesting behavior is the control plane's, so the chapter says where the
+// operator's part ends, and lists what the API cannot express.
+TRAINING.register({
+  id: 'external-kms',
+  title: 'Working with an external KMS: HashiCorp Vault and KMIP',
+  summary: 'Where a cluster keeps the keys of its encrypted volumes: in its own FoundationDB by default, or in HashiCorp Vault, OpenBao, or a KMIP appliance, chosen once before the cluster is created, with encryption turned on per StorageClass.',
+  goal: 'a reader can prepare Vault for a simplyblock control plane, state the key store on a deployment document before approval, read the failure the operator reports, write an encrypted StorageClass for a pool, and say which operations an encrypted volume cannot take part in.',
+
+  sections: [
+    {
+      heading: 'What the key store holds, and what the framing becomes',
+      body: [
+        'An encrypted simplyblock volume is encrypted in the data plane. SPDK stacks a crypto bdev under the volume, which encrypts with AES-XTS, and every encrypted volume has its own data encryption key (DEK). The driver\'s documentation says key management is handled entirely by the storage cluster, and the cluster\'s key store decides where the key lives. The design document for superclusters records the path as `cluster/{cluster_id}/lvol/{lvol_id}`, a path naming the cluster and the volume.',
+        { table: { head: ['Key store', 'Where the DEK is kept', 'Key descriptor the control plane records'], rows: [
+          ['None stated', 'The control plane\'s own FoundationDB (`LocalKMS`)', '`fdb`: the DEK path'],
+          ['`kms.vault`', 'Wrapped by a key encryption key (KEK) in a Vault transit mount, the wrapped ciphertext in a KV mount', '`hcp`: DEK path, KEK name, the transit and KV mounts, and the Vault URL'],
+          ['`kms.kmip`', 'Wrapped under a named key in the KMIP appliance', '`kmip`: DEK path, KEK name, server URL'],
+        ] } },
+        'The descriptors are from the control plane\'s API schema in `shared/openapi.json`. What the operator contributes is smaller than the table suggests: one endpoint, sent once, when the cluster is created. Creating, wrapping, unwrapping, and deleting keys are the control plane\'s work, and the operator never sees a key.',
+        'The chapter was commissioned as working with an external KMS, naming HashiCorp and KMIP. The code adjusts that framing in three places. HashiCorp means Vault, and the control plane\'s schema describes the provider as Vault "or an OpenBao-compatible server," which is what the repository\'s own setup script installs. KMIP is implemented as an endpoint and nothing else, with no certificate or credential setting anywhere, and no script or test in the repository runs a cluster against a KMIP server. And there are no other providers: the AWS, Azure, and GCP key stores in the Control Center prototype are not in the API.',
+        { callout: 'Not validated end to end in this repository: no test creates a volume against an external Vault or KMIP server. The CSI end-to-end suite provisions and mounts a volume from a class with `encryption: "True"`, and `helm-charts/scripts/setup-kms.sh` is tested against a stub `kubectl` and `helm`.', kind: 'info' },
+      ],
+    },
+    {
+      heading: 'Preparing Vault the way setup-kms.sh prepares OpenBao',
+      body: [
+        'The control plane signs in to Vault with TLS client-certificate auth. The certificate it presents is its web API serving certificate, the Secret `simplyblock-webappapi-tls` with the common name `simplyblock-webappapi`, which the operator requests from cert-manager. The operator adds the `client auth` usage to that certificate only when the ControlPlane uses the `cert-manager` provider with mutual TLS on, which are both defaults. The ControlPlane\'s `tls` block is immutable once the control plane exists, so this is decided at install time. There is no token, Kubernetes auth, or AppRole setting anywhere in the API.',
+        'The operator sends Vault\'s endpoint and nothing else, so every other name is the control plane\'s default, and Vault has to be prepared to exactly those defaults. The API has no field for a mount, a role, or a key name.',
+        { table: { head: ['Control plane setting', 'Default', 'Settable through the operator'], rows: [
+          ['`transit_mount`', '`simplyblock/transit`', 'No'],
+          ['`kv_mount`', '`simplyblock/kv`', 'No'],
+          ['`cert_role`', '`simplyblock-webappapi`', 'No'],
+          ['`credentials_cert_role`', 'none', 'No'],
+          ['`base_url`', 'none, required', 'Yes: `kms.vault.endpoint`'],
+        ] } },
+        '`helm-charts/scripts/setup-kms.sh` installs OpenBao in the namespace `vault`, serving at `https://openbao.vault:8200` with a certificate cert-manager issues from `simplyblock-certificate-authority-issuer`, the same CA that signs the control plane\'s certificate. It then configures exactly the defaults above. For a Vault run outside the script, the same configuration reads:',
+        { steps: [
+          'Take the CA that signed the control plane\'s certificate, from the `ca.crt` key of the Secret `simplyblock-webappapi-tls` in the `simplyblock` namespace. The script trusts the same CA through OpenBao\'s own serving certificate.',
+          'Enable the transit engine at `simplyblock/transit` and KV version 2 at `simplyblock/kv`.',
+          'Write the policy `simplyblock-webappapi-policy`, which grants the transit key, data key, encrypt, and decrypt paths and read and write on the KV mount.',
+          'Enable cert auth and write the role `simplyblock-webappapi`: it trusts that CA, allows only certificates with the DNS name `simplyblock-webappapi`, attaches the policy, and issues tokens of ten minutes, thirty at most.',
+        ] },
+        { code: [
+          `kubectl get secret simplyblock-webappapi-tls -n simplyblock -o jsonpath='{.data.ca\\.crt}' | base64 -d > simplyblock-ca.crt`,
+          '',
+          `vault secrets enable -path=simplyblock/transit transit`,
+          `vault secrets enable -path=simplyblock/kv -version=2 kv`,
+          `vault policy write simplyblock-webappapi-policy simplyblock-webappapi-policy.hcl`,
+          `vault auth enable cert`,
+          `vault write auth/cert/certs/simplyblock-webappapi \\`,
+          '  ' + `certificate=@simplyblock-ca.crt \\`,
+          '  ' + `allowed_dns_sans=simplyblock-webappapi \\`,
+          '  ' + `token_policies=simplyblock-webappapi-policy \\`,
+          '  ' + `token_ttl=10m token_max_ttl=30m`,
+        ].join('\n'), title: 'The script\'s configuration, with bao replaced by vault' },
+        { code: 'path "simplyblock/transit/keys/*"             { capabilities = ["create", "update", "read", "delete"] }\npath "simplyblock/transit/datakey/plaintext/*" { capabilities = ["create", "update"] }\npath "simplyblock/transit/datakey/wrapped/*"   { capabilities = ["create", "update"] }\npath "simplyblock/transit/encrypt/*"           { capabilities = ["create", "update"] }\npath "simplyblock/transit/decrypt/*"           { capabilities = ["create", "update"] }\npath "simplyblock/kv/*"                        { capabilities = ["create", "read", "update", "delete"] }', title: 'simplyblock-webappapi-policy.hcl, as the script writes it' },
+        'The script creates no transit key. The policy lets the control plane create keys under `simplyblock/transit/keys/`, and the KEK\'s name is chosen by the control plane and does not appear in this repository.',
+        { callout: 'Two things the repository does not show. How the control plane verifies Vault\'s serving certificate: in the script\'s setup it is signed by the same simplyblock CA, and the API has no CA bundle field for a Vault signed by another CA. And whether cert auth works with a certificate that lacks the client-auth usage, which is what a ControlPlane on the OpenShift provider or with mutual TLS off presents.', kind: 'warn' },
+      ],
+      examples: [
+        { title: 'The ControlPlane whose certificate Vault trusts', file: 'examples/external-kms/01-controlplane.yaml', notes: [
+          { at: 'enableMutualTLS: true', text: 'With mutual TLS on, the operator requests the web API certificate with both `server auth` and `client auth`. The control plane presents the same certificate to Vault.' },
+          { at: 'provider: cert-manager', text: 'Only the cert-manager path adds the client-auth usage. The OpenShift service CA issues serving certificates only.' },
+          { at: 'tls:', text: 'Immutable once the control plane exists, so the certificate a Vault login depends on is chosen at install time.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Stating the key store before the cluster exists',
+      body: [
+        'The whole surface a user writes is one block with one member and one field. `kms.vault.endpoint` is an `http` or `https` URL, for example, `https://vault.corp.example.com:8200`. `kms.kmip.endpoint` is `host:port` with no scheme, for example, `kmip.corp.example.com:5696`. The schema checks both against patterns, and nothing else is accepted under `kms`: there is no credentials Secret, no CA bundle, no TLS setting, no Vault namespace, no mount, no key name, and for KMIP no client certificate or server CA.',
+        'The block goes on the ClusterDeploymentConfig\'s cluster template, `spec.cluster.kms`, before the document is approved. The expansion copies it verbatim into `StorageCluster.spec.kms` when it creates the cluster, so the block is present on the very first reconcile. The field\'s own documentation says why it belongs there: setting it on the StorageCluster afterward races with the creation.',
+        'On the StorageCluster the block is guarded by the CEL rule `!has(oldSelf.kms) || self.kms == oldSelf.kms`, with the message `kms is immutable once set`. The rule allows one thing besides leaving the block alone: adding it to a cluster that had none. That addition is accepted and does nothing. The operator reads `spec.kms` in one place, the step that builds the cluster\'s creation request, and a cluster that already exists is never sent a key store again. Its encrypted volumes keep their keys in FoundationDB, and from then on the block cannot be removed either.',
+        { list: [
+          '**Vault and KMIP both set** is accepted. There is no CEL rule making them exclusive, although a comment in the cluster controller says there is, and the controller checks Vault first, so Vault is used and the KMIP endpoint is ignored without a message.',
+          '**A document that adds nodes** with `clusterRef` to a standalone cluster ignores its `cluster` template, `kms` included. The key store is the creating document\'s decision.',
+          '**There is no sample and no Helm value** for the block. `operator/config/samples` has none, and the chart renders no StorageCluster to put it on.',
+          '**Older spellings:** a `v1alpha1` cluster\'s `hashicorpVaultSettings.baseURL` converts to `kms.vault.endpoint`, and `design-storagecluster.md` still calls the field `baseURL`. The code says `endpoint`.',
+        ] },
+      ],
+      examples: [
+        { title: 'The deployment document with Vault', file: 'examples/external-kms/02-clusterdeploymentconfig-vault.yaml', notes: [
+          { at: 'kms:', text: 'On the cluster template, so it exists when the cluster is created. The expansion carries it to `StorageCluster.spec.kms` unchanged.' },
+          { at: 'endpoint: https://vault.corp.example.com:8200', text: 'The only Vault setting. The pattern accepts `http` too, and nothing in the operator requires `https`.' },
+          { at: 'approved: true', text: 'After approval the document is immutable, and the cluster it creates holds the block under its own immutability rule.' },
+        ] },
+        { title: 'The same document with KMIP instead', file: 'examples/external-kms/03-clusterdeploymentconfig-kmip.yaml', notes: [
+          { at: 'kmip:', text: 'A sibling of `vault`. State one of the two: with both set, Vault wins silently.' },
+          { at: 'endpoint: kmip.corp.example.com:5696', text: '`host:port`, no scheme. A URL such as `https://kmip.corp.example.com:5696` fails the schema pattern.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What the operator checks, and what it sends',
+      body: [
+        'The StorageCluster\'s creation machine runs `Claiming`, `CheckingControlPlane`, `ResolvingConfig`, and `Creating`. In `ResolvingConfig` the operator builds the creation request and checks the endpoint on the way. The check is about addresses, not about the key store:',
+        { list: [
+          'For Vault, the URL has to parse with an `http` or `https` scheme and a host. For KMIP, the value has to split into a host and a port.',
+          'An IP literal is refused if it is in `127.0.0.0/8`, `169.254.0.0/16`, `0.0.0.0/8`, `::1`, or `fe80::/10`.',
+          'A hostname has to resolve from the operator pod, and none of its addresses may be in those ranges.',
+        ] },
+        'No connection is opened, no TLS handshake is made, and nothing authenticates. Private addresses pass: the code comment says RFC 1918 ranges are blocked, and the list does not contain them, which is why an in-cluster name such as `https://openbao.vault:8200` is accepted. A reachable, correctly prepared Vault and a name that merely resolves look the same to the operator.',
+        'When the check fails, the operator raises a Warning event with reason `InvalidConfig` and the message `The key store is not usable: ` followed by the cause, such as `spec.kms.vault.endpoint: cannot resolve host "vault.corp.example.com": ...`. It writes the same cause to `status.message`, stays in `ResolvingConfig` with phase `Creating`, and retries every 20 seconds. There is no condition for the key store. Each creation step has a ten-minute deadline: once it passes, the phase becomes `Unavailable` with `creation step ResolvingConfig outlived its deadline`, and the operator does not retry the step on its own.',
+        'When the check passes, `Creating` posts the cluster with `kms_settings` of `{provider: vault, base_url: <endpoint>}` or `{provider: kmip, server_url: <endpoint>}`. From then on the operator has no part in the key store. Whether the control plane reaches Vault at creation, and what happens when the key store is unreachable while a volume is created, a node restarts, or a volume is attached, is the control plane\'s behavior and cannot be read from this repository. The operator raises no event and no condition for any of it.',
+        { code: 'kubectl get stc secure -n simplyblock -o jsonpath=\'{.status.phase} {.status.step.state} {.status.message}\'\nkubectl get events -n simplyblock --field-selector reason=InvalidConfig', title: 'Reading a cluster stuck on its key store' },
+      ],
+    },
+    {
+      heading: 'Encryption per StorageClass',
+      body: [
+        'A key store makes encryption possible and encrypts nothing on its own. A volume the CSI driver provisions is encrypted when its StorageClass carries the parameter `encryption` with a true value. There is no encryption field on a StoragePool\'s `volumeDefaults` and no cluster-wide default, and the operator never writes `encryption` into a class it creates. The default class the cluster wrote for its pool is unencrypted, and because a StorageClass\'s parameters cannot be changed, encryption is a second class assigned to the same pool.',
+        { steps: [
+          'Read the cluster\'s UUID from `status.uuid` of the StorageCluster. It is the class\'s `cluster_id`.',
+          'Copy the three assignment labels of the pool: `storage.simplyblock.io/namespace`, `storage.simplyblock.io/cluster`, and `storage.simplyblock.io/pool`.',
+          'Set `pool_name` to the pool\'s name and add `encryption: "true"`.',
+          'Leave out `storage.simplyblock.io/managed-by`. It marks a class the operator wrote and may delete with its pool.',
+        ] },
+        'The StorageClass admission webhook compares an assigned class with its pool and refuses a class that names another cluster, another pool, or another stripe. `encryption` is none of those, so the class is admitted. The driver reads the parameter with Go\'s boolean parsing, so `"true"`, `"True"`, and `"1"` all turn encryption on, and a value it cannot parse fails the volume\'s creation with the parse error.',
+        'The CSI driver does three things with the parameter, and nothing with keys. It sends `encrypt` in the create request to the control plane. It writes `encryption: "true"` into the PersistentVolume\'s volume attributes. And the node service uses that attribute when it stages the volume: an empty encrypted volume reads as pseudo-random bytes with no signature, so the filesystem guard formats it rather than refusing it as a device carrying unknown data. A claim names no Secret, and the driver never sees or transports key material. Striped volumes may be encrypted, because encryption applies to each member on its own.',
+        'Snapshots and clones of an encrypted volume get no special handling in the operator or the driver, and what the control plane does with their keys is not in this repository. A backup\'s `encrypted` flag is read by the shared library and shown on no CRD.',
+      ],
+      examples: [
+        { title: 'The encrypted class for the default pool', file: 'examples/external-kms/04-storageclass-encrypted.yaml', notes: [
+          { at: 'storage.simplyblock.io/pool: secure-default', text: 'The assignment is the three labels together. A pool name alone could match a pool of that name in another namespace or cluster.' },
+          { at: 'cluster_id:', text: 'The StorageCluster\'s `status.uuid`. The webhook refuses a class whose cluster disagrees with its pool\'s.' },
+          { at: 'pool_name: secure-default', text: 'The default pool, `<cluster>-default`. The class draws from the same capacity as `simplyblock-secure`.' },
+          { at: 'encryption: "true"', text: 'Quoted, because parameters are strings and an unquoted `true` is a YAML boolean the API refuses. Not something the operator ever writes.' },
+          { at: 'WaitForFirstConsumer', text: 'As on the class the operator writes for the default pool, so the volume is placed where its workload is scheduled.' },
+        ] },
+        { title: 'A claim against it', file: 'examples/external-kms/05-pvc.yaml', notes: [
+          { at: 'storageClassName: simplyblock-secure-encrypted', text: 'The only thing that makes this volume encrypted. Its PersistentVolume carries `encryption: "true"` in its volume attributes afterward.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'The limits',
+      body: [
+        '**No key rotation.** The operator rotates nothing, and no API field asks for it. With `csiaddons.create` on, the chart installs the csi-addons `EncryptionKeyRotationJob` and `EncryptionKeyRotationCronJob` CRDs, only because the csi-addons manager does not start without every CRD it watches. Even so, the driver\'s csi-addons identity advertises no key-rotation capability, so such a job has nothing to act on. The control plane has calls to rekey and import data encryption keys, and the operator uses neither. Whether rotating the transit key on the Vault side is safe for the control plane is not established here.',
+        '**The key store is fixed for the cluster\'s life.** Changing the endpoint, switching from Vault to KMIP, or removing the block is refused by the CEL rule. Adding a block to an existing cluster is accepted and has no effect. A cluster that needs another key store is a new cluster.',
+        '**Relocate refuses encrypted volumes.** A `Relocate` PersistentVolumeOps moves a volume to another member of its supercluster by replicating it and deleting the source. The source\'s deletion deletes the volume\'s key, and replication does not carry the key, so the target would hold ciphertext nobody can decrypt (`design-superclusters.md` section 9.4). The admission webhook reads the PersistentVolume\'s `encryption` attribute and denies the request with `EncryptedVolumeNotMovable`. The `Validating` step refuses it again, and it refuses a whole move when any volume sharing the subsystem is encrypted.',
+        '**Moving an encrypted volume to an unrelated cluster** has no supported path either. The same design names the hazard on replication\'s own commit with `delete_source` and on failover of encrypted volumes, and lists what carries the key as an open question for the control plane.',
+        { table: { head: ['Missing from the API', 'What exists instead'], rows: [
+          ['Providers other than Vault and KMIP', 'None. The Control Center prototype\'s cloud key stores are not in the API'],
+          ['Vault token, Kubernetes, or AppRole auth', 'Cert auth with the control plane\'s web API certificate'],
+          ['Credentials, CA bundle, or TLS settings', 'None, for either provider'],
+          ['Transit mount, KV mount, role, or key name', 'The control plane\'s defaults, which Vault has to match'],
+          ['KMIP client certificate and server CA', 'None. The endpoint is the only KMIP setting'],
+          ['A rule that Vault and KMIP exclude each other', 'Vault wins when both are set'],
+          ['A reachability probe, a KMS condition, or runtime events', 'The DNS check and the `InvalidConfig` event at creation'],
+          ['Key rotation', 'None'],
+          ['A pool-level or cluster-level encryption default', 'The StorageClass parameter'],
+        ] } },
+      ],
+      examples: [
+        { title: 'The refused Relocate', file: 'examples/external-kms/06-persistentvolumeops-relocate.yaml', notes: [
+          { at: 'kind: PersistentVolumeOps', text: 'Cluster-scoped, like the PersistentVolume it names, so it has no namespace.' },
+          { at: 'persistentVolumeName:', text: 'The webhook reads this PersistentVolume\'s volume attributes. The driver wrote `encryption: "true"` there when the volume was created from an encrypted class.' },
+          { at: 'action: Relocate', text: 'Schema-valid with its `relocate` block, which the CEL rule requires. The refusal is the webhook\'s, made right after it finds the volume.' },
+          { at: 'targetClusterRef: secure-b', text: 'Another member of the same supercluster. Whatever it names, an encrypted volume is refused with `EncryptedVolumeNotMovable` before the target is looked at.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What goes wrong',
+      body: [
+        { pitfalls: [
+          { symptom: 'The StorageCluster stays in `Creating` at step `ResolvingConfig`, with `InvalidConfig` events reading `cannot resolve host`.', cause: 'The key store\'s hostname does not resolve from the operator pod. The operator checks DNS before it posts the cluster.', fix: 'Make the name resolve from the operator pod, or use a name that does. Do it within the ten-minute step deadline: after it the phase is `Unavailable` and the step does not resume on its own.' },
+          { symptom: '`InvalidConfig` reads `URL resolves to a restricted IP address` or `endpoint targets a restricted IP address`.', cause: 'The endpoint is or resolves to a loopback, link-local, or `0.0.0.0/8` address.', fix: 'Use the key store\'s routable address or its Service name. Private addresses are accepted.' },
+          { symptom: 'The ClusterDeploymentConfig is refused with a pattern error on `kms.kmip.endpoint`.', cause: 'The KMIP endpoint was written as a URL with a scheme.', fix: 'Write `host:port`, for example, `kmip.corp.example.com:5696`.' },
+          { symptom: 'The cluster is `Online` and unencrypted claims bind, and claims of the encrypted class do not provision.', cause: 'The control plane cannot use Vault: a mount or the role is not under the control plane\'s default name, the cert-auth role trusts another CA or another DNS name, or the certificate lacks the client-auth usage. The operator checks none of this.', fix: 'Compare Vault with `setup-kms.sh`: `simplyblock/transit`, `simplyblock/kv` as KV version 2, the policy, and the role `simplyblock-webappapi` trusting the CA in `simplyblock-webappapi-tls`. Read Vault\'s audit log for the control plane\'s login.' },
+          { symptom: '`spec.kms` was added to a running cluster and accepted, and new encrypted volumes still keep their keys in FoundationDB.', cause: 'The block is read only when the cluster is created. Adding it later is allowed by the CEL rule and has no effect.', fix: 'None on that cluster, and the block now cannot be removed. State `kms` on the template of the document that creates the next cluster.' },
+          { symptom: 'Both `vault` and `kmip` were stated, and the KMIP appliance never sees a request.', cause: 'Nothing makes the two exclusive, and the controller uses Vault when both are set.', fix: 'State one provider. On a cluster that already exists the block is immutable.' },
+          { symptom: 'Applying the encrypted StorageClass fails with an error about a boolean where a string was expected.', cause: '`encryption: true` was written unquoted, and StorageClass parameters are strings.', fix: 'Quote it: `encryption: "true"`.' },
+          { symptom: 'A `Relocate` is refused with `EncryptedVolumeNotMovable`.', cause: 'The volume is encrypted, and a move would delete its only key.', fix: 'Leave the volume in its member. There is no override: the design keeps the refusal until the control plane carries the key with a move, its item P0-1.' },
+        ] },
+      ],
+    },
+  ],
+
+  questions: [
+    { topic: 'Key hierarchy', cat: 'concept', text: 'Where does the data encryption key of an encrypted volume live when the cluster has no `spec.kms`?', options: ['In the control plane\'s FoundationDB', 'In a Kubernetes Secret beside the claim', 'In the CSI node plugin\'s memory', 'Nowhere, because without a key store no volume can be encrypted', 'In the StorageCluster\'s status'], correct: [0], explain: 'Without an external store the control plane keeps DEKs in its own FoundationDB, the `LocalKMS` with an `fdb` key descriptor. Encryption still works, and no Kubernetes object holds a key.' },
+    { topic: 'Key hierarchy', cat: 'concept', text: 'With `kms.vault` set, which statements describe how a volume\'s key is kept?', options: ['Each encrypted volume has its own DEK', 'The DEK is wrapped by a KEK held in a Vault transit mount', 'The wrapped DEK is stored in a Vault KV mount', 'The operator wraps the DEK before sending it to Vault', 'All volumes of the cluster share one DEK stored in Vault'], correct: [0, 1, 2], explain: 'The control plane\'s schema describes Vault as a transit mount that wraps and unwraps DEKs and a KV mount that stores the wrapped ciphertext. The operator never handles a key, and keys are per volume.' },
+    { topic: 'Key hierarchy', cat: 'concept', text: 'Which component encrypts the data of an encrypted volume?', options: ['SPDK\'s crypto bdev in the data plane, with AES-XTS', 'The CSI node plugin, with dm-crypt', 'The operator, before it writes the volume', 'Vault, which receives every block', 'The kernel NVMe driver on the client'], correct: [0], explain: 'The driver\'s documentation describes the crypto bdev under the volume, through the SPDK accel framework with AES-XTS. Vault only holds the KEK, and the node plugin does no encryption.' },
+    { topic: 'Key hierarchy', cat: 'concept', text: 'Which of these does the operator do with volume keys?', options: ['Creates a DEK when a volume is created', 'Stores DEKs in a Secret for recovery', 'Rotates DEKs on a schedule', 'Unwraps a DEK when a node restarts', 'Copies DEKs to the target of a Relocate'], correct: [], explain: 'None. The operator sends one endpoint when the cluster is created and never sees a key. Creating, wrapping, and unwrapping are the control plane\'s, there is no rotation, and Relocate refuses encrypted volumes because nothing carries the key.' },
+    { topic: 'Key hierarchy', cat: 'concept', text: 'Which statements about the commissioned framing "HashiCorp and KMIP" are true of the code?', options: ['The Vault provider also accepts an OpenBao-compatible server', 'KMIP is configured by an endpoint alone', 'AWS, Azure, and GCP key stores are available through `spec.kms`', 'The repository\'s setup script installs OpenBao', 'No test in the repository runs a cluster against a KMIP server'], correct: [0, 1, 3, 4], explain: 'The control plane schema names OpenBao, `setup-kms.sh` installs it, and KMIP has only an endpoint with no script or test. The cloud key stores exist only in the Control Center prototype.' },
+
+    { topic: 'Fields and immutability', cat: 'field', text: 'Which values are admitted for `kms.kmip.endpoint`?', options: ['`kmip.corp.example.com:5696`', '`https://kmip.corp.example.com:5696`', '`kmip.corp.example.com`', '`10.20.0.15:5696`', '`kmip://kmip.corp.example.com:5696`'], correct: [0, 3], explain: 'The pattern is `host:port` with no scheme, and a dotted address fits the host part. A scheme or a missing port fails the pattern.' },
+    { topic: 'Fields and immutability', cat: 'field', text: 'Where should `kms` be stated for a cluster created from a deployment document?', options: ['`spec.cluster.kms` on the ClusterDeploymentConfig, before approval', 'On the StorageCluster after the document creates it', 'On the ControlPlane', 'On the default StoragePool', 'In the Helm values under `kms`'], correct: [0], explain: 'The expansion copies the template\'s block into `StorageCluster.spec.kms`, so it exists at the first reconcile. Setting it on the StorageCluster afterward races with the creation, and the ControlPlane, the pool, and the chart have no such field.' },
+    { topic: 'Fields and immutability', cat: 'concept', text: 'A StorageCluster was created without `kms`. Which changes does the API server accept?', options: ['Adding `kms.vault` for the first time', 'Changing a Vault endpoint once it is set', 'Removing the `kms` block once it is set', 'Replacing `vault` with `kmip` once it is set', 'Leaving `kms` absent'], correct: [0, 4], explain: 'The rule `!has(oldSelf.kms) || self.kms == oldSelf.kms` allows a first assignment and nothing after it. Leaving the field absent changes nothing and is always accepted.' },
+    { topic: 'Fields and immutability', cat: 'concept', text: '`kms.vault` is added to a cluster that has been `Online` for a week. What happens?', options: ['The update is accepted and nothing else happens', 'Existing DEKs are moved to Vault', 'New volumes keep their keys in Vault from then on', 'The cluster restarts its storage nodes', 'The update is refused'], correct: [0], explain: 'The CEL rule allows a first assignment, and the operator reads `spec.kms` only in the step that builds the creation request. A cluster that exists is never sent a key store, and the block now cannot be removed.' },
+    { topic: 'Fields and immutability', cat: 'field', text: 'A cluster template states both `kms.vault` and `kms.kmip`. Which statements are true?', options: ['The API server admits it', 'The controller sends Vault and ignores KMIP', 'A CEL rule refuses it with "set exactly one provider"', 'Both endpoints are sent and the control plane picks one', 'The operator raises an `InvalidConfig` event about the conflict'], correct: [0, 1], explain: 'There is no exclusion rule, although a controller comment claims one. `kmsConfig` checks Vault first and returns, so KMIP is ignored without any message.' },
+    { topic: 'Fields and immutability', cat: 'field', text: 'Which of these can `spec.kms` express?', options: ['A Vault token in a Secret', 'The transit mount path', 'A CA bundle for Vault\'s certificate', 'A KMIP client certificate', 'A Vault namespace'], correct: [], explain: 'None. The block has one endpoint per provider. Mounts and the role are the control plane\'s defaults, and there is no credentials, CA, or namespace field.' },
+
+    { topic: 'Preparing Vault', cat: 'action', text: 'Which engines and mounts does Vault need for a cluster whose `kms.vault` names it?', options: ['Transit at `simplyblock/transit`', 'KV version 2 at `simplyblock/kv`', 'PKI at `simplyblock/pki`', 'KV version 1 at `secret/`', 'Database secrets at `simplyblock/db`'], correct: [0, 1], explain: 'Those are the control plane\'s default `transit_mount` and `kv_mount`, which the operator cannot change, and `setup-kms.sh` enables exactly these two.' },
+    { topic: 'Preparing Vault', cat: 'concept', text: 'How does the control plane authenticate to Vault?', options: ['TLS client-certificate auth, with the web API\'s serving certificate', 'A root token the operator stores in a Secret', 'Kubernetes auth with the control plane\'s service account', 'AppRole with a role ID in the StorageCluster', 'Username and password from the ControlPlane spec'], correct: [0], explain: 'The script enables cert auth and a role trusting the CA of that certificate. The API has no token, Kubernetes auth, or AppRole setting.' },
+    { topic: 'Preparing Vault', cat: 'field', text: 'Which properties does the cert-auth role `simplyblock-webappapi` in `setup-kms.sh` have?', options: ['It trusts the CA that signed the control plane\'s certificate', 'It allows the DNS name `simplyblock-webappapi`', 'It attaches `simplyblock-webappapi-policy`', 'Its tokens live ten minutes, thirty at most', 'It is named after the control plane\'s default `cert_role`'], correct: [0, 1, 2, 3, 4], explain: 'All five. The role name matters because the operator sends no `cert_role`, so the control plane logs in under its default, `simplyblock-webappapi`.' },
+    { topic: 'Preparing Vault', cat: 'concept', text: 'When does the operator issue the control plane\'s web API certificate with the `client auth` usage?', options: ['When the ControlPlane\'s provider is `cert-manager` and mutual TLS is on', 'Always, whatever the provider', 'When the provider is `OpenShift`', 'When `spec.kms` is set on a StorageCluster', 'When mutual TLS is off'], correct: [0], explain: 'The client-auth usage is added only on the cert-manager path with mutual TLS. Both are defaults, and the ControlPlane\'s `tls` block is immutable once the control plane exists.' },
+    { topic: 'Preparing Vault', cat: 'action', text: 'Which paths does `simplyblock-webappapi-policy` grant?', options: ['`simplyblock/transit/keys/*`', '`simplyblock/transit/encrypt/*` and `decrypt/*`', '`simplyblock/transit/datakey/plaintext/*` and `datakey/wrapped/*`', '`simplyblock/kv/*`', '`sys/mounts/*`'], correct: [0, 1, 2, 3], explain: 'The policy covers the transit keys, data keys, encrypt and decrypt, and the KV mount. It grants nothing under `sys/`, so the control plane cannot enable or move mounts.' },
+    { topic: 'Preparing Vault', cat: 'concept', text: 'Which questions does the repository leave unanswered about a Vault run outside the script?', options: ['How the control plane verifies a Vault certificate signed by a CA other than simplyblock\'s', 'Whether cert auth works with a certificate that lacks the client-auth usage', 'The name of the KEK the control plane creates', 'Which mount paths the control plane uses by default', 'Which DNS name the role must allow'], correct: [0, 1, 2], explain: 'The defaults and the DNS name are in the control plane schema and the script. Server-certificate trust, the client-auth question, and the KEK\'s name are not visible in the repository.' },
+
+    { topic: 'Operator checks', cat: 'concept', text: 'What does the operator verify about `kms.vault.endpoint` before it posts the cluster?', options: ['The URL has an `http` or `https` scheme and a host', 'The hostname resolves from the operator pod', 'None of the resolved addresses is loopback, link-local, or in `0.0.0.0/8`', 'Vault answers on the port', 'The control plane can log in to Vault'], correct: [0, 1, 2], explain: 'The check is DNS and address ranges. It opens no connection, makes no TLS handshake, and attempts no login.' },
+    { topic: 'Operator checks', cat: 'concept', text: 'Which endpoints pass the operator\'s check, assuming each name resolves to the address shown?', options: ['`https://openbao.vault:8200`, resolving to a ClusterIP in `10.96.0.0/12`', '`https://vault.corp.example.com:8200`, resolving to `192.168.10.5`', '`https://127.0.0.1:8200`', '`https://169.254.169.254`', '`https://vault.local:8200`, resolving to `127.0.0.1`'], correct: [0, 1], explain: 'Private ranges pass: the code comment says RFC 1918 is blocked, and the list does not contain it. Loopback and link-local are refused whether written as a literal or reached through a name.' },
+    { topic: 'Operator checks', cat: 'action', text: 'The key store\'s hostname does not resolve. Where does the failure show?', options: ['A Warning event with reason `InvalidConfig` on the StorageCluster', 'The StorageCluster\'s `status.message`', 'A `KMSReady` condition set to `False`', 'The ClusterDeploymentConfig is refused at admission', 'The ControlPlane\'s phase turns `Degraded`'], correct: [0, 1], explain: 'The operator raises `InvalidConfig` with "The key store is not usable: ..." and writes the cause to `status.message`. There is no KMS condition, and admission does not resolve names.' },
+    { topic: 'Operator checks', cat: 'concept', text: 'A cluster has failed the endpoint check for twelve minutes. Which statements are true?', options: ['Its phase is `Unavailable`', 'Its message reads that the creation step `ResolvingConfig` outlived its deadline', 'It retries every 20 seconds and will create the cluster once DNS is fixed', 'The backend cluster exists without a key store', 'The operator falls back to FoundationDB and creates the cluster'], correct: [0, 1], explain: 'Each creation step has a ten-minute deadline, after which the phase is `Unavailable` and the step does not resume on its own. Nothing was posted, and there is no fallback to the local store.' },
+    { topic: 'Operator checks', cat: 'field', text: 'What does the creation request carry for `kms.kmip.endpoint: kmip.corp.example.com:5696`?', options: ['`kms_settings` with `provider: kmip` and `server_url`', '`kms_settings` with `provider: vault` and `base_url`', 'The appliance\'s client certificate', 'A key name for the KEK', 'Nothing, KMIP is applied after creation'], correct: [0], explain: 'atlas-lib maps the KMIP endpoint to `{provider: kmip, server_url}`. There is nothing else to send, because the API holds nothing else.' },
+
+    { topic: 'Encrypted classes', cat: 'field', text: 'Which parameters and labels does an encrypted class for the pool `secure-default` of cluster `secure` in namespace `simplyblock` need?', options: ['`cluster_id` set to the StorageCluster\'s `status.uuid`', '`pool_name: secure-default`', '`encryption: "true"`', 'The three `storage.simplyblock.io/` assignment labels', '`storage.simplyblock.io/managed-by: storagecluster`'], correct: [0, 1, 2, 3], explain: 'The driver needs `cluster_id` and `pool_name`, the labels assign the class to the pool, and `encryption` turns it on. The managed-by label marks a class the operator wrote and may delete, and an authored class leaves it out.' },
+    { topic: 'Encrypted classes', cat: 'concept', text: 'Why is encryption a second StorageClass rather than an edit to the class the cluster wrote for its default pool?', options: ['StorageClass parameters cannot be changed after creation', 'The default class belongs to another namespace', 'The operator rewrites the default class on every reconcile', 'A pool can have only one class', 'The default class is not assigned to the pool'], correct: [0], explain: 'Kubernetes does not allow a StorageClass\'s parameters to change. A pool can have any number of classes, joined by labels, and the operator writes its default class once.' },
+    { topic: 'Encrypted classes', cat: 'concept', text: 'Where else can encryption be turned on for a pool\'s volumes?', options: ['`StoragePool.spec.volumeDefaults.encryption`', 'A cluster-wide default on the StorageCluster', 'An annotation on the claim', 'A field in `spec.kms`', 'A ControlPlane setting'], correct: [], explain: 'None. The StorageClass parameter is the only switch. The pool\'s `volumeDefaults` has no encryption field, and the operator never writes `encryption` into a class.' },
+    { topic: 'Encrypted classes', cat: 'action', text: 'Which of these does the CSI driver do for a claim of an encrypted class?', options: ['Sends `encrypt` in the create request to the control plane', 'Writes `encryption: "true"` into the PersistentVolume\'s volume attributes', 'Formats an empty encrypted volume that reads as random bytes, rather than refusing it', 'Fetches the DEK from Vault and passes it to SPDK', 'Requires a Secret named on the claim'], correct: [0, 1, 2], explain: 'The driver forwards the flag, records it on the PersistentVolume, and the node\'s staging guard uses it to tell an unreadable empty volume from one carrying other data. It never sees or transports key material.' },
+    { topic: 'Encrypted classes', cat: 'field', text: 'Which `encryption` values turn encryption on?', options: ['`"true"`', '`"True"`', '`"1"`', '`"yes"`', '`"enabled"`'], correct: [0, 1, 2], explain: 'The driver uses Go\'s boolean parsing, which accepts `true`, `True`, and `1` among others. `yes` and `enabled` fail to parse, and the volume\'s creation fails with the error.' },
+
+    { topic: 'Limits', cat: 'concept', text: 'Why is a Relocate of an encrypted volume refused?', options: ['The move deletes the source volume, and with it the only copy of the key', 'Replication does not carry the key to the target', 'Encrypted volumes cannot be replicated at all', 'The target member has a different key store', 'Vault refuses requests from two clusters'], correct: [0, 1], explain: 'Design section 9.4: the landing volume has no crypto layer, the key lives under a path naming the source volume, and `delete_source` deletes it. The design gives the deleted key as the reason, not a difference between the key stores of the members.' },
+    { topic: 'Limits', cat: 'action', text: 'Where is an encrypted Relocate refused?', options: ['By the admission webhook, with `EncryptedVolumeNotMovable`', 'In the operation\'s `Validating` step', 'By the CEL rules of the PersistentVolumeOps schema', 'By the CSI driver when the target volume is created', 'By Vault, when the target cluster asks for the key'], correct: [0, 1], explain: 'The webhook reads the PersistentVolume\'s `encryption` attribute and denies, and `Validating` refuses again, including when any volume sharing the subsystem is encrypted. The schema has no rule about encryption.' },
+    { topic: 'Limits', cat: 'concept', text: 'Which statements about key rotation are true?', options: ['The operator rotates no key', 'The driver advertises no csi-addons key-rotation capability', 'The chart can install the csi-addons key-rotation CRDs, so that the csi-addons manager starts', 'The control plane has rekey and import calls the operator does not use', 'An `EncryptionKeyRotationJob` rotates a volume\'s DEK'], correct: [0, 1, 2, 3], explain: 'The CRDs are there because the csi-addons manager does not start without them, and a rotation job has nothing to act on because the driver offers no such capability. The control plane\'s rekey and import calls are unused.' },
+    { topic: 'Limits', cat: 'concept', text: 'A cluster\'s Vault is to be replaced by a KMIP appliance. What does the operator offer?', options: ['Nothing on that cluster: the key store is fixed for its life', 'An edit of `spec.kms` that the control plane applies', 'A StorageClusterOps action to migrate keys', 'A Relocate of every encrypted volume to a KMIP cluster', 'An annotation that reloads the key store'], correct: [0], explain: 'The `kms` block is immutable once set, and no operation moves keys. Relocate refuses encrypted volumes, so a new key store means a new cluster.' },
+  ],
+
+  tasks: [
+    {
+      title: 'The ControlPlane Vault can trust',
+      scenario: 'Write the ControlPlane for a cluster whose keys will be kept in Vault with cert auth: its web API certificate has to carry the client-auth usage.',
+      [`yaml`]: [
+        'apiVersion: storage.simplyblock.io/v1alpha2',
+        'kind: ControlPlane',
+        'metadata:',
+        '  name: {{name}}',
+        '  namespace: simplyblock',
+        'spec:',
+        '  source:',
+        '    local:',
+        '      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4',
+        '      ' + `tls:`,
+        '        ' + `enableTLS: {{serving}}`,
+        '        ' + `enableMutualTLS: {{mutual}}`,
+        '        provider: {{provider}}',
+      ].join('\n') + '\n',
+      blanks: {
+        name: { accept: ['simplyblock'], hint: 'the only name the operator reconciles' },
+        serving: { accept: ['true'], hint: 'mutual TLS means nothing without it' },
+        mutual: { accept: ['true'], hint: 'the condition for the client-auth usage' },
+        provider: { accept: ['cert-manager'], hint: 'the provider that can issue client certificates' },
+      },
+      explain: 'The operator adds `client auth` to the web API certificate only on the `cert-manager` path with mutual TLS, and the control plane presents that certificate to Vault. The `tls` block is immutable once the control plane exists.',
+    },
+    {
+      title: 'Vault on the deployment document',
+      scenario: 'Complete the document so that the cluster `secure` is created with its volume keys in the Vault at `https://vault.corp.example.com:8200`.',
+      [`yaml`]: [
+        'apiVersion: storage.simplyblock.io/v1alpha2',
+        'kind: ClusterDeploymentConfig',
+        'metadata:',
+        '  name: secure',
+        '  namespace: simplyblock',
+        'spec:',
+        '  approved: {{approved}}',
+        '  environment: Vanilla',
+        '  cluster:',
+        '    name: secure',
+        '    maxSubsystemCount: 50',
+        '    vcpuCount: 8',
+        '    {{block}}:',
+        '      {{provider}}:',
+        '        endpoint: {{endpoint}}',
+        '  nodeSets:',
+        '    - name: secure',
+        '      groups:',
+        '        - name: default',
+        '          workers: [worker-1, worker-2, worker-3]',
+        '          mgmtInterface: eth0',
+        '          devices:',
+        '            ' + `nvme: ["0000:c1:00.0"]`,
+      ].join('\n') + '\n',
+      blanks: {
+        approved: { accept: ['true'], hint: 'the document is expanded only once this is set' },
+        block: { accept: ['kms'], hint: 'the block on the cluster template' },
+        provider: { accept: ['vault'], hint: 'the sibling of `kmip`' },
+        endpoint: { accept: ['https://vault.corp.example.com:8200', '"https://vault.corp.example.com:8200"'], hint: 'the URL, scheme included' },
+      },
+      explain: 'The block goes on the template so the expansion carries it into `StorageCluster.spec.kms` before the cluster is created. The endpoint is the whole Vault configuration.',
+    },
+    {
+      title: 'An encrypted class for the default pool',
+      scenario: 'Write a StorageClass whose volumes are encrypted and drawn from the default pool `secure-default` of the cluster `secure` in the namespace `simplyblock`.',
+      [`yaml`]: [
+        'apiVersion: storage.k8s.io/v1',
+        'kind: StorageClass',
+        'metadata:',
+        '  name: simplyblock-secure-encrypted',
+        '  labels:',
+        '    storage.simplyblock.io/namespace: simplyblock',
+        '    storage.simplyblock.io/cluster: secure',
+        '    storage.simplyblock.io/pool: {{pool}}',
+        'provisioner: {{provisioner}}',
+        'parameters:',
+        '  cluster_id: 4b8e2f1a-9c3d-4e7f-a1b2-6d5c4e3f2a10',
+        '  pool_name: {{poolName}}',
+        '  {{key}}: {{value}}',
+        'volumeBindingMode: WaitForFirstConsumer',
+      ].join('\n') + '\n',
+      blanks: {
+        pool: { accept: ['secure-default'], hint: 'the pool label names the pool' },
+        provisioner: { accept: ['csi.simplyblock.io'], hint: 'the driver name' },
+        poolName: { accept: ['secure-default'], hint: 'the parameter the driver reads' },
+        key: { accept: ['encryption'], hint: 'the parameter the driver reads to turn encryption on' },
+        value: { accept: ['/["\'](true|True|TRUE|1|t|T)["\']/'], hint: 'a true value, as a string' },
+      },
+      explain: 'The labels assign the class to the pool, `cluster_id` and `pool_name` are what the driver needs, and `encryption` with a quoted true value turns encryption on. An unquoted `true` is a YAML boolean, which a StorageClass parameter cannot hold.',
+    },
+  ],
+});

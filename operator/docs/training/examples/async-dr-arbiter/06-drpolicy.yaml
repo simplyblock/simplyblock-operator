@@ -1,0 +1,18 @@
+# The DRPolicy, written on the hub: the two DRClusters and the interval. A
+# non-empty schedulingInterval makes the policy asynchronous, and it equals
+# the VolumeReplicationClass's schedulingInterval on both sites. The selector
+# narrows which VolumeReplicationClasses Ramen considers. All three fields are
+# immutable, so a different cadence is a new DRPolicy. Ramen's hub writes the
+# StorageClass pairs it found into status.async.peerClasses.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPolicy
+metadata:
+  name: dr-5m
+spec:
+  drClusters:
+    - site-a
+    - site-b
+  schedulingInterval: 5m
+  replicationClassSelector:
+    matchLabels:
+      dr.example.com/class: simplyblock-dr

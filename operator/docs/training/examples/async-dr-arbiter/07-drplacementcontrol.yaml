@@ -1,0 +1,22 @@
+# The DRPlacementControl, written on the hub in the application's namespace:
+# the DR intent for one application. It names the DRPolicy, the OCM Placement
+# that places the application, the site the application runs on, and the
+# label that selects the claims to protect. The policy, placement, and claim
+# references are immutable. Ramen then creates a VolumeReplicationGroup on
+# site-a, which creates one VolumeReplication per selected claim, and the CSI
+# driver attaches each volume to the backend policy the class names.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPlacementControl
+metadata:
+  name: orders-drpc
+  namespace: shop
+spec:
+  drPolicyRef:
+    name: dr-5m
+  placementRef:
+    kind: Placement
+    name: orders-placement
+  preferredCluster: site-a
+  pvcSelector:
+    matchLabels:
+      app: orders

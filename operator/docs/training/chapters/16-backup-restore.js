@@ -1,4 +1,4 @@
-// Chapter 10: backup and restore. The data-protection kinds as the operator
+// Backup and restore. The data-protection kinds as the operator
 // implements them: the store on the cluster, the policy that schedules copies,
 // the records the mirror writes for every copy the store holds, a copy or a
 // group backup taken on demand, and the two Ops kinds that restore. The one

@@ -1,0 +1,23 @@
+# An encrypted StorageClass for the cluster's default pool. The operator wrote
+# the class simplyblock-secure for that pool, without encryption, and a
+# class's parameters cannot be edited, so encryption is a second class drawing
+# from the same pool. The three labels are the assignment to the pool, and
+# cluster_id and pool_name are what the driver needs, both as the operator
+# writes them on the default class. encryption is the one addition, and it is
+# a quoted string because StorageClass parameters are strings.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-secure-encrypted
+  labels:
+    storage.simplyblock.io/namespace: simplyblock
+    storage.simplyblock.io/cluster: secure
+    storage.simplyblock.io/pool: secure-default
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 4b8e2f1a-9c3d-4e7f-a1b2-6d5c4e3f2a10
+  pool_name: secure-default
+  encryption: "true"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

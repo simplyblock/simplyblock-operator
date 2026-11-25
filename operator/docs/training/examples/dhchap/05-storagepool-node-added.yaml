@@ -1,0 +1,21 @@
+# The same pool after worker-3 is added to allowedNodes. Only the list changes:
+# volumeDefaults is applied exactly as before, because any change to it is
+# refused. On the next reconcile the operator labels worker-3 and adds its host
+# NQN to the pool's allowed hosts, and the class needs no change, because its
+# selector names the pool's label and not a node.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: payments
+  namespace: simplyblock
+spec:
+  clusterRef: production
+  allowedNodes:
+    - worker-1
+    - worker-2
+    - worker-3
+  limits:
+    capacity: 20T
+  volumeDefaults:
+    enableDHCHAP: true
+    filesystem: xfs

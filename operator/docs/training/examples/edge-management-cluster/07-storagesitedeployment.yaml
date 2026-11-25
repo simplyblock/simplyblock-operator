@@ -1,0 +1,33 @@
+# The optional hub path: a request, written on the management cluster, for the
+# storage of one edge that Open Cluster Management manages as the ManagedCluster
+# edge-north. The operator on the management cluster carries it to the edge
+# through a ManifestWork in the hub namespace edge-north: an OperatorOps
+# discovery first, and once the draft names nodes, the sizing below applied
+# onto the draft. It reads the draft, the StorageCluster, and the nodes back
+# through ManagedClusterViews. Nothing is deployed while approved is false.
+#
+# The edge runs the operator with the managed profile of
+# 05-edge-helm-values.yaml, so the StorageCluster the draft expands into
+# registers with the management cluster's control plane.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageSiteDeployment
+metadata:
+  name: edge-north
+  namespace: simplyblock
+spec:
+  cluster: edge-north
+  siteNamespace: simplyblock
+  draftName: site-draft
+  discover:
+    workers:
+      - edge-north-0
+      - edge-north-1
+      - edge-north-2
+  sizing:
+    name: edge-north
+    vcpuCount: 4
+    maxSubsystemCount: 50
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+  approved: false

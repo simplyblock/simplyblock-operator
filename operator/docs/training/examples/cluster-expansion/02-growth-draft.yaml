@@ -1,0 +1,54 @@
+# The growth document as the discovery run wrote it, before review. It is a
+# draft: approved is false, the operator validates it on every pass and writes
+# what it found into status.message, and nothing is created from it. There is
+# no spec.cluster, because prod exists and its sizing, stripe, and failure-domain
+# mode are read from the live StorageCluster. The run split the workers into one
+# group per zone, since the zone is part of what a group shares.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: prod-growth-1
+  namespace: simplyblock
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: prod-grow-1
+spec:
+  approved: false
+  environment: OpenShift
+  clusterRef: prod
+  nodeSets:
+    - name: discovered
+      groups:
+        - name: group-1-nvme-2x3T
+          failureDomain: zone-a
+          workers:
+            - worker-07
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: group-2-nvme-2x3T
+          failureDomain: zone-b
+          workers:
+            - worker-08
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: group-3-nvme-2x3T
+          failureDomain: zone-c
+          workers:
+            - worker-09
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

@@ -1,0 +1,15 @@
+# The policy the cluster migration enrolls claims under. Mode migration is what
+# a cluster-scoped ReplicationOps requires, and admission refuses the operation
+# against a policy in failover mode. The interval and the retention govern the
+# replication that runs between enrollment and the plan. The retention is the
+# smallest the CRD allows.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPolicy
+metadata:
+  name: gen1-move
+  namespace: simplyblock
+spec:
+  pairRef: gen1-to-gen2
+  mode: migration
+  interval: 5m
+  snapshotRetention: 2

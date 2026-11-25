@@ -1,0 +1,37 @@
+# The management API's way out of the management cluster. The operator creates
+# the Service simplyblock-webappapi as a ClusterIP on port 5000 and nothing
+# that reaches it from outside. Its serving certificate names only the
+# Service's in-cluster DNS names, and no ControlPlane field adds another, so a
+# LoadBalancer passing that certificate through fails hostname verification on
+# every edge. An Ingress that terminates TLS with a certificate for the
+# external name avoids that.
+#
+# Two things are left to the Ingress controller and are not shown, because this
+# repository documents neither. The certificate in the TLS Secret has to come
+# from a CA in the system trust store of the edge clusters' operator and CSI
+# containers. And the backend serves HTTPS with a certificate from the
+# management cluster's own CA (the ca.crt of the Secret
+# simplyblock-ca-bundle-tls), so the controller has to be told to connect to
+# its backend over HTTPS, which each controller configures in its own way.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simplyblock-management-api
+  namespace: simplyblock
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - control.central.example.com
+      secretName: control-central-example-com-tls
+  rules:
+    - host: control.central.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: simplyblock-webappapi
+                port:
+                  name: http

@@ -1,0 +1,22 @@
+# A discovery run narrowed to three new workers, writing a growth document for
+# the running cluster prod. discover.clusterRef is what makes the run a growth
+# run: it is copied into the draft's spec.clusterRef, and the draft then carries
+# no cluster layout of its own. discover.workers keeps the probes to the three
+# machines bought for this growth. The run reads each worker's failure domain
+# from topology.kubernetes.io/zone, the label prod's first run read, so the new
+# workers carry that label before the run starts.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: prod-grow-1
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    clusterRef: prod
+    configName: prod-growth-1
+    workers:
+      - worker-07
+      - worker-08
+      - worker-09
+    enablePartitionedDevices: true

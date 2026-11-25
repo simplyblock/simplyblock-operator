@@ -1,0 +1,13 @@
+# The direction of the move: from the StorageCluster gen1 to the StorageCluster
+# gen2. Both live in this namespace, so both are named rather than given as
+# UUIDs, and the operator resolves each name to the cluster's status.uuid. The
+# target cannot be changed once the pair exists. The pair reconciler creates the
+# backend replication target and sets status.ready, which the policy waits for.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPair
+metadata:
+  name: gen1-to-gen2
+  namespace: simplyblock
+spec:
+  sourceCluster: gen1
+  targetCluster: gen2

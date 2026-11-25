@@ -1,0 +1,31 @@
+# A cluster with latency-driven rebalancing turned on and the post-migration
+# data realignment batched. The rebalancing and realignment settings are blocks
+# of the StorageCluster, so the whole object is shown, reduced to the two
+# sizing fields the API requires.
+#
+# The values under volumeAutoPlacement are the defaults, written out so they
+# can be read. Setting disableMigration to true first is the dry run: load is
+# evaluated and the candidates are logged, and no PersistentVolumeOps is
+# created. Two fields the API accepts, storageNodeCandidateCount and
+# metricsBackend, are read by no code today and are left out.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageCluster
+metadata:
+  name: prod
+  namespace: simplyblock
+spec:
+  maxSubsystemCount: 50
+  vcpuCount: 8
+  enableVolumeAutoPlacement: true
+  volumeAutoPlacement:
+    disableMigration: false
+    evaluationInterval: 60s
+    imbalanceThreshold: 80
+    minHotColdDifferencePct: 20
+    defaultCoolDownSeconds: 600
+    maxVolumeMigrationsPerCycle: 10
+    prometheusURL: http://simplyblock-prometheus:9090
+  volumeMigrationSettings:
+    dataRealignment:
+      interval: 10m
+      minMoves: 5

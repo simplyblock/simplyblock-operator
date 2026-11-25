@@ -1,0 +1,18 @@
+# The move itself: the same scope and policy without dryRun. It enrolls every
+# claim on gen1 that is not replicated yet, waits for each to replicate, hands
+# them all to one migration plan, and follows that plan until every volume has
+# cut over or failed. With deleteSource the control plane deletes each source
+# volume after its cutover, and the operator marks the volume's
+# PersistentVolume with where the data lives now. The run takes as long as the
+# copy, which the dry run forecast.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: move-gen1
+  namespace: simplyblock
+spec:
+  action: migration
+  scope: cluster
+  ref: gen1
+  policyRef: gen1-move
+  deleteSource: true

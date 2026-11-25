@@ -1,0 +1,40 @@
+# The Helm values of one DR site, site-a. The same file with the names of
+# site-b is installed on the second site. The managed profile installs the
+# operator and the CSI driver here and no control plane: both sites register
+# with the one control plane on the third site, so a volume replicated from
+# site-a can be promoted on site-b by a call that does not need site-a. The
+# two lines that make the site a Ramen DR cluster are csiaddons.create, which
+# installs the VolumeReplication CRDs, the csi-addons controller-manager, and
+# the driver's csi-addons sidecar, and ramen.drCluster.enabled, which runs
+# Ramen's DR cluster operator. The S3 profiles are the same on all three sites.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values-dr-site.yaml
+deployment:
+  profile: managed
+
+controlplane:
+  managed:
+    endpoint: https://control.dr-hub.example.com
+    credentialsSecretRef: hub-control-plane
+    storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+
+csiaddons:
+  create: true
+
+ramen:
+  drCluster:
+    enabled: true
+  s3StoreProfiles:
+    - s3ProfileName: site-a-s3
+      s3Bucket: ramen-metadata
+      s3CompatibleEndpoint: https://s3.site-a.example.com
+      s3Region: east
+      s3SecretRef:
+        name: ramen-s3-site-a
+    - s3ProfileName: site-b-s3
+      s3Bucket: ramen-metadata
+      s3CompatibleEndpoint: https://s3.site-b.example.com
+      s3Region: west
+      s3SecretRef:
+        name: ramen-s3-site-b

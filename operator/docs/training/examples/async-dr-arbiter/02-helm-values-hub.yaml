@@ -1,0 +1,33 @@
+# The Helm values of the third site, the arbiter. It hosts the shared
+# simplyblock control plane (standalone profile) and runs no storage nodes, so
+# the chart's first discovery run is turned off. ramen.hub.enabled runs Ramen's
+# hub operator, which reconciles DRCluster, DRPolicy, and DRPlacementControl and
+# fails to start without Open Cluster Management on this cluster. The chart
+# does not install OCM: the OCM hub is installed and both sites are registered
+# as ManagedClusters before this release. The S3 profiles repeat those of the
+# sites, because each DRCluster names the profile its site restores from.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 02-helm-values-hub.yaml
+deployment:
+  profile: standalone
+
+discovery:
+  enabled: false
+
+ramen:
+  hub:
+    enabled: true
+  s3StoreProfiles:
+    - s3ProfileName: site-a-s3
+      s3Bucket: ramen-metadata
+      s3CompatibleEndpoint: https://s3.site-a.example.com
+      s3Region: east
+      s3SecretRef:
+        name: ramen-s3-site-a
+    - s3ProfileName: site-b-s3
+      s3Bucket: ramen-metadata
+      s3CompatibleEndpoint: https://s3.site-b.example.com
+      s3Region: west
+      s3SecretRef:
+        name: ramen-s3-site-b

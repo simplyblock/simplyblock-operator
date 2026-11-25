@@ -1,0 +1,24 @@
+# A claim pinned to one storage node. The annotation's value is the node's
+# backend UUID, the status.uuid of its StorageNode, and a validating webhook
+# refuses a value that names no storage node the control plane knows.
+#
+# At creation the CSI controller places the volume on that node. After that,
+# the pin controller is the only thing that moves the volume: changing the value
+# raises a PersistentVolumeOps to the new node, and removing the annotation
+# leaves the volume where it is. A drain, the auto-rebalancer, and a
+# hand-written PersistentVolumeOps are refused with VolumePinned, and so is a
+# move of any volume sharing this volume's NVMe-oF subsystem.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pg-data
+  namespace: payments
+  annotations:
+    storage.simplyblock.io/selected-storage-node: 7d1c6a52-0b8e-4f3a-9c21-5e4f8a9b3c10
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-prod
+  resources:
+    requests:
+      storage: 100Gi

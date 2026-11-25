@@ -1,0 +1,25 @@
+# The Helm values of one edge cluster: the managed profile, pointed at the
+# management API through the Ingress of 04-ingress.yaml. Every edge uses the
+# same values apart from what is its own: its storage, and the name of its
+# StorageCluster, which has to be unique across all edges.
+#
+# tls.enabled is false on the edge. The value decides how this release's own
+# clients verify a control plane: with it on, the CSI plugins trust only the
+# CA bundle of this edge's own cert-manager, which did not sign the Ingress
+# certificate. With it off, the operator and the CSI plugins verify the HTTPS
+# endpoint against the system trust store, which holds the CA of the Ingress
+# certificate.
+#
+# The Secret central-control-plane holds the token of 01-admin-token-secret.yaml
+# under the key token, created on the edge before the install.
+deployment:
+  profile: managed
+
+controlplane:
+  managed:
+    endpoint: https://control.central.example.com
+    credentialsSecretRef: central-control-plane
+    storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+
+tls:
+  enabled: false

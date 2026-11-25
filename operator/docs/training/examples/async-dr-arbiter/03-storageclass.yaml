@@ -1,0 +1,21 @@
+# The StorageClass on site-a. A class of the same name exists on site-b,
+# because a failover restores each claim with its original storageClassName
+# and Ramen pairs the two sites' classes by name. The storageid label differs
+# between the sites, since each site has its own storage cluster, and a
+# differing value is what marks the pair as asynchronous. The class carries
+# no storage.simplyblock.io/replication-policy annotation: that annotation
+# enrolls a volume through a ReplicationSlot, and a volume protected by Ramen
+# is owned by a VolumeReplication instead, never by both.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-dr
+  labels:
+    ramendr.openshift.io/storageid: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+  pool_name: site-a-default
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

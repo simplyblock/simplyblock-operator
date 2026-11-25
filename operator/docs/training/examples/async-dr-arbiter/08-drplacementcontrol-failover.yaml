@@ -1,0 +1,22 @@
+# The same DRPlacementControl after a person decided that site-a is lost:
+# action is set to Failover and failoverCluster names the site to run on. Only
+# these two fields change. Nothing writes them on its own, and the hub does
+# not judge site-a lost. The volumes on site-b are promoted from the last
+# replicated snapshot, so the writes of up to one interval are lost.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPlacementControl
+metadata:
+  name: orders-drpc
+  namespace: shop
+spec:
+  action: Failover
+  failoverCluster: site-b
+  drPolicyRef:
+    name: dr-5m
+  placementRef:
+    kind: Placement
+    name: orders-placement
+  preferredCluster: site-a
+  pvcSelector:
+    matchLabels:
+      app: orders

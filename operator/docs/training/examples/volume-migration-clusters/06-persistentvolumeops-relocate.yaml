@@ -1,0 +1,15 @@
+# A Relocate inside the supercluster prod: the volume behind one claim, with
+# every volume sharing its NVMe-oF subsystem, moved from its member to the
+# member prod-fast-mzt. The operation is cluster-scoped, like the
+# PersistentVolume it names, and needs no pair or policy: the operator starts
+# the replication itself. The source is always deleted after the cutover, and
+# an abort is no longer honored once the operation reaches Committing.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: relocate-orders-db
+spec:
+  persistentVolumeName: pvc-4b1d2e7a-9c3f-4a85-b6d0-2e1f7c9a3b58
+  action: Relocate
+  relocate:
+    targetClusterRef: prod-fast-mzt
