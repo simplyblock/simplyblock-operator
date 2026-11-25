@@ -214,6 +214,17 @@ func TestStorageClusterOpsUpdateRules(t *testing.T) {
 			denied: "spec.cancelTask is immutable",
 		},
 		{
+			name: "toggling the pod refresh of a rolling restart mid-walk",
+			create: clusterOps(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
+				func(s *simplyblockv1alpha2.StorageClusterOpsSpec) {
+					s.RollingRestart = &simplyblockv1alpha2.RollingRestartSpec{RefreshSNodeAPI: true}
+				}),
+			mutate: asClusterOps(func(s *simplyblockv1alpha2.StorageClusterOpsSpec) {
+				s.RollingRestart = &simplyblockv1alpha2.RollingRestartSpec{}
+			}),
+			denied: "spec.rollingRestart is immutable",
+		},
+		{
 			name:   "aborting a cancel",
 			create: clusterOps(simplyblockv1alpha2.StorageClusterOpsActionCancelTask, withTask("task-1")),
 			mutate: asClusterOps(func(s *simplyblockv1alpha2.StorageClusterOpsSpec) { s.Abort = true }),
