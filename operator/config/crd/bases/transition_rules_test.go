@@ -379,6 +379,15 @@ func TestStretchedClusterUpdateRules(t *testing.T) {
 			denied: "sizing cannot change once",
 		},
 		{
+			name:   "pinning another SPDK image on an approved stretched cluster",
+			create: approvedStretched(),
+			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) {
+				s.Images = &simplyblockv1alpha2.DeploymentImages{
+					SPDK: &simplyblockv1alpha2.ImageSpec{Image: "registry.example/spdk:2"}}
+			}),
+			denied: "images cannot change once",
+		},
+		{
 			name:   "swapping the roles",
 			create: stretched(),
 			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) {
