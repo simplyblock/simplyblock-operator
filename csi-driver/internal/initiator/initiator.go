@@ -840,6 +840,27 @@ func dhchapAuthArgs(connectCmd string) []string {
 	return args
 }
 
+// regularKeepAliveTmo is the keep-alive the control plane returns for a
+// regular cluster's paths (sbcli LVOL_NVME_KEEP_ALIVE_TO[_TCP]). The driver has
+// never passed that value on, so those paths keep the kernel's default.
+const regularKeepAliveTmo = 8
+
+// shortenedKeepAlive is the control plane's keep-alive for a path when it chose
+// a shorter one than a regular cluster's, and zero (omit it) otherwise.
+//
+// The control plane decides the value per path; the driver does not know why.
+// Today that is a multi-attach cluster (sbcli MULTI_ATTACH_CLIENT_KEEP_ALIVE_TO,
+// 3 s): a node lost without closing its connections stalls its volumes' I/O
+// until the host's keep-alive notices, and with the default that took 10-14 s.
+// An older control plane, or a regular cluster, returns 8 or nothing, so its
+// hosts connect exactly as before.
+func shortenedKeepAlive(conn *controlplane.LvolConnectResp) int {
+	if conn.KeepAliveTmo > 0 && conn.KeepAliveTmo < regularKeepAliveTmo {
+		return conn.KeepAliveTmo
+	}
+	return 0
+}
+
 // connectArgs is the NVMe connect command line for one path.
 //
 // On a two-node arbitrated cluster the control plane's keep-alive,
@@ -847,7 +868,9 @@ func dhchapAuthArgs(connectCmd string) []string {
 // TCP connections, so its path is found dead only by the keep-alive, held I/O
 // must be answered before fast_io_fail fails it, and a fenced path must be
 // retried rather than dropped (sbcli docs/design/two-node-arbitration.md §9.1).
-// Every other cluster connects exactly as before.
+// Any other cluster gets the control plane's keep-alive only when it is
+// shorter than a regular cluster's (shortenedKeepAlive), so a regular cluster
+// connects exactly as before.
 func connectArgs(conn *controlplane.LvolConnectResp, ctrlLossTmo int) []string {
 	if conn.TwoNode && conn.CtrlLossTmo > ctrlLossTmo {
 		ctrlLossTmo = conn.CtrlLossTmo
@@ -867,6 +890,8 @@ func connectArgs(conn *controlplane.LvolConnectResp, ctrlLossTmo int) []string {
 		if conn.FastIOFailTmo > 0 {
 			cmd = append(cmd, "--fast_io_fail_tmo="+strconv.Itoa(conn.FastIOFailTmo))
 		}
+	} else if kato := shortenedKeepAlive(conn); kato > 0 {
+		cmd = append(cmd, "-k", strconv.Itoa(kato))
 	}
 	if conn.HostIface != "" {
 		cmd = append(cmd, "-f", conn.HostIface)

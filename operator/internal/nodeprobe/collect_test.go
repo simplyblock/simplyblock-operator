@@ -247,6 +247,10 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 			Namespaces: []nvme.NamespaceFormats{{NSID: 1, Formats: []nvme.LBAFormat{{DataSize: 4096}}}},
 		}},
 		HostOS: ubuntuHost(),
+		SANInitiators: inventory.SANInitiators{
+			ISCSIIQN: "iqn.1994-05.com.redhat:w3", FCWWPNs: []string{"21000024ff4c1a2b"},
+			NVMeHostNQN: "nqn.2014-08.org.nvmexpress:uuid:w3",
+		},
 	}
 
 	report := FromInventory("worker-3", probedAt, inv, nil)
@@ -260,6 +264,8 @@ func TestFromInventoryCarriesEveryReadingAndNotMostOfThem(t *testing.T) {
 		"nvmeControllers": len(report.NVMeControllers) != 0,
 		"lbaFormats":      len(report.NVMeControllers) != 0 && len(report.NVMeControllers[0].LBAFormats) != 0,
 		"hostOS":          report.HostOS.Distro != "",
+		"sanInitiators": report.SANInitiators != nil && report.SANInitiators.ISCSIIQN != "" &&
+			len(report.SANInitiators.FCWWPNs) == 1 && report.SANInitiators.NVMeHostNQN != "",
 	} {
 		if !carried {
 			t.Errorf("the %s reading was not carried into the report", name)

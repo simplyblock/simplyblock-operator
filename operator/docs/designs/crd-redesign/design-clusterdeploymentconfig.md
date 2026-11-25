@@ -526,6 +526,27 @@ the ones the cluster already has for a growth document, and reports
 about erasure coding is counted as 1+1, because that is what the control plane
 defaults to.
 
+**The same scheme decides what those nodes hand over and how they are spread.**
+Every storage node needs at least one data device, since a node without one is
+counted toward the node minimum while buying none of what the minimum is for;
+the cluster needs `ndcs+2*npcs` data devices in all, the stripe's width plus a
+spare device per tolerated failure to rebuild onto, which is `ndcs+npcs` when
+`spec.cluster.raidDevices` declares every device protected below simplyblock by
+a hardware RAID LUN or an md or dm array, so that a disk failure never costs the
+stripe a chunk; and where the groups declare failure domains, `ndcs+npcs`
+distinct domains are needed, one per chunk, so that losing a domain costs a
+stripe one chunk and never two. A device `enableJournalDevice` dedicates to the
+journal is one per storage node and carries no data, so it is counted out
+first. Devices are counted from the groups that name them and from the device
+names or the control plane's report of the nodes the cluster already has; a
+worker nobody can count is held to neither device floor, and the total is not
+asserted while one is unknown. `StripeBelowMinimumDevices` names the group, or
+the node, that is short, and `StripeBelowMinimumFailureDomains` the domains the
+document ends up with. A declared single-node cluster keeps its own rule, a
+device per chunk on its one node, and is not held to the domain floor. These are
+the floors the control plane's own activation gate does not have: it counts
+`ndcs+npcs+1` devices and nothing else.
+
 **Nodes that share a worker are counted, and then counted again.** The minimum is
 a node count, and a fleet that reaches it by running several nodes per socket on
 two workers has not bought the independent spare the count was asking for, since
@@ -1129,29 +1150,31 @@ Both kinds are new, so both tables are new infrastructure.
 
 ### 9.1 Kubernetes events
 
-| Event                                                    | Type      | Reason                      | On                        |
-|----------------------------------------------------------|-----------|-----------------------------|---------------------------|
-| A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`            | `ClusterDeploymentConfig` |
-| A draft names a device no node advertises                | `Warning` | `DeviceNotFound`            | `ClusterDeploymentConfig` |
-| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`       | `ClusterDeploymentConfig` |
-| A draft would map more than 256 failure domains          | `Warning` | `TooManyFailureDomains`     | `ClusterDeploymentConfig` |
-| A draft's scheme is one the control plane refuses        | `Warning` | `StripeUnsupported`         | `ClusterDeploymentConfig` |
-| A draft has fewer nodes than its scheme requires         | `Warning` | `StripeBelowMinimumNodes`   | `ClusterDeploymentConfig` |
-| A draft's nodes sit on too few workers for its scheme    | `Warning` | `StripeBelowMinimumWorkers` | `ClusterDeploymentConfig` |
-| A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`          | `ClusterDeploymentConfig` |
-| Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`      | `ClusterDeploymentConfig` |
-| Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`             | `ClusterDeploymentConfig` |
-| Expansion refused: `clusterRef` names no cluster         | `Warning` | `ClusterNotFound`           | `ClusterDeploymentConfig` |
-| Expansion created the cluster                            | `Normal`  | `ClusterCreated`            | `ClusterDeploymentConfig` |
-| Expansion created the nodes                              | `Normal`  | `NodesCreated`              | `ClusterDeploymentConfig` |
-| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`      | `ClusterDeploymentConfig` |
-| Discovery could not read a node's devices                | `Warning` | `DeviceInspectionFailed`    | `OperatorOps`             |
-| Discovery wrote a config                                 | `Normal`  | `ConfigWritten`             | `OperatorOps`             |
-| The run is waiting for another to finish (§7)            | `Normal`  | `OperationQueued`           | `OperatorOps`             |
-| The run started                                          | `Normal`  | `OperationStarted`          | `OperatorOps`             |
-| The operation finished successfully                      | `Normal`  | `OperationSucceeded`        | `OperatorOps`             |
-| The operation failed                                     | `Warning` | `OperationFailed`           | `OperatorOps`             |
-| The run was aborted and its unwind finished              | `Normal`  | `OperationAborted`          | `OperatorOps`             |
+| Event                                                    | Type      | Reason                             | On                        |
+|----------------------------------------------------------|-----------|------------------------------------|---------------------------|
+| A draft names a worker that does not exist               | `Warning` | `WorkerNotFound`                   | `ClusterDeploymentConfig` |
+| A draft names a device no node advertises                | `Warning` | `DeviceNotFound`                   | `ClusterDeploymentConfig` |
+| A draft's devices are not the class its cluster uses     | `Warning` | `DeviceClassMismatch`              | `ClusterDeploymentConfig` |
+| A draft would map more than 256 failure domains          | `Warning` | `TooManyFailureDomains`            | `ClusterDeploymentConfig` |
+| A draft's scheme is one the control plane refuses        | `Warning` | `StripeUnsupported`                | `ClusterDeploymentConfig` |
+| A draft has fewer nodes than its scheme requires         | `Warning` | `StripeBelowMinimumNodes`          | `ClusterDeploymentConfig` |
+| A draft's nodes sit on too few workers for its scheme    | `Warning` | `StripeBelowMinimumWorkers`        | `ClusterDeploymentConfig` |
+| A draft's nodes hand over too few data devices           | `Warning` | `StripeBelowMinimumDevices`        | `ClusterDeploymentConfig` |
+| A draft's groups declare too few failure domains         | `Warning` | `StripeBelowMinimumFailureDomains` | `ClusterDeploymentConfig` |
+| A draft is valid and awaiting approval                   | `Normal`  | `AwaitingApproval`                 | `ClusterDeploymentConfig` |
+| Expansion is held because the control plane is not ready | `Warning` | `ControlPlaneNotReady`             | `ClusterDeploymentConfig` |
+| Expansion refused: the cluster already exists            | `Warning` | `ClusterExists`                    | `ClusterDeploymentConfig` |
+| Expansion refused: `clusterRef` names no cluster         | `Warning` | `ClusterNotFound`                  | `ClusterDeploymentConfig` |
+| Expansion created the cluster                            | `Normal`  | `ClusterCreated`                   | `ClusterDeploymentConfig` |
+| Expansion created the nodes                              | `Normal`  | `NodesCreated`                     | `ClusterDeploymentConfig` |
+| A step's deadline expired                                | `Warning` | `StepDeadlineExceeded`             | `ClusterDeploymentConfig` |
+| Discovery could not read a node's devices                | `Warning` | `DeviceInspectionFailed`           | `OperatorOps`             |
+| Discovery wrote a config                                 | `Normal`  | `ConfigWritten`                    | `OperatorOps`             |
+| The run is waiting for another to finish (§7)            | `Normal`  | `OperationQueued`                  | `OperatorOps`             |
+| The run started                                          | `Normal`  | `OperationStarted`                 | `OperatorOps`             |
+| The operation finished successfully                      | `Normal`  | `OperationSucceeded`               | `OperatorOps`             |
+| The operation failed                                     | `Warning` | `OperationFailed`                  | `OperatorOps`             |
+| The run was aborted and its unwind finished              | `Normal`  | `OperationAborted`                 | `OperatorOps`             |
 
 **No event reports a rejected approval.** An admission rejection fails the
 request, so what the administrator gets is the webhook's message on their own
@@ -1715,6 +1738,13 @@ type ClusterTemplate struct {
 	// Stripe is the erasure-coding layout.
 	// +optional
 	Stripe *StripeSpec `json:"stripe,omitempty"`
+
+	// RaidDevices declares every data device protected below simplyblock (a
+	// hardware RAID LUN, or an md or dm RAID array), which lowers the cluster's
+	// data-device floor from dataChunks+2*parityChunks to dataChunks+parityChunks.
+	// Carried to the cluster's spec.raidDevices, which is immutable.
+	// +optional
+	RaidDevices *bool `json:"raidDevices,omitempty"`
 
 	// FabricType is the storage fabric.
 	// +optional

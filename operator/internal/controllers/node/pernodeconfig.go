@@ -228,6 +228,13 @@ func renderNodeConfig(
 	// however the names are spelled -- which is not a failure it reports, but a
 	// configure that selects no device and a node that never comes up.
 	block := cluster.Spec.DeviceClass == simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
+	// A multi-attach node whose journal is a LUN on the array uses no local
+	// device: the control plane creates its journal LUN and data LUN when it
+	// adds the node, so whatever the document names is not handed over.
+	arrayOnly := cluster.Spec.MultiAttach.JournalOnLUN()
+	if arrayOnly {
+		names = nil
+	}
 	if block {
 		entry.WriteString("LBLK=true\n")
 		fmt.Fprintf(&entry, "BLK_NAMES=%s\n", utils.ShellQuote(strings.Join(names, ",")))
@@ -239,11 +246,21 @@ func renderNodeConfig(
 			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
 			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
 		}
-		// By default the configure carves each node's journal partition from
-		// its smallest device (the journal split). enableJournalDevice asks for
-		// the smallest device to be dedicated to the journal instead.
-		if workload := cluster.Spec.StorageNodes; workload != nil &&
-			ptr.BoolFromOrFalse(workload.EnableJournalDevice) {
+		// A multi-attach node's data device is the LUN the control plane
+		// creates on the array when the node is added. Its journal is another
+		// LUN created beside it (the array's journal placement LUN), and the
+		// node names no device, or the one device the node names, whole (the
+		// placement Local). Otherwise, the configure carves each node's journal
+		// partition from its smallest device (the journal split), and
+		// enableJournalDevice asks for the smallest device to be dedicated to
+		// the journal instead. The flags exclude each other.
+		switch {
+		case arrayOnly:
+			entry.WriteString("LBLK_ARRAY_ONLY=true\n")
+		case cluster.Spec.MultiAttach != nil:
+			entry.WriteString("LBLK_JOURNAL_ONLY=true\n")
+		case cluster.Spec.StorageNodes != nil &&
+			ptr.BoolFromOrFalse(cluster.Spec.StorageNodes.EnableJournalDevice):
 			entry.WriteString("LBLK_JOURNAL_DEVICE=true\n")
 		}
 	} else {

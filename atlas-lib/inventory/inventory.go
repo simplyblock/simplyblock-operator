@@ -296,6 +296,11 @@ type Inventory struct {
 	// kernel, where Environment is the cluster's.
 	HostOS HostOS
 
+	// SANInitiators are the identities a storage array knows the worker by
+	// (iSCSI IQN, FC port names, NVMe host NQN), for a cluster whose LUNs the
+	// array presents.
+	SANInitiators SANInitiators
+
 	// Environment is which Kubernetes distribution the cluster runs, and the
 	// markers that said so.
 	//
@@ -516,6 +521,12 @@ func Collect(ctx context.Context, cfg Config) (Inventory, error) {
 		errs = append(errs, fmt.Errorf("read the kernel: %w", err))
 	}
 	inv.HostOS = hostOS
+
+	initiators, err := ReadSANInitiators(cfg)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("read the SAN initiators: %w", err))
+	}
+	inv.SANInitiators = initiators
 
 	ifaces, err := ReadInterfaces(cfg)
 	if err != nil {

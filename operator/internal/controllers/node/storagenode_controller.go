@@ -650,6 +650,18 @@ func (r *StorageNodeReconciler) awaitSlot(
 		return stepAdopting, true, nil
 	}
 
+	// Adding a node of a multi-attach cluster creates its LUN on the cluster's
+	// storage array, so the add waits for the array's registration, and holds
+	// no slot meanwhile.
+	if !cluster.ArrayReady() {
+		reason := "it is not registered yet"
+		if st := cluster.Status.Array; st != nil && st.Message != "" {
+			reason = st.Message
+		}
+		return stepAwaitingSlot, false, blockedf(AwaitingArray,
+			"waiting for the cluster's storage array, where this node's LUN is created: %s", reason)
+	}
+
 	// A slot taken for a machine that is not there is an add posted against a
 	// worker that cannot answer it. The wait costs nothing, because the slot is
 	// still free when the machine comes back, and taking it would put a second

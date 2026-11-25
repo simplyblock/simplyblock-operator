@@ -932,7 +932,7 @@ func TestTheDraftStatesTheHostOSTheProbesRead(t *testing.T) {
 		}},
 	}}}
 
-	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, &plan)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -969,7 +969,7 @@ func TestTheDraftStatesNoHostOSForAFleetThatDisagrees(t *testing.T) {
 		worker("worker-02", "rocky"),
 	}}
 
-	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, plan)
+	config, notes, err := r.draftFor(context.Background(), ops, &simplyblockv1alpha2.DiscoverSpec{}, &plan)
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -1021,7 +1021,7 @@ func TestTheDraftCarriesTheTolerationsTheRunProbedWith(t *testing.T) {
 	ops := &simplyblockv1alpha2.OperatorOps{ObjectMeta: metav1.ObjectMeta{Name: "discover-1"}}
 	spec := &simplyblockv1alpha2.DiscoverSpec{Tolerations: storagePlaneTaint}
 
-	config, notes, err := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{})
+	config, notes, err := r.draftFor(context.Background(), ops, spec, &discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}
@@ -1047,7 +1047,7 @@ func TestAGrowthDraftCarriesNoTolerations(t *testing.T) {
 		Tolerations: storagePlaneTaint,
 	}
 
-	config, _, err := r.draftFor(context.Background(), ops, spec, discoverypkg.Plan{})
+	config, _, err := r.draftFor(context.Background(), ops, spec, &discoverypkg.Plan{})
 	if err != nil {
 		t.Fatalf("the fleet was refused: %v", err)
 	}

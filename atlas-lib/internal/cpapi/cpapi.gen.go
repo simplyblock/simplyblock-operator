@@ -55,6 +55,24 @@ func (e AlertDTOStatus) Valid() bool {
 	}
 }
 
+// Defines values for ArrayParamsJournal.
+const (
+	Local ArrayParamsJournal = "local"
+	Lun   ArrayParamsJournal = "lun"
+)
+
+// Valid indicates whether the value is a known member of the ArrayParamsJournal enum.
+func (e ArrayParamsJournal) Valid() bool {
+	switch e {
+	case Local:
+		return true
+	case Lun:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ClusterDTOStatus.
 const (
 	ClusterDTOStatusActive       ClusterDTOStatus = "active"
@@ -124,6 +142,24 @@ func (e ClusterParamsDeviceMode) Valid() bool {
 	case Lblk:
 		return true
 	case Nvme:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for ClusterParamsFtt.
+const (
+	ClusterParamsFttN1 ClusterParamsFtt = 1
+	ClusterParamsFttN2 ClusterParamsFtt = 2
+)
+
+// Valid indicates whether the value is a known member of the ClusterParamsFtt enum.
+func (e ClusterParamsFtt) Valid() bool {
+	switch e {
+	case ClusterParamsFttN1:
+		return true
+	case ClusterParamsFttN2:
 		return true
 	default:
 		return false
@@ -615,16 +651,16 @@ func (e ReplicationTargetDTOStatus) Valid() bool {
 
 // Defines values for SecondaryTarget.
 const (
-	N0 SecondaryTarget = 0
-	N1 SecondaryTarget = 1
+	SecondaryTargetN0 SecondaryTarget = 0
+	SecondaryTargetN1 SecondaryTarget = 1
 )
 
 // Valid indicates whether the value is a known member of the SecondaryTarget enum.
 func (e SecondaryTarget) Valid() bool {
 	switch e {
-	case N0:
+	case SecondaryTargetN0:
 		return true
-	case N1:
+	case SecondaryTargetN1:
 		return true
 	default:
 		return false
@@ -1255,6 +1291,51 @@ type AlertDTOSeverity string
 // AlertDTOStatus defines model for AlertDTO.Status.
 type AlertDTOStatus string
 
+// ArrayDTO defines model for ArrayDTO.
+type ArrayDTO struct {
+	Capabilities   *map[string]interface{} `json:"capabilities,omitempty"`
+	CredentialRef  *map[string]interface{} `json:"credential_ref,omitempty"`
+	Endpoint       string                  `json:"endpoint"`
+	HasCredentials bool                    `json:"has_credentials"`
+	Id             string                  `json:"id"`
+	Journal        *string                 `json:"journal,omitempty"`
+	JournalLunSize *int                    `json:"journal_lun_size,omitempty"`
+	JournalOptions *map[string]interface{} `json:"journal_options,omitempty"`
+	LunSize        int                     `json:"lun_size"`
+	Options        map[string]interface{}  `json:"options"`
+	Plugin         string                  `json:"plugin"`
+}
+
+// ArrayParams defines model for ArrayParams.
+type ArrayParams struct {
+	// AllowLocalKmsCredentials Opt in (true) or out (false) of keeping the credentials in the cluster's local key store, effectively unencrypted, when it has no external KMS (test environments); omitted, unchanged
+	AllowLocalKmsCredentials *bool `json:"allow_local_kms_credentials,omitempty"`
+
+	// CredentialRef Instead of credentials: a secret kept outside simplyblock, {"kind": "vault-kv", "mount": ..., "path": ..., "version": ...} or {"kind": "kmip-secret", "uid": ..., "field": ...}
+	CredentialRef *map[string]interface{} `json:"credential_ref,omitempty"`
+	Credentials   *map[string]string      `json:"credentials,omitempty"`
+	Endpoint      *string                 `json:"endpoint,omitempty"`
+
+	// Journal Where each node's journal is kept: local (a disk or partition of its host) or lun (a LUN of its own, created next to its data LUN; needs lun_size)
+	Journal *ArrayParamsJournal `json:"journal,omitempty"`
+
+	// JournalLunSize journal lun: size of each node's journal LUN; 0 = 3% of lun_size, at least 2 GiB
+	JournalLunSize *int `json:"journal_lun_size,omitempty"`
+
+	// JournalOptions journal lun: plugin options for the journal LUNs, applied over options, e.g. {"pool": "fast-pool"}
+	JournalOptions *map[string]interface{} `json:"journal_options,omitempty"`
+
+	// LunSize Size of the LUN created for each added node; 0 = none
+	LunSize *int                    `json:"lun_size,omitempty"`
+	Options *map[string]interface{} `json:"options,omitempty"`
+
+	// Plugin Plugin name (entry point in simplyblock.array_plugins), e.g. aws-ebs
+	Plugin string `json:"plugin"`
+}
+
+// ArrayParamsJournal Where each node's journal is kept: local (a disk or partition of its host) or lun (a LUN of its own, created next to its data LUN; needs lun_size)
+type ArrayParamsJournal string
+
 // BackupConfigInput A cluster's backup configuration: a location plus how to authenticate to it.
 type BackupConfigInput struct {
 	BucketName       string         `json:"bucket_name"`
@@ -1479,6 +1560,7 @@ type ClusterDTO struct {
 	LvolGeometryEnabled         bool               `json:"lvol_geometry_enabled"`
 	MaxFaultTolerance           int                `json:"max_fault_tolerance"`
 	MdJournal                   *bool              `json:"md_journal,omitempty"`
+	MultiAttach                 *bool              `json:"multi_attach,omitempty"`
 	Name                        *string            `json:"name"`
 	NodeAffinity                bool               `json:"node_affinity"`
 	NodeLabelSuffix             string             `json:"node_label_suffix"`
@@ -1534,6 +1616,7 @@ type ClusterParams struct {
 	EnableFailureDomain    *bool                    `json:"enable_failure_domain,omitempty"`
 	EnableNodeAffinity     *bool                    `json:"enable_node_affinity,omitempty"`
 	Fabric                 *string                  `json:"fabric,omitempty"`
+	Ftt                    *ClusterParamsFtt        `json:"ftt,omitempty"`
 	HaType                 *ClusterParamsHaType     `json:"ha_type,omitempty"`
 	HugepagesMem           *int                     `json:"hugepages_mem,omitempty"`
 	InflightIoThreshold    *int                     `json:"inflight_io_threshold,omitempty"`
@@ -1545,6 +1628,7 @@ type ClusterParams struct {
 	MaxQueueSize           *int                     `json:"max_queue_size,omitempty"`
 	MaxSubsys              int                      `json:"max_subsys"`
 	MdJournal              *bool                    `json:"md_journal,omitempty"`
+	MultiAttach            *bool                    `json:"multi_attach,omitempty"`
 	Name                   *string                  `json:"name,omitempty"`
 	NodeLabelSuffix        *string                  `json:"node_label_suffix,omitempty"`
 	NvmfBasePort           *int                     `json:"nvmf_base_port,omitempty"`
@@ -1553,6 +1637,7 @@ type ClusterParams struct {
 	ProvCapCrit            *int                     `json:"prov_cap_crit,omitempty"`
 	ProvCapWarn            *int                     `json:"prov_cap_warn,omitempty"`
 	QpairCount             *int                     `json:"qpair_count,omitempty"`
+	RaidDevices            *bool                    `json:"raid_devices,omitempty"`
 	RpcBasePort            *int                     `json:"rpc_base_port,omitempty"`
 	SnodeApiPort           *int                     `json:"snode_api_port,omitempty"`
 	SnodeApiService        *string                  `json:"snode_api_service,omitempty"`
@@ -1568,6 +1653,9 @@ type ClusterParamsBlkSize int
 
 // ClusterParamsDeviceMode defines model for ClusterParams.DeviceMode.
 type ClusterParamsDeviceMode string
+
+// ClusterParamsFtt defines model for ClusterParams.Ftt.
+type ClusterParamsFtt int
 
 // ClusterParamsHaType defines model for ClusterParams.HaType.
 type ClusterParamsHaType string
@@ -1819,10 +1907,23 @@ type DeviceDTO struct {
 
 // DeviceGrowthDTO defines model for DeviceGrowthDTO.
 type DeviceGrowthDTO struct {
-	Devices   []map[string]interface{} `json:"devices"`
-	Errors    map[string]string        `json:"errors"`
-	Rebalance *DeviceRebalanceDTO      `json:"rebalance,omitempty"`
-	Uniform   bool                     `json:"uniform"`
+	Devices []DeviceGrowthEntryDTO             `json:"devices"`
+	Errors  map[string]string                  `json:"errors"`
+	Factor  float32                            `json:"factor"`
+	Grown   bool                               `json:"grown"`
+	Luns    *map[string]map[string]interface{} `json:"luns,omitempty"`
+	Reason  string                             `json:"reason"`
+	Shrunk  *[]string                          `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthEntryDTO defines model for DeviceGrowthEntryDTO.
+type DeviceGrowthEntryDTO struct {
+	BackendSize   int    `json:"backend_size"`
+	DeviceId      string `json:"device_id"`
+	NewSize       int    `json:"new_size"`
+	OldSize       int    `json:"old_size"`
+	PlacementSize int    `json:"placement_size"`
+	UnusedSize    int    `json:"unused_size"`
 }
 
 // DeviceHealthAssessmentDTO A device health verdict computed outside the control plane.
@@ -1891,13 +1992,6 @@ type DevicePerformanceAssessmentDTO struct {
 
 // DevicePerformanceAssessmentDTOVerdict defines model for DevicePerformanceAssessmentDTO.Verdict.
 type DevicePerformanceAssessmentDTOVerdict string
-
-// DeviceRebalanceDTO defines model for DeviceRebalanceDTO.
-type DeviceRebalanceDTO struct {
-	Reason         string `json:"reason"`
-	Started        bool   `json:"started"`
-	WeightsUpdated bool   `json:"weights_updated"`
-}
 
 // DeviceResizeDTO defines model for DeviceResizeDTO.
 type DeviceResizeDTO struct {
@@ -3169,6 +3263,11 @@ type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsSeverity string
 // ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus defines parameters for ClustersAlertsListApiV2ClustersClusterIdAlertsGet.
 type ClustersAlertsListApiV2ClustersClusterIdAlertsGetParamsStatus string
 
+// ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams defines parameters for ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete.
+type ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams struct {
+	Force *bool `form:"force,omitempty" json:"force,omitempty"`
+}
+
 // ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams defines parameters for ClustersBackupsListApiV2ClustersClusterIdBackupsGet.
 type ClustersBackupsListApiV2ClustersClusterIdBackupsGetParams struct {
 	// Watch Stream state changes as Server-Sent Events instead of returning a plain response: a `snapshot` event with the current state first, then `created`/`updated`/`deleted` events carrying the full resource representation. A `deleted` event carries the resource's final state when it is still retrievable (e.g. a volume whose status became `deleted`), or an empty object once it is gone entirely. Streams do not support resume; reconnecting clients receive a fresh snapshot. Changes written by pre-upgrade components may take up to 30 seconds to appear.
@@ -3258,7 +3357,8 @@ type ClustersConsistencyGroupsSubsystemMovesPrepareApiV2ClustersClusterIdConsist
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams defines parameters for ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost.
 type ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams struct {
-	Rebalance *bool `form:"rebalance,omitempty" json:"rebalance,omitempty"`
+	LunFactor *float32 `form:"lun_factor,omitempty" json:"lun_factor,omitempty"`
+	LunSize   *int     `form:"lun_size,omitempty" json:"lun_size,omitempty"`
 }
 
 // ClustersIostatsApiV2ClustersClusterIdIostatsGetParams defines parameters for ClustersIostatsApiV2ClustersClusterIdIostatsGet.
@@ -3569,6 +3669,9 @@ type ClustersArbitrationPreferredApiV2ClustersClusterIdArbitrationPreferredPutJS
 
 // ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody defines body for ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut for application/json ContentType.
 type ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody = UnderscoreRemediation
+
+// ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody defines body for ClustersArraysCreateApiV2ClustersClusterIdArraysPost for application/json ContentType.
+type ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody = ArrayParams
 
 // ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody defines body for ClustersBackupsCreateApiV2ClustersClusterIdBackupsPost for application/json ContentType.
 type ClustersBackupsCreateApiV2ClustersClusterIdBackupsPostJSONRequestBody = UnderscoreBackupSnapshotParams
@@ -4534,6 +4637,46 @@ type ClientInterface interface {
 	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
 	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
+	// ClustersArraysListApiV2ClustersClusterIdArraysGet Clusters:Arrays:List
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysListApiV2ClustersClusterIdArraysGet` operationId).
+	ClustersArraysListApiV2ClustersClusterIdArraysGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBody Clusters:Arrays:Create
+	//
+	// Register the cluster's storage array (or re-register it, e.g. to
+	// rotate its credentials). The plugin is loaded and connected with the
+	// credentials and its capabilities read before anything is saved.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+	ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArraysCreateApiV2ClustersClusterIdArraysPost Clusters:Arrays:Create
+	//
+	// Register the cluster's storage array (or re-register it, e.g. to
+	// rotate its credentials). The plugin is loaded and connected with the
+	// credentials and its capabilities read before anything is saved.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+	ClustersArraysCreateApiV2ClustersClusterIdArraysPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete Clusters:Arrays:Delete
+	//
+	// Remove the registration and its credentials. Refused while LUNs
+	// created through the array exist, unless ``force``.
+	//
+	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete` operationId).
+	ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete(ctx context.Context, clusterId openapi_types.UUID, arrayId string, params *ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet Clusters:Arrays:Get
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet` operationId).
+	ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet(ctx context.Context, clusterId openapi_types.UUID, arrayId string, reqEditors ...RequestEditorFn) (*http.Response, error)
+
 	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
 	//
 	// The cluster's backup configuration, with credentials masked.
@@ -5266,11 +5409,20 @@ type ClientInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after the LUNs of the cluster
-	// were grown on the storage array. If they have grown unevenly, the device
-	// weights are set to the new sizes and the cluster is rebalanced, unless
-	// ``rebalance`` is false.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
+	//
+	// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+	// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+	// that large is left alone, so the call can be repeated after a failure;
+	// nodes added later get LUNs of that size).
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
 	ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -6800,6 +6952,96 @@ func (c *Client) ClustersArbitrationRemediationApiV2ClustersClusterIdArbitration
 	return c.Client.Do(req)
 }
 
+// ClustersArraysListApiV2ClustersClusterIdArraysGet Clusters:Arrays:List
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysListApiV2ClustersClusterIdArraysGet` operationId).
+func (c *Client) ClustersArraysListApiV2ClustersClusterIdArraysGet(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArraysListApiV2ClustersClusterIdArraysGetRequest(c.Server, clusterId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBody Clusters:Arrays:Create
+//
+// Register the cluster's storage array (or re-register it, e.g. to
+// rotate its credentials). The plugin is loaded and connected with the
+// credentials and its capabilities read before anything is saved.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+func (c *Client) ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBody(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequestWithBody(c.Server, clusterId, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArraysCreateApiV2ClustersClusterIdArraysPost Clusters:Arrays:Create
+//
+// Register the cluster's storage array (or re-register it, e.g. to
+// rotate its credentials). The plugin is loaded and connected with the
+// credentials and its capabilities read before anything is saved.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+func (c *Client) ClustersArraysCreateApiV2ClustersClusterIdArraysPost(ctx context.Context, clusterId openapi_types.UUID, body ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequest(c.Server, clusterId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete Clusters:Arrays:Delete
+//
+// Remove the registration and its credentials. Refused while LUNs
+// created through the array exist, unless “force“.
+//
+// Corresponds with DELETE /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete` operationId).
+func (c *Client) ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete(ctx context.Context, clusterId openapi_types.UUID, arrayId string, params *ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteRequest(c.Server, clusterId, arrayId, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet Clusters:Arrays:Get
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet` operationId).
+func (c *Client) ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet(ctx context.Context, clusterId openapi_types.UUID, arrayId string, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetRequest(c.Server, clusterId, arrayId)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
 // ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet Clusters:Backup-Config:Get
 //
 // The cluster's backup configuration, with credentials masked.
@@ -8281,11 +8523,20 @@ func (c *Client) ClustersExpandApiV2ClustersClusterIdExpandPost(ctx context.Cont
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after the LUNs of the cluster
-// were grown on the storage array. If they have grown unevenly, the device
-// weights are set to the new sizes and the cluster is rebalanced, unless
-// “rebalance“ is false.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
+//
+// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+// that large is left alone, so the call can be repeated after a failure;
+// nodes added later get LUNs of that size).
 //
 // Corresponds with POST /api/v2/clusters/{cluster_id}/grow-devices (the `ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost` operationId).
 func (c *Client) ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPost(ctx context.Context, clusterId openapi_types.UUID, params *ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -11568,6 +11819,196 @@ func NewClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediati
 	return req, nil
 }
 
+// NewClustersArraysListApiV2ClustersClusterIdArraysGetRequest constructs an http.Request for the ClustersArraysListApiV2ClustersClusterIdArraysGet method
+func NewClustersArraysListApiV2ClustersClusterIdArraysGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arrays/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequest calls the generic ClustersArraysCreateApiV2ClustersClusterIdArraysPost builder with application/json body
+func NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequest(server string, clusterId openapi_types.UUID, body ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequestWithBody(server, clusterId, "application/json", bodyReader)
+}
+
+// NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequestWithBody constructs an http.Request for the ClustersArraysCreateApiV2ClustersClusterIdArraysPost method, with any body, and a specified content type
+func NewClustersArraysCreateApiV2ClustersClusterIdArraysPostRequestWithBody(server string, clusterId openapi_types.UUID, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arrays/", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteRequest constructs an http.Request for the ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete method
+func NewClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteRequest(server string, clusterId openapi_types.UUID, arrayId string, params *ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "array_id", arrayId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arrays/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if params.Force != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "force", *params.Force, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodDelete, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetRequest constructs an http.Request for the ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet method
+func NewClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetRequest(server string, clusterId openapi_types.UUID, arrayId string) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	var pathParam1 string
+
+	pathParam1, err = runtime.StyleParamWithOptions("simple", false, "array_id", arrayId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: ""})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/arrays/%s", pathParam0, pathParam1)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest constructs an http.Request for the ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGet method
 func NewClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
 	var err error
@@ -14351,9 +14792,21 @@ func NewClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostRequest(server s
 		// per the OpenAPI spec (e.g. "color=blue,black,brown").
 		var rawQueryFragments []string
 
-		if params.Rebalance != nil {
+		if params.LunFactor != nil {
 
-			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "rebalance", *params.Rebalance, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "boolean", Format: ""}); err != nil {
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "lun_factor", *params.LunFactor, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if params.LunSize != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "lun_size", *params.LunSize, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
 				return nil, err
 			} else {
 				for _, qp := range strings.Split(queryFrag, "&") {
@@ -21168,6 +21621,52 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with PUT /api/v2/clusters/{cluster_id}/arbitration/remediation (the `ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPut` operationId).
 	ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse, error)
 
+	// ClustersArraysListApiV2ClustersClusterIdArraysGetWithResponse Clusters:Arrays:List
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysListApiV2ClustersClusterIdArraysGet` operationId).
+	ClustersArraysListApiV2ClustersClusterIdArraysGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersArraysListApiV2ClustersClusterIdArraysGetResponse, error)
+
+	// ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBodyWithResponse Clusters:Arrays:Create
+	//
+	// Register the cluster's storage array (or re-register it, e.g. to
+	// rotate its credentials). The plugin is loaded and connected with the
+	// credentials and its capabilities read before anything is saved.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+	ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse, error)
+
+	// ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse Clusters:Arrays:Create
+	//
+	// Register the cluster's storage array (or re-register it, e.g. to
+	// rotate its credentials). The plugin is loaded and connected with the
+	// credentials and its capabilities read before anything is saved.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+	ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse, error)
+
+	// ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteWithResponse Clusters:Arrays:Delete
+	//
+	// Remove the registration and its credentials. Refused while LUNs
+	// created through the array exist, unless ``force``.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with DELETE /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete` operationId).
+	ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, arrayId string, params *ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams, reqEditors ...RequestEditorFn) (*ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse, error)
+
+	// ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetWithResponse Clusters:Arrays:Get
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet` operationId).
+	ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, arrayId string, reqEditors ...RequestEditorFn) (*ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse, error)
+
 	// ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse Clusters:Backup-Config:Get
 	//
 	// The cluster's backup configuration, with credentials masked.
@@ -21966,11 +22465,20 @@ type ClientWithResponsesInterface interface {
 
 	// ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 	//
-	// Grow every online lblk data device of the cluster to the size of its
-	// block device, one device at a time. Used after the LUNs of the cluster
-	// were grown on the storage array. If they have grown unevenly, the device
-	// weights are set to the new sizes and the cluster is rebalanced, unless
-	// ``rebalance`` is false.
+	// Grow all lblk data devices of the cluster online by the same factor.
+	//
+	// Every block device is rescanned (for example, after its LUN was grown on
+	// the storage array), and every device grows by the smallest growth factor
+	// of all of them; the rest of a larger block device stays unused
+	// (`unused_size`). If one block device did not grow, nothing grows
+	// (`grown` false, `reason`). Device weights and data placement never change.
+	// A block device smaller than its device is refused, listed in `shrunk`
+	// and `errors`, and raises the device_shrunk alert.
+	//
+	// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+	// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+	// that large is left alone, so the call can be repeated after a failure;
+	// nodes added later get LUNs of that size).
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -23912,6 +24420,191 @@ func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediati
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArraysListApiV2ClustersClusterIdArraysGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *[]ArrayDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersArraysListApiV2ClustersClusterIdArraysGetResponse) GetJSON200() *[]ArrayDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArraysListApiV2ClustersClusterIdArraysGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArraysListApiV2ClustersClusterIdArraysGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArraysListApiV2ClustersClusterIdArraysGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArraysListApiV2ClustersClusterIdArraysGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArraysListApiV2ClustersClusterIdArraysGetResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *ArrayDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse) GetJSON201() *ArrayDTO {
+	return r.JSON201
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *ArrayDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse) GetJSON200() *ArrayDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -32032,6 +32725,82 @@ func (c *ClientWithResponses) ClustersArbitrationRemediationApiV2ClustersCluster
 	return ParseClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemediationPutResponse(rsp)
 }
 
+// ClustersArraysListApiV2ClustersClusterIdArraysGetWithResponse Clusters:Arrays:List
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysListApiV2ClustersClusterIdArraysGet` operationId).
+func (c *ClientWithResponses) ClustersArraysListApiV2ClustersClusterIdArraysGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersArraysListApiV2ClustersClusterIdArraysGetResponse, error) {
+	rsp, err := c.ClustersArraysListApiV2ClustersClusterIdArraysGet(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArraysListApiV2ClustersClusterIdArraysGetResponse(rsp)
+}
+
+// ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBodyWithResponse Clusters:Arrays:Create
+//
+// Register the cluster's storage array (or re-register it, e.g. to
+// rotate its credentials). The plugin is loaded and connected with the
+// credentials and its capabilities read before anything is saved.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+func (c *ClientWithResponses) ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBodyWithResponse(ctx context.Context, clusterId openapi_types.UUID, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse, error) {
+	rsp, err := c.ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithBody(ctx, clusterId, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse(rsp)
+}
+
+// ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse Clusters:Arrays:Create
+//
+// Register the cluster's storage array (or re-register it, e.g. to
+// rotate its credentials). The plugin is loaded and connected with the
+// credentials and its capabilities read before anything is saved.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/arrays/ (the `ClustersArraysCreateApiV2ClustersClusterIdArraysPost` operationId).
+func (c *ClientWithResponses) ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, body ClustersArraysCreateApiV2ClustersClusterIdArraysPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse, error) {
+	rsp, err := c.ClustersArraysCreateApiV2ClustersClusterIdArraysPost(ctx, clusterId, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse(rsp)
+}
+
+// ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteWithResponse Clusters:Arrays:Delete
+//
+// Remove the registration and its credentials. Refused while LUNs
+// created through the array exist, unless “force“.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with DELETE /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete` operationId).
+func (c *ClientWithResponses) ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteWithResponse(ctx context.Context, clusterId openapi_types.UUID, arrayId string, params *ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteParams, reqEditors ...RequestEditorFn) (*ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse, error) {
+	rsp, err := c.ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDelete(ctx, clusterId, arrayId, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse(rsp)
+}
+
+// ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetWithResponse Clusters:Arrays:Get
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /api/v2/clusters/{cluster_id}/arrays/{array_id} (the `ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet` operationId).
+func (c *ClientWithResponses) ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetWithResponse(ctx context.Context, clusterId openapi_types.UUID, arrayId string, reqEditors ...RequestEditorFn) (*ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse, error) {
+	rsp, err := c.ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGet(ctx, clusterId, arrayId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse(rsp)
+}
+
 // ClustersBackupConfigGetApiV2ClustersClusterIdBackupConfigGetWithResponse Clusters:Backup-Config:Get
 //
 // The cluster's backup configuration, with credentials masked.
@@ -33280,11 +34049,20 @@ func (c *ClientWithResponses) ClustersExpandApiV2ClustersClusterIdExpandPostWith
 
 // ClustersGrowDevicesApiV2ClustersClusterIdGrowDevicesPostWithResponse Clusters:Grow Devices
 //
-// Grow every online lblk data device of the cluster to the size of its
-// block device, one device at a time. Used after the LUNs of the cluster
-// were grown on the storage array. If they have grown unevenly, the device
-// weights are set to the new sizes and the cluster is rebalanced, unless
-// “rebalance“ is false.
+// Grow all lblk data devices of the cluster online by the same factor.
+//
+// Every block device is rescanned (for example, after its LUN was grown on
+// the storage array), and every device grows by the smallest growth factor
+// of all of them; the rest of a larger block device stays unused
+// (`unused_size`). If one block device did not grow, nothing grows
+// (`grown` false, `reason`). Device weights and data placement never change.
+// A block device smaller than its device is refused, listed in `shrunk`
+// and `errors`, and raises the device_shrunk alert.
+//
+// On a cluster whose array plugin creates its LUNs, every LUN is grown at
+// the array first: by `lun_factor`, or to `lun_size` bytes (a LUN already
+// that large is left alone, so the call can be repeated after a failure;
+// nodes added later get LUNs of that size).
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -35845,6 +36623,134 @@ func ParseClustersArbitrationRemediationApiV2ClustersClusterIdArbitrationRemedia
 	switch {
 	case rsp.StatusCode == 204:
 		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArraysListApiV2ClustersClusterIdArraysGetResponse parses an HTTP response from a ClustersArraysListApiV2ClustersClusterIdArraysGetWithResponse call
+func ParseClustersArraysListApiV2ClustersClusterIdArraysGetResponse(rsp *http.Response) (*ClustersArraysListApiV2ClustersClusterIdArraysGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArraysListApiV2ClustersClusterIdArraysGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest []ArrayDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse parses an HTTP response from a ClustersArraysCreateApiV2ClustersClusterIdArraysPostWithResponse call
+func ParseClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse(rsp *http.Response) (*ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArraysCreateApiV2ClustersClusterIdArraysPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest ArrayDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse parses an HTTP response from a ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteWithResponse call
+func ParseClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse(rsp *http.Response) (*ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArraysDeleteApiV2ClustersClusterIdArraysArrayIdDeleteResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse parses an HTTP response from a ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetWithResponse call
+func ParseClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse(rsp *http.Response) (*ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersArraysGetApiV2ClustersClusterIdArraysArrayIdGetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest ArrayDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

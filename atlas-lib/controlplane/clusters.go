@@ -105,8 +105,18 @@ type CreateClusterParams struct {
 	DeviceMode      string
 	// SingleNode creates a cluster of one storage node, which is also created
 	// without HA.
-	SingleNode    bool
-	WorkloadNames ClusterWorkloadNames
+	SingleNode bool
+	// RaidDevices declares that every data device is protected below
+	// simplyblock (a hardware RAID LUN, md, or dm RAID), which lowers the
+	// control plane's device floor for the stripe to ndcs+npcs.
+	RaidDevices bool
+	// MultiAttach creates a cluster on multi-attach array LUNs: each node's
+	// LUN is presented to its secondary and tertiary as well, and taken over
+	// by one of them when the node fails. It needs RaidDevices, and
+	// FaultTolerance says how many node failures it tolerates (1 or 2).
+	MultiAttach    bool
+	FaultTolerance int
+	WorkloadNames  ClusterWorkloadNames
 	// SyncReplication creates a cluster whose writes land on both of its
 	// sites before they are acknowledged. The backend accepts it at create
 	// only.
@@ -259,6 +269,7 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		Atomic4k:            isTrue(p.Atomic4K),
 		MdJournal:           ptr.To(p.MetadataJournal),
 		IsSingleNode:        isTrue(p.SingleNode),
+		RaidDevices:         isTrue(p.RaidDevices),
 		SyncReplication:     isTrue(p.SyncReplication),
 		LeaderSite:          nonEmpty(p.LeaderSite),
 		SnodeApiService:     nonEmpty(p.WorkloadNames.NodeAPIService),
@@ -267,6 +278,12 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		NodeLabelSuffix:     nonEmpty(p.WorkloadNames.NodeLabelSuffix),
 		KmsSettings:         kmsSettingsOf(p.KMS),
 		BackupConfig:        backupConfigOf(p.Backup),
+	}
+	if p.MultiAttach {
+		body.MultiAttach = ptr.To(true)
+		if p.FaultTolerance > 0 {
+			body.Ftt = ptr.To(cpapi.ClusterParamsFtt(p.FaultTolerance))
+		}
 	}
 	if p.DeviceMode != "" {
 		body.DeviceMode = ptr.To(cpapi.ClusterParamsDeviceMode(p.DeviceMode))

@@ -135,7 +135,8 @@ type LvolConnectResp struct {
 	// keep-alive, fast_io_fail and ctrl-loss values, or a frozen node's path is
 	// detected late and a fenced path dropped (sbcli
 	// docs/design/two-node-arbitration.md §9.1). Every other cluster keeps the
-	// driver's own connect settings.
+	// driver's own connect settings, except that a keep-alive shorter than a
+	// regular cluster's (a multi-attach cluster's 3 s) is passed on as well.
 	KeepAliveTmo  int  `json:"keep-alive-tmo,omitempty"`
 	FastIOFailTmo int  `json:"fast-io-fail-tmo,omitempty"`
 	TwoNode       bool `json:"two-node,omitempty"`

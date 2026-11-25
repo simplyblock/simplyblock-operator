@@ -604,7 +604,17 @@ func (r *OperatorOpsReconciler) write(
 	}
 
 	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
+	if spec.MultiAttach.JournalOnLUN() {
+		// The nodes' journals and data are LUNs the control plane creates on
+		// the array, so no local device is drafted and a worker with none is
+		// kept: what the plan needs of it is its CPUs, memory, and network.
+		planner.DeviceRules = []discoverypkg.DeviceRule{discoverypkg.ArrayOnlyRule{}}
+		planner.WorkerRules = []discoverypkg.WorkerRule{}
+	}
 	plan := planner.Plan(collected, spec)
+	if spec.MultiAttach.JournalOnLUN() {
+		plan.Class = discoverypkg.ClassBlock
+	}
 
 	if len(plan.NodeSets) == 0 {
 		// The rules worked out why every machine was dropped, and a run that
@@ -637,7 +647,7 @@ func (r *OperatorOpsReconciler) write(
 			plan.ExplainWithin(budget), advice)
 	}
 
-	config, notes, err := r.draftFor(ctx, ops, spec, plan)
+	config, notes, err := r.draftFor(ctx, ops, spec, &plan)
 	if err != nil {
 		// A fleet the run read and cannot draft a document for. The reason names
 		// the worker and the shape of its disks, and the run's own message is one
@@ -753,7 +763,7 @@ func (r *OperatorOpsReconciler) draftFor(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.OperatorOps,
 	spec *simplyblockv1alpha2.DiscoverSpec,
-	plan discoverypkg.Plan,
+	plan *discoverypkg.Plan,
 ) (*simplyblockv1alpha2.ClusterDeploymentConfig, []string, error) {
 	name := spec.ConfigName
 	if name == "" {
@@ -789,7 +799,7 @@ func (r *OperatorOpsReconciler) draftFor(
 	// carries one host OS for every worker it schedules, so a fleet that
 	// disagrees has no answer to state and the note says which worker runs
 	// what.
-	hostOS, hostOSNotes := discoverypkg.HostOSFor(plan)
+	hostOS, hostOSNotes := discoverypkg.HostOSFor(*plan)
 	config.Spec.HostOS = hostOS
 	notes = append(notes, hostOSNotes...)
 
@@ -817,7 +827,7 @@ func (r *OperatorOpsReconciler) draftFor(
 			clusterName = base + "-" + disambiguator + clusterNameSuffix
 		}
 
-		template, err := discoverypkg.ClusterTemplateFor(clusterName, plan,
+		template, err := discoverypkg.ClusterTemplateFor(clusterName, *plan,
 			discoverypkg.TemplateOptions{
 				ForceJournalDevice:   ptr.BoolFromOrFalse(spec.ForceJournalDevice),
 				Network:              spec.Network,
@@ -828,6 +838,12 @@ func (r *OperatorOpsReconciler) draftFor(
 		}
 		config.Spec.Cluster = template.Template
 		notes = append(notes, template.Notes...)
+
+		// A run told about the storage array drafts a multi-attach cluster:
+		// the array goes into the draft, each node keeps one local device as
+		// its journal, and workers without an initiator for the array's
+		// protocol become findings.
+		notes = append(notes, discoverypkg.ApplyMultiAttach(plan, config.Spec.Cluster, spec.MultiAttach)...)
 
 		// The taints this run was allowed to probe through are the taints the
 		// storage nodes have to live with, so the draft states them rather than

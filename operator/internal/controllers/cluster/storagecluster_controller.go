@@ -816,6 +816,7 @@ func (r *StorageClusterReconciler) sync(
 
 	tasks := r.readTasks(readCtx, cluster)
 	serviceClasses, serviceClassesRead := r.applyServiceClasses(readCtx, cluster)
+	array := r.reconcileArray(ctx, readCtx, cluster)
 
 	stretched, err := r.stretchedStatus(ctx, cluster, reading)
 	if err != nil {
@@ -840,6 +841,7 @@ func (r *StorageClusterReconciler) sync(
 		if serviceClassesRead {
 			status.ServiceClasses = serviceClasses
 		}
+		status.Array = array
 	})
 	if err != nil {
 		return ctrl.Result{}, err
@@ -1154,9 +1156,21 @@ func (r *StorageClusterReconciler) creationParams(
 		MetadataJournal:     ptr.BoolFromOrTrue(cluster.Spec.EnableMetadataJournal),
 		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
 		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+		RaidDevices:         ptr.BoolFromOrFalse(cluster.Spec.RaidDevices),
+		MultiAttach:         cluster.Spec.MultiAttach != nil,
+		FaultTolerance:      multiAttachFaultTolerance(cluster.Spec.MultiAttach),
 		SyncReplication:     ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
 		LeaderSite:          creatingLeaderSite(cluster),
 	}, nil
+}
+
+// multiAttachFaultTolerance is the node failures a multi-attach cluster is
+// created to tolerate; zero for any other cluster.
+func multiAttachFaultTolerance(ma *simplyblockv1alpha2.MultiAttachSpec) int {
+	if ma == nil {
+		return 0
+	}
+	return int(ma.FaultTolerance)
 }
 
 // deviceMode is spec.deviceClass in sbcli's cluster-create spelling. The CRD
