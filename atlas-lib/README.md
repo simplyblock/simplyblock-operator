@@ -85,6 +85,9 @@ atlas/
 │   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
 │   ├── devices.go          ForgetDevice: prune the node's LVM devices file
 │   └── vdo.go              The VDO VolumeProvisioning handler, registered by this package's init
+├── devmapper/              Single-segment dm-linear mappings: the indirection a volume's consumer holds
+│   ├── devmapper.go        Mapper: Create, Table, Swap, Suspend/Resume, ReloadResume, Remove, List
+│   └── readonly.go         CreateReadOnly, ReadOnly, MakeReadOnly; every reload keeps the mapping's mode
 ├── volstack/               A volume's node-side stack, as ordered layers
 │   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Yielder, Grower, NodeRequirements, Recorder), Plan
 │   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in

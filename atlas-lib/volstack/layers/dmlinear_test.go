@@ -14,14 +14,19 @@ import (
 
 // fakeMapper keeps mappings in memory and records the verbs run against them.
 type fakeMapper struct {
-	tables  map[string]devmapper.Target
-	sectors map[string]uint64
-	calls   []string
-	swapErr error
+	tables   map[string]devmapper.Target
+	sectors  map[string]uint64
+	readOnly map[string]bool
+	calls    []string
+	swapErr  error
 }
 
 func newFakeMapper() *fakeMapper {
-	return &fakeMapper{tables: map[string]devmapper.Target{}, sectors: map[string]uint64{}}
+	return &fakeMapper{
+		tables:   map[string]devmapper.Target{},
+		sectors:  map[string]uint64{},
+		readOnly: map[string]bool{},
+	}
 }
 
 func (f *fakeMapper) Table(_ context.Context, name string) (devmapper.Target, error) {
@@ -42,6 +47,26 @@ func (f *fakeMapper) Sectors(_ context.Context, device string) (uint64, error) {
 func (f *fakeMapper) Create(_ context.Context, name, device string, sectors uint64) error {
 	f.calls = append(f.calls, "create "+name+" "+device)
 	f.tables[name] = devmapper.Target{Sectors: sectors, Device: device}
+	return nil
+}
+
+func (f *fakeMapper) CreateReadOnly(_ context.Context, name, device string, sectors uint64) error {
+	f.calls = append(f.calls, "create-readonly "+name+" "+device)
+	f.tables[name] = devmapper.Target{Sectors: sectors, Device: device}
+	f.readOnly[name] = true
+	return nil
+}
+
+func (f *fakeMapper) ReadOnly(_ context.Context, name string) (bool, error) {
+	if _, ok := f.tables[name]; !ok {
+		return false, devmapper.ErrNotFound
+	}
+	return f.readOnly[name], nil
+}
+
+func (f *fakeMapper) MakeReadOnly(_ context.Context, name string) error {
+	f.calls = append(f.calls, "make-readonly "+name)
+	f.readOnly[name] = true
 	return nil
 }
 

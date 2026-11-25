@@ -120,9 +120,10 @@ func (n *Node) dmLinear(volume Volume) volstack.Layer {
 		mapper = devmapper.New(nil)
 	}
 	return layers.NewDMLinear(layers.DMLinearConfig{
-		Name:    layers.DMLinearName(volume.UUID),
-		Mapper:  mapper,
-		Resolve: n.cfg.Resolve,
+		Name:     layers.DMLinearName(volume.UUID),
+		Mapper:   mapper,
+		Resolve:  n.cfg.Resolve,
+		ReadOnly: volume.ReadOnly,
 	})
 }
 

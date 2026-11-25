@@ -132,7 +132,7 @@ func (m *Mapper) Swap(ctx context.Context, name, device string, sectors uint64) 
 	if err := m.SuspendWithoutFreeze(ctx, name); err != nil {
 		return err
 	}
-	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
+	if err := m.reload(ctx, name, table(sectors, device)); err != nil {
 		if rerr := m.Resume(ctx, name); rerr != nil {
 			return fmt.Errorf("dmsetup reload %s: %w; resume on the old table also failed: %v", name, err, rerr)
 		}
@@ -205,7 +205,7 @@ func (m *Mapper) SuspendWithoutFreeze(ctx context.Context, name string) error {
 // Swap, the old table may name a namespace that has already gone, and the
 // caller decides between retrying and resuming elsewhere.
 func (m *Mapper) ReloadResume(ctx context.Context, name, device string, sectors uint64) error {
-	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
+	if err := m.reload(ctx, name, table(sectors, device)); err != nil {
 		return fmt.Errorf("dmsetup reload %s: %w (still suspended)", name, err)
 	}
 	return m.Resume(ctx, name)

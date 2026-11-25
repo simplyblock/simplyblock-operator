@@ -60,12 +60,13 @@ func TestTableRefusesAMappingThatIsNotOneLinearSegment(t *testing.T) {
 }
 
 func TestSwapSuspendsReloadsAndResumes(t *testing.T) {
-	r := &recorder{}
+	r := &recorder{out: map[string]string{attrQuery: "L--w\n"}}
 	if err := New(r.run).Swap(context.Background(), "sb-v", "259:11", 2048); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{
 		"dmsetup suspend --nolockfs sb-v",
+		attrQuery,
 		"dmsetup reload sb-v --table 0 2048 linear 259:11 0",
 		"dmsetup resume sb-v",
 	}
@@ -83,7 +84,10 @@ func TestSwapSuspendsReloadsAndResumes(t *testing.T) {
 // mapping at the namespace the fabric just reconnected.
 func TestSwapReachesTheNewDeviceUnderAFilesystemThatCannotFreeze(t *testing.T) {
 	r := &recorder{
-		out: map[string]string{"dmsetup suspend sb-v": "device-mapper: suspend ioctl on sb-v  failed: Input/output error"},
+		out: map[string]string{
+			"dmsetup suspend sb-v": "device-mapper: suspend ioctl on sb-v  failed: Input/output error",
+			attrQuery:              "L--w\n",
+		},
 		err: map[string]error{"dmsetup suspend sb-v": errors.New("exit status 1")},
 	}
 	if err := New(r.run).Swap(context.Background(), "sb-v", "259:11", 2048); err != nil {
