@@ -256,6 +256,15 @@ func TestTheGeneratedTableGuardsTheMarkedFields(t *testing.T) {
 			new:  &simplyblockv1alpha2.StorageBackup{Spec: simplyblockv1alpha2.StorageBackupSpec{ClusterRef: "c2"}},
 			path: "spec.clusterRef",
 		},
+		{
+			name: "ControlPlane source.local.image",
+			gvk:  simplyblockv1alpha2.GroupVersion.WithKind("ControlPlane"),
+			old: &simplyblockv1alpha2.ControlPlane{Spec: simplyblockv1alpha2.ControlPlaneSpec{
+				Source: simplyblockv1alpha2.ControlPlaneSource{Local: &simplyblockv1alpha2.LocalControlPlane{Image: "sb:1"}}}},
+			new: &simplyblockv1alpha2.ControlPlane{Spec: simplyblockv1alpha2.ControlPlaneSpec{
+				Source: simplyblockv1alpha2.ControlPlaneSource{Local: &simplyblockv1alpha2.LocalControlPlane{Image: "sb:2"}}}},
+			path: "spec.source.local.image",
+		},
 	}
 	v := operatorManagedValidator(t)
 	for _, c := range cases {

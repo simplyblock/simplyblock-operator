@@ -214,7 +214,14 @@ type LocalControlPlane struct {
 	// Any registry is accepted, mirrors included, as long as the value is a
 	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
+	//
+	// It is set when the ControlPlane is created. Afterward the operator writes
+	// it: a ControlPlaneOps of action Upgrade, which checks the control plane is
+	// Available and drains before it applies the image, or the chart's
+	// bootstrap apply of a changed image value. An edit by anyone else would
+	// skip that check and that drain, so it is refused.
 	// +kubebuilder:validation:Required
+	// +simplyblock:operatorManaged
 	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled.
@@ -498,8 +505,8 @@ type ManagedControlPlane struct {
 // two modes siblings rather than two unrelated top-level fields.
 //
 // Which member it is cannot change afterward, while the members themselves stay
-// editable: changing spec.source.local.image is an ordinary edit, and it is what
-// a ControlPlaneOps upgrade performs.
+// editable: changing spec.source.local.image is what a ControlPlaneOps upgrade
+// performs, so the image is operator-managed rather than frozen.
 // +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
 // +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {

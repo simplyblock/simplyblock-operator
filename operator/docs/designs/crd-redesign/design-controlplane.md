@@ -190,8 +190,11 @@ does not host, so the fleet is administered from there.
 Switching a live deployment from a control plane the operator installed to one it
 did not is not a reconfiguration, it is a different deployment: the clusters,
 their UUIDs, and their volumes live in the FoundationDB behind the old one. The
-members themselves stay editable, because editing `spec.source.local.image` is an
-ordinary change and it is what an `Upgrade` performs (§6). Freezing the block
+members themselves stay editable, because changing `spec.source.local.image` is
+what an `Upgrade` performs (§6). The image is operator-managed: the operator
+writes it, through an `Upgrade` or the bootstrap apply of the chart's object, and
+the operator-managed-fields webhook refuses an edit by anyone else, which would
+skip the upgrade's precondition and drain. Freezing the block
 instead would emit `self == oldSelf` over the whole struct, which freezes the
 image with it and makes that operation impossible to complete.
 
@@ -1336,8 +1339,8 @@ type ManagedControlPlane struct {
 //
 // The immutability is the interesting one. What is frozen is the choice between
 // the two modes and not the block, because the members have to stay editable:
-// changing spec.source.local.image is an ordinary edit, and it is what a
-// ControlPlaneOps upgrade performs. Spelling it +k8s:immutable on the field would
+// changing spec.source.local.image is what a ControlPlaneOps upgrade performs,
+// and the image is operator-managed rather than frozen. Spelling it +k8s:immutable on the field would
 // emit self == oldSelf over the whole struct, which freezes the image with it and
 // makes that operation impossible to complete.
 //
