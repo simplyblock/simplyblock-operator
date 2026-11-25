@@ -436,10 +436,10 @@ func (c *Cluster) WorkDir() string { return c.workDir }
 // and an unrecognised shape reports the raw output, so a format change says what
 // it changed to instead of failing as an empty list.
 func (c *Cluster) controlplaneAddresses(ctx context.Context) ([]string, error) {
-	out, err := c.run(ctx, time.Minute,
+	out, combined, err := c.runSplit(ctx, time.Minute,
 		"--talosconfig", c.talosconfig, "config", "info", "--output", "json")
 	if err != nil {
-		return nil, fmt.Errorf("read talos context: %w\n%s", err, out)
+		return nil, fmt.Errorf("read talos context: %w\n%s", err, combined)
 	}
 
 	var info struct {
@@ -526,46 +526,56 @@ func sudoCommand(ctx context.Context, args ...string) *exec.Cmd {
 	return exec.CommandContext(ctx, "sudo", args...) //nolint:gosec // fixed binary, structured args
 }
 
+// talosctlCommand builds a talosctl invocation, elevated when sudo is set.
+//
+// talosctl reads HOME for its image cache and state directory, and merges what
+// it fetches into the kubeconfig KUBECONFIG names, which is the cluster's own
+// file here rather than the developer's. Elevated, both are passed by name
+// through env rather than with sudo -E: sudo-rs, which Ubuntu now ships, does
+// not support -E and silently runs with root's environment instead.
+func talosctlCommand(ctx context.Context, talosctl string, sudo bool, kubeconfig string, args []string) *exec.Cmd {
+	if !sudo {
+		cmd := exec.CommandContext(ctx, talosctl, args...) //nolint:gosec // fixed binary, structured args
+		cmd.Env = append(os.Environ(), "KUBECONFIG="+kubeconfig)
+		return cmd
+	}
+	full := append([]string{"env", "HOME=" + os.Getenv("HOME"), "KUBECONFIG=" + kubeconfig, talosctl}, args...)
+	return exec.CommandContext(ctx, "sudo", full...) //nolint:gosec // fixed binary, structured args
+}
+
 // run invokes talosctl, returning combined output because talosctl explains its
 // failures there.
-//
-// -E preserves the environment: talosctl reads HOME for its image cache, and
-// losing it would re-download the image on every run.
 func (c *Cluster) run(ctx context.Context, timeout time.Duration, args ...string) (string, error) {
+	_, combined, err := c.runSplit(ctx, timeout, args...)
+	return combined, err
+}
+
+// runSplit is run with stdout kept apart as well, for a command whose stdout is
+// the answer and has to be parsed: sudo and talosctl both write to stderr, and
+// a warning there is not part of the JSON.
+func (c *Cluster) runSplit(ctx context.Context, timeout time.Duration, args ...string) (stdout, combined string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	bin, full := c.cfg.TalosctlPath, args
-	if *c.cfg.Sudo {
-		bin, full = "sudo", append([]string{"-E", c.cfg.TalosctlPath}, args...)
-	}
-	cmd := exec.CommandContext(ctx, bin, full...) //nolint:gosec // fixed binary, structured args
+	cmd := talosctlCommand(ctx, c.cfg.TalosctlPath, *c.cfg.Sudo, c.kubeconfig, args)
 
-	// talosctl merges what it fetches into the caller's own kubeconfig unless it
-	// is pointed somewhere else, and sudo here preserves HOME, so the caller it
-	// means is the developer. Left alone, every run leaves an admin@<cluster>
-	// context behind in a file the tests have no business writing. Naming the
-	// cluster's own file sends any such merge there instead.
-	cmd.Env = append(os.Environ(), "KUBECONFIG="+c.kubeconfig)
-
-	var captured bytes.Buffer
-	sink := io.Writer(&captured)
+	var all, out bytes.Buffer
+	sink := io.Writer(&all)
 	if c.cfg.Logf != nil {
 		lines := &lineWriter{emit: c.cfg.Logf}
 		defer lines.flush()
-		sink = io.MultiWriter(&captured, lines)
+		sink = io.MultiWriter(&all, lines)
 	}
-	cmd.Stdout, cmd.Stderr = sink, sink
+	cmd.Stdout, cmd.Stderr = io.MultiWriter(sink, &out), sink
 
-	err := cmd.Run()
-	out := captured.Bytes()
+	err = cmd.Run()
 	// CommandContext kills on deadline, and what surfaces is "signal: killed" —
 	// which reads as a crash rather than as the timeout it is.
 	if err != nil && ctx.Err() != nil {
-		return string(out), fmt.Errorf("talosctl %s did not finish within %s: %w",
+		return out.String(), all.String(), fmt.Errorf("talosctl %s did not finish within %s: %w",
 			args[0], timeout, ctx.Err())
 	}
-	return string(out), err
+	return out.String(), all.String(), err
 }
 
 // lineWriter turns a stream into whole lines and hands each to a logger.
