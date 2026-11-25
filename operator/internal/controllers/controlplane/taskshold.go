@@ -13,8 +13,13 @@
 //
 // While an add is in flight the stamp the runner already carries is kept, and
 // its PodDisruptionBudget allows no disruption. Both are released when the add
-// has settled, and after tasksHoldLimit whether it has or not, so that an add
-// that never settles does not hold a drain for good.
+// has settled.
+//
+// A hold that only an add can end is a drain refused for as long as adds keep
+// coming, and a fleet's adds follow one another without a gap. So the hold runs
+// in turns: tasksHoldLimit held, then tasksHoldRelease open, for as long as an
+// add is in flight. A drain waits one turn at most, and the add it interrupts
+// in the open window is retried.
 
 package controlplane
 
@@ -36,16 +41,21 @@ import (
 
 const (
 	// tasksHoldSinceAnnotation is on the runner's budget while a node add is in
-	// flight, and says when the hold began. It is what bounds the hold without
-	// the operator keeping anything in memory.
+	// flight, and says when the current run of adds began. The turns are counted
+	// from it, which is what bounds the hold without the operator keeping
+	// anything in memory.
 	tasksHoldSinceAnnotation = "storage.simplyblock.io/node-add-hold-since"
 
-	// tasksHoldLimit is how long one unbroken run of node adds may hold the
-	// runner. An add takes minutes; a fleet's adds follow one another without a
-	// gap, and a drain held for all of them is a MachineConfigPool reporting
-	// itself degraded. Past the limit the drain wins, and the add it interrupts
-	// is retried.
+	// tasksHoldLimit is how long the runner is held in one turn. An add takes
+	// minutes, and a drain refused for an hour is a MachineConfigPool reporting
+	// itself degraded.
 	tasksHoldLimit = 20 * time.Minute
+
+	// tasksHoldRelease is how long the hold then stays open before the next
+	// turn. A drain that has been failing retries every five minutes and gives
+	// each attempt a minute and a half, so the window has to be longer than
+	// both together for the drain to be sure of landing in it.
+	tasksHoldRelease = 7 * time.Minute
 )
 
 // tasksHold is the state of the hold on one pass.
@@ -57,10 +67,10 @@ type tasksHold struct {
 	held bool
 }
 
-// tasksHoldNow reads whether a node add is in flight in the namespace and how
-// long the runner has been held for it.
+// tasksHoldNow reads whether a node add is in flight and which turn of the hold
+// the runner in the given namespace is in.
 func (r *ControlPlaneReconciler) tasksHoldNow(ctx context.Context, namespace string) (tasksHold, error) {
-	inFlight, err := r.nodeAddInFlight(ctx, namespace)
+	inFlight, err := r.nodeAddInFlight(ctx)
 	if err != nil || !inFlight {
 		return tasksHold{}, err
 	}
@@ -79,37 +89,47 @@ func (r *ControlPlaneReconciler) tasksHoldNow(ctx context.Context, namespace str
 			since = began
 		}
 	}
-	return tasksHold{since: &since, held: now.Sub(since) < tasksHoldLimit}, nil
+	return tasksHold{since: &since, held: heldAt(now.Sub(since))}, nil
 }
 
-// nodeAddInFlight reports whether the control plane has been asked to add a
-// storage node and has not answered yet. Posting and Resolving are the two
-// steps between the request and the node: a node waiting for its slot has asked
-// for nothing, and one whose worker is away has left both for AwaitingWorker, so
-// the hold never keeps a drain off the worker an add is waiting on.
-func (r *ControlPlaneReconciler) nodeAddInFlight(ctx context.Context, namespace string) (bool, error) {
+// heldAt reports whether the hold is on, that long into a run of adds. A clock
+// that went backwards reads as the start of the run.
+func heldAt(into time.Duration) bool {
+	if into < 0 {
+		return true
+	}
+	return into%(tasksHoldLimit+tasksHoldRelease) < tasksHoldLimit
+}
+
+// applyTasksBudget writes the task runner's budget by itself, ahead of
+// everything else a pass applies. Releasing the hold must not depend on the rest
+// of the pass going through: a budget left at no disruption by a pass that
+// failed further on is a drain refused with nothing counting its turn.
+func (r *ControlPlaneReconciler) applyTasksBudget(
+	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
+) error {
+	hold, err := r.tasksHoldNow(ctx, cp.Namespace)
+	if err != nil {
+		return err
+	}
+	return applyOne(ctx, r.Client, cp, r.Scheme, tasksDisruptionBudget(cp.Namespace, hold))
+}
+
+// nodeAddInFlight reports whether the control plane is adding a storage node
+// (StorageNode.AddInFlight). The nodes of every namespace count: a
+// StorageCluster in any namespace belongs to this installation, and its adds
+// are driven by the one task runner.
+func (r *ControlPlaneReconciler) nodeAddInFlight(ctx context.Context) (bool, error) {
 	var nodes simplyblockv1alpha2.StorageNodeList
-	if err := r.List(ctx, &nodes, client.InNamespace(namespace)); err != nil {
+	if err := r.List(ctx, &nodes); err != nil {
 		return false, err
 	}
 	for i := range nodes.Items {
-		if nodeAddStep(&nodes.Items[i]) {
+		if nodes.Items[i].AddInFlight() {
 			return true, nil
 		}
 	}
 	return false, nil
-}
-
-// nodeAddStep reports whether the node is in a step the task runner is working on.
-func nodeAddStep(node *simplyblockv1alpha2.StorageNode) bool {
-	if !node.DeletionTimestamp.IsZero() {
-		return false
-	}
-	switch simplyblockv1alpha2.StorageNodeStep(node.Status.Step.State) {
-	case simplyblockv1alpha2.StorageNodeStepPosting, simplyblockv1alpha2.StorageNodeStepResolving:
-		return true
-	}
-	return false
 }
 
 // tasksDisruptionBudget is the task runner's budget. It always exists, so that
@@ -122,6 +142,9 @@ func tasksDisruptionBudget(namespace string, hold tasksHold) *policyv1.PodDisrup
 		Spec: policyv1.PodDisruptionBudgetSpec{
 			MaxUnavailable: ptr.To(intstr.FromInt32(1)),
 			Selector:       &metav1.LabelSelector{MatchLabels: map[string]string{appLabel: ComponentTasks}},
+			// A runner that is not ready is adding nothing, so the hold has
+			// nothing to protect and must not keep it on a host being drained.
+			UnhealthyPodEvictionPolicy: ptr.To(policyv1.AlwaysAllow),
 		},
 	}
 	if hold.since != nil {
@@ -143,29 +166,25 @@ func (r *ControlPlaneReconciler) clock() time.Time {
 	return time.Now()
 }
 
-// storageNodeRequests maps a StorageNode to the ControlPlanes in its namespace,
-// so the hold is raised when an add is asked for and released when it settles
-// rather than a steady-state pass later.
-func (r *ControlPlaneReconciler) storageNodeRequests(ctx context.Context, obj client.Object) []reconcile.Request {
-	var planes simplyblockv1alpha2.ControlPlaneList
-	if err := r.List(ctx, &planes, client.InNamespace(obj.GetNamespace())); err != nil {
+// storageNodeRequests maps a StorageNode, in whichever namespace, to the
+// ControlPlane that holds the install, so the hold is raised when an add is
+// asked for and released when it settles rather than a steady-state pass later.
+func (r *ControlPlaneReconciler) storageNodeRequests(ctx context.Context, _ client.Object) []reconcile.Request {
+	holder, err := r.deploymentHolder(ctx)
+	if err != nil || holder.Name == "" {
 		return nil
 	}
-	requests := make([]reconcile.Request, 0, len(planes.Items))
-	for i := range planes.Items {
-		requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&planes.Items[i])})
-	}
-	return requests
+	return []reconcile.Request{{NamespacedName: holder}}
 }
 
 // nodeAddStepChanged passes the StorageNode events that can change the hold:
-// a node entering or leaving the steps the runner works on. A node's status is
-// written on every pass of its own controller, and none of those writes is a
-// reason to reconcile the control plane.
+// a node's add beginning or ending. A node's status is written on every pass of
+// its own controller, and none of those writes is a reason to reconcile the
+// control plane.
 func nodeAddStepChanged() predicate.Predicate {
 	inStep := func(obj client.Object) bool {
 		node, ok := obj.(*simplyblockv1alpha2.StorageNode)
-		return ok && nodeAddStep(node)
+		return ok && node.AddInFlight()
 	}
 	return predicate.Funcs{
 		CreateFunc:  func(e event.CreateEvent) bool { return inStep(e.Object) },

@@ -374,6 +374,11 @@ func (r *ControlPlaneReconciler) performInstallStep(
 func (r *ControlPlaneReconciler) steadyState(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
+	// First and by itself, so that the hold on the task runner is released on
+	// time whatever else this pass runs into (taskshold.go).
+	if err := r.applyTasksBudget(ctx, cp); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.applyEverything(ctx, cp); err != nil {
 		return ctrl.Result{}, err
 	}

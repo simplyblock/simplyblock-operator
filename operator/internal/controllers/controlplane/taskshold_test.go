@@ -176,7 +176,7 @@ func TestANodeThatIsNotBeingAddedHoldsNothing(t *testing.T) {
 
 // An add that never settles must not hold a drain for good: a MachineConfigPool
 // whose drain is refused for an hour reports itself degraded.
-func TestTheHoldIsReleasedAfterItsLimit(t *testing.T) {
+func TestTheHoldOpensAfterItsLimit(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, 11, 25, 19, 50, 0, 0, time.UTC)
 	cp := localControlPlane()
@@ -193,8 +193,8 @@ func TestTheHoldIsReleasedAfterItsLimit(t *testing.T) {
 	}
 	held := stampOf(t, c, ComponentTasks)
 
-	// Within the limit, and through a second node's add following the first
-	// without a gap: the hold is one run, and keeps the time it began.
+	// Within the limit the hold keeps the time it began, whatever else changes:
+	// the turns are counted from it.
 	now = now.Add(tasksHoldLimit - time.Minute)
 	moveCoordinators(t, c, "sb:def@10.0.0.2:4500")
 	if err := r.applyEverything(ctx, cp); err != nil {
@@ -219,7 +219,7 @@ func TestTheHoldIsReleasedAfterItsLimit(t *testing.T) {
 	}
 	if budget.Annotations[holdSinceAnnotation] != began {
 		t.Error("the budget forgot when the hold began while an add is still in flight, " +
-			"so the next pass would hold again from now and the limit would never bite")
+			"so the next pass would hold again from now and the open window would never come")
 	}
 	if got, want := stampOf(t, c, ComponentTasks), stampOf(t, c, ComponentWebAPI); got != want {
 		t.Errorf("past the limit the runner still carries %s and the management API %s", got, want)
@@ -252,5 +252,145 @@ func TestOnlyANodeEnteringOrLeavingItsAddReconcilesTheControlPlane(t *testing.T)
 	}
 	if p.Create(event.CreateEvent{Object: slot}) {
 		t.Error("a node created waiting for its slot reconciles the control plane")
+	}
+}
+
+// The hold comes back after the open window, for as long as adds are in flight:
+// a fleet's adds follow one another, and a hold that was spent after its first
+// turn protected only the first twenty minutes of them.
+func TestTheHoldRunsInTurns(t *testing.T) {
+	for _, tc := range []struct {
+		into time.Duration
+		held bool
+	}{
+		{0, true},
+		{tasksHoldLimit - time.Second, true},
+		{tasksHoldLimit, false},
+		{tasksHoldLimit + tasksHoldRelease - time.Second, false},
+		{tasksHoldLimit + tasksHoldRelease, true},
+		{2*tasksHoldLimit + tasksHoldRelease, false},
+		{-time.Minute, true},
+	} {
+		if got := heldAt(tc.into); got != tc.held {
+			t.Errorf("%v into a run of adds: held = %v, want %v", tc.into, got, tc.held)
+		}
+	}
+	// A drain that has been failing retries every five minutes and gives an
+	// attempt a minute and a half. The window has to fit both.
+	if tasksHoldRelease < 5*time.Minute+90*time.Second {
+		t.Errorf("the open window is %v, shorter than one retry of a failing drain", tasksHoldRelease)
+	}
+}
+
+// Regression: 2026-11-25-node-add-restarted-by-roll — a node that fails keeps
+// the step it failed in. Counted as an add in flight, one failed node kept the
+// run of adds going for good, and every later add found the hold's turn spent.
+func TestAFailedNodeIsNotAnAddInFlight(t *testing.T) {
+	for _, step := range []simplyblockv1alpha2.StorageNodeStep{
+		simplyblockv1alpha2.StorageNodeStepPosting, simplyblockv1alpha2.StorageNodeStepResolving,
+	} {
+		node := storageNodeIn(step)
+		node.Status.Phase = simplyblockv1alpha2.StorageNodePhaseFailed
+		cp := localControlPlane()
+		r := &ControlPlaneReconciler{Client: newClient(t, cp, node), Scheme: testScheme(t)}
+		hold, err := r.tasksHoldNow(context.Background(), testNamespace)
+		if err != nil {
+			t.Fatalf("%s: %v", step, err)
+		}
+		if hold.held || hold.since != nil {
+			t.Errorf("a node that failed in %s holds the task runner", step)
+		}
+	}
+}
+
+// A node has its UUID when the control plane has written its record, which is
+// the start of add_node and not the end of it. The runner is still adding it
+// until the control plane stops reporting in_creation.
+func TestANodeIsBeingAddedUntilTheControlPlaneHasFinishedCreatingIt(t *testing.T) {
+	recorded := storageNodeIn("")
+	recorded.Status.UUID = "41223fb2-47a1-4b72-9dba-6b85c3c6695a"
+
+	for _, tc := range []struct {
+		status string
+		want   bool
+	}{
+		{"in_creation", true},
+		{"online", false},
+		{"unreachable", false},
+		{"", false},
+	} {
+		node := recorded.DeepCopy()
+		node.Status.Status = tc.status
+		cp := localControlPlane()
+		r := &ControlPlaneReconciler{Client: newClient(t, cp, node), Scheme: testScheme(t)}
+		hold, err := r.tasksHoldNow(context.Background(), testNamespace)
+		if err != nil {
+			t.Fatalf("%q: %v", tc.status, err)
+		}
+		if hold.held != tc.want {
+			t.Errorf("a recorded node the control plane reports as %q: held = %v, want %v",
+				tc.status, hold.held, tc.want)
+		}
+	}
+}
+
+// A StorageCluster in any namespace belongs to this installation, and its node
+// adds are driven by the one task runner.
+func TestANodeAddInAnotherNamespaceHoldsTheTaskRunner(t *testing.T) {
+	ctx := context.Background()
+	elsewhere := storageNodeIn(simplyblockv1alpha2.StorageNodeStepResolving)
+	elsewhere.Namespace = "tenant-b"
+	cp := localControlPlane()
+	c := newClient(t, cp, clusterFileConfigMap("sb:abc@10.0.0.1:4500"), elsewhere)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.applyEverything(ctx, cp); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	if got := tasksBudget(t, c).Spec.MaxUnavailable.IntValue(); got != 0 {
+		t.Errorf("the budget allows %d disruptions while a node in another namespace is being added", got)
+	}
+
+	requests := r.storageNodeRequests(ctx, elsewhere)
+	if len(requests) != 1 || requests[0].NamespacedName != client.ObjectKeyFromObject(cp) {
+		t.Errorf("a node in another namespace wakes %v; want the ControlPlane that holds the install", requests)
+	}
+}
+
+// The release must not wait on the rest of a pass: a budget left at no
+// disruption by a pass that failed further on is a drain nothing lets through.
+func TestTheBudgetIsWrittenByItself(t *testing.T) {
+	ctx := context.Background()
+	now := time.Date(2026, 11, 25, 19, 50, 0, 0, time.UTC)
+	cp := localControlPlane()
+	c := newClient(t, cp, storageNodeIn(simplyblockv1alpha2.StorageNodeStepResolving))
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t), Now: func() time.Time { return now }}
+
+	if err := r.applyTasksBudget(ctx, cp); err != nil {
+		t.Fatalf("apply the budget: %v", err)
+	}
+	budget := tasksBudget(t, c)
+	if got := budget.Spec.MaxUnavailable.IntValue(); got != 0 {
+		t.Errorf("the budget allows %d disruptions while a node is being added", got)
+	}
+	if policy := budget.Spec.UnhealthyPodEvictionPolicy; policy == nil || *policy != policyv1.AlwaysAllow {
+		t.Errorf("unhealthyPodEvictionPolicy = %v; a runner that is not ready is adding nothing "+
+			"and must not be kept on a host being drained", policy)
+	}
+
+	now = now.Add(tasksHoldLimit + time.Minute)
+	if err := r.applyTasksBudget(ctx, cp); err != nil {
+		t.Fatalf("apply the budget in the open window: %v", err)
+	}
+	if got := tasksBudget(t, c).Spec.MaxUnavailable.IntValue(); got != 1 {
+		t.Errorf("in the open window the budget allows %d disruptions, with nothing else applied", got)
+	}
+
+	now = now.Add(tasksHoldRelease)
+	if err := r.applyTasksBudget(ctx, cp); err != nil {
+		t.Fatalf("apply the budget in the next turn: %v", err)
+	}
+	if got := tasksBudget(t, c).Spec.MaxUnavailable.IntValue(); got != 0 {
+		t.Errorf("in the next turn the budget allows %d disruptions; the hold comes back", got)
 	}
 }
