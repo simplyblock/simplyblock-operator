@@ -494,7 +494,12 @@ func (r *SimplyblockDriverReconciler) desired(
 		objects = append(objects, csiAddonsRole(d), csiAddonsRoleBinding(d), csiAddonsAuthDelegatorBinding(d))
 	}
 	objects = append(objects, clientCertificates(d)...)
-	objects = append(objects, nodeDaemonSet(d, image), withSiteLink(controllerStatefulSet(d, image), r.SiteLink), csiDriver(d))
+	groupVersion, err := r.groupSnapshotAPIVersion(ctx)
+	if err != nil {
+		return nil, err
+	}
+	controller := withGroupSnapshotAPI(withSiteLink(controllerStatefulSet(d, image), r.SiteLink), d, groupVersion)
+	objects = append(objects, nodeDaemonSet(d, image), controller, csiDriver(d))
 
 	// The class is this deployment's and is applied wherever the kinds exist,
 	// but only where they exist: a cluster serving no snapshot API has no kind

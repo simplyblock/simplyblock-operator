@@ -23,6 +23,8 @@ import (
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/client-go/discovery"
+
+	groupsnapshotapi "github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
 )
 
 // snapshotAPITTL is how long a discovery answer is trusted.
@@ -43,6 +45,43 @@ type DiscoveredSnapshotAPI struct {
 	asked    bool
 	askedAt  time.Time
 	nowFuncT func() time.Time
+
+	groupVersion string
+	groupAsked   bool
+	groupAskedAt time.Time
+}
+
+// GroupSnapshotAPIVersion reports the newest version of
+// groupsnapshot.storage.k8s.io the cluster serves, or the empty string when it
+// serves none. The answer is cached as SnapshotAPIServed's is, and every error
+// other than a version that is not served is returned.
+func (d *DiscoveredSnapshotAPI) GroupSnapshotAPIVersion(_ context.Context) (string, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.groupAsked && d.now().Sub(d.groupAskedAt) < snapshotAPITTL {
+		return d.groupVersion, nil
+	}
+	if d.Discovery == nil {
+		return "", fmt.Errorf("no discovery client is configured")
+	}
+
+	served := ""
+	for _, version := range groupsnapshotapi.Versions {
+		gv := groupsnapshotapi.Group + "/" + version
+		_, err := d.Discovery.ServerResourcesForGroupVersion(gv)
+		if apierrors.IsNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("read the resources of %s: %w", gv, err)
+		}
+		served = version
+		break
+	}
+
+	d.groupVersion, d.groupAsked, d.groupAskedAt = served, true, d.now()
+	return served, nil
 }
 
 // SnapshotAPIServed reports whether the cluster serves

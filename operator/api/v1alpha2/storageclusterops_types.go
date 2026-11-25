@@ -53,7 +53,7 @@ const (
 // StorageClusterOpsAction is the operation a StorageClusterOps performs. The
 // values are PascalCase, as every enum in the group is; v1alpha1 spelled them
 // lowercase and hyphenated, and the conversion maps between the two.
-// +kubebuilder:validation:Enum=Activate;Expand;Shutdown;Start;Restart;RollingRestart;CancelTask
+// +kubebuilder:validation:Enum=Activate;Expand;Shutdown;Start;Restart;RollingRestart;CancelTask;GrowDevices
 type StorageClusterOpsAction string
 
 const (
@@ -68,6 +68,16 @@ const (
 	// inside the cluster: it names a task of the cluster's status.tasks by its
 	// control-plane ID.
 	StorageClusterOpsActionCancelTask StorageClusterOpsAction = "CancelTask"
+
+	// StorageClusterOpsActionGrowDevices grows every Linux block device (lblk)
+	// of the cluster online by the same factor, after the LUNs were grown on
+	// the storage array: the smallest growth of any of their block devices.
+	// Device weights and data placement never change, so the part of a LUN
+	// that grew by more stays unused (status.deviceGrowth.devices). If one
+	// block device did not grow, nothing grows. A block device that shrank,
+	// or a device that is not online, fails the operation without growing
+	// anything; a shrink also raises the control plane's device_shrunk alert.
+	StorageClusterOpsActionGrowDevices StorageClusterOpsAction = "GrowDevices"
 )
 
 // StorageClusterOpsStep is one step of a running cluster operation. The enum is
@@ -149,6 +159,55 @@ type StorageClusterOpsSpec struct {
 	RollingRestart *RollingRestartSpec `json:"rollingRestart,omitempty"`
 }
 
+// ClusterDeviceGrowthStatus is what one GrowDevices did to the devices of a
+// cluster.
+type ClusterDeviceGrowthStatus struct {
+	// Grown reports whether the devices grew. Nothing grows unless every data
+	// device can grow by the same factor; Reason says why not.
+	Grown bool `json:"grown"`
+
+	// Factor is the growth factor applied to every data device, as a decimal
+	// string ("1.5"), or "1" when nothing grew.
+	Factor string `json:"factor"`
+
+	// Reason says why nothing grew.
+	// +optional
+	Reason string `json:"reason,omitempty"`
+
+	// Devices lists every data device with its new size and the part of its
+	// block device that stays unused.
+	// +optional
+	Devices []DeviceGrowthStatus `json:"devices,omitempty"`
+
+	// UnusedBytes is the sum of the devices' unused capacity.
+	// +optional
+	UnusedBytes int64 `json:"unusedBytes,omitempty"`
+
+	// Errors maps the control-plane ID of each device that stopped the growth
+	// to the reason.
+	// +optional
+	Errors map[string]string `json:"errors,omitempty"`
+
+	// Shrunk lists the control-plane IDs of the devices whose block device is
+	// smaller than the device. Shrinking is not supported; restore the LUN.
+	// +optional
+	Shrunk []string `json:"shrunk,omitempty"`
+}
+
+// DeviceGrowthStatus is one data device after a GrowDevices.
+type DeviceGrowthStatus struct {
+	// DeviceID is the control-plane ID of the device.
+	DeviceID string `json:"deviceID"`
+
+	// Size is the device's size in bytes after the growth.
+	Size int64 `json:"size"`
+
+	// UnusedBytes is the part of the device's block device beyond Size: grown
+	// on the storage array by more than the cluster-wide factor.
+	// +optional
+	UnusedBytes int64 `json:"unusedBytes,omitempty"`
+}
+
 // RollingRestartStatus is the walk's position over the cluster's nodes. Where
 // the machine has got to within the node currently being restarted is
 // status.step, and neither field is complete without the other.
@@ -198,6 +257,10 @@ type StorageClusterOpsStatus struct {
 	// RollingRestart.
 	// +optional
 	RollingRestart *RollingRestartStatus `json:"rollingRestart,omitempty"`
+
+	// DeviceGrowth is what a GrowDevices did, set only for that action.
+	// +optional
+	DeviceGrowth *ClusterDeviceGrowthStatus `json:"deviceGrowth,omitempty"`
 
 	// ObservedGeneration is the generation the rest of this status was computed
 	// from, so a stale status can be told from a current one.
