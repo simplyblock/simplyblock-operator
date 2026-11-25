@@ -13,8 +13,100 @@ on:
   workflow_dispatch:
 
 jobs:
+  # One job per image and architecture on a native runner, pushed by digest;
+  # build-and-push joins the digests into the tagged multi-arch manifest.
+  build-arch:
+    name: "Build (${{ matrix.name }}, ${{ matrix.arch }})"
+    runs-on: ${{ matrix.arch == 'arm64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+        name: [operator, rebalancer]
+        include:
+          - name: operator
+            dockerfile: operator/Dockerfile
+            image_name: simplyblock/simplyblock-operator
+            ecr_image_name: simply-block/simplyblock-operator
+            quay_image_name: quay.io/simplyblock-io/simplyblock-operator
+            internal_image_name: registry.simplyblock.ai/simplyblock/simplyblock-operator
+          - name: rebalancer
+            dockerfile: operator/Dockerfile.simplyblock-rebalancer
+            image_name: simplyblock/simplyblock-rebalancer
+            ecr_image_name: simply-block/simplyblock-rebalancer
+            quay_image_name: quay.io/simplyblock-io/simplyblock-rebalancer
+            internal_image_name: registry.simplyblock.ai/simplyblock/simplyblock-rebalancer
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Log in to container registries
+        id: login
+        uses: ./.github/actions/registry-login
+        with:
+          dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+          dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          quay: ${{ inputs.version != '' }}
+          quay-username: ${{ secrets.QUAY_USERNAME }}
+          quay-password: ${{ secrets.QUAY_PASSWORD }}
+          internal-username: ${{ secrets.INTERNAL_USERNAME }}
+          internal-password: ${{ secrets.INTERNAL_PASSWORD }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+
+      - name: Compute image tag
+        id: image_tag
+        uses: ./.github/actions/image-tag
+        with:
+          version: ${{ inputs.version || github.ref_name }}
+
+      - name: Determine target repositories
+        id: repos
+        run: |
+          names="${{ matrix.image_name }},${{ steps.login.outputs.ecr-registry }}/${{ matrix.ecr_image_name }},${{ matrix.internal_image_name }}"
+          if [ -n "${{ inputs.version }}" ]; then
+            names="${names},${{ matrix.quay_image_name }}"
+          fi
+          echo "names=${names}" >> "$GITHUB_OUTPUT"
+
+      # Rebuilds the OS package layer once a day, in step with the daily image scan.
+      - name: Set the package layer cache key
+        run: echo "CACHE_KEY=$(date -u +%F)" >> "$GITHUB_ENV"
+
+      - name: Build and push ${{ matrix.name }} (${{ matrix.arch }}) by digest
+        id: build
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/${{ matrix.arch }}
+          outputs: type=image,"name=${{ steps.repos.outputs.names }}",push-by-digest=true,name-canonical=true,push=true
+          build-args: |
+            VERSION=${{ steps.image_tag.outputs.label_version }}
+            RELEASE=1
+            CACHE_KEY=${{ env.CACHE_KEY }}
+          cache-from: type=registry,ref=${{ matrix.internal_image_name }}:cache-${{ matrix.arch }}
+          cache-to: type=registry,ref=${{ matrix.internal_image_name }}:cache-${{ matrix.arch }},mode=max
+
+      - name: Record the digest
+        run: mkdir -p digests && echo "${{ steps.build.outputs.digest }}" > "digests/${{ matrix.arch }}"
+
+      - name: Upload the digest
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ matrix.name }}-digest-${{ matrix.arch }}
+          path: digests/${{ matrix.arch }}
+          retention-days: 1
+
   build-and-push:
     name: "Build and push (${{ matrix.name }})"
+    needs: build-arch
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -79,20 +171,19 @@ jobs:
             echo "EOF"
           } >> "$GITHUB_OUTPUT"
 
-      - name: Build and push multi-arch ${{ matrix.name }} image (DockerHub + ECR + Quay + Internal)
-        id: build
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6
+      - name: Download the digests
+        timeout-minutes: 2
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          context: .
-          file: ${{ matrix.dockerfile }}
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.tags.outputs.tags }}
-          build-args: |
-            VERSION=${{ steps.image_tag.outputs.label_version }}
-            RELEASE=1
-          cache-from: type=gha,scope=${{ matrix.name }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.name }}
+          pattern: ${{ matrix.name }}-digest-*
+          merge-multiple: true
+          path: digests
+
+      - name: Create the multi-arch ${{ matrix.name }} manifests
+        id: build
+        env:
+          TAGS: ${{ steps.tags.outputs.tags }}
+        run: .github/scripts/merge-arch-manifests.sh digests
 
       # Red Hat certification runs these checks on every image the bundle lists.
       # Running them on the pushed digest fails the build instead of the release.

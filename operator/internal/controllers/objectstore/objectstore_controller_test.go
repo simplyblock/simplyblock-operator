@@ -8,6 +8,7 @@ package objectstore
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,12 +246,11 @@ func TestObjectStoreReplicaChangeUpdatesTheDeploymentInPlace(t *testing.T) {
 	}
 }
 
-// I-04: deleting a Ready ObjectStore completes immediately, since it has no
-// finalizer of its own (design §4.2: owned objects are garbage-collected by
-// Kubernetes, not this reconciler). Whether that garbage collection itself
-// actually runs is not exercised here: envtest has no garbage-collector
+// I-04: deleting an ObjectStore no S3Bucket references completes once the
+// reconciler releases its finalizer. Whether garbage collection of the owned
+// objects then runs is not exercised here: envtest has no garbage-collector
 // controller, only a real cluster does (E-01..E-03's own scope).
-func TestObjectStoreDeletionIsNotBlockedByAFinalizer(t *testing.T) {
+func TestObjectStoreDeletionWithNoBucketsCompletes(t *testing.T) {
 	cli := apiServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -268,11 +268,75 @@ func TestObjectStoreDeletionIsNotBlockedByAFinalizer(t *testing.T) {
 	if err := cli.Delete(ctx, store); err != nil {
 		t.Fatalf("deleting the ObjectStore: %v", err)
 	}
+	if _, err := r.Reconcile(ctx, ctrlRequestKey(key)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
 
 	var got simplyblockv1alpha2.ObjectStore
 	err := cli.Get(ctx, key, &got)
 	if !apierrorsIsNotFound(err) {
-		t.Errorf("Get after delete = %v, want NotFound (no finalizer should hold it back)", err)
+		t.Errorf("Get after delete = %v, want NotFound (no bucket references the ObjectStore)", err)
+	}
+}
+
+// I-08: deleting an ObjectStore an S3Bucket still references is held by the
+// finalizer, with BucketsRemaining naming the bucket, until the bucket is
+// gone.
+//
+// Regression: 2026-11-23-objectstore-deleted-under-its-buckets. Deleting an
+// ObjectStore removed its gateway while its buckets stayed Ready, so nothing
+// served them and nothing reported it (CI run 45100042373, TC-S3-002).
+func TestObjectStoreDeletionIsHeldWhileABucketReferencesIt(t *testing.T) {
+	cli := apiServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	store := testObjectStoreFixture("os-i08-store")
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	bucket := &simplyblockv1alpha2.S3Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "os-i08-bucket", Namespace: store.Namespace},
+		Spec: simplyblockv1alpha2.S3BucketSpec{
+			ObjectStoreRef: store.Name, BucketName: "os-i08-bucket",
+			CapacityBytes: 50 * 1 << 20, StorageClassName: "any",
+		},
+	}
+	if err := cli.Create(ctx, bucket); err != nil {
+		t.Fatalf("creating the bucket: %v", err)
+	}
+	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme()}
+	key := client.ObjectKeyFromObject(store)
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
+		return o.Status.Phase == osPhaseProvisioning
+	})
+
+	if err := cli.Delete(ctx, store); err != nil {
+		t.Fatalf("deleting the ObjectStore: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrlRequestKey(key)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	var held simplyblockv1alpha2.ObjectStore
+	if err := cli.Get(ctx, key, &held); err != nil {
+		t.Fatalf("ObjectStore gone while %s still references it: %v", bucket.Name, err)
+	}
+	cond := findCondition(held.Status.Conditions, conditionBucketsRemaining)
+	if cond == nil || cond.Status != metav1.ConditionTrue || !strings.Contains(cond.Message, bucket.Name) {
+		t.Errorf("BucketsRemaining condition = %+v, want True naming %s", cond, bucket.Name)
+	}
+	if held.Status.Phase != osPhaseProvisioning {
+		t.Errorf("phase = %q while the delete is held, want it unchanged (Provisioning)", held.Status.Phase)
+	}
+
+	if err := cli.Delete(ctx, bucket); err != nil {
+		t.Fatalf("deleting the bucket: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrlRequestKey(key)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if err := cli.Get(ctx, key, &held); !apierrorsIsNotFound(err) {
+		t.Errorf("Get after the last bucket was deleted = %v, want NotFound", err)
 	}
 }
 

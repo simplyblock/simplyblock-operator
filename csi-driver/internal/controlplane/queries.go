@@ -57,6 +57,9 @@ func (c *ClusterClient) VolumeNodeInfo(ctx context.Context, lvolID string) (*Nod
 	}
 	raw, err := c.API.do(ctx, http.MethodGet, c.API.v2volume(poolID, lvolID), nil)
 	if err != nil {
+		if isHTTPStatus(err, http.StatusNotFound) {
+			err = fmt.Errorf("%w: %w", ErrVolumeNotFound, err)
+		}
 		return nil, fmt.Errorf("failed to fetch node info: %w", err)
 	}
 	var info NodeInfo

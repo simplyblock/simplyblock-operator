@@ -55,7 +55,9 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
     fi
 
-RUN dnf update -y --nogpgcheck && \
+# Changes daily in CI, so the package update below is not served from cache forever.
+ARG CACHE_KEY
+RUN echo "cache key: ${CACHE_KEY}" && dnf update -y --nogpgcheck && \
     dnf install -y --nodocs \
         fio \
         nvme-cli \

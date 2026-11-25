@@ -769,6 +769,36 @@ controlplane:
       # across `maxNumberIndex` indices: `7d` over 3 indices rotates every 56 hours. Applies only
       # when Graylog first starts. A later change reaches only a new installation.
       retentionPeriod: "7d"
+      # Sized for the storage nodes' SPDK logs, the largest stream Graylog takes:
+      # one busy node writes thousands of lines a second. At 400m CPU Graylog
+      # processed about 1,500 messages a second, fell 13 minutes behind ten
+      # nodes within half an hour of a cluster start and filled half its journal
+      # (EKS bed bf34, 2026-11-24); with the values below it kept up.
+      # -- Resources of the Graylog container. The memory limit has to leave room above `heapSize`.
+      resources:
+        requests:
+          cpu: "1"
+          memory: "3Gi"
+        limits:
+          cpu: "4"
+          memory: "6Gi"
+      # -- Java heap of Graylog (`-Xms` and `-Xmx`). About half the memory limit.
+      heapSize: "3g"
+      # -- Threads that decode and process incoming messages.
+      processbufferProcessors: 4
+      # -- Threads that write processed messages to OpenSearch.
+      outputbufferProcessors: 3
+      # -- Messages per bulk write to OpenSearch.
+      outputBatchSize: 5000
+      journal:
+        # -- Keeps the message journal on a persistent volume, so the messages Graylog has received
+        # but not yet written to OpenSearch survive a restart of its pod. Off, the journal is an
+        # `emptyDir` and a restart drops them.
+        persistence: true
+        # -- Size of the journal volume. Uses `controlplane.storageclass.name`.
+        size: 20Gi
+        # -- Largest journal Graylog keeps before it drops incoming messages. Below the volume size.
+        maxSize: "15gb"
     grafana:
       # -- Grafana image.
       repository: quay.io/simplyblock-io/grafana
@@ -1041,6 +1071,17 @@ metricsAPI:
   # empty value serves each volume's provisioned size and nothing measured.
   # -- Prometheus the capacity samples are read from. Empty serves provisioned sizes only.
   prometheusURL: http://simplyblock-prometheus:9090
+
+operatorMetrics:
+  # The operator's controller-runtime metrics, including the ObjectStore and
+  # S3Bucket families. Served per pod, on the container port named "metrics",
+  # over HTTPS behind Kubernetes authentication and authorization: a scraper
+  # presents a ServiceAccount token bound to the
+  # simplyblock-operator-metrics-reader ClusterRole.
+  # -- Serves the operator's own metrics. `false` closes the port.
+  enabled: false
+  # -- Container port of the operator's metrics endpoint.
+  port: 8443
 
 mongodb-kubernetes:
   # -- Name of the MongoDB operator.

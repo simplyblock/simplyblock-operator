@@ -174,6 +174,12 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 		}
 	}
 
+	// Remote clusters do not depend on the plugins, so they are written before
+	// anything that can hold the deployment back.
+	if err := r.reconcileRemoteClusters(ctx, &d); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Adoption refuses on the one thing the spec cannot change. The counts are
 	// still published, because the plugins are running and what is blocked is
 	// the handover rather than the driver.
@@ -746,6 +752,10 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 		return r.Update(ctx, d)
 	}
 
+	if err := r.removeRemoteEntries(ctx, d); err != nil {
+		return err
+	}
+
 	for _, obj := range r.ownedClusterScoped(d) {
 		if err := r.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
 			if errors.IsNotFound(err) {
@@ -878,6 +888,8 @@ func (r *SimplyblockDriverReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A driver that states no TLS follows the control plane's, so the control
 		// plane appearing re-reconciles the drivers beside it.
 		Watches(&simplyblockv1alpha2.ControlPlane{}, handler.EnqueueRequestsFromMapFunc(r.driversInNamespace)).
+		// A rotated cluster secret is written into its entry on the next pass.
+		Watches(&corev1.Secret{}, handler.EnqueueRequestsFromMapFunc(r.driversReferencingSecret)).
 		Named("simplyblockdriver").
 		Complete(r)
 }
@@ -892,6 +904,25 @@ func (r *SimplyblockDriverReconciler) driversWithMDS(ctx context.Context, _ clie
 	var requests []reconcile.Request
 	for _, d := range drivers.Items {
 		if d.Spec.PNFS.MDS != nil {
+			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&d)})
+		}
+	}
+	return requests
+}
+
+// driversReferencingSecret maps a Secret event to the drivers whose
+// spec.remoteClusters name it.
+func (r *SimplyblockDriverReconciler) driversReferencingSecret(ctx context.Context, obj client.Object) []reconcile.Request {
+	var drivers simplyblockv1alpha2.SimplyblockDriverList
+	if err := r.List(ctx, &drivers, client.InNamespace(obj.GetNamespace())); err != nil {
+		log.FromContext(ctx).Error(err, "listing drivers for a Secret event")
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, d := range drivers.Items {
+		if slices.ContainsFunc(d.Spec.RemoteClusters, func(rc simplyblockv1alpha2.RemoteStorageCluster) bool {
+			return rc.CredentialsSecretRef.Name == obj.GetName()
+		}) {
 			requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(&d)})
 		}
 	}

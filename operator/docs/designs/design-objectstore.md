@@ -184,7 +184,7 @@ type ObjectStorePhase string
 ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 ```
 
-The whole type is in Appendix A. No finalizer: the Deployment, the Service, and the `Certificate` (or the OpenShift serving-cert annotation, which needs none) are all owned via `ownerReferences` and garbage-collected by Kubernetes on delete, and nothing outside this design's own objects needs cleanup. Deleting an `ObjectStore` while an `S3Bucket` still names it in `spec.objectStoreRef` is not blocked: `design-bucket-provisioning.md` §6 already tolerates a gateway Deployment disappearing out from under existing buckets ("Mount-holders... existing deliveries are left in place... until the `S3Bucket` itself is deleted"), so an `ObjectStore`'s own deletion needs no stronger guarantee than that design already assumes.
+The whole type is in Appendix A. The Deployment, the Service, and the `Certificate` (or the OpenShift serving-cert annotation, which needs none) are all owned via `ownerReferences` and garbage-collected by Kubernetes on delete. Deleting an `ObjectStore` while an `S3Bucket` still names it in `spec.objectStoreRef` is blocked by the finalizer `storage.simplyblock.io/objectstore-buckets`. The delete request itself succeeds and sets `deletionTimestamp`, but the finalizer stays until no `S3Bucket` in the namespace references the `ObjectStore`. Until then the owned objects are not garbage-collected, so the gateway keeps serving the remaining buckets, and the condition `BucketsRemaining` `True` names them. The reconciler watches `S3Bucket` objects and maps each to the `ObjectStore` it references, so the last bucket's deletion releases the finalizer within one reconcile. A bucket left without a gateway is not a supported state: an `S3Bucket` reports `Ready` while nothing serves it, which no status field can make honest short of re-deriving gateway presence on every bucket.
 
 A CR as it exists once `Ready`:
 
@@ -243,18 +243,30 @@ Reaching this Service from outside the cluster is not this design's concern (§2
     ▼
   (re-enters Provisioning only via Degraded, never directly from Ready)
 
+  Degraded         ← reached by refusing to act; not retried on a timer
+    │  a Secret/ConfigMap named in spec.envFrom is created or changes,
+    │  or the owned Certificate reports Ready
+    ▼
+  Provisioning     (fresh phaseDeadline)
+
   deletion requested at any phase
     │
     ▼
-  owned objects garbage-collected; no finalizer, no Deleting phase
+  finalizer held while any S3Bucket references this ObjectStore
+    │  (phase unchanged, BucketsRemaining True, gateway keeps serving)
+    │  last referencing S3Bucket deleted
+    ▼
+  finalizer removed, owned objects garbage-collected; no Deleting phase
 ```
 
-| Condition                                                                                                                  | Phase        | Result                                                                                                                                     |
-|----------------------------------------------------------------------------------------------------------------------------|--------------|--------------------------------------------------------------------------------------------------------------------------------------------|
-| The gateway image cannot be pulled, or the Deployment's pods crash-loop                                                    | Provisioning | Stays `Provisioning` past its deadline, then `Degraded`, `DeploymentAvailable` `False` with the pod's own reason                           |
-| The TLS provider cannot issue a certificate (cert-manager `Issuer` missing, OpenShift serving-cert controller not running) | Provisioning | `Degraded`, `CertificateReady` `False` naming the cause                                                                                    |
-| Operator restarts mid-`Provisioning`                                                                                       | Provisioning | Resumes from `status`: re-reads the Deployment, Service, and Certificate rather than restarting from `Pending`                             |
-| `spec.replicas` lowered while gateway pods are serving traffic                                                             | Ready        | Ordinary `Deployment` rolling scale-down. This design adds no draining beyond what the gateway's own readiness probe already gives kubelet |
+| Condition                                                                                                                   | Phase        | Result                                                                                                                                        |
+|-----------------------------------------------------------------------------------------------------------------------------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| The gateway image cannot be pulled, or the Deployment's pods crash-loop                                                     | Provisioning | Stays `Provisioning` past its deadline, then `Degraded`, `DeploymentAvailable` `False` with the pod's own reason                              |
+| The TLS provider cannot issue a certificate (cert-manager `Issuer` missing, OpenShift serving-cert controller not running)  | Provisioning | `Degraded`, `CertificateReady` `False` naming the cause                                                                                       |
+| Operator restarts mid-`Provisioning`                                                                                        | Provisioning | Resumes from `status`: re-reads the Deployment, Service, and Certificate rather than restarting from `Pending`                                |
+| The cause of a `Degraded` is fixed (missing `envFrom` reference created, `Issuer` created so the `Certificate` turns Ready) | Degraded     | Returns to `Provisioning` with a fresh deadline, noticed by the watch on the `envFrom` reference or a once-a-minute read of the `Certificate` |
+| `ObjectStore` deleted while `S3Bucket`s still reference it                                                                  | Any          | Finalizer held, phase unchanged, `BucketsRemaining` `True` naming the buckets, gateway keeps serving until the last one is deleted            |
+| `spec.replicas` lowered while gateway pods are serving traffic                                                              | Ready        | Ordinary `Deployment` rolling scale-down. This design adds no draining beyond what the gateway's own readiness probe already gives kubelet    |
 
 ---
 
@@ -301,7 +313,7 @@ None. This design calls no `sbcli` endpoint: the gateway binary's own interactio
 |---------------------------------------------------------------------------------------------|---------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `spec.image` does not exist or cannot be pulled                                             | Pod `ImagePullBackOff`                                  | `Degraded`, `DeploymentAvailable` `False`, event naming the image                                                                                           |
 | `spec.tlsProvider: cert-manager` with no matching `Issuer`/`ClusterIssuer` in the namespace | `Certificate` stays `False`                             | `Degraded`, `CertificateReady` `False`, event naming the missing issuer                                                                                     |
-| `spec.envFrom` names a `Secret`/`ConfigMap` that does not exist                             | Pod stays `CreateContainerConfigError`                  | `Degraded`, `DeploymentAvailable` `False`, event naming the missing reference                                                                               |
+| `spec.envFrom` names a `Secret`/`ConfigMap` that does not exist                             | Pod stays `CreateContainerConfigError`                  | `Degraded`, `DeploymentAvailable` `False`, event naming the missing reference. Creating the reference returns the `ObjectStore` to `Provisioning` (§6)      |
 | A gateway pod crashes under live S3 traffic                                                 | `Deployment`'s own `Pod` restart, `readyReplicas` drops | Ordinary Kubernetes pod restart. `S3Bucket`'s own mount delivery (`design-bucket-provisioning.md` §5) is unaffected, since it targets the node, not the pod |
 
 ---

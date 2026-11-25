@@ -15,8 +15,11 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -421,5 +424,149 @@ func forcePastDeadline(t *testing.T, cli client.Client, key client.ObjectKey) {
 	bucket.Status.PhaseDeadline = &past
 	if err := cli.Status().Update(context.Background(), &bucket); err != nil {
 		t.Fatalf("forcing the deadline into the past: %v", err)
+	}
+}
+
+// I-14: raising capacityBytes on a Ready bucket raises the PVC's requested
+// storage to match, and the bucket stays Ready.
+//
+// Regression: 2026-11-23-s3bucket-capacity-never-expands. ensurePVC returned
+// an existing PVC unchanged and the Ready path never looked at capacity
+// again, so a grown capacityBytes left the PVC at its creation size and the
+// bucket filled up at the old limit (CI run 45100042373, TC-S3-004).
+func TestS3BucketCapacityIncreaseExpandsThePVC(t *testing.T) {
+	cli := apiServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startFakeCSIBinder(ctx, t, cli)
+	startFakeNFSExportCreator(ctx, cli)
+
+	// The apiserver only admits a PVC expansion when the PVC's StorageClass
+	// allows one, which is what the e2e StorageClass sets as well.
+	sc := &storagev1.StorageClass{
+		ObjectMeta:           metav1.ObjectMeta{Name: fakeStorageClassName},
+		Provisioner:          "csi.simplyblock.io",
+		AllowVolumeExpansion: ptr.To(true),
+	}
+	if err := cli.Create(ctx, sc); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("creating the StorageClass: %v", err)
+	}
+
+	store := testObjectStoreNamed("i14-store")
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	bucket := &simplyblockv1alpha2.S3Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "i14-bucket", Namespace: "default"},
+		Spec: simplyblockv1alpha2.S3BucketSpec{
+			ObjectStoreRef: store.Name, BucketName: "i14-bucket",
+			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
+		},
+	}
+	if err := cli.Create(ctx, bucket); err != nil {
+		t.Fatalf("creating the bucket: %v", err)
+	}
+
+	r := &S3BucketReconciler{
+		Client: cli, Scheme: cli.Scheme(), Recorder: events.NewFakeRecorder(16),
+		Registry: newFakePeerRegistry(ctx, t),
+	}
+	key := client.ObjectKeyFromObject(bucket)
+	got := reconcileBucketUntil(t, r, key, func(b *simplyblockv1alpha2.S3Bucket) bool {
+		return b.Status.Phase == phaseReady
+	})
+
+	const grown = 150 * 1 << 20
+	got.Spec.CapacityBytes = grown
+	if err := cli.Update(ctx, got); err != nil {
+		t.Fatalf("raising capacityBytes: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, ctrlRequestKey(key)); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	var pvc corev1.PersistentVolumeClaim
+	if err := cli.Get(ctx, client.ObjectKey{Namespace: "default", Name: pvcNameFor(bucket.Spec.BucketName)}, &pvc); err != nil {
+		t.Fatalf("reading the PVC: %v", err)
+	}
+	if req := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; req.Value() != grown {
+		t.Errorf("PVC requests %s after capacityBytes went to %d, want %d bytes", req.String(), int64(grown), int64(grown))
+	}
+	var after simplyblockv1alpha2.S3Bucket
+	if err := cli.Get(ctx, key, &after); err != nil {
+		t.Fatalf("reading the bucket back: %v", err)
+	}
+	if after.Status.Phase != phaseReady {
+		t.Errorf("bucket phase = %q after its own expansion, want %q", after.Status.Phase, phaseReady)
+	}
+}
+
+// I-15: lowering capacityBytes is refused at admission. A PVC cannot shrink,
+// so a lower value accepted into the spec would leave spec and volume
+// disagreeing with nothing reporting it.
+func TestS3BucketCapacityDecreaseIsRejected(t *testing.T) {
+	cli := apiServer(t)
+	ctx := context.Background()
+
+	bucket := &simplyblockv1alpha2.S3Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "i15-bucket", Namespace: "default"},
+		Spec: simplyblockv1alpha2.S3BucketSpec{
+			ObjectStoreRef: "i15-store", BucketName: "i15-bucket",
+			CapacityBytes: 100 * 1 << 20, StorageClassName: fakeStorageClassName,
+		},
+	}
+	if err := cli.Create(ctx, bucket); err != nil {
+		t.Fatalf("creating the bucket: %v", err)
+	}
+	bucket.Spec.CapacityBytes = 50 * 1 << 20
+	if err := cli.Update(ctx, bucket); err == nil {
+		t.Error("lowering capacityBytes was admitted, want it rejected")
+	}
+}
+
+// I-16: an S3Bucket naming an ObjectStore that is being deleted degrades
+// with ObjectStoreNotFound, so a new bucket cannot keep a deleting
+// ObjectStore alive indefinitely.
+func TestS3BucketDegradesWhenItsObjectStoreIsBeingDeleted(t *testing.T) {
+	cli := apiServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	startFakeCSIBinder(ctx, t, cli)
+
+	store := testObjectStoreNamed("i16-store")
+	// A finalizer of the test's own keeps the deleted ObjectStore around
+	// with deletionTimestamp set, as the operator's finalizer would.
+	store.Finalizers = []string{"test.simplyblock.io/hold"}
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	if err := cli.Delete(ctx, store); err != nil {
+		t.Fatalf("deleting the ObjectStore: %v", err)
+	}
+	t.Cleanup(func() {
+		var o simplyblockv1alpha2.ObjectStore
+		if cli.Get(context.Background(), client.ObjectKeyFromObject(store), &o) == nil {
+			o.Finalizers = nil
+			_ = cli.Update(context.Background(), &o)
+		}
+	})
+
+	bucket := &simplyblockv1alpha2.S3Bucket{
+		ObjectMeta: metav1.ObjectMeta{Name: "i16-bucket", Namespace: store.Namespace},
+		Spec: simplyblockv1alpha2.S3BucketSpec{
+			ObjectStoreRef: store.Name, BucketName: "i16-bucket",
+			CapacityBytes: 50 * 1 << 20, StorageClassName: fakeStorageClassName,
+		},
+	}
+	if err := cli.Create(ctx, bucket); err != nil {
+		t.Fatalf("creating the bucket: %v", err)
+	}
+	r := &S3BucketReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: events.NewFakeRecorder(16)}
+	got := reconcileBucketUntil(t, r, client.ObjectKeyFromObject(bucket), func(b *simplyblockv1alpha2.S3Bucket) bool {
+		return b.Status.Phase == phaseDegraded || b.Status.Phase == phaseReady
+	})
+	cond := findCondition(got.Status.Conditions, conditionObjectStoreOK)
+	if got.Status.Phase != phaseDegraded || cond == nil || cond.Reason != reasonObjectStoreNotFound {
+		t.Errorf("phase = %q, ObjectStoreOK = %+v, want Degraded with reason ObjectStoreNotFound", got.Status.Phase, cond)
 	}
 }

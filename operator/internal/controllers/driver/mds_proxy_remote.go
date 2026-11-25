@@ -36,18 +36,9 @@ const (
 // simplyblock-csi-secret-v2 lists and this operator does not manage, asked of
 // each cluster's control plane with that cluster's secret.
 func (r *SimplyblockDriverReconciler) remoteListenerPorts(ctx context.Context, namespace string) ([]int32, error) {
-	var secret corev1.Secret
-	key := client.ObjectKey{Namespace: namespace, Name: csiCredentialsSecret}
-	if err := r.Get(ctx, key, &secret); err != nil {
-		return nil, client.IgnoreNotFound(err)
-	}
-	raw, ok := secret.Data[csiCredentialsKey]
-	if !ok || len(raw) == 0 {
-		return nil, nil
-	}
-	var creds clustercontroller.CSICredentials
-	if err := json.Unmarshal(raw, &creds); err != nil {
-		return nil, fmt.Errorf("reading %s: %w", csiCredentialsSecret, err)
+	creds, err := r.readCSICredentials(ctx, namespace)
+	if err != nil {
+		return nil, err
 	}
 
 	var ports []int32
@@ -66,6 +57,27 @@ func (r *SimplyblockDriverReconciler) remoteListenerPorts(ctx context.Context, n
 		ports = append(ports, found...)
 	}
 	return ports, errors.Join(errs...)
+}
+
+// readCSICredentials reads simplyblock-csi-secret-v2, which is empty when the
+// Secret does not exist yet.
+func (r *SimplyblockDriverReconciler) readCSICredentials(
+	ctx context.Context, namespace string,
+) (clustercontroller.CSICredentials, error) {
+	var creds clustercontroller.CSICredentials
+	var secret corev1.Secret
+	key := client.ObjectKey{Namespace: namespace, Name: csiCredentialsSecret}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return creds, client.IgnoreNotFound(err)
+	}
+	raw, ok := secret.Data[csiCredentialsKey]
+	if !ok || len(raw) == 0 {
+		return creds, nil
+	}
+	if err := json.Unmarshal(raw, &creds); err != nil {
+		return creds, fmt.Errorf("reading %s: %w", csiCredentialsSecret, err)
+	}
+	return creds, nil
 }
 
 // clusterListenerPorts asks one cluster's control plane for its nodes' ports.

@@ -3,14 +3,17 @@ FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
 ARG TARGETOS
 ARG TARGETARCH
 ARG BUILDPLATFORM
+ARG BUILDARCH
 
 WORKDIR /workspace
 
-# Install cross-compilers required for CGO (CGO is needed for GOEXPERIMENT=boringcrypto).
-RUN apt-get update && apt-get install -y \
-    gcc \
-    gcc-aarch64-linux-gnu \
-    libc6-dev-arm64-cross \
+# CGO is needed for GOEXPERIMENT=boringcrypto. The arm64 cross-compiler is only
+# installed on an amd64 builder: CI builds each architecture natively, and
+# Debian ships no aarch64 cross toolchain for an arm64 host.
+RUN apt-get update && apt-get install -y gcc \
+    && if [ "${BUILDARCH}" = "amd64" ]; then \
+         apt-get install -y gcc-aarch64-linux-gnu libc6-dev-arm64-cross; \
+       fi \
     && rm -rf /var/lib/apt/lists/*
 
 # atlas is a sibling module consumed via a local replace (../atlas-lib). The build
@@ -32,10 +35,10 @@ COPY operator/ .
 
 # Build with BoringCrypto (FIPS 140-2 validated crypto).
 # CGO_ENABLED=1 is required by GOEXPERIMENT=boringcrypto.
-# CC selects the appropriate cross-compiler when targeting arm64 from an amd64 host.
+# CC selects the cross-compiler only when targeting arm64 from an amd64 host.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+    CC=$([ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o manager ./cmd
@@ -63,7 +66,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 # It serves TLS, so it takes the same BoringCrypto build the manager does.
 RUN --mount=type=cache,target=/root/.cache/go-build \
     --mount=type=cache,target=/go/pkg/mod \
-    CC=$([ "${TARGETARCH}" = "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
+    CC=$([ "${TARGETARCH}" = "arm64" ] && [ "${BUILDARCH}" != "arm64" ] && echo "aarch64-linux-gnu-gcc" || echo "gcc") \
     CGO_ENABLED=1 GOEXPERIMENT=boringcrypto \
     GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
     go build -o conversion-webhook ./cmd/conversion-webhook
@@ -78,7 +81,9 @@ ARG RELEASE=1
 # Apply all available security patches from the UBI10 repositories. iputils is
 # what the storage network probe runs: arping for the duplicate-address check,
 # and ping for the peers. The probe pods run this image.
-RUN microdnf update -y && microdnf install -y iputils && microdnf clean all
+# Changes daily in CI, so the package update below is not served from cache forever.
+ARG CACHE_KEY
+RUN echo "cache key: ${CACHE_KEY}" && microdnf update -y && microdnf install -y iputils && microdnf clean all
 
 # Required labels for Red Hat certification (preflight check operator).
 LABEL name="simplyblock-operator" \
