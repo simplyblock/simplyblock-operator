@@ -109,6 +109,7 @@ type StorageSiteSizing struct {
 
 // StorageSiteDeploymentSpec is the request for one site's storage cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval is one-way: an approved deployment cannot be un-approved"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || (has(self.sizing) == has(oldSelf.sizing) && (!has(self.sizing) || self.sizing == oldSelf.sizing))",message="sizing cannot change once the deployment is approved: the site's approved draft refuses the re-apply, and the request would report Failed for a running cluster"
 type StorageSiteDeploymentSpec struct {
 	// Cluster is the OCM ManagedCluster the storage is deployed on. The request's
 	// ManifestWork and views live in its namespace on the hub. Immutable.

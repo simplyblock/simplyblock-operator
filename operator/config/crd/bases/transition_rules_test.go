@@ -332,7 +332,36 @@ func TestStorageSiteDeploymentUpdateRules(t *testing.T) {
 			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) { s.SiteNamespace = "other" }),
 			denied: "siteNamespace is immutable",
 		},
+		{
+			name:   "resizing an approved deployment",
+			create: approvedSiteDeployment(),
+			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) {
+				s.Sizing = &simplyblockv1alpha2.StorageSiteSizing{VCPUCount: ptr.To(int32(8))}
+			}),
+			denied: "sizing cannot change once",
+		},
+		{
+			name:   "resizing a deployment under review",
+			create: siteDeployment(),
+			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) {
+				s.Sizing = &simplyblockv1alpha2.StorageSiteSizing{VCPUCount: ptr.To(int32(8))}
+			}),
+		},
 	})
+}
+
+func approvedSiteDeployment() *simplyblockv1alpha2.StorageSiteDeployment {
+	d := siteDeployment()
+	d.Spec.Approved = true
+	d.Spec.Sizing = &simplyblockv1alpha2.StorageSiteSizing{VCPUCount: ptr.To(int32(4))}
+	return d
+}
+
+func approvedStretched() *simplyblockv1alpha2.StretchedCluster {
+	c := stretched()
+	c.Spec.Approved = true
+	c.Spec.Sizing = &simplyblockv1alpha2.StorageSiteSizing{VCPUCount: ptr.To(int32(4))}
+	return c
 }
 
 func TestStretchedClusterUpdateRules(t *testing.T) {
@@ -342,6 +371,12 @@ func TestStretchedClusterUpdateRules(t *testing.T) {
 			create: stretched(),
 			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) { s.Sites[1].SiteNamespace = "other" }),
 			denied: "siteNamespace is immutable",
+		},
+		{
+			name:   "resizing an approved stretched cluster",
+			create: approvedStretched(),
+			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) { s.Sizing = nil }),
+			denied: "sizing cannot change once",
 		},
 		{
 			name:   "swapping the roles",
