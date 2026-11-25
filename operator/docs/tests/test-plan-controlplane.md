@@ -274,6 +274,11 @@ File: `operator/internal/controllers/controlplane/controlplaneops_controller_uni
 | U-192 | No workload carries a `reloader.stakater.com` annotation | Regression | `TestNoWorkloadCarriesAReloaderAnnotation` |
 | U-193 | A change to the cluster file wakes the ControlPlane in its namespace and nothing else | Positive | `TestAClusterFileChangeWakesTheControlPlaneInItsNamespaceOnly` |
 | U-194 | A cluster file that vanishes leaves the stamp the workloads carry, and its return with the same data changes nothing | Regression | `TestAFileThatVanishesLeavesTheStampItsWorkloadsCarry` |
+| U-522 | A coordinator move while a node add is in flight leaves the task runner's stamp alone and restamps the other workloads; the runner is stamped once the add settles (2026-11-25-node-add-restarted-by-roll) | Regression | `TestACoordinatorMoveDuringANodeAddDoesNotRollTheTaskRunner` |
+| U-523 | The task runner's budget allows no disruption while a node is `Posting` or `Resolving`, and one otherwise (2026-11-25-node-add-restarted-by-roll) | Regression | `TestTheTaskRunnerIsNotEvictedWhileItAddsANode` |
+| U-524 | A node waiting for its slot, or for its worker, holds nothing | Negative | `TestANodeThatIsNotBeingAddedHoldsNothing` |
+| U-525 | The hold is released once it has lasted its limit, while adds are still in flight, and the runner is stamped | Boundary | `TestTheHoldIsReleasedAfterItsLimit` |
+| U-526 | Only a node entering or leaving its add wakes the ControlPlane; its other status writes do not | Positive | `TestOnlyANodeEnteringOrLeavingItsAddReconcilesTheControlPlane` |
 | U-57  | `Upgrade`: the image is applied and `Verifying` waits for the rollout                                                                              | Positive   | —                                                 |
 | U-58  | `Upgrade` whose rollout stalls: `ProgressDeadlineExceeded` fails it                                                                                | Negative   | —                                                 |
 | U-59  | `Upgrade` succeeding: `spec.source.managed.image` is updated to match                                                                              | Positive   | —                                                 |
