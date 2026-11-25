@@ -400,7 +400,8 @@ func TestStretchedClusterUpdateRules(t *testing.T) {
 			name:   "swapping the roles",
 			create: stretched(),
 			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) {
-				s.Sites[0].Role, s.Sites[1].Role = simplyblockv1alpha2.StretchedRoleFollower, simplyblockv1alpha2.StretchedRoleLeader
+				s.Sites[0].Role = simplyblockv1alpha2.StretchedRoleFollower
+				s.Sites[1].Role = simplyblockv1alpha2.StretchedRoleLeader
 			}),
 		},
 	})
