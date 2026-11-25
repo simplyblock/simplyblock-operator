@@ -119,7 +119,10 @@ operator's own service account, matched by its exact username. A create is
 admitted, because it states the field for the first time. Status paths are not
 guarded: status is written through its own subresource.
 
-A field another identity also writes names it, `writers=<name>;<name>`:
+A field another identity also writes names it, `writers=<name>;<name>`. The
+list holds the writers *besides* the operator, which is always admitted and is
+not a name the list accepts; `;` separates names, as in every kubebuilder marker
+list, so `writers=hub,operator` is one unknown name and fails `make manifests`:
 
 ```go
 // +simplyblock:operatorManaged:writers=hub
