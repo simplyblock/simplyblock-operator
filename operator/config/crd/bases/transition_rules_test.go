@@ -440,3 +440,20 @@ func TestStorageBackupPolicyUpdateRules(t *testing.T) {
 		},
 	})
 }
+
+// A bucket of zero or negative capacity has nothing to provision: the schema
+// refuses it rather than leaving the PVC create to fail on every pass.
+func TestS3BucketCapacityMustBePositive(t *testing.T) {
+	c := ruleServer(t)
+	for _, capacity := range []int64{0, -1} {
+		bucket := &simplyblockv1alpha2.S3Bucket{Spec: simplyblockv1alpha2.S3BucketSpec{
+			ObjectStoreRef: "store", BucketName: "data", CapacityBytes: capacity, StorageClassName: "standard",
+		}}
+		bucket.SetNamespace("default")
+		bucket.SetGenerateName("rule-")
+		err := c.Create(context.Background(), bucket)
+		if err == nil || !strings.Contains(err.Error(), "capacityBytes") {
+			t.Errorf("capacityBytes %d: create error = %v, want a refusal naming capacityBytes", capacity, err)
+		}
+	}
+}
