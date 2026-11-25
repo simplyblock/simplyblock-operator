@@ -202,6 +202,26 @@ webhooks:
       path: /validate-operator-managed-fields
   failurePolicy: Fail
   matchPolicy: Equivalent
+  name: voperatormanaged-storagebackups.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - storagebackups
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
   name: voperatormanaged-storageclusters.storage.simplyblock.io
   rules:
   - apiGroups:
