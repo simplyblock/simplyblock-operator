@@ -203,10 +203,18 @@ func TestSidecarsAreSixAndExcludeTheSnapshotController(t *testing.T) {
 type fixedSnapshotAPI struct {
 	served bool
 	err    error
+	// groupVersion is the groupsnapshot.storage.k8s.io version served, empty
+	// for none; groupErr is a failure to tell.
+	groupVersion string
+	groupErr     error
 }
 
 func (f fixedSnapshotAPI) SnapshotAPIServed(context.Context) (bool, error) {
 	return f.served, f.err
+}
+
+func (f fixedSnapshotAPI) GroupSnapshotAPIVersion(context.Context) (string, error) {
+	return f.groupVersion, f.groupErr
 }
 
 // U-04: a cluster already serving the API is one the operator adds nothing to.
