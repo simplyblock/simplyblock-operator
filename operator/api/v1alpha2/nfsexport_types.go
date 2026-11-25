@@ -85,8 +85,9 @@ type NFSExportSpec struct {
 	// the time this is written. It is here so that growing one bumps the
 	// record's generation, which is what tells the operator to re-assemble and
 	// run xfs_growfs on the host -- the one machine that can, and the one no
-	// CSI call ever reaches.
+	// CSI call ever reaches. The CSI controller writes it on an expansion.
 	// +optional
+	// +simplyblock:operatorManaged:writers=csi
 	SizeBytes int64 `json:"sizeBytes,omitempty"`
 }
 

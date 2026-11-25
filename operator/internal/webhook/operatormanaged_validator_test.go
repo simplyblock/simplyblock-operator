@@ -305,3 +305,28 @@ func TestAWriterResolvedAtRequestTimeIsAdmitted(t *testing.T) {
 		t.Fatal("a user's resize was admitted, want it refused")
 	}
 }
+
+// The CSI controller records an expansion on the export serving the volume;
+// a user's edit of the size is refused.
+func TestOnlyTheCSIControllerResizesAnExport(t *testing.T) {
+	const csiController = "system:serviceaccount:simplyblock:simplyblock-csi-controller-sa"
+	gvk := simplyblockv1alpha2.GroupVersion.WithKind("NFSExport")
+	v := operatorManagedValidator(t)
+	v.ResolveWriter = func(_ context.Context, writer string) ([]string, error) {
+		if writer == "csi" {
+			return []string{csiController}, nil
+		}
+		return nil, nil
+	}
+	export := func(size int64) *simplyblockv1alpha2.NFSExport {
+		return &simplyblockv1alpha2.NFSExport{Spec: simplyblockv1alpha2.NFSExportSpec{VolumeRef: "pvc-1", SizeBytes: size}}
+	}
+	if resp := v.Handle(context.Background(), updateRequest(t, gvk, testUser, export(1), export(2))); resp.Allowed {
+		t.Error("a user's resize was admitted, want it refused")
+	} else if !strings.Contains(resp.Result.Message, "spec.sizeBytes") {
+		t.Errorf("refusal %q does not name spec.sizeBytes", resp.Result.Message)
+	}
+	if resp := v.Handle(context.Background(), updateRequest(t, gvk, csiController, export(1), export(2))); !resp.Allowed {
+		t.Errorf("the CSI controller's resize was refused: %s", resp.Result.Message)
+	}
+}

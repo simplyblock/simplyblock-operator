@@ -13,6 +13,7 @@ import "k8s.io/apimachinery/pkg/runtime/schema"
 
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=update,versions=v1alpha2,name=voperatormanaged-clusterdeploymentconfigs.storage.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=controlplanes,verbs=update,versions=v1alpha2,name=voperatormanaged-controlplanes.storage.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=nfsexports,verbs=update,versions=v1alpha2,name=voperatormanaged-nfsexports.storage.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagebackups,verbs=update,versions=v1alpha2,name=voperatormanaged-storagebackups.storage.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=update,versions=v1alpha2,name=voperatormanaged-storageclusters.storage.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagedevices,verbs=update,versions=v1alpha2,name=voperatormanaged-storagedevices.storage.simplyblock.io,admissionReviewVersions=v1
@@ -26,6 +27,9 @@ var generatedOperatorManagedFields = map[schema.GroupVersionKind][]OperatorManag
 	},
 	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "ControlPlane"}: {
 		{Path: "spec.source.local.image", Segments: []string{"spec", "source", "local", "image"}},
+	},
+	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "NFSExport"}: {
+		{Path: "spec.sizeBytes", Segments: []string{"spec", "sizeBytes"}, Writers: []string{"csi"}},
 	},
 	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "StorageBackup"}: {
 		{Path: "spec.clusterRef", Segments: []string{"spec", "clusterRef"}},
