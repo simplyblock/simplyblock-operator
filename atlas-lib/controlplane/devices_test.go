@@ -184,3 +184,73 @@ func TestDeviceRemovalAndFailureReportARefusal(t *testing.T) {
 		t.Error("a refused failure was reported as performed")
 	}
 }
+
+func TestGrowClusterDevicesReadsTheGrowth(t *testing.T) {
+	var path, method string
+	c := deviceClient(t, func(w http.ResponseWriter, r *http.Request) {
+		path, method = r.URL.Path, r.Method
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"grown":  true,
+			"factor": 1.5,
+			"devices": []map[string]any{{
+				"device_id": testDeviceID, "old_size": 100, "new_size": 150,
+				"backend_size": 200, "unused_size": 50, "placement_size": 100,
+			}},
+			"errors": map[string]string{},
+			"reason": "",
+		})
+	})
+
+	got, err := c.GrowClusterDevices(t.Context(), testDeviceCluster)
+	if err != nil {
+		t.Fatalf("growing the devices: %v", err)
+	}
+	if method != http.MethodPost || !strings.HasSuffix(path, "/clusters/"+testDeviceCluster+"/grow-devices") {
+		t.Errorf("request = %s %s, want POST .../clusters/{id}/grow-devices", method, path)
+	}
+	want := DeviceGrowth{DeviceID: testDeviceID, OldSize: 100, NewSize: 150, BackendSize: 200,
+		UnusedSize: 50, PlacementSize: 100}
+	if !got.Grown || got.Factor != 1.5 || len(got.Devices) != 1 || got.Devices[0] != want {
+		t.Errorf("growth = %+v, want factor 1.5 and %+v", got, want)
+	}
+}
+
+func TestGrowClusterDevicesReportsAShrink(t *testing.T) {
+	c := deviceClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"grown": false, "factor": 1.0, "devices": []any{},
+			"errors": map[string]string{testDeviceID: "The block device shrank"},
+			"reason": "A block device is smaller than its device; nothing was grown",
+			"shrunk": []string{testDeviceID},
+		})
+	})
+
+	got, err := c.GrowClusterDevices(t.Context(), testDeviceCluster)
+	if err != nil {
+		t.Fatalf("growing the devices: %v", err)
+	}
+	if got.Grown || len(got.Shrunk) != 1 || got.Shrunk[0] != testDeviceID || got.Reason == "" {
+		t.Errorf("growth = %+v, want nothing grown and the shrunk device listed", got)
+	}
+}
+
+// A refusal is a conflict the caller can tell apart from a transport failure:
+// it is final, where the other is worth a retry.
+func TestGrowClusterDevicesReportsARefusal(t *testing.T) {
+	c := deviceClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"detail":"Online device growth needs a cluster in lblk device mode"}`))
+	})
+
+	_, err := c.GrowClusterDevices(t.Context(), testDeviceCluster)
+	var status *StatusError
+	if !errors.As(err, &status) || status.StatusCode != http.StatusConflict {
+		t.Fatalf("err = %v, want a 409 StatusError", err)
+	}
+	if !strings.Contains(err.Error(), "lblk") {
+		t.Errorf("err = %v, want the control plane's reason carried", err)
+	}
+}
