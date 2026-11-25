@@ -168,3 +168,22 @@ serving-cert annotation).
 simplyblock-csi-link-tls
 {{- end -}}
 {{- end -}}
+
+{{/*
+The newest version of groupsnapshot.storage.k8s.io the cluster serves (v1,
+v1beta2, or v1beta1), or empty when it serves none. OpenShift 5 serves v1 only,
+and a cluster on the external-snapshotter 8.2 CRDs serves v1beta1 only. The
+chart installs its own group snapshot CRDs only where this is empty, so they
+never collide with a platform's, and its snapshot-controller (8.2, which
+watches v1beta1) turns group snapshots on only where v1beta1 is what is served.
+*/}}
+{{- define "simplyblock.groupSnapshotAPIVersion" -}}
+{{- $api := .Capabilities.APIVersions -}}
+{{- if $api.Has "groupsnapshot.storage.k8s.io/v1/VolumeGroupSnapshotClass" -}}
+v1
+{{- else if $api.Has "groupsnapshot.storage.k8s.io/v1beta2/VolumeGroupSnapshotClass" -}}
+v1beta2
+{{- else if $api.Has "groupsnapshot.storage.k8s.io/v1beta1/VolumeGroupSnapshotClass" -}}
+v1beta1
+{{- end -}}
+{{- end -}}
