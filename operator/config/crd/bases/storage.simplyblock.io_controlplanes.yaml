@@ -629,7 +629,7 @@ spec:
                       type: object
                       x-kubernetes-validations:
                         - message: 'spec.source.local.foundationDB.storageClassName is immutable: it is in the claim templates of the control plane''s StatefulSets, which the API server refuses to change, so a new class would fail every later apply'
-                          rule: '(has(self.foundationDB) && has(self.foundationDB.storageClassName) ? self.foundationDB.storageClassName : '''') == (has(oldSelf.foundationDB) && has(oldSelf.foundationDB.storageClassName) ? oldSelf.foundationDB.storageClassName : '''')'
+                          rule: (has(self.foundationDB) && has(self.foundationDB.storageClassName)) == (has(oldSelf.foundationDB) && has(oldSelf.foundationDB.storageClassName)) && (!(has(self.foundationDB) && has(self.foundationDB.storageClassName)) || self.foundationDB.storageClassName == oldSelf.foundationDB.storageClassName)
                     managed:
                       description: Managed is a control plane that already exists.
                       properties:

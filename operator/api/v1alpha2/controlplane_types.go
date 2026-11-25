@@ -209,7 +209,7 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 // LocalControlPlane is a control plane this cluster hosts, installed and owned
 // by the operator. Its objects carry a controller reference to the ControlPlane,
 // so the ownership spine starts at a real edge rather than at a Helm release.
-// +kubebuilder:validation:XValidation:rule="(has(self.foundationDB) && has(self.foundationDB.storageClassName) ? self.foundationDB.storageClassName : '') == (has(oldSelf.foundationDB) && has(oldSelf.foundationDB.storageClassName) ? oldSelf.foundationDB.storageClassName : '')",message="spec.source.local.foundationDB.storageClassName is immutable: it is in the claim templates of the control plane's StatefulSets, which the API server refuses to change, so a new class would fail every later apply"
+// +kubebuilder:validation:XValidation:rule="(has(self.foundationDB) && has(self.foundationDB.storageClassName)) == (has(oldSelf.foundationDB) && has(oldSelf.foundationDB.storageClassName)) && (!(has(self.foundationDB) && has(self.foundationDB.storageClassName)) || self.foundationDB.storageClassName == oldSelf.foundationDB.storageClassName)",message="spec.source.local.foundationDB.storageClassName is immutable: it is in the claim templates of the control plane's StatefulSets, which the API server refuses to change, so a new class would fail every later apply"
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
 	// Any registry is accepted, mirrors included, as long as the value is a

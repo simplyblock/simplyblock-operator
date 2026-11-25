@@ -195,9 +195,9 @@ spec:
                 plane has no call that detaches a policy from a group, so the old
                 group, or the claims a selector had attached, would stay under the
                 policy'
-              rule: '(has(self.consistencyGroupName) ? self.consistencyGroupName :
-                '''') == (has(oldSelf.consistencyGroupName) ? oldSelf.consistencyGroupName
-                : '''')'
+              rule: has(self.consistencyGroupName) == has(oldSelf.consistencyGroupName)
+                && (!has(self.consistencyGroupName) || self.consistencyGroupName ==
+                oldSelf.consistencyGroupName)
           status:
             description: status defines the observed state of StorageBackupPolicy
             properties:
