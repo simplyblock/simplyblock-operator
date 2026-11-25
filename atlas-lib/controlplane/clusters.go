@@ -111,6 +111,10 @@ type CreateClusterParams struct {
 	// sites before they are acknowledged. The backend accepts it at create
 	// only.
 	SyncReplication bool
+	// FlexGeometry gives every lvstore of the cluster an 8 MiB cluster size (and
+	// raid0 strip), whatever its erasure-coding scheme. Off, the lvstore cluster
+	// is one 2 MiB page per data chunk. The backend accepts it at create only.
+	FlexGeometry bool
 	// LeaderSite names the creating site the leader of a sync-replicated
 	// cluster; empty leaves it unset.
 	LeaderSite string
@@ -259,6 +263,7 @@ func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 		Atomic4k:            isTrue(p.Atomic4K),
 		MdJournal:           ptr.To(p.MetadataJournal),
 		IsSingleNode:        isTrue(p.SingleNode),
+		FlexGeometry:        isTrue(p.FlexGeometry),
 		SyncReplication:     isTrue(p.SyncReplication),
 		LeaderSite:          nonEmpty(p.LeaderSite),
 		SnodeApiService:     nonEmpty(p.WorkloadNames.NodeAPIService),

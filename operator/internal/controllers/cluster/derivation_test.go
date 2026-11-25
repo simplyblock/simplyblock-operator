@@ -387,3 +387,33 @@ func TestCreationParamsCarryTheIntegritySettings(t *testing.T) {
 		}
 	}
 }
+
+// Flex geometry is fixed when the control plane creates the cluster, so the
+// create request carries what the spec states, and an unstated field is off.
+func TestCreationParamsCarryFlexGeometry(t *testing.T) {
+	for _, tc := range []struct {
+		stated *bool
+		want   bool
+	}{
+		{nil, false},
+		{ptr.To(false), false},
+		{ptr.To(true), true},
+	} {
+		cluster := &simplyblockv1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "prod", Namespace: "sb"},
+			Spec: simplyblockv1alpha2.StorageClusterSpec{
+				MaxSubsystemCount: ptr.To(int32(10)),
+				VCPUCount:         ptr.To(int32(8)),
+				FlexGeometry:      tc.stated,
+			},
+		}
+
+		params, err := (&StorageClusterReconciler{}).creationParams(context.Background(), cluster)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if params.FlexGeometry != tc.want {
+			t.Errorf("flexGeometry %v: FlexGeometry = %v, want %v", ptr.BoolFromOrFalse(tc.stated), params.FlexGeometry, tc.want)
+		}
+	}
+}

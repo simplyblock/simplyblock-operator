@@ -88,6 +88,7 @@ const (
 	annoClusterBackupRegion = "storage.simplyblock.io/conversion-spec.backup.region"
 	annoClusterDeviceClass  = "storage.simplyblock.io/conversion-spec.deviceClass"
 	annoClusterSync         = "storage.simplyblock.io/conversion-spec.enableSyncReplication"
+	annoClusterFlexGeometry = "storage.simplyblock.io/conversion-spec.flexGeometry"
 	annoClusterStretched    = "storage.simplyblock.io/conversion-spec.stretched"
 
 	// The service classes have no counterpart in this version.
@@ -452,6 +453,7 @@ func stashClusterHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageCluster) 
 	}{
 		{annoClusterDeviceClass, deviceClass},
 		{annoClusterSync, src.Spec.EnableSyncReplication},
+		{annoClusterFlexGeometry, src.Spec.FlexGeometry},
 		{annoClusterStretched, src.Spec.Stretched},
 		{annoClusterStatusStretched, src.Status.Stretched},
 		{annoClusterServiceClasses, src.Spec.ServiceClasses},
@@ -552,6 +554,7 @@ func restoreClusterHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageCluster
 		target any
 	}{
 		{annoClusterSync, &dst.Spec.EnableSyncReplication},
+		{annoClusterFlexGeometry, &dst.Spec.FlexGeometry},
 		{annoClusterStretched, &dst.Spec.Stretched},
 		{annoClusterStatusStretched, &dst.Status.Stretched},
 		{annoClusterServiceClasses, &dst.Spec.ServiceClasses},

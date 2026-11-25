@@ -4140,6 +4140,11 @@ func (in *StorageClusterSpec) DeepCopyInto(out *StorageClusterSpec) {
 		*out = new(bool)
 		**out = **in
 	}
+	if in.FlexGeometry != nil {
+		in, out := &in.FlexGeometry, &out.FlexGeometry
+		*out = new(bool)
+		**out = **in
+	}
 	if in.EnableChecksumValidation != nil {
 		in, out := &in.EnableChecksumValidation, &out.EnableChecksumValidation
 		*out = new(bool)

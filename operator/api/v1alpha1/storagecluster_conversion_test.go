@@ -943,3 +943,28 @@ func TestStorageClusterTheMetadataJournalSurvivesTheHub(t *testing.T) {
 		}
 	}
 }
+
+// flexGeometry has no field at v1alpha1. A cluster read there and written back
+// would otherwise lose it, and the hub refuses that write because the field is
+// immutable.
+func TestStorageClusterFlexGeometrySurvivesTheTripDown(t *testing.T) {
+	for _, stated := range []*bool{nil, ptr.To(false), ptr.To(true)} {
+		hub := &v1alpha2.StorageCluster{
+			ObjectMeta: metav1.ObjectMeta{Name: "c", Namespace: "sb"},
+			Spec:       v1alpha2.StorageClusterSpec{FlexGeometry: stated},
+		}
+
+		var stored StorageCluster
+		if err := stored.ConvertFrom(hub); err != nil {
+			t.Fatalf("ConvertFrom: %v", err)
+		}
+		var back v1alpha2.StorageCluster
+		if err := stored.ConvertTo(&back); err != nil {
+			t.Fatalf("ConvertTo: %v", err)
+		}
+
+		if diff := cmp.Diff(hub.Spec.FlexGeometry, back.Spec.FlexGeometry); diff != "" {
+			t.Errorf("spec.flexGeometry did not survive (-want +got):\n%s", diff)
+		}
+	}
+}

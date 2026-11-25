@@ -328,3 +328,34 @@ func TestClientGetClusterReadsSyncReplicationAndTheLeaderSite(t *testing.T) {
 		}
 	}
 }
+
+// Flex geometry gives every lvstore an 8 MiB cluster size and is fixed at
+// create, so the create request is where it is asked for. A cluster that does
+// not ask sends no key and gets the control plane's default, which is off.
+func TestFlexGeometryIsAskedForAtCreate(t *testing.T) {
+	for _, tc := range []struct {
+		params CreateClusterParams
+		want   any
+	}{
+		{CreateClusterParams{FlexGeometry: true}, true},
+		{CreateClusterParams{}, nil},
+	} {
+		var body map[string]any
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &body)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(clusterDTO))
+		})
+
+		tc.params.Name, tc.params.MaxSubsys, tc.params.SpdkVCPUCount = "prod", 20, 8
+		if _, err := c.CreateCluster(context.Background(), tc.params); err != nil {
+			t.Fatal(err)
+		}
+
+		if body["flex_geometry"] != tc.want {
+			t.Errorf("flex_geometry = %v, want %v", body["flex_geometry"], tc.want)
+		}
+	}
+}
