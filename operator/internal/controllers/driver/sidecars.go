@@ -43,12 +43,11 @@ const (
 // The csi-snapshotter releases for the newer versions of
 // groupsnapshot.storage.k8s.io. A release watches VolumeGroupSnapshotClass at
 // one version only (8.2, the default above, watches v1beta1), so the sidecar is
-// picked by the version the cluster serves (withGroupSnapshotAPI). Upstream
-// images rather than quay.io/simplyblock-io mirrors, which do not exist for
-// these tags yet: mirroring them is a release task, as for defaultCSIAddonsImage.
+// picked by the version the cluster serves (withGroupSnapshotAPI). Mirrored
+// under quay.io/simplyblock-io like the rest of the pinned set.
 const (
-	snapshotterImageV1beta2 = "registry.k8s.io/sig-storage/csi-snapshotter:v8.4.0"
-	snapshotterImageV1      = "registry.k8s.io/sig-storage/csi-snapshotter:v8.7.0"
+	snapshotterImageV1beta2 = "quay.io/simplyblock-io/csi-snapshotter:v8.4.0"
+	snapshotterImageV1      = "quay.io/simplyblock-io/csi-snapshotter:v8.7.0"
 )
 
 // csiVolumeGroupSnapshotGate is the sidecar flag that turns group snapshots on
