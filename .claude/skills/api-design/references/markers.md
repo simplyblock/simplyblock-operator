@@ -82,7 +82,7 @@ object survives into the cluster, where the console reads it.
 
 | Marker                         | CRD annotation                           | In the Control Center                                            |
 |--------------------------------|------------------------------------------|------------------------------------------------------------------|
-| `+simplyblock:operatorManaged` | `simplyblock.io/operator-managed-fields` | Badged `operator-managed` and locked, as an immutable field is   |
+| `+simplyblock:operatorManaged` | `simplyblock.io/operator-managed-fields` | Locked as an immutable field is; refused at admission (below)    |
 | `+simplyblock:advanced`        | `simplyblock.io/advanced-fields`         | Left out of Essentials, shown in Everything                      |
 | `+simplyblock:invisible`       | `simplyblock.io/invisible-fields`        | Left out of Essentials and the Everything tree, kept in the YAML |
 
@@ -110,12 +110,30 @@ few need, `invisible` for one nobody should see. The Everything tree shows only
 what the object holds, so an advanced field that is not set appears nowhere
 until it is set some other way.
 
-**None of the markers is enforced at admission.** `operatorManaged` stops an edit in
-the console only, and `kubectl` can still change the field. A field a user must not
-change belongs in `status`, or needs the webhook check that compares the old
-and new values for a requester that is not the operator (`isOperator` in
-`internal/webhook/storagenode_validator.go`). `advanced` and `invisible` hide
-nothing from anyone who can read the object.
+**`operatorManaged` is enforced at admission.** `make manifests` also writes
+`internal/webhook/zz_generated.operatormanaged.go`: the marked spec paths of
+every kind, and a webhook registration per kind for UPDATE. The
+operator-managed-fields validator (`internal/webhook/operatormanaged_validator.go`)
+refuses an update that changes one of those fields unless it comes from the
+operator's own service account, matched by its exact username. A create is
+admitted, because it states the field for the first time. Status paths are not
+guarded: status is written through its own subresource.
+
+A field another identity also writes names it, `writers=<name>;<name>`:
+
+```go
+// +simplyblock:operatorManaged:writers=hub
+Role StretchedRole `json:"role"`
+```
+
+The known writers are `knownWriters` in `hack/fieldmarkers/main.go`; the
+operator maps each to usernames at run time (`hub` is the
+`--hub-work-agent-username` flag). An unknown writer fails `make manifests`. The
+marker sits on a type, so a writer named there is admitted wherever the type is
+embedded.
+
+`advanced` and `invisible` are not enforced, and hide nothing from anyone who
+can read the object.
 
 ## Cross-field rules worth writing
 

@@ -847,17 +847,22 @@ type StretchedSpec struct {
 	// PeerCluster is the other site's managed cluster: the name the hub knows
 	// it by, and the one the site link reaches that site's operator by. Empty
 	// means the same as peerSite.
+	//
+	// The operator writes it on a StorageCluster, and the hub's work agent on a
+	// site's ClusterDeploymentConfig, which embeds this type.
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
-	// +simplyblock:operatorManaged
+	// +simplyblock:operatorManaged:writers=hub
 	PeerCluster string `json:"peerCluster,omitempty"`
 
 	// Role is Leader or Follower. A leader creates and activates the backend
 	// cluster and runs every cluster-wide operation; a follower adopts the
 	// cluster and manages only its own site's nodes. A change is a role swap,
-	// delivered from the hub.
+	// delivered from the hub: the hub's work agent re-delivers a site's
+	// ClusterDeploymentConfig with the new role, and the operator carries it onto
+	// the StorageCluster.
 	// +kubebuilder:validation:Required
-	// +simplyblock:operatorManaged
+	// +simplyblock:operatorManaged:writers=hub
 	Role StretchedRole `json:"role"`
 }
 

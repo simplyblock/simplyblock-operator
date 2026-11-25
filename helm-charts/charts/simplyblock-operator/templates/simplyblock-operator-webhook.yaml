@@ -179,6 +179,66 @@ webhooks:
     service:
       name: simplyblock-operator-webhook-service
       namespace: {{ .Release.Namespace }}
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: voperatormanaged-clusterdeploymentconfigs.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - clusterdeploymentconfigs
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: voperatormanaged-storageclusters.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - storageclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: voperatormanaged-storagenodes.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - storagenodes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: simplyblock-operator-webhook-service
+      namespace: {{ .Release.Namespace }}
       path: /validate-storage-simplyblock-io-v1alpha2-operatorops
   failurePolicy: Ignore
   name: voperatorops.simplyblock.io

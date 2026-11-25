@@ -153,6 +153,66 @@ webhooks:
     service:
       name: webhook-service
       namespace: system
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: voperatormanaged-clusterdeploymentconfigs.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - clusterdeploymentconfigs
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: voperatormanaged-storageclusters.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - storageclusters
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-operator-managed-fields
+  failurePolicy: Fail
+  matchPolicy: Equivalent
+  name: voperatormanaged-storagenodes.storage.simplyblock.io
+  rules:
+  - apiGroups:
+    - storage.simplyblock.io
+    apiVersions:
+    - v1alpha2
+    operations:
+    - UPDATE
+    resources:
+    - storagenodes
+  sideEffects: None
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
       path: /validate-storage-simplyblock-io-v1alpha2-operatorops
   failurePolicy: Ignore
   name: voperatorops.simplyblock.io
