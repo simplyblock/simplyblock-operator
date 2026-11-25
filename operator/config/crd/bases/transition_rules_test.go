@@ -267,3 +267,35 @@ func TestStorageBackupOpsUpdateRules(t *testing.T) {
 		},
 	})
 }
+
+func TestControlPlaneUpdateRules(t *testing.T) {
+	plane := func(fdb *simplyblockv1alpha2.FoundationDBSpec) *simplyblockv1alpha2.ControlPlane {
+		return &simplyblockv1alpha2.ControlPlane{Spec: simplyblockv1alpha2.ControlPlaneSpec{
+			Source: simplyblockv1alpha2.ControlPlaneSource{Local: &simplyblockv1alpha2.LocalControlPlane{
+				Image: "registry.example/simplyblock:1", FoundationDB: fdb,
+			}},
+		}}
+	}
+	withFDB := func(fdb *simplyblockv1alpha2.FoundationDBSpec) func(client.Object) {
+		return func(o client.Object) { o.(*simplyblockv1alpha2.ControlPlane).Spec.Source.Local.FoundationDB = fdb }
+	}
+	runTransitions(t, []transition{
+		{
+			name:   "moving the database to another storage class",
+			create: plane(&simplyblockv1alpha2.FoundationDBSpec{StorageClassName: "gp3"}),
+			mutate: withFDB(&simplyblockv1alpha2.FoundationDBSpec{StorageClassName: "io2"}),
+			denied: "storageClassName is immutable",
+		},
+		{
+			name:   "naming a class for a database created on the default one",
+			create: plane(nil),
+			mutate: withFDB(&simplyblockv1alpha2.FoundationDBSpec{StorageClassName: "gp3"}),
+			denied: "storageClassName is immutable",
+		},
+		{
+			name:   "resizing the database",
+			create: plane(&simplyblockv1alpha2.FoundationDBSpec{StorageClassName: "gp3"}),
+			mutate: withFDB(&simplyblockv1alpha2.FoundationDBSpec{StorageClassName: "gp3", Replicas: ptr.To(int32(5))}),
+		},
+	})
+}
