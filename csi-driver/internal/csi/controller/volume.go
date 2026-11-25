@@ -41,7 +41,7 @@ func (cs *Server) CreateVolume(
 
 	// fsType "pnfs" is served by an export rather than a block device. The
 	// access mode does not decide it.
-	pnfs, err := isPNFSRequest(req.GetVolumeCapabilities())
+	pnfs, err := checkCapabilities(req)
 	if err != nil {
 		return nil, err
 	}
