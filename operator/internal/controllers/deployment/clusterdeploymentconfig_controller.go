@@ -71,6 +71,11 @@ const (
 	// this is the backstop for the event rather than the path the next step
 	// normally arrives on.
 	configAdvance = time.Second
+
+	// lateActivationRetry is how often a document that failed waiting for its
+	// nodes looks at them again. Nothing is waiting on the answer but the
+	// cluster, so it is slower than a step in progress.
+	lateActivationRetry = time.Minute
 )
 
 // ClusterDeploymentConfigReconciler reconciles a ClusterDeploymentConfig.
@@ -135,6 +140,9 @@ func (r *ClusterDeploymentConfigReconciler) Reconcile(
 	if terminalConfig(config.Status.Phase) {
 		if config.Status.Phase == simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded {
 			return ctrl.Result{}, r.carryStretchedRole(ctx, &config)
+		}
+		if failedAwaitingNodes(&config) {
+			return r.activateLate(ctx, &config)
 		}
 		return ctrl.Result{}, nil
 	}
@@ -456,6 +464,57 @@ func (r *ClusterDeploymentConfigReconciler) succeed(
 				State: string(simplyblockv1alpha2.ClusterDeploymentConfigStepCompleted),
 			}
 		})
+}
+
+// failedAwaitingNodes reports a document that failed in its last step, with
+// everything it was to create already created. What it still owes is the
+// activation, and that is not re-running the deployment.
+func failedAwaitingNodes(config *simplyblockv1alpha2.ClusterDeploymentConfig) bool {
+	return config.Status.Phase == simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed &&
+		configStep(config.Status.Step.State) == stepActivating &&
+		config.Status.ClusterRef != "" && len(config.Status.NodeRefs) > 0
+}
+
+// activateLate asks for the activation of a document that failed while it was
+// waiting for its nodes, once they are all online.
+//
+// The step's deadline says the nodes took longer than the document allows, and
+// the document says so by failing. It does not mean they never come: a rolling
+// reboot takes the workers away in turn, and a node add that was stuck is
+// unstuck by somebody. A cluster left with every node online and nobody to ask
+// for its activation serves nothing, and says nothing about why.
+//
+// Nothing is written while the nodes are not there, so the document keeps the
+// failure it recorded. When they are, the activation is asked for as the step
+// would have, and the document ends Expanded.
+func (r *ClusterDeploymentConfigReconciler) activateLate(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (ctrl.Result, error) {
+	online, err := r.everyNodeRefOnline(ctx, config)
+	if err != nil {
+		return ctrl.Result{RequeueAfter: lateActivationRetry}, err
+	}
+	if !online {
+		return ctrl.Result{RequeueAfter: lateActivationRetry}, nil
+	}
+
+	done, err := r.activateCluster(ctx, config)
+	if err != nil {
+		var refusal *refusedError
+		if errors.As(err, &refusal) {
+			// What refused the step the first time refuses it again, and the
+			// document already says so.
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{RequeueAfter: lateActivationRetry}, err
+	}
+	if !done {
+		return ctrl.Result{RequeueAfter: lateActivationRetry}, nil
+	}
+	r.emit(config, corev1.EventTypeNormal, ActivatedLate, fmt.Sprintf(
+		"Every node of cluster %s came online after step %s had outlived its deadline; the activation was asked for",
+		config.Status.ClusterRef, stepActivating))
+	return ctrl.Result{}, r.succeed(ctx, config)
 }
 
 // fail records a terminal refusal.

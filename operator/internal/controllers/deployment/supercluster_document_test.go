@@ -423,6 +423,7 @@ func TestAMemberIsActivatedWhileAnotherMembersNodeIsBeingProvisioned(t *testing.
 		t.Fatalf("createNodes: %v", err)
 	}
 	setNodePhase(t, r.Client, "worker-2", simplyblockv1alpha2.StorageNodePhaseProvisioning)
+	underADeadline(t, r, time.Now().Add(30*time.Minute))
 	config = withActivatingStep(t, r, readDocument(t, r), time.Now().Add(-time.Minute))
 
 	if _, err := r.expand(ctx, config); err != nil {
