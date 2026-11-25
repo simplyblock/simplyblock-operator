@@ -1534,6 +1534,7 @@ func main() {
 				Scheme:           mgr.GetScheme(),
 				OperatorUsername: operatorUsername,
 				Writers:          map[string][]string{"hub": {hubWorkAgentUsername}},
+				ResolveWriter:    csiControllerWriter(mgr.GetClient()),
 			}})
 		setupLog.Info("registered operator-managed-fields validating webhook", "operator", operatorUsername)
 
@@ -1736,4 +1737,26 @@ func newSwitchoverServer(mgr ctrl.Manager, namespace string) *atlasswitchover.Se
 		}
 	}
 	return server
+}
+
+// csiControllerWriter resolves the `csi` writer of the operator-managed-fields
+// webhook: the CSI controller's service account of every SimplyblockDriver. It
+// is resolved per request because the account is named after the driver.
+func csiControllerWriter(reader client.Reader) func(context.Context, string) ([]string, error) {
+	return func(ctx context.Context, writer string) ([]string, error) {
+		if writer != "csi" {
+			return nil, nil
+		}
+		var drivers simplyblockv1alpha2.SimplyblockDriverList
+		if err := reader.List(ctx, &drivers); err != nil {
+			return nil, err
+		}
+		usernames := make([]string, 0, len(drivers.Items))
+		for i := range drivers.Items {
+			d := &drivers.Items[i]
+			usernames = append(usernames,
+				"system:serviceaccount:"+d.Namespace+":"+driver.ControllerServiceAccountName(d))
+		}
+		return usernames, nil
+	}
 }

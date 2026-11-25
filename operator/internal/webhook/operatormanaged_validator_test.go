@@ -281,3 +281,27 @@ func TestTheGeneratedTableGuardsTheMarkedFields(t *testing.T) {
 		}
 	}
 }
+
+// A writer known only at request time is resolved then: the CSI controller's
+// service account is named after the SimplyblockDriver.
+func TestAWriterResolvedAtRequestTimeIsAdmitted(t *testing.T) {
+	gvk := schema.GroupVersionKind{Group: "fixture.simplyblock.io", Version: "v1", Kind: "Export"}
+	const csiController = "system:serviceaccount:simplyblock:simplyblock-csi-controller-sa"
+	v := operatorManagedValidator(t)
+	v.Fields = map[schema.GroupVersionKind][]OperatorManagedField{gvk: {
+		{Path: "spec.sizeBytes", Segments: []string{"spec", "sizeBytes"}, Writers: []string{"csi"}},
+	}}
+	v.ResolveWriter = func(_ context.Context, writer string) ([]string, error) {
+		if writer == "csi" {
+			return []string{csiController}, nil
+		}
+		return nil, nil
+	}
+	export := func(size int64) map[string]any { return map[string]any{"spec": map[string]any{"sizeBytes": size}} }
+	if resp := v.Handle(context.Background(), updateRequest(t, gvk, csiController, export(1), export(2))); !resp.Allowed {
+		t.Fatalf("the CSI controller's resize was refused: %s", resp.Result.Message)
+	}
+	if resp := v.Handle(context.Background(), updateRequest(t, gvk, testUser, export(1), export(2))); resp.Allowed {
+		t.Fatal("a user's resize was admitted, want it refused")
+	}
+}

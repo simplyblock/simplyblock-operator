@@ -72,6 +72,9 @@ var knownWriters = map[string]bool{
 	// hub is the work agent that applies the hub's ManifestWorks on a site,
 	// which delivers a stretched site's ClusterDeploymentConfig.
 	"hub": true,
+	// `csi` is the CSI controller, whose service account is named after the
+	// SimplyblockDriver, so the operator resolves it at request time.
+	"csi": true,
 }
 
 // Fields maps a marker to the paths it marks, per API version.

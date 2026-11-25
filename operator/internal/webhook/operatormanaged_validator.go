@@ -47,11 +47,15 @@ type OperatorManagedValidator struct {
 	// Writers maps each writer a marker may name (hub, for one) to the usernames
 	// it stands for.
 	Writers map[string][]string
+	// ResolveWriter returns the usernames of a writer that is known only at
+	// request time, such as the CSI controller, whose service account is named
+	// after the SimplyblockDriver. It is consulted for a writer Writers lacks.
+	ResolveWriter func(ctx context.Context, writer string) ([]string, error)
 	// Fields is the table of guarded fields; nil means the generated one.
 	Fields map[schema.GroupVersionKind][]OperatorManagedField
 }
 
-func (v *OperatorManagedValidator) Handle(_ context.Context, req admission.Request) admission.Response {
+func (v *OperatorManagedValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	if req.Operation != admissionv1.Update {
 		return admission.Allowed("")
 	}
@@ -80,37 +84,49 @@ func (v *OperatorManagedValidator) Handle(_ context.Context, req admission.Reque
 		if reflect.DeepEqual(project(oldObj, f.Segments), project(newObj, f.Segments)) {
 			continue
 		}
-		if !v.mayWrite(user, f.Writers) {
-			refused = append(refused, f.Path+writersNote(f.Writers))
+		allowed, err := v.mayWrite(ctx, user, f.Writers)
+		if err != nil {
+			return admission.Errored(http.StatusInternalServerError, err)
+		}
+		if !allowed {
+			refused = append(refused, f.Path+" ("+writtenBy(f.Writers)+")")
 		}
 	}
 	if len(refused) == 0 {
 		return admission.Allowed("")
 	}
 	return admission.Denied(fmt.Sprintf(
-		"%s %s written by the operator (+simplyblock:operatorManaged), and %q may not change %s",
-		strings.Join(refused, ", "), plural(len(refused), "is", "are"), user, plural(len(refused), "it", "them")))
+		"%q may not change operator-managed fields (+simplyblock:operatorManaged): %s",
+		user, strings.Join(refused, ", ")))
 }
 
 // mayWrite reports whether user is the operator or one of the named writers.
-func (v *OperatorManagedValidator) mayWrite(user string, writers []string) bool {
+func (v *OperatorManagedValidator) mayWrite(ctx context.Context, user string, writers []string) (bool, error) {
 	if user == v.OperatorUsername && user != "" {
-		return true
+		return true, nil
 	}
 	for _, w := range writers {
-		if slices.Contains(v.Writers[w], user) {
-			return true
+		usernames, static := v.Writers[w]
+		if !static && v.ResolveWriter != nil {
+			resolved, err := v.ResolveWriter(ctx, w)
+			if err != nil {
+				return false, fmt.Errorf("resolve the %s writer: %w", w, err)
+			}
+			usernames = resolved
+		}
+		if slices.Contains(usernames, user) {
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
-// writersNote names the writers a field admits besides the operator.
-func writersNote(writers []string) string {
+// writtenBy names who may write a field: the operator, and its writers.
+func writtenBy(writers []string) string {
 	if len(writers) == 0 {
-		return ""
+		return "written by the operator"
 	}
-	return " (and the " + strings.Join(writers, ", ") + ")"
+	return "written by the operator and the " + strings.Join(writers, ", ") + " " + plural(len(writers), "writer", "writers")
 }
 
 // normalize decodes raw into the kind's Go type and back to unstructured JSON,

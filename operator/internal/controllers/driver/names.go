@@ -73,6 +73,13 @@ type objectNames struct {
 	csiDriver string
 }
 
+// ControllerServiceAccountName is the service account the CSI controller of d
+// runs as, in d's namespace. The operator-managed-fields webhook admits it as
+// the `csi` writer.
+func ControllerServiceAccountName(d *simplyblockv1alpha2.SimplyblockDriver) string {
+	return names(d).controllerServiceAccount
+}
+
 func names(d *simplyblockv1alpha2.SimplyblockDriver) objectNames {
 	p := d.Name + "-csi-"
 	return objectNames{

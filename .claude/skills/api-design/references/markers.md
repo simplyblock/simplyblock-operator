@@ -130,8 +130,11 @@ Role StretchedRole `json:"role"`
 ```
 
 The known writers are `knownWriters` in `hack/fieldmarkers/main.go`; the
-operator maps each to usernames at run time (`hub` is the
-`--hub-work-agent-username` flag). An unknown writer fails `make manifests`. The
+operator maps each to usernames at run time. `hub` is the
+`--hub-work-agent-username` flag. `csi` is the CSI controller's service account
+of every SimplyblockDriver, resolved per request (`csiControllerWriter` in
+`cmd/main.go`), because the account is named after the driver. A new writer is a
+`knownWriters` entry plus its mapping there. An unknown writer fails `make manifests`. The
 marker sits on a type, so a writer named there is admitted wherever the type is
 embedded.
 
