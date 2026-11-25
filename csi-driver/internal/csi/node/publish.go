@@ -67,6 +67,9 @@ func (ns *Server) NodePublishVolume(
 
 	if err := ns.publishVolume(ctx, plan, getStagingTargetPath(req), req); err != nil { // idempotent
 		klog.Errorf("failed to publish volume, volumeID: %s err: %v", volumeID, err)
+		if _, ok := status.FromError(err); ok {
+			return nil, err
+		}
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
@@ -98,6 +101,12 @@ func (ns *Server) NodeUnpublishVolume(
 		klog.Errorf("failed to delete mount point, targetPath: %s err: %v", req.GetTargetPath(), err)
 		return nil, status.Error(codes.Internal, err.Error())
 	}
+	// After the target is gone, so the read-only mapping of a readOnly raw-block
+	// publish has no bind left on it.
+	if err := ns.releaseReadOnlyDevice(ctx, volumeID, req.GetTargetPath()); err != nil {
+		klog.Errorf("failed to remove the read-only mapping of %s at %s: %v", volumeID, req.GetTargetPath(), err)
+		return nil, status.Error(codes.Internal, err.Error())
+	}
 
 	if ns.guardian != nil {
 		if spdkVol, err := csicommon.ParseVolumeHandle(volumeID); err == nil {
@@ -127,6 +136,11 @@ func (ns *Server) publishVolume(
 			return status.Error(codes.Internal, err.Error())
 		}
 		stagingPath = devicePath
+		if req.GetReadonly() {
+			if stagingPath, err = ns.readOnlyDevice(ctx, req.GetVolumeId(), targetPath, devicePath); err != nil {
+				return err
+			}
+		}
 
 		fsType = ""
 
@@ -152,6 +166,10 @@ func (ns *Server) publishVolume(
 
 	mntFlags := req.GetVolumeCapability().GetMount().GetMountFlags()
 	mntFlags = append(mntFlags, "bind")
+	if req.GetReadonly() {
+		// mount-utils binds first and then remounts ro: a bind ignores ro.
+		mntFlags = append(mntFlags, "ro")
+	}
 	klog.Infof("mount %s to %s, fstype: %s, flags: %v", stagingPath, targetPath, fsType, mntFlags)
 	return ns.mounter.Mount(stagingPath, targetPath, fsType, mntFlags)
 }
