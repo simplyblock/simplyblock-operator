@@ -90,7 +90,7 @@ const HEADLINES = {
       row("spec.config.pcieAllowList", {type: "list", fmt: F.list}), ro("spec.config.pcieDenyList", {type: "list", fmt: F.list}), ro("spec.config.pcieModel"), ro("spec.config.driveSizeRange"), ro("spec.config.deviceNames", {type: "list", fmt: F.list}),
       ro("spec.config.failureDomain"), ro("spec.config.site"), ro("spec.config.expand", {type: "bool", fmt: F.bool}),
       ro("spec.config.journalManager.count", {type: "number"}), ro("spec.config.journalManager.percentPerDevice", {type: "number"}),
-      row("spec.config.reservedSystemCPU"), row("spec.config.spdkSystemMemory"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {type: "select"}),
+      row("spec.config.reservedSystemCPU"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {type: "select"}),
       row("spec.config.spdkProxyImage"), row("spec.config.spdkProxyImagePullPolicy", {type: "select"}), ro("spec.stretched.remote", {type: "bool", fmt: F.bool})
     ],
     status: [

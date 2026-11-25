@@ -83,10 +83,7 @@ if [ -z "${MAX_SUBSYS_COUNT}" ]; then
 fi
 ARGS="--max-lvol=${MAX_SUBSYS_COUNT}"
 [ -n "${PCI_ALLOWED}" ] && ARGS="${ARGS} --pci-allowed=\"${PCI_ALLOWED}\""
-[ -n "${PCI_BLOCKED}" ] && ARGS="${ARGS} --pci-blocked=\"${PCI_BLOCKED}\""
 [ -n "${NVME_DEVICES}" ] && ARGS="${ARGS} --nvme-devices=\"${NVME_DEVICES}\""
-[ -n "${DEVICE_MODEL}" ] && ARGS="${ARGS} --device-model=\"${DEVICE_MODEL}\""
-[ -n "${SIZE_RANGE}" ] && ARGS="${ARGS} --size-range=\"${SIZE_RANGE}\""
 [ "${LBLK}" = "true" ] && ARGS="${ARGS} --lblk"
 [ -n "${BLK_NAMES}" ] && ARGS="${ARGS} --blk-names=\"${BLK_NAMES}\""
 [ -n "${BLK_NAMES_EXCLUDE}" ] && ARGS="${ARGS} --blk-names-exclude=\"${BLK_NAMES_EXCLUDE}\""

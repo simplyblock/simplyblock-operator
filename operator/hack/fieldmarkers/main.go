@@ -67,11 +67,10 @@ type root struct {
 	named          *types.Named
 }
 
-// collect loads the packages matching patterns, relative to dir, and resolves
-// the markers of every root kind in them.
-func collect(dir string, patterns ...string) (Kinds, error) {
+// collect loads the packages matching patterns, relative to the working
+// directory, and resolves the markers of every root kind in them.
+func collect(patterns ...string) (Kinds, error) {
 	cfg := &packages.Config{
-		Dir: dir,
 		Mode: packages.NeedName | packages.NeedTypes | packages.NeedSyntax | packages.NeedTypesInfo |
 			// from source, not export data: building export data fails outright on a
 			// type error, where the type checker reports it and carries on
@@ -346,7 +345,7 @@ type crdIdentity struct {
 }
 
 func run(crdDir string) error {
-	kinds, err := collect(".", "./api/...")
+	kinds, err := collect("./api/...")
 	if err != nil {
 		return err
 	}

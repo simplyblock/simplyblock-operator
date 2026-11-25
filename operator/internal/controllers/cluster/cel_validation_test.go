@@ -549,7 +549,7 @@ func TestStorageClusterClusterModeRules(t *testing.T) {
 	if err := apiClient.Create(context.Background(), same); err != nil {
 		t.Fatalf("creating a single-node cluster: %v", err)
 	}
-	same.Spec.MaxSubsystemCount = ptr.To(int32(12))
+	same.Spec.MaxConcurrentWorkerRestarts = ptr.To(int32(2))
 	if err := apiClient.Update(context.Background(), same); err != nil {
 		t.Errorf("an unrelated update of a single-node cluster was refused: %v", err)
 	}

@@ -1588,7 +1588,6 @@ function mergeHost(h, sites) {
     set("mgmt_nic", g.mgmtInterface, from);
     if (!src.data_nics) set("data_nics", g.dataInterfaces, from);
     set("numa_sockets_used", (dg.cluster.socketsToUse || []).map(x => parseInt(x, 10)).filter(x => !isNaN(x)), from);
-    if (!src.memory_per_pod) set("memory_per_pod", qty(g.spdkSystemMemory), from);
     ((g.devices || {}).nvme || []).forEach(pcie => {
       if (!h.devices.some(d => d.pcie_address === pcie)) {
         h.devices.push({
@@ -20862,7 +20861,7 @@ const HEADLINES = {
       type: "number"
     }), ro("spec.config.journalManager.percentPerDevice", {
       type: "number"
-    }), row("spec.config.reservedSystemCPU"), row("spec.config.spdkSystemMemory"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {
+    }), row("spec.config.reservedSystemCPU"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {
       type: "select"
     }), row("spec.config.spdkProxyImage"), row("spec.config.spdkProxyImagePullPolicy", {
       type: "select"

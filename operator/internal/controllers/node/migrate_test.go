@@ -352,10 +352,10 @@ func TestThePromoteIsFollowedByTheTopologyRepoint(t *testing.T) {
 		t.Errorf("the node still names worker %q, so Kubernetes and the control plane disagree",
 			node.Spec.WorkerNode)
 	}
-	if len(node.Spec.Config.PcieAllowList) != 1 ||
-		node.Spec.Config.PcieAllowList[0] != "0000:04:00.0" {
-		t.Errorf("the allow list is %v, want the drives the migration bound on the target",
-			node.Spec.Config.PcieAllowList)
+	if len(node.Spec.Config.DeviceNames) != 1 ||
+		node.Spec.Config.DeviceNames[0] != "0000:04:00.0" {
+		t.Errorf("the device list is %v, want the drives the migration bound on the target",
+			node.Spec.Config.DeviceNames)
 	}
 }
 

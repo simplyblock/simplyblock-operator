@@ -633,6 +633,6 @@ under `spec.nodeSets[].cluster`, on a document with more than one node set or on
 )
 
 #v(4pt)
-#note[Two settings of a group are never derived and can be added in the draft: `spdkSystemMemory`, the memory
-SPDK starts with, and `reservedSystemCPU`, the cores held back from SPDK, as a list such as `0,1`.]
+#note[One setting of a group is never derived and can be added in the draft: `reservedSystemCPU`, the cores
+held back from SPDK, as a list such as `0,1`. SPDK's memory is not a setting: the control plane sizes it.]
 
