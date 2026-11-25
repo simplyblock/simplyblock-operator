@@ -53,14 +53,12 @@ awk -v operator_tag="$TAG" -v simplyblock_tag="$VERSION" '
     if (sub_key == "simplyblock") { print "    repository: quay.io/simplyblock-io/simplyblock";          next }
   }
   top == "controlCenter" && sub_key == "image" {
-    if (/^    tag:/)        { print "    tag: \"" operator_tag "\"";                   next }
-    if (/^    registry:/)   { print "    registry: quay.io";                           next }
-    if (/^    repository:/) { print "    repository: simplyblock-io/control-center";   next }
+    if (/^    tag:/)        { print "    tag: \"" operator_tag "\"";                         next }
+    if (/^    repository:/) { print "    repository: quay.io/simplyblock-io/control-center"; next }
   }
   top == "controlCenter" && sub_key == "mock" {
-    if (/^      tag:/)        { print "      tag: \"" operator_tag "\"";                      next }
-    if (/^      registry:/)   { print "      registry: quay.io";                              next }
-    if (/^      repository:/) { print "      repository: simplyblock-io/control-center-mock"; next }
+    if (/^      tag:/)        { print "      tag: \"" operator_tag "\"";                              next }
+    if (/^      repository:/) { print "      repository: quay.io/simplyblock-io/control-center-mock"; next }
   }
   { print }
 ' "$VALUES" > "$VALUES.stamped"

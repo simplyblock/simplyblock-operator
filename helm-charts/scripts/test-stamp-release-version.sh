@@ -63,10 +63,10 @@ check() {
   done <<'EOF_REPOS'
 .image.operator.repository quay.io/simplyblock-io/simplyblock-operator
 .image.simplyblock.repository quay.io/simplyblock-io/simplyblock
-.controlCenter.image.registry quay.io
-.controlCenter.image.repository simplyblock-io/control-center
-.controlCenter.mock.image.registry quay.io
-.controlCenter.mock.image.repository simplyblock-io/control-center-mock
+.controlCenter.image.repository quay.io/simplyblock-io/control-center
+.controlCenter.mock.image.repository quay.io/simplyblock-io/control-center-mock
+.controlCenter.image.registry null
+.controlCenter.mock.image.registry null
 EOF_REPOS
   if grep -q 'registry\.simplyblock\.ai' "$copy/values.yaml"; then
     fail "$tag: the stamped values.yaml still names registry.simplyblock.ai"

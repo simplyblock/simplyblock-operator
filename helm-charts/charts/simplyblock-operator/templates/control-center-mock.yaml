@@ -11,7 +11,6 @@
 {{- $cc := .Values.controlCenter }}
 {{- $mock := $cc.mock }}
 {{- $name := printf "%s-mock" (include "sbcc.fullname" .) }}
-{{- $reg := $mock.image.registry | default "quay.io" }}
 {{- $tag := $mock.image.tag | default (.Chart.AppVersion | default "latest") }}
 apiVersion: apps/v1
 kind: Deployment
@@ -49,7 +48,7 @@ spec:
       {{- end }}
       containers:
         - name: mock
-          image: "{{ $reg }}/{{ $mock.image.repository }}:{{ $tag }}"
+          image: "{{ $mock.image.repository }}:{{ $tag }}"
           imagePullPolicy: {{ $mock.image.pullPolicy }}
           args:
             - --listen=:8080
