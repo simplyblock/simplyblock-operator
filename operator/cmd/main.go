@@ -67,7 +67,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 
@@ -159,9 +158,10 @@ func init() {
 	// v1alpha1 stays registered because it is still the storage version and still
 	// served (design-property-renames.md §3.8).
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
-	// external-snapshotter VolumeGroupSnapshot: the operator serves a validating
-	// webhook on it (design §9.4) but does not own the CRD.
-	utilruntime.Must(volumegroupsnapshotv1beta1.AddToScheme(scheme))
+	// external-snapshotter VolumeGroupSnapshot is deliberately not registered:
+	// a cluster serves it at v1beta1, v1beta2, or v1, and a typed read pins one.
+	// The operator reads it through internal/groupsnapshot instead, at the
+	// version served (GitHub #978).
 	// external-snapshotter VolumeSnapshot: the VolumeGroupSnapshotOps restore
 	// enumerates a group snapshot's member snapshots (design §7.4).
 	utilruntime.Must(snapshotv1.AddToScheme(scheme))
@@ -1625,6 +1625,8 @@ func main() {
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 
+		// The path still names v1beta1, which every installed webhook
+		// configuration points at; the handler serves all three versions.
 		mgr.GetWebhookServer().Register("/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot",
 			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotValidator{
 				Client:    mgr.GetClient(),

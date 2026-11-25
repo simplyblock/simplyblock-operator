@@ -13,11 +13,14 @@ import (
 	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	crclient "sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/groupsnapshottest"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
@@ -75,7 +78,10 @@ func (b vgsBackend) server(t *testing.T) string {
 	return srv.URL
 }
 
-func newVGSValidator(t *testing.T, pvcs []vgsPVC, apiURL string) *VolumeGroupSnapshotValidator {
+// newVGSValidator builds the webhook against a cluster that serves the
+// VolumeGroupSnapshot kinds at version only: v1beta1 is the external-snapshotter
+// 8.2 CRDs, v1 is OpenShift 5.
+func newVGSValidator(t *testing.T, version string, pvcs []vgsPVC, apiURL string) *VolumeGroupSnapshotValidator {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {
@@ -108,22 +114,33 @@ func newVGSValidator(t *testing.T, pvcs []vgsPVC, apiURL string) *VolumeGroupSna
 		}
 		objs = append(objs, pvc)
 	}
-	objs = append(objs,
-		&volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{
-			ObjectMeta: metav1.ObjectMeta{Name: "sb-class"},
-			Driver:     "csi.simplyblock.io",
-		},
-		&volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{
-			ObjectMeta: metav1.ObjectMeta{Name: "foreign-class"},
-			Driver:     "ebs.csi.aws.com",
-		})
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+	objs = append(objs, vgsClass(version, "sb-class", "csi.simplyblock.io"), vgsClass(version, "foreign-class", "ebs.csi.aws.com"))
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithRESTMapper(groupsnapshottest.Mapper(version)).
+		WithObjects(objs...).Build()
 	return &VolumeGroupSnapshotValidator{Client: cl, APIClient: webapi.NewClient(apiURL)}
 }
 
-func vgsRequest(t *testing.T, appSelector, className string) admission.Request {
+// vgsClass is a VolumeGroupSnapshotClass stored at version. The client library
+// this module pins has no v1 type, so a v1 class is written unstructured.
+func vgsClass(version, name, driver string) crclient.Object {
+	if version == "v1beta1" {
+		return &volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Driver:     driver,
+		}
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"driver": driver}}
+	u.SetAPIVersion(groupsnapshot.Group + "/" + version)
+	u.SetKind(groupsnapshot.KindVolumeGroupSnapshotClass)
+	u.SetName(name)
+	return u
+}
+
+func vgsRequest(t *testing.T, version, appSelector, className string) admission.Request {
 	t.Helper()
 	vgs := &volumegroupsnapshotv1beta1.VolumeGroupSnapshot{
+		TypeMeta:   metav1.TypeMeta{APIVersion: groupsnapshot.Group + "/" + version, Kind: groupsnapshot.KindVolumeGroupSnapshot},
 		ObjectMeta: metav1.ObjectMeta{Name: "gen", Namespace: "sb"},
 		Spec: volumegroupsnapshotv1beta1.VolumeGroupSnapshotSpec{
 			Source: volumegroupsnapshotv1beta1.VolumeGroupSnapshotSource{
@@ -253,20 +270,25 @@ func TestVolumeGroupSnapshotValidator(t *testing.T) {
 			allowed:  true,
 		},
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			className := tc.className
-			if className == "" {
-				className = "sb-class"
-			}
-			if tc.noClassName {
-				className = ""
-			}
-			v := newVGSValidator(t, tc.pvcs, tc.backend.server(t))
-			resp := v.Handle(context.Background(), vgsRequest(t, tc.selector, className))
-			if resp.Allowed != tc.allowed {
-				t.Fatalf("Allowed = %v, want %v (msg: %s)", resp.Allowed, tc.allowed, resp.Result.Message)
-			}
-		})
+	// Every decision is the same whichever version the cluster serves the kinds
+	// at. OpenShift 5 serves v1 only, and a webhook that read the class at
+	// v1beta1 there admitted every object unvalidated (GitHub #978).
+	for _, version := range []string{"v1beta1", "v1"} {
+		for _, tc := range tests {
+			t.Run(version+"/"+tc.name, func(t *testing.T) {
+				className := tc.className
+				if className == "" {
+					className = "sb-class"
+				}
+				if tc.noClassName {
+					className = ""
+				}
+				v := newVGSValidator(t, version, tc.pvcs, tc.backend.server(t))
+				resp := v.Handle(context.Background(), vgsRequest(t, version, tc.selector, className))
+				if resp.Allowed != tc.allowed {
+					t.Fatalf("Allowed = %v, want %v (msg: %s)", resp.Allowed, tc.allowed, resp.Result.Message)
+				}
+			})
+		}
 	}
 }

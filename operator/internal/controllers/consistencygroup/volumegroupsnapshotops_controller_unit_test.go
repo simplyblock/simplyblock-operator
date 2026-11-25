@@ -14,6 +14,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,6 +23,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot/groupsnapshottest"
 )
 
 func boolPtr(b bool) *bool    { return &b }
@@ -91,11 +95,21 @@ func restoreOps(name string, restore *simplyblockv1alpha2.RestoreOpsSpec) *simpl
 
 func newGroupOpsReconciler(t *testing.T, objects ...client.Object) (*VolumeGroupSnapshotOpsReconciler, client.Client, *events.FakeRecorder) {
 	t.Helper()
+	return newGroupOpsReconcilerAt(t, "v1beta1", objects...)
+}
+
+// newGroupOpsReconcilerAt runs the reconciler against a cluster that serves the
+// VolumeGroupSnapshot kinds at version only.
+func newGroupOpsReconcilerAt(
+	t *testing.T, version string, objects ...client.Object,
+) (*VolumeGroupSnapshotOpsReconciler, client.Client, *events.FakeRecorder) {
+	t.Helper()
 	scheme := newTestScheme(t,
 		simplyblockv1alpha2.AddToScheme, corev1.AddToScheme,
 		volumegroupsnapshotv1beta1.AddToScheme, snapshotv1.AddToScheme)
 	cl := fake.NewClientBuilder().
 		WithScheme(scheme).
+		WithRESTMapper(groupsnapshottest.Mapper(version)).
 		WithStatusSubresource(&simplyblockv1alpha2.VolumeGroupSnapshotOps{}, &corev1.PersistentVolumeClaim{}).
 		WithObjects(objects...).
 		Build()
@@ -165,6 +179,67 @@ func TestGroupRestore_CreatesOneClaimPerMember(t *testing.T) {
 	}
 	if ops.Status.ObservedGeneration != 1 {
 		t.Errorf("observedGeneration = %d, want 1", ops.Status.ObservedGeneration)
+	}
+}
+
+// servedAtV1 rewrites the fixture's VolumeGroupSnapshot kinds as OpenShift 5
+// stores them: at groupsnapshot.storage.k8s.io/v1, the only version it serves.
+// The client library this module pins has no v1 type, so they become
+// unstructured objects.
+func servedAtV1(t *testing.T, objects []client.Object) []client.Object {
+	t.Helper()
+	out := make([]client.Object, 0, len(objects))
+	for _, obj := range objects {
+		var kind string
+		switch obj.(type) {
+		case *volumegroupsnapshotv1beta1.VolumeGroupSnapshot:
+			kind = groupsnapshot.KindVolumeGroupSnapshot
+		case *volumegroupsnapshotv1beta1.VolumeGroupSnapshotContent:
+			kind = groupsnapshot.KindVolumeGroupSnapshotContent
+		default:
+			out = append(out, obj)
+			continue
+		}
+		fields, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+		if err != nil {
+			t.Fatalf("convert %s: %v", obj.GetName(), err)
+		}
+		u := &unstructured.Unstructured{Object: fields}
+		u.SetAPIVersion(groupsnapshot.Group + "/v1")
+		u.SetKind(kind)
+		out = append(out, u)
+	}
+	return out
+}
+
+// GitHub #978: OpenShift 5 serves the group snapshot kinds at v1 only, where a
+// typed v1beta1 read finds nothing and every restore failed with "no longer
+// exists". The restore reads the group snapshot at the version served.
+func TestGroupRestore_ClusterServingOnlyV1(t *testing.T) {
+	objects := append(servedAtV1(t, groupRestoreFixture()), restoreOps("op1", nil))
+	r, cl, _ := newGroupOpsReconcilerAt(t, "v1", objects...)
+
+	ops := reconcileSettle(t, r, cl, "op1")
+
+	if claims := restoredClaims(t, cl); len(claims) != 3 {
+		t.Fatalf("restored claims = %d, want 3 (phase %q: %s)", len(claims), ops.Status.Phase, ops.Status.Message)
+	}
+	if ops.Status.MembersExpected != 3 {
+		t.Errorf("membersExpected = %d, want 3", ops.Status.MembersExpected)
+	}
+}
+
+// The incomplete-generation gate reads the expected member count from the
+// bound content, which is a v1 object on the same cluster.
+func TestGroupRestore_IncompleteGenerationFailsAtV1(t *testing.T) {
+	objects := append(servedAtV1(t, withoutMember(groupRestoreFixture(), "snap-pvc-c")), restoreOps("op1", nil))
+	r, cl, _ := newGroupOpsReconcilerAt(t, "v1", objects...)
+
+	ops := reconcileSettle(t, r, cl, "op1")
+
+	if ops.Status.Phase != simplyblockv1alpha2.VolumeGroupSnapshotOpsPhaseFailed ||
+		!strings.Contains(ops.Status.Message, "2 of 3") {
+		t.Errorf("phase %q, message %q; want Failed naming 2 of 3", ops.Status.Phase, ops.Status.Message)
 	}
 }
 
