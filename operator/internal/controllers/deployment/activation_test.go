@@ -15,7 +15,9 @@ package deployment
 
 import (
 	"context"
+	"strings"
 	"testing"
+	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -140,5 +142,104 @@ func TestAnExpandedDocumentReportsCompleted(t *testing.T) {
 	if stored.Status.Step.State != string(simplyblockv1alpha2.ClusterDeploymentConfigStepCompleted) ||
 		stored.Status.Step.Deadline != nil {
 		t.Errorf("step = %+v, want Completed with no deadline", stored.Status.Step)
+	}
+}
+
+func setPhaseOf(
+	t *testing.T, r *ClusterDeploymentConfigReconciler, name string, phase simplyblockv1alpha2.StorageNodePhase,
+) {
+	t.Helper()
+	var node simplyblockv1alpha2.StorageNode
+	key := client.ObjectKey{Namespace: theNamespace, Name: name}
+	if err := r.Get(context.Background(), key, &node); err != nil {
+		t.Fatalf("reading %s: %v", name, err)
+	}
+	node.Status.Phase = phase
+	if err := r.Update(context.Background(), &node); err != nil {
+		t.Fatalf("writing %s: %v", name, err)
+	}
+}
+
+// Regression: 2026-11-25-activation-deadline-counts-node-adds — the first node
+// add of a six-node deployment was stuck for ninety minutes. The Activating
+// step counted that wait against its own hour, the document failed, and a
+// failed document is terminal: when all six nodes came online forty minutes
+// later nothing asked for the activation, and the cluster stayed unready.
+func TestNodesStillBeingProvisionedDoNotRunOutTheActivationDeadline(t *testing.T) {
+	ctx := context.Background()
+	config, r := anExpandedDocument(t, simplyblockv1alpha2.StorageNodePhaseProvisioning)
+	config = withActivatingStep(t, r, config, time.Now().Add(-time.Minute))
+
+	if _, err := r.expand(ctx, config); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	held := reread(t, r, config)
+	if held.Status.Phase == simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed {
+		t.Fatalf("the document failed while its nodes were being provisioned: %s", held.Status.Message)
+	}
+	if deadline, has := held.Status.Step.KubeDeadline(); !has || !deadline.After(time.Now()) {
+		t.Errorf("the wait for the nodes left the step's deadline at %v; it must not run while a node is on its way", deadline)
+	}
+	if !strings.Contains(held.Status.Message, config.Status.NodeRefs[0]) {
+		t.Errorf("message = %q, want the node the document is waiting on", held.Status.Message)
+	}
+	if !emitted(r, AwaitingNodes) {
+		t.Error("a document waiting for its nodes emitted no AwaitingNodes")
+	}
+
+	// The nodes arrive, long after the deadline the step entered with.
+	for _, name := range config.Status.NodeRefs {
+		setPhaseOf(t, r, name, simplyblockv1alpha2.StorageNodePhaseOnline)
+	}
+	if _, err := r.expand(ctx, held); err != nil {
+		t.Fatalf("expand once the nodes are online: %v", err)
+	}
+	var ops simplyblockv1alpha2.StorageClusterOpsList
+	if err := r.List(ctx, &ops, client.InNamespace(theNamespace)); err != nil {
+		t.Fatalf("listing the operations: %v", err)
+	}
+	if len(ops.Items) != 1 || ops.Items[0].Spec.Action != simplyblockv1alpha2.StorageClusterOpsActionActivate {
+		t.Errorf("the nodes came online and %d operations were raised; want the one activation", len(ops.Items))
+	}
+	if got := reread(t, r, config).Status.Phase; got != simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanded {
+		t.Errorf("phase = %q, want Expanded", got)
+	}
+}
+
+// The deadline still bounds a deployment that is not going to finish: a node
+// that failed is not on its way, whatever the others are doing.
+func TestANodeThatFailedStillRunsOutTheActivationDeadline(t *testing.T) {
+	for _, others := range []simplyblockv1alpha2.StorageNodePhase{
+		simplyblockv1alpha2.StorageNodePhaseOnline,
+		simplyblockv1alpha2.StorageNodePhaseProvisioning,
+	} {
+		ctx := context.Background()
+		config, r := anExpandedDocument(t, others)
+		setPhaseOf(t, r, config.Status.NodeRefs[1], simplyblockv1alpha2.StorageNodePhaseFailed)
+		config = withActivatingStep(t, r, config, time.Now().Add(-time.Minute))
+
+		if _, err := r.expand(ctx, config); err != nil {
+			t.Fatalf("expand: %v", err)
+		}
+		if got := reread(t, r, config); got.Status.Phase != simplyblockv1alpha2.ClusterDeploymentConfigPhaseFailed {
+			t.Errorf("with one node Failed and the other %s, phase = %q; want Failed past the deadline",
+				others, got.Status.Phase)
+		}
+	}
+}
+
+// Within the deadline nothing is rewritten on every pass: the deadline is moved
+// only once half of it is spent.
+func TestTheActivationDeadlineIsNotRewrittenOnEveryPass(t *testing.T) {
+	ctx := context.Background()
+	config, r := anExpandedDocument(t, simplyblockv1alpha2.StorageNodePhaseProvisioning)
+	entered := time.Now().Add(activatingDeadline - time.Minute).Truncate(time.Second)
+	config = withActivatingStep(t, r, config, entered)
+
+	if _, err := r.expand(ctx, config); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+	if deadline, _ := reread(t, r, config).Status.Step.KubeDeadline(); !deadline.Equal(entered) {
+		t.Errorf("the deadline moved from %v to %v with most of it left", entered, deadline)
 	}
 }

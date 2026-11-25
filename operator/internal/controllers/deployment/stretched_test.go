@@ -406,16 +406,17 @@ func TestALeaderWaitingForThePeerSiteDoesNotRunOutItsDeadline(t *testing.T) {
 	}
 }
 
-// The deadline still bounds the leader's own work: its own nodes not coming
-// online is not a wait on the other site.
-func TestALeaderWhoseOwnNodesAreNotOnlineStillRunsOutItsDeadline(t *testing.T) {
+// The deadline still bounds the leader's own work: one of its own nodes having
+// stopped short of Online is not a wait on the other site, and not a node on
+// its way either.
+func TestALeaderWhoseOwnNodeFailedStillRunsOutItsDeadline(t *testing.T) {
 	ctx := context.Background()
 	config, r := anExpandedStretchedDocument(t, simplyblockv1alpha2.StretchedRoleLeader, 0, 0)
 	var node simplyblockv1alpha2.StorageNode
 	if err := r.Get(ctx, client.ObjectKey{Namespace: theNamespace, Name: config.Status.NodeRefs[0]}, &node); err != nil {
 		t.Fatalf("reading the node: %v", err)
 	}
-	node.Status.Phase = simplyblockv1alpha2.StorageNodePhaseProvisioning
+	node.Status.Phase = simplyblockv1alpha2.StorageNodePhaseFailed
 	if err := r.Update(ctx, &node); err != nil {
 		t.Fatalf("writing the node: %v", err)
 	}

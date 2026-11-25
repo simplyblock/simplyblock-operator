@@ -488,6 +488,9 @@ Files: `operator/internal/controllers/deployment/erasurecoding_test.go`,
 | U-162 | A fleet of one or two is proposed 1+0, and the note says what a third worker would allow                                    | Boundary | `TestAFleetTooSmallForRedundancyIsSaidSo`                        |
 | U-163 | A fleet of four or more is proposed 2+1, with the alternatives named                                                        | Positive | `TestTheDraftAccountsForTheSchemeItProposed`                     |
 | U-248 | A draft whose stripe is 1+1 sets `enableNodeAffinity` unless the seed states it; other schemes leave it unset unless stated | Positive | `TestNodeAffinityIsOnByDefaultForOnePlusOneOnly`                 |
+| U-249 | Nodes still `Pending` or `Provisioning` do not run out the `Activating` deadline, and the activation is asked for when they come online however late (2026-11-25-activation-deadline-counts-node-adds) | Regression | `TestNodesStillBeingProvisionedDoNotRunOutTheActivationDeadline` |
+| U-250 | A node that is `Failed` still runs out the `Activating` deadline, whatever the others are doing | Negative | `TestANodeThatFailedStillRunsOutTheActivationDeadline` |
+| U-251 | The `Activating` deadline is moved only once half of it is spent | Boundary | `TestTheActivationDeadlineIsNotRewrittenOnEveryPass` |
 
 `U-157` is the row that makes the minimum mean what it says. The count is of
 storage nodes, and a fleet that reaches it by running several nodes on one worker

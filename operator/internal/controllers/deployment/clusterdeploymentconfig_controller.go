@@ -210,16 +210,32 @@ func (r *ClusterDeploymentConfigReconciler) expand(
 		}
 		if waiting {
 			// The deadline is moved rather than ignored, so it bounds the step
-			// again from the moment the other site's nodes are online. It is
-			// written only once half of it is spent, not on every pass.
-			if deadline, has := config.Status.Step.KubeDeadline(); !has ||
-				time.Until(deadline) < activatingDeadline/2 {
-				rearmed := metav1.NewTime(time.Now().Add(activatingDeadline))
-				if err := r.recordStep(ctx, config, current, &rearmed); err != nil {
-					return ctrl.Result{}, err
-				}
+			// again from the moment the other site's nodes are online.
+			if err := r.rearmActivating(ctx, config); err != nil {
+				return ctrl.Result{}, err
 			}
 			return ctrl.Result{RequeueAfter: configRetry}, nil
+		}
+
+		// A node that is still being provisioned is the node controller's work,
+		// and each of its steps has a deadline of its own. Counting the same
+		// wait against this step failed the document while the nodes were on
+		// their way, and a failed document is terminal: the nodes came online
+		// with nothing left to ask for the activation.
+		node, phase, err := r.nodeBeingProvisioned(ctx, config)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
+				simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding, err.Error())
+		}
+		if node != "" {
+			if err := r.rearmActivating(ctx, config); err != nil {
+				return ctrl.Result{}, err
+			}
+			r.emit(config, corev1.EventTypeNormal, AwaitingNodes, fmt.Sprintf(
+				"StorageNode %s is %s rather than Online", node, phase))
+			return ctrl.Result{RequeueAfter: configRetry}, r.note(ctx, config,
+				simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding,
+				fmt.Sprintf("waiting on %s: StorageNode %s is %s", current, node, phase))
 		}
 	}
 	if machine.TimeoutReached() {

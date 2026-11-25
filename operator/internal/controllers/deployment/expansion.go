@@ -62,9 +62,12 @@ const (
 	awaitingClusterDeadline = 30 * time.Minute
 	creatingNodesDeadline   = 10 * time.Minute
 
-	// activatingDeadline covers every node this document created coming online,
-	// which is a node add per worker and the cap serializes them. It is the
-	// longest step for that reason rather than because activating is slow.
+	// activatingDeadline bounds the step once nothing is on its way any more:
+	// every node online and the activation not asked for, or a node that has
+	// stopped short of Online. While a node is still being provisioned the
+	// deadline is moved (nodeBeingProvisioned), because that wait is the node
+	// controller's and has its own deadlines, and it grows with the fleet: a
+	// node add per worker, serialized by the cap.
 	activatingDeadline = 60 * time.Minute
 )
 
@@ -1043,6 +1046,50 @@ func (r *ClusterDeploymentConfigReconciler) firstNodeRefNotOnline(
 		}
 	}
 	return "", "", nil
+}
+
+// nodeBeingProvisioned names a node the document created that the node
+// controller is still working on, with its phase, or "" when there is none or
+// when a node has stopped: one that is Failed, or anything else that is neither
+// Online nor on its way, is not coming without somebody acting, and the step's
+// deadline is what reports that.
+func (r *ClusterDeploymentConfigReconciler) nodeBeingProvisioned(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (string, simplyblockv1alpha2.StorageNodePhase, error) {
+	var waiting string
+	var waitingPhase simplyblockv1alpha2.StorageNodePhase
+	for _, name := range config.Status.NodeRefs {
+		var node simplyblockv1alpha2.StorageNode
+		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+		if err := r.Get(ctx, key, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return "", "", fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		switch node.Status.Phase {
+		case simplyblockv1alpha2.StorageNodePhaseOnline:
+		case "", simplyblockv1alpha2.StorageNodePhasePending, simplyblockv1alpha2.StorageNodePhaseProvisioning:
+			if waiting == "" {
+				waiting, waitingPhase = name, node.Status.Phase
+			}
+		default:
+			return "", "", nil
+		}
+	}
+	return waiting, waitingPhase, nil
+}
+
+// rearmActivating moves the Activating step's deadline a full step ahead. It is
+// written only once half of it is spent, not on every pass.
+func (r *ClusterDeploymentConfigReconciler) rearmActivating(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) error {
+	if deadline, has := config.Status.Step.KubeDeadline(); has && time.Until(deadline) >= activatingDeadline/2 {
+		return nil
+	}
+	rearmed := metav1.NewTime(time.Now().Add(activatingDeadline))
+	return r.recordStep(ctx, config, stepActivating, &rearmed)
 }
 
 // awaitingPeerSite reports a stretched leader whose own nodes are all online
