@@ -19,6 +19,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -235,6 +236,9 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	met, err := r.apply(ctx, effective)
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.pruneCSIAddons(ctx, effective); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("applied the driver deployment", "driver", names(&d).csiDriver, "adopted", met)
@@ -781,6 +785,39 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 
 	controllerutil.RemoveFinalizer(d, driverFinalizer)
 	return r.Update(ctx, d)
+}
+
+// pruneCSIAddons removes the csi-addons Role and bindings once the sidecar is
+// turned off. desired stops applying them, but an apply never deletes, and left
+// behind they grant the controller's account permissions for a sidecar that no
+// longer runs. Only objects this deployment controls, or labeled as its own for
+// the cluster-scoped binding, are removed.
+func (r *SimplyblockDriverReconciler) pruneCSIAddons(ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver) error {
+	if csiAddonsEnabled(d) {
+		return nil
+	}
+	n := names(d)
+	if err := r.deleteOwned(ctx, d, &rbacv1.RoleBinding{}, n.roleBinding(csiAddonsComponent)); err != nil {
+		return err
+	}
+	if err := r.deleteOwned(ctx, d, &rbacv1.Role{}, n.role(csiAddonsComponent)); err != nil {
+		return err
+	}
+	binding := &rbacv1.ClusterRoleBinding{}
+	key := client.ObjectKey{Name: n.clusterRoleBinding("csi-addons-auth-delegator")}
+	if err := r.Get(ctx, key, binding); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("read ClusterRoleBinding %s: %w", key.Name, err)
+	}
+	if !mayDelete(binding) {
+		return nil
+	}
+	if err := r.Delete(ctx, binding); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete ClusterRoleBinding %s: %w", key.Name, err)
+	}
+	return nil
 }
 
 // ownedClusterScoped is everything the finalizer has to consider: the

@@ -17,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -419,5 +420,48 @@ func TestAnEmptyHolderIsNotADuplicate(t *testing.T) {
 	}
 	if contains(got.Status.Message, "holds it") {
 		t.Errorf("the only driver was refused as a duplicate: %q", got.Status.Message)
+	}
+}
+
+// Turning csi-addons off stops applying its Role and bindings, and removes the
+// ones applied while it was on: left behind, they grant the controller's account
+// permissions for a sidecar that no longer runs.
+func TestTurningCSIAddonsOffRemovesItsRBAC(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := withCSIAddons(testDriver("simplyblock"))
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme, Snapshots: servingCluster}
+	n := names(d)
+	objects := func() []client.Object {
+		return []client.Object{
+			&rbacv1.Role{ObjectMeta: metav1.ObjectMeta{Name: n.role(csiAddonsComponent), Namespace: d.Namespace}},
+			&rbacv1.RoleBinding{ObjectMeta: metav1.ObjectMeta{Name: n.roleBinding(csiAddonsComponent), Namespace: d.Namespace}},
+			&rbacv1.ClusterRoleBinding{ObjectMeta: metav1.ObjectMeta{Name: n.clusterRoleBinding("csi-addons-auth-delegator")}},
+		}
+	}
+
+	reconcileOnce(t, r, d)
+	for _, obj := range objects() {
+		if err := c.Get(t.Context(), client.ObjectKeyFromObject(obj), obj); err != nil {
+			t.Fatalf("%T %s not applied with csi-addons on: %v", obj, obj.GetName(), err)
+		}
+	}
+
+	var live simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(d), &live); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	live.Spec.EnableCSIAddons = &off
+	if err := c.Update(t.Context(), &live); err != nil {
+		t.Fatal(err)
+	}
+	reconcileOnce(t, r, &live)
+
+	for _, obj := range objects() {
+		err := c.Get(t.Context(), client.ObjectKeyFromObject(obj), obj)
+		if !apierrors.IsNotFound(err) {
+			t.Errorf("%T %s still there with csi-addons off (err %v)", obj, obj.GetName(), err)
+		}
 	}
 }
