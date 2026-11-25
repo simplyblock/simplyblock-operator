@@ -13,6 +13,7 @@ import "k8s.io/apimachinery/pkg/runtime/schema"
 
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=update,versions=v1alpha2,name=voperatormanaged-clusterdeploymentconfigs.storage.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=update,versions=v1alpha2,name=voperatormanaged-storageclusters.storage.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagedevices,verbs=update,versions=v1alpha2,name=voperatormanaged-storagedevices.storage.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:webhook:path=/validate-operator-managed-fields,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodes,verbs=update,versions=v1alpha2,name=voperatormanaged-storagenodes.storage.simplyblock.io,admissionReviewVersions=v1
 
 // generatedOperatorManagedFields is the table the validator reads.
@@ -24,6 +25,9 @@ var generatedOperatorManagedFields = map[schema.GroupVersionKind][]OperatorManag
 	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "StorageCluster"}: {
 		{Path: "spec.stretched.peerCluster", Segments: []string{"spec", "stretched", "peerCluster"}, Writers: []string{"hub"}},
 		{Path: "spec.stretched.role", Segments: []string{"spec", "stretched", "role"}, Writers: []string{"hub"}},
+	},
+	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "StorageDevice"}: {
+		{Path: "spec.nodeRef", Segments: []string{"spec", "nodeRef"}},
 	},
 	{Group: "storage.simplyblock.io", Version: "v1alpha2", Kind: "StorageNode"}: {
 		{Path: "spec.config.deviceNames", Segments: []string{"spec", "config", "deviceNames"}},

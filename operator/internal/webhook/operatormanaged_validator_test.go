@@ -225,3 +225,36 @@ func TestAChangeInsideAListOrMapIsAChange(t *testing.T) {
 		}
 	}
 }
+
+// Each field the API marks is guarded through the generated table, which is
+// what the operator registers: a user's change is refused and names the field.
+func TestTheGeneratedTableGuardsTheMarkedFields(t *testing.T) {
+	cases := []struct {
+		name     string
+		gvk      schema.GroupVersionKind
+		old, new any
+		path     string
+	}{
+		{
+			name: "StorageDevice nodeRef",
+			gvk:  simplyblockv1alpha2.GroupVersion.WithKind("StorageDevice"),
+			old:  &simplyblockv1alpha2.StorageDevice{Spec: simplyblockv1alpha2.StorageDeviceSpec{NodeRef: "n1", DeviceID: "d1"}},
+			new:  &simplyblockv1alpha2.StorageDevice{Spec: simplyblockv1alpha2.StorageDeviceSpec{NodeRef: "n2", DeviceID: "d1"}},
+			path: "spec.nodeRef",
+		},
+	}
+	v := operatorManagedValidator(t)
+	for _, c := range cases {
+		resp := v.Handle(context.Background(), updateRequest(t, c.gvk, testUser, c.old, c.new))
+		if resp.Allowed {
+			t.Errorf("%s: a user's change was admitted, want it refused", c.name)
+			continue
+		}
+		if !strings.Contains(resp.Result.Message, c.path) {
+			t.Errorf("%s: refusal %q does not name %s", c.name, resp.Result.Message, c.path)
+		}
+		if resp := v.Handle(context.Background(), updateRequest(t, c.gvk, testOperator, c.old, c.new)); !resp.Allowed {
+			t.Errorf("%s: the operator's change was refused: %s", c.name, resp.Result.Message)
+		}
+	}
+}
