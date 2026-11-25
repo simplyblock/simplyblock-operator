@@ -617,3 +617,29 @@ func TestExportsReconcileConcurrently(t *testing.T) {
 		t.Errorf("MaxConcurrentReconciles = %d, want at least 8", got)
 	}
 }
+
+// Regression: a spec write that landed between a pass's read of the export and
+// one of its status writes was marked observed, because the status write
+// stamped the generation of its own fresh read. A grow recorded that way never
+// re-assembled, and the metadata server's filesystem kept its old size.
+func TestAStatusWriteMarksObservedOnlyTheGenerationThePassRead(t *testing.T) {
+	stored := testExport(func(e *simplyblockv1alpha2.NFSExport) { e.Generation = 3 })
+	r, cl := newExportReconciler(t, nil, stored)
+
+	// What this pass read: the export before the CSI controller's size write.
+	read := stored.DeepCopy()
+	read.Generation = 2
+	if err := r.writeStatus(context.Background(), read, func(s *simplyblockv1alpha2.NFSExportStatus) {
+		s.Message = "probing the metadata server"
+	}); err != nil {
+		t.Fatalf("writeStatus: %v", err)
+	}
+
+	var got simplyblockv1alpha2.NFSExport
+	if err := cl.Get(context.Background(), client.ObjectKeyFromObject(stored), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.ObservedGeneration != 2 {
+		t.Fatalf("observedGeneration = %d, want 2: generation 3 was never acted on", got.Status.ObservedGeneration)
+	}
+}
