@@ -1,0 +1,43 @@
+# The upstream TestDriver manifest for the multi-node Level 1 run: ReadWriteMany
+# and ReadOnlyMany, which simplyblock serves for raw block only. run.sh limits
+# this run to the block test patterns, and every claim the suite makes here is
+# ReadWriteMany (RequiredAccessModes), so the multi-node test attaches one
+# volume on two nodes the way a live-migrating VM does.
+#
+# Everything else matches manifest.yaml, whose header explains the split.
+# ${STORAGE_CLASS} and ${SNAPSHOT_CLASS} are filled in by run.sh.
+ShortName: simplyblock-block-multinode
+StorageClass:
+  FromExistingClassName: ${STORAGE_CLASS}
+SnapshotClass:
+  FromExistingClassName: ${SNAPSHOT_CLASS}
+DriverInfo:
+  Name: csi.simplyblock.io
+  RequiredAccessModes:
+    - ReadWriteMany
+  SupportedSizeRange:
+    Min: 1Gi
+    Max: 100Gi
+  SupportedFsType:
+    "": {}
+  Capabilities:
+    persistence: true
+    block: true
+    exec: true
+    multipods: true
+    snapshotDataSource: true
+    pvcDataSource: true
+    controllerExpansion: true
+    nodeExpansion: true
+    onlineExpansion: true
+    offlineExpansion: true
+    RWX: true
+    capReadOnlyMany: true
+    readWriteOncePod: false
+    multiplePVsSameID: false
+    volumeLimits: false
+    groupSnapshot: false
+    topology: false
+    capacity: false
+    fsGroup: false
+    volumeMountGroup: false

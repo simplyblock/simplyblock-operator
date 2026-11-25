@@ -1,0 +1,3 @@
+# Run directories of level1/run.sh: logs, JUnit files, and monitor output of
+# a certification run, kept locally or archived elsewhere, never committed.
+level1/results/

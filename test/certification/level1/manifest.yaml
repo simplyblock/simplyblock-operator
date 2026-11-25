@@ -1,0 +1,59 @@
+# The upstream TestDriver manifest for the main Level 1 run: every test pattern
+# (default filesystem, ext4, XFS, and raw block) against one simplyblock
+# StorageClass, with the capabilities the driver serves in every volume mode.
+#
+# ReadWriteMany and ReadOnlyMany are off here and covered by
+# manifest-block-multinode.yaml instead. The suite cannot scope a capability to
+# one volume mode: its multi-node test claims the volume in RequiredAccessModes
+# for every pattern, and its ReadOnlyMany tests run in the filesystem pattern
+# too, while simplyblock serves both modes for raw block only (a filesystem on a
+# block volume is never mounted on several hosts).
+#
+# Format: Kubernetes test/e2e/storage/external (release-1.33 for OCP 4.20).
+# ${STORAGE_CLASS} and ${SNAPSHOT_CLASS} are filled in by run.sh.
+ShortName: simplyblock
+StorageClass:
+  FromExistingClassName: ${STORAGE_CLASS}
+SnapshotClass:
+  FromExistingClassName: ${SNAPSHOT_CLASS}
+DriverInfo:
+  Name: csi.simplyblock.io
+  SupportedSizeRange:
+    Min: 1Gi
+    Max: 100Gi
+  SupportedFsType:
+    "": {}
+    ext4: {}
+    xfs: {}
+  Capabilities:
+    persistence: true
+    block: true
+    fsGroup: true
+    exec: true
+    multipods: true
+    snapshotDataSource: true
+    pvcDataSource: true
+    controllerExpansion: true
+    nodeExpansion: true
+    onlineExpansion: true
+    offlineExpansion: true
+    readWriteOncePod: true
+    # Off for the reasons above; manifest-block-multinode.yaml turns them on.
+    RWX: false
+    capReadOnlyMany: false
+    # The driver reads PersistentVolume objects (topology, moved volumes), which
+    # is the case the suite says to keep this off for until it is verified.
+    multiplePVsSameID: false
+    # NodeGetInfo reports no MaxVolumesPerNode yet.
+    volumeLimits: false
+    # The upstream manifest has no field for a VolumeGroupSnapshotClass.
+    groupSnapshot: false
+    topology: false
+    capacity: false
+    volumeMountGroup: false
+  StressTestOptions:
+    NumPods: 10
+    NumRestarts: 10
+  VolumeSnapshotStressTestOptions:
+    NumPods: 10
+    NumSnapshots: 10
