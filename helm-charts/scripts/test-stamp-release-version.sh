@@ -5,6 +5,8 @@
 # The operator image is published under the release tag verbatim. The
 # simplyblock image is published without the leading "v" and with a hotfix
 # suffix as a fourth dotted component, so v26.3.2-1 ships simplyblock:26.3.2.1.
+# A release names quay.io for every image the branch pulls from the internal
+# registry, because only release builds are pushed there.
 #
 # Regression: 2026-10-21-stamp-simplyblock-dotted-hotfix-tag (release/26.3.2 #762)
 set -euo pipefail
@@ -50,6 +52,23 @@ check() {
   mock="$("$YQ" -r '.controlCenter.mock.image.tag' "$copy/values.yaml")"
   [[ "$mock" == "$want_operator" ]] ||
     fail "$tag: controlCenter.mock.image.tag is '$mock', want '$want_operator'"
+  # The branch pulls the main builds from registry.simplyblock.ai, and a release
+  # pulls what it published to quay.io.
+  local path want got
+  while read -r path want; do
+    got="$("$YQ" -r "$path" "$copy/values.yaml")"
+    [[ "$got" == "$want" ]] || fail "$tag: $path is '$got', want '$want'"
+  done <<'EOF_REPOS'
+.image.operator.repository quay.io/simplyblock-io/simplyblock-operator
+.image.simplyblock.repository quay.io/simplyblock-io/simplyblock
+.controlCenter.image.registry quay.io
+.controlCenter.image.repository simplyblock-io/control-center
+.controlCenter.mock.image.registry quay.io
+.controlCenter.mock.image.repository simplyblock-io/control-center-mock
+EOF_REPOS
+  if grep -q 'registry\.simplyblock\.ai' "$copy/values.yaml"; then
+    fail "$tag: the stamped values.yaml still names registry.simplyblock.ai"
+  fi
 }
 
 check v26.4.0 v26.4.0 26.4.0
