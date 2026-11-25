@@ -1677,22 +1677,21 @@ func (r *StorageNodeReconciler) addParams(
 	}
 
 	params := utils.StorageNodeSetAddParams{
-		NodeAddress:      r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
-		InterfaceName:    firstNonEmpty(config.MgmtInterface, workload.MgmtInterface),
-		SPDKImage:        config.SpdkImage,
-		SPDKProxyImage:   config.SpdkProxyImage,
-		DataNics:         nicsOf(config.DataInterfaces, workload.DataInterfaces),
-		Namespace:        node.Namespace,
-		JMPercent:        journalPercent(config.JournalManager),
-		Partitions:       partitionsPerDevice(workload, cluster.Spec.DeviceClass),
-		HaJMCount:        journalCount(config.JournalManager),
-		CRName:           cluster.Name,
-		CRNameSpace:      cluster.Namespace,
-		CRPlural:         "storageclusters",
-		Format4K:         ptr.BoolFromOrFalse(workload.EnableFormat4K),
-		SpdkSystemMemory: config.SpdkSystemMemory,
-		Expand:           ptr.BoolFromOrFalse(config.Expand),
-		Site:             config.Site,
+		NodeAddress:    r.Workload.NodeAddress(ctx, node.Namespace, node.Spec.ClusterRef, node.Spec.WorkerNode),
+		InterfaceName:  firstNonEmpty(config.MgmtInterface, workload.MgmtInterface),
+		SPDKImage:      config.SpdkImage,
+		SPDKProxyImage: config.SpdkProxyImage,
+		DataNics:       nicsOf(config.DataInterfaces, workload.DataInterfaces),
+		Namespace:      node.Namespace,
+		JMPercent:      journalPercent(config.JournalManager),
+		Partitions:     partitionsPerDevice(workload, cluster.Spec.DeviceClass),
+		HaJMCount:      journalCount(config.JournalManager),
+		CRName:         cluster.Name,
+		CRNameSpace:    cluster.Namespace,
+		CRPlural:       "storageclusters",
+		Format4K:       ptr.BoolFromOrFalse(workload.EnableFormat4K),
+		Expand:         ptr.BoolFromOrFalse(config.Expand),
+		Site:           config.Site,
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.

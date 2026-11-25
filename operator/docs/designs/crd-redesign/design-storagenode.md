@@ -495,13 +495,11 @@ availability tracks the operator's own, and an operator that is down is not
 reconciling anything the rejection could deadlock.
 
 **Mutable.** `config.spdkImage`, `config.spdkImagePullPolicy`,
-`config.spdkProxyImage`, `config.spdkProxyImagePullPolicy`, and
-`config.spdkSystemMemory`. The two images are
+`config.spdkProxyImage`, and `config.spdkProxyImagePullPolicy`. The two images are
 per-node so that an image rollout can be phased, which is the whole reason they
-are not on the cluster, and the memory figure is what a node whose device count
-grew legitimately needs to raise. All of them take effect on the node's next
+are not on the cluster. All of them take effect on the node's next
 configuration generation, which is a restart-shaped change rather than a
-declarative one.
+declarative one. SPDK's memory is not a node field: the control plane sizes it.
 
 The two pull policies are the fields of the set the operator records and does not
 yet spend. The control plane starts the SPDK pod, and its `spdk_process_start`
@@ -1088,7 +1086,7 @@ Neither path needs a second DaemonSet, because neither adds a second *kind* of n
 Each adds nodes to the one that exists.
 
 **What differs between hardware generations is per-node already.**
-`config.spdkImage`, `config.spdkProxyImage`, and `config.spdkSystemMemory` are node
+`config.spdkImage` and `config.spdkProxyImage` are node
 fields precisely so that a rollout can be phased (§3.2), and `config.sizing` is a node
 field so that a re-size can walk the fleet one machine at a time (§3.1). A second
 workload would be a second place to express what these already express, and it would
@@ -2650,14 +2648,6 @@ type StorageNodeConfig struct {
 	// +kubebuilder:default=Always
 	// +optional
 	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
-
-	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with ("4G", "512M"). It carries no immutability marker, because a node
-	// whose device count grew legitimately needs it raised, and the webhook that
-	// guards spec.config is what decides who may raise it.
-	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
-	// +optional
-	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
 	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
 	// core list such as 0,1 or 0-3.

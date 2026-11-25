@@ -4,7 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    simplyblock.io/advanced-fields: '{"v1alpha2":["spec.cluster.network.podNetwork","spec.cluster.network.spdkOnHostNetwork","spec.cluster.openshift.machineConfigPool"]}'
     simplyblock.io/invisible-fields: '{"v1alpha2":["spec.cluster.stretched"]}'
+    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.cluster.stretched.peerCluster","spec.cluster.stretched.role"]}'
   name: clusterdeploymentconfigs.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -155,6 +157,9 @@ spec:
                         bucket:
                           description: Bucket is the bucket backups are written to and read from.
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         credentials:
                           description: |-
                             Credentials is how this store's endpoint is authenticated to. Replaces
@@ -178,6 +183,9 @@ spec:
                                   type: string
                               type: object
                               x-kubernetes-map-type: atomic
+                              x-kubernetes-validations:
+                                - message: field is immutable
+                                  rule: self == oldSelf
                             source:
                               default: Secret
                               description: |-
@@ -190,10 +198,15 @@ spec:
                                 - Secret
                                 - ProviderChain
                               type: string
+                              x-kubernetes-validations:
+                                - message: field is immutable
+                                  rule: self == oldSelf
                           required:
                             - source
                           type: object
                           x-kubernetes-validations:
+                            - message: field secretRef is immutable once set
+                              rule: '!has(oldSelf.secretRef) || has(self.secretRef)'
                             - message: 'source: Secret requires secretRef'
                               rule: self.source != 'Secret' || has(self.secretRef)
                             - message: 'source: ProviderChain forbids secretRef'
@@ -219,18 +232,31 @@ spec:
                               type: string
                           type: object
                           x-kubernetes-map-type: atomic
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         endpoint:
                           description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                           pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         region:
                           description: Region is the bucket's region, for endpoints that do not imply one.
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       required:
                         - bucket
                         - endpoint
                       type: object
                       x-kubernetes-validations:
+                        - message: field region is immutable once set
+                          rule: '!has(oldSelf.region) || has(self.region)'
+                        - message: field credentialsSecretRef is immutable once set
+                          rule: '!has(oldSelf.credentialsSecretRef) || has(self.credentialsSecretRef)'
                         - message: one of credentials and the deprecated credentialsSecretRef must be set
                           rule: has(self.credentialsSecretRef) || has(self.credentials)
                         - message: credentials and the deprecated credentialsSecretRef are exclusive
@@ -689,6 +715,9 @@ spec:
                             With data networks, the RPC stays on that interface and the data moves to the
                             networks' interfaces, whose addresses are stable, so no Service is kept.
                           type: boolean
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         spdkOnHostNetwork:
                           description: |-
                             SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
@@ -696,8 +725,15 @@ spec:
                             do not agree on what their NICs are called: each node names its own in
                             its spec.config.dataInterfaces, which is allowed only in this mode.
                           type: boolean
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       type: object
                       x-kubernetes-validations:
+                        - message: field podNetwork is immutable once set
+                          rule: '!has(oldSelf.podNetwork) || has(self.podNetwork)'
+                        - message: field spdkOnHostNetwork is immutable once set
+                          rule: '!has(oldSelf.spdkOnHostNetwork) || has(self.spdkOnHostNetwork)'
                         - message: one of podNetwork and spdkOnHostNetwork must be set
                           rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)
                         - message: podNetwork and spdkOnHostNetwork are exclusive
@@ -755,7 +791,13 @@ spec:
                           maxLength: 253
                           pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       type: object
+                      x-kubernetes-validations:
+                        - message: field machineConfigPool is immutable once set
+                          rule: '!has(oldSelf.machineConfigPool) || has(self.machineConfigPool)'
                     ports:
                       description: |-
                         Ports are where this cluster's storage nodes listen. Unstated, and for
@@ -1364,13 +1406,6 @@ spec:
                                 It expands into StorageNode.spec.config.site, whose shape it shares.
                               maxLength: 63
                               pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
-                              type: string
-                            spdkSystemMemory:
-                              description: |-
-                                SpdkSystemMemory is the memory the control plane starts SPDK with on these
-                                nodes.
-                              maxLength: 32
-                              pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
                               type: string
                             workers:
                               description: Workers are the Kubernetes worker hostnames in this group.

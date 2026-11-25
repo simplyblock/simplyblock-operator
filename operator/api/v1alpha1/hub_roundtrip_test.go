@@ -398,7 +398,6 @@ func TestStorageClusterRoundTripsFromTheHub(t *testing.T) {
 			EnableVolumeAutoPlacement: ptr.To(true),
 			VolumeAutoPlacement: &v1alpha2.VolumeAutoPlacementSettings{
 				DisableMigration: ptr.To(true),
-				MetricsBackend:   ptr.To(v1alpha2.MetricsBackendPrometheus),
 			},
 		},
 		Status: v1alpha2.StorageClusterStatus{

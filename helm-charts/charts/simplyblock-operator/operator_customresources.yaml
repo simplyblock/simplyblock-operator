@@ -87,7 +87,6 @@ spec:
           # power feed rather than indexed. Required when the cluster has
           # enableFailureDomains set.
           # failureDomain: rack-a
-          # spdkSystemMemory: 4G
           # journalManager:
           #   count: 3
           #   percentPerDevice: 3

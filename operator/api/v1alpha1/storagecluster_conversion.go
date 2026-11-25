@@ -78,6 +78,9 @@ const (
 	annoV1Alpha1WithCompression  = "storage.simplyblock.io/v1alpha1-backup.withCompression"
 	annoV1Alpha1LocalTesting     = "storage.simplyblock.io/v1alpha1-backup.localTesting"
 	annoV1Alpha1SecondaryTarget  = "storage.simplyblock.io/v1alpha1-backup.secondaryTarget"
+	// The rebalancer's metrics source left the hub: v1alpha2 reads node
+	// latency one way only. Carried so a v1alpha1 object keeps its value.
+	annoV1Alpha1MetricsBackend = "storage.simplyblock.io/v1alpha1-volumeAutoPlacement.metricsBackend"
 )
 
 // The annotations holding the hub fields this version cannot express. The key
@@ -161,19 +164,6 @@ var creationStepToHub = map[string]string{
 
 // creationStepFromHub is the inverse, derived so the two cannot disagree.
 var creationStepFromHub = invertStringMap(creationStepToHub)
-
-// metricsBackendToHub recases the rebalancer's metrics source
-// (design-property-renames.md §2.5). Every value is listed, because the field
-// is user-authored and appears in deployment manifests.
-var metricsBackendToHub = map[string]string{
-	"controlplane": string(v1alpha2.MetricsBackendControlPlane),
-	"prometheus":   string(v1alpha2.MetricsBackendPrometheus),
-	"uniform":      string(v1alpha2.MetricsBackendUniform),
-}
-
-// metricsBackendFromHub is the inverse, derived so the two cannot disagree
-// about a value.
-var metricsBackendFromHub = invertStringMap(metricsBackendToHub)
 
 // baselineStrategyToHub and baselineColdStartToHub recase the two rebalancing
 // enums, for the reason metricsBackendToHub recases its own: both are
@@ -259,6 +249,11 @@ func (src *StorageCluster) ConvertTo(dstRaw conversion.Hub) error {
 	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1WithCompression, backup.WithCompression)
 	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1LocalTesting, backup.LocalTesting)
 	stashRemoved(&dst.ObjectMeta, annoV1Alpha1SecondaryTarget, formatInt32(backup.SecondaryTarget))
+	var metricsBackend string
+	if ap := src.Spec.VolumeAutoPlacement; ap != nil && ap.MetricsBackend != nil {
+		metricsBackend = string(*ap.MetricsBackend)
+	}
+	stashRemoved(&dst.ObjectMeta, annoV1Alpha1MetricsBackend, metricsBackend)
 
 	dst.Status = v1alpha2.StorageClusterStatus{
 		UUID:                        src.Status.UUID,
@@ -362,6 +357,12 @@ func (dst *StorageCluster) ConvertFrom(srcRaw conversion.Hub) error {
 		dst.Spec.Backup.WithCompression = compression
 		dst.Spec.Backup.LocalTesting = localTesting
 		dst.Spec.Backup.SecondaryTarget = secondary
+	}
+	if v := unstashRemoved(&dst.ObjectMeta, annoV1Alpha1MetricsBackend); v != "" {
+		if dst.Spec.VolumeAutoPlacement == nil {
+			dst.Spec.VolumeAutoPlacement = &VolumeAutoPlacementSettings{}
+		}
+		dst.Spec.VolumeAutoPlacement.MetricsBackend = ptr.To(MetricsBackend(v))
 	}
 
 	dst.Status = StorageClusterStatus{
@@ -779,10 +780,6 @@ func autoPlacementToHub(s *VolumeAutoPlacementSettings) *v1alpha2.VolumeAutoPlac
 		IOPSWeight:                  s.IOPSWeight,
 		ThroughputWeight:            s.ThroughputWeight,
 	}
-	if b := s.MetricsBackend; b != nil {
-		out.MetricsBackend = ptr.To(v1alpha2.MetricsBackend(
-			mapOrPassThrough(metricsBackendToHub, string(*b))))
-	}
 	if b := s.BaselineStrategy; b != nil {
 		out.BaselineStrategy = ptr.To(v1alpha2.BaselineStrategy(
 			mapOrPassThrough(baselineStrategyToHub, string(*b))))
@@ -814,10 +811,6 @@ func autoPlacementFromHub(s *v1alpha2.VolumeAutoPlacementSettings) *VolumeAutoPl
 		BaselineOutlierK:            s.BaselineOutlierK,
 		IOPSWeight:                  s.IOPSWeight,
 		ThroughputWeight:            s.ThroughputWeight,
-	}
-	if b := s.MetricsBackend; b != nil {
-		out.MetricsBackend = ptr.To(MetricsBackend(
-			mapOrPassThrough(metricsBackendFromHub, string(*b))))
 	}
 	if b := s.BaselineStrategy; b != nil {
 		out.BaselineStrategy = ptr.To(BaselineStrategy(

@@ -158,7 +158,6 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 	node := anUnprovisionedNode(stepPosting)
 	node.Spec.Config.SpdkImage = "example.test/spdk:v1"
 	node.Spec.Config.SpdkProxyImage = "example.test/spdk-proxy:v1"
-	node.Spec.Config.SpdkSystemMemory = "4g"
 	node.Spec.Config.JournalManager = &simplyblockv1alpha2.JournalManagerSpec{
 		PercentPerDevice: ptr.To(int32(5)), Count: ptr.To(int32(2)),
 	}
@@ -174,9 +173,8 @@ func TestTheAddCarriesWhatTheNodeSaysAboutItself(t *testing.T) {
 	params := r.addParams(context.Background(), node, cluster)
 
 	if params.SPDKImage != "example.test/spdk:v1" ||
-		params.SPDKProxyImage != "example.test/spdk-proxy:v1" ||
-		params.SpdkSystemMemory != "4g" {
-		t.Errorf("params = %+v, want the images and memory the node declares", params)
+		params.SPDKProxyImage != "example.test/spdk-proxy:v1" {
+		t.Errorf("params = %+v, want the images the node declares", params)
 	}
 	if params.JMPercent != 5 || params.HaJMCount != 2 {
 		t.Errorf("journal = %d%% over %d, want what the node declares",
