@@ -142,13 +142,6 @@ spec:
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
-              ttlSeconds:
-                description: |-
-                  TTLSeconds is an optional maximum lifetime: the drill is torn down after it
-                  even without a delete, so a forgotten drill cannot hold a clone forever.
-                format: int64
-                minimum: 0
-                type: integer
             required:
             - bubbleCluster
             - scope

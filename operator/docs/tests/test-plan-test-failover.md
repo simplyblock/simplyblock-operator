@@ -76,11 +76,9 @@ File: `internal/controller/testfailover_statemachine_unit_test.go`
 
 File: `internal/controller/testfailover_unit_test.go`
 
-| #    | Scenario                                                            | Type     | Test |
-|------|---------------------------------------------------------------------|----------|------|
-| U-18 | `bubbleNamespace` defaults to `bubble` when unset                   | Boundary | —    |
-| U-19 | `ttlSeconds` unset → no auto-teardown scheduled                     | Boundary | —    |
-| U-20 | `ttlSeconds` set → teardown scheduled at creation time plus the TTL | Positive | —    |
+| #    | Scenario                                          | Type     | Test |
+|------|---------------------------------------------------|----------|------|
+| U-18 | `bubbleNamespace` defaults to `bubble` when unset | Boundary | —    |
 
 ---
 
@@ -243,7 +241,7 @@ sufficient, or a backend enumeration is required (design Open Question 3).
 | Scope                        | Volume, Group                                                                        | U-01, U-02, I-06, E-05             | —                                                      |
 | Recovery point               | replicated (volume and group)                                                        | U-06, U-07                         | shipped (Phase 2)                                      |
 | Cross-cluster transport      | ManagedClusterView read, ManifestWork write                                          | I-01, I-08                         | —                                                      |
-| Lifecycle / restart          | mid-step restart (each step), delete mid-drill, TTL teardown                         | I-13, I-15, I-20, U-20             | control-plane restart mid-call                         |
+| Lifecycle / restart          | mid-step restart (each step), delete mid-drill                                       | I-13, I-15, I-20                   | control-plane restart mid-call                         |
 | Control-plane / OCM response | 404, 5xx, connection refused, ManifestWork timeout, idempotent retry, 404-as-success | I-04, I-05, I-07, I-12, I-14, I-24 | partial-write then crash                               |
 | Concurrency                  | same source, different sources                                                       | I-27, I-28                         | spec mutated mid-drill (blocked by immutability, I-26) |
 | Data correctness             | recovered marker, source untouched, crash-consistent group                           | E-03, E-04, E-05                   | recovered-data checksum under load (M-01)              |

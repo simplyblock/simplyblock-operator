@@ -24,6 +24,8 @@ func TestRemovedFieldsAreGoneFromTheSchema(t *testing.T) {
 		{"storage.simplyblock.io_clusterdeploymentconfigs.yaml", "spec.cluster.arbitration.holdMs"},
 		{"storage.simplyblock.io_storageclusters.yaml", "spec.arbitration.leaseTtlMs"},
 		{"storage.simplyblock.io_clusterdeploymentconfigs.yaml", "spec.cluster.arbitration.leaseTtlMs"},
+		// Documented as a teardown deadline that nothing ever scheduled.
+		{"storage.simplyblock.io_testfailovers.yaml", "spec.ttlSeconds"},
 	}
 	for _, c := range cases {
 		raw, err := FS.ReadFile(c.crd)
@@ -40,7 +42,7 @@ func TestRemovedFieldsAreGoneFromTheSchema(t *testing.T) {
 	}
 }
 
-// schemaField returns the schema of the dotted path in a version of crd, or
+// schemaField returns the schema of the dotted path in a version of the CRD, or
 // nil when the path is not there.
 func schemaField(t *testing.T, crd map[string]any, version, path string) any {
 	t.Helper()

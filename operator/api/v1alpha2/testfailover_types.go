@@ -131,12 +131,6 @@ type TestFailoverSpec struct {
 	// +optional
 	// +k8s:immutable
 	BubbleNamespace string `json:"bubbleNamespace,omitempty"`
-
-	// TTLSeconds is an optional maximum lifetime: the drill is torn down after it
-	// even without a delete, so a forgotten drill cannot hold a clone forever.
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	TTLSeconds *int64 `json:"ttlSeconds,omitempty"`
 }
 
 // TestFailoverClone is one recovered volume: the source it came from, the
