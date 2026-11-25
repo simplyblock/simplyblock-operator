@@ -129,6 +129,9 @@ spec:
                     the discovery and the draft live.
                   maxLength: 63
                   type: string
+                  x-kubernetes-validations:
+                    - message: 'siteNamespace is immutable: the views that project the site back are not re-pointed, so a new namespace splits the request between two namespaces and fails it'
+                      rule: self == oldSelf
                 sizing:
                   description: |-
                     Sizing is written onto the draft's cluster template once the draft exists,

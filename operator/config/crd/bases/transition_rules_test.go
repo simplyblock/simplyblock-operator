@@ -299,3 +299,56 @@ func TestControlPlaneUpdateRules(t *testing.T) {
 		},
 	})
 }
+
+func siteDeployment() *simplyblockv1alpha2.StorageSiteDeployment {
+	return &simplyblockv1alpha2.StorageSiteDeployment{
+		Spec: simplyblockv1alpha2.StorageSiteDeploymentSpec{Cluster: "site-a", SiteNamespace: "simplyblock"},
+	}
+}
+
+func asSiteDeployment(f func(*simplyblockv1alpha2.StorageSiteDeploymentSpec)) func(client.Object) {
+	return func(o client.Object) { f(&o.(*simplyblockv1alpha2.StorageSiteDeployment).Spec) }
+}
+
+func stretched() *simplyblockv1alpha2.StretchedCluster {
+	return &simplyblockv1alpha2.StretchedCluster{Spec: simplyblockv1alpha2.StretchedClusterSpec{
+		ClusterName: "stretched",
+		Sites: []simplyblockv1alpha2.StretchedSite{
+			{Cluster: "site-a", Site: "a", Role: simplyblockv1alpha2.StretchedRoleLeader, SiteNamespace: "simplyblock"},
+			{Cluster: "site-b", Site: "b", Role: simplyblockv1alpha2.StretchedRoleFollower, SiteNamespace: "simplyblock"},
+		},
+	}}
+}
+
+func asStretched(f func(*simplyblockv1alpha2.StretchedClusterSpec)) func(client.Object) {
+	return func(o client.Object) { f(&o.(*simplyblockv1alpha2.StretchedCluster).Spec) }
+}
+
+func TestStorageSiteDeploymentUpdateRules(t *testing.T) {
+	runTransitions(t, []transition{
+		{
+			name:   "moving the site's objects to another namespace",
+			create: siteDeployment(),
+			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) { s.SiteNamespace = "other" }),
+			denied: "siteNamespace is immutable",
+		},
+	})
+}
+
+func TestStretchedClusterUpdateRules(t *testing.T) {
+	runTransitions(t, []transition{
+		{
+			name:   "moving one site's objects to another namespace",
+			create: stretched(),
+			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) { s.Sites[1].SiteNamespace = "other" }),
+			denied: "siteNamespace is immutable",
+		},
+		{
+			name:   "swapping the roles",
+			create: stretched(),
+			mutate: asStretched(func(s *simplyblockv1alpha2.StretchedClusterSpec) {
+				s.Sites[0].Role, s.Sites[1].Role = simplyblockv1alpha2.StretchedRoleFollower, simplyblockv1alpha2.StretchedRoleLeader
+			}),
+		},
+	})
+}

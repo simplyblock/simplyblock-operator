@@ -120,6 +120,7 @@ type StorageSiteDeploymentSpec struct {
 
 	// SiteNamespace is the simplyblock operator's namespace on the site, where
 	// the discovery and the draft live.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="siteNamespace is immutable: the views that project the site back are not re-pointed, so a new namespace splits the request between two namespaces and fails it"
 	// +kubebuilder:default=simplyblock
 	// +kubebuilder:validation:MaxLength=63
 	// +optional

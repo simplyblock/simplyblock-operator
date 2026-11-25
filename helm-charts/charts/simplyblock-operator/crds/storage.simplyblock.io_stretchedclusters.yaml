@@ -353,6 +353,8 @@ spec:
                   rule: '!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster))'
                 - message: 'approval is one-way: an approved stretched cluster cannot be un-approved'
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
+                - message: 'a site''s siteNamespace is immutable: the views that project the site back are not re-pointed, so a new namespace splits that site''s flow between two namespaces and fails the request'
+                  rule: '!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && s.siteNamespace == o.siteNamespace))'
                 - message: discover cannot change once the stretched cluster is approved
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && has(s.discover) == has(o.discover) && (!has(s.discover) || s.discover == o.discover)))'
             status:
