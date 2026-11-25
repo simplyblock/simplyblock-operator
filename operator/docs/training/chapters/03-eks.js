@@ -151,7 +151,7 @@ TRAINING.register({
         'Apply the run and watch it. A good run ends in `Succeeded` and names its draft:',
         { code: '$ kubectl apply -f 04-operatorops-discover.yaml\n$ kubectl get oops eks -n simplyblock -w\nNAME   ACTION     PHASE       STEP        CONFIG           AGE\neks    Discover   Running     Probing                      20s\neks    Discover   Succeeded   Completed   discovered-eks   75s', title: 'Run discovery' },
         'A filter that matches nothing fails the run. No draft is written:',
-        { code: '$ kubectl get oops eks -n simplyblock -o jsonpath=\'{.status.message}{"\\n"}\'\nno worker has a device this run would use: ... its model "Amazon Elastic Block Store" does not contain "Instance Strage" ...', title: 'A filter with a typo' },
+        { code: '$ kubectl get oops eks -n simplyblock -o jsonpath=\'{.status.message}{"\\n"}\'\nno worker has a device this run would use: ... its model "Amazon Elastic Block Store" does not contain "Instance Store" ...', title: 'A filter with a typo' },
         'Read the real model strings in the probe reports:',
         { code: 'kubectl get cm -n simplyblock -l storage.simplyblock.io/nodeprobe-run=eks -o yaml | grep model', title: 'The probe reports' },
         'Expect these results on this node group:',
