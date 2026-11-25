@@ -1408,10 +1408,8 @@ controlCenter:
   image:
     # The branch installs the main build from the internal registry, and a
     # release names quay.io and its own tag.
-    # -- Control Center image registry. Empty uses `quay.io`.
-    registry: registry.simplyblock.ai
     # -- Control Center image repository.
-    repository: simplyblock/control-center
+    repository: registry.simplyblock.ai/simplyblock/control-center
     # Empty inherits .Chart.AppVersion. This chart's appVersion is a floating
     # tag, so pin a released console tag here for production.
     # -- Control Center image tag. Empty uses the chart's `appVersion`. Pin a released tag in
@@ -1601,9 +1599,7 @@ controlCenter:
   mock:
     enabled: false
     image:
-      # Empty defaults to quay.io.
-      registry: registry.simplyblock.ai
-      repository: simplyblock/control-center-mock
+      repository: registry.simplyblock.ai/simplyblock/control-center-mock
       # Empty inherits .Chart.AppVersion.
       tag: "main"
       pullPolicy: IfNotPresent
