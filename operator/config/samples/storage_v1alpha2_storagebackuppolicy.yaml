@@ -17,7 +17,7 @@ spec:
   claimSelector:
     matchLabels:
       backup: nightly
-  # Four quarter-hourly copies, eleven hourly, and seven daily.
+  # Four quarter-hourly copies, eleven hourly, and seven daily: 22 backups,
+  # the oldest a week old. The schedule is the whole retention statement;
+  # status.retention shows the caps the operator derived from it.
   schedule: 15m,4 60m,11 24h,7
-  maxVersions: 22
-  maxAge: 30d

@@ -52,17 +52,17 @@ File: `operator/internal/controllers/backup/storagebackuppolicy_selector_test.go
 
 ### Policy Reconcile (design §4.2, §9)
 
-| #    | Scenario                                                                 | Type     | Test |
-|------|--------------------------------------------------------------------------|----------|------|
-| U-12 | A new policy: created in the control plane, `status.policyID` recorded   | Positive | —    |
-| U-13 | A changed `spec.schedule`: applied to the control plane                  | Positive | —    |
-| U-14 | A changed `spec.maxVersions`: applied                                    | Positive | —    |
-| U-15 | The operator never runs the schedule itself                              | Negative | —    |
-| U-16 | The operator never prunes a backup itself                                | Negative | —    |
-| U-17 | `spec.maxVersions` of 0 means no limit by count, not immediate deletion  | Boundary | —    |
-| U-18 | A malformed `spec.schedule`: rejected before the control plane is called | Negative | —    |
-| U-19 | Deleting a policy deletes its `StorageBackup` objects, not the backups   | Negative | —    |
-| U-20 | `status.lastBackupAt` is updated from what the control plane reports     | Positive | —    |
+| #    | Scenario                                                                                                                               | Type     | Test                                                                   |
+|------|----------------------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------|
+| U-12 | A new policy: created in the control plane, `status.policyID` recorded                                                                 | Positive | —                                                                      |
+| U-13 | A changed `spec.schedule`: applied to the control plane                                                                                | Positive | —                                                                      |
+| U-14 | The caps sent to the control plane are the schedule's keep counts added up and its furthest reach, and `status.retention` reports them | Positive | `TestPolicyRetentionIsDerivedFromItsSchedule`, `TestScheduleRetention` |
+| U-15 | The operator never runs the schedule itself                                                                                            | Negative | —                                                                      |
+| U-16 | The operator never prunes a backup itself                                                                                              | Negative | —                                                                      |
+| U-17 | An empty `spec.schedule` sends no caps: no limit by count or age, not immediate deletion                                               | Boundary | `TestScheduleRetention`                                                |
+| U-18 | A malformed `spec.schedule`: rejected before the control plane is called                                                               | Negative | —                                                                      |
+| U-19 | Deleting a policy deletes its `StorageBackup` objects, not the backups                                                                 | Negative | —                                                                      |
+| U-20 | `status.lastBackupAt` is updated from what the control plane reports                                                                   | Positive | —                                                                      |
 
 ### Backup Lifecycle (design §5)
 
@@ -198,24 +198,24 @@ foreign backup is asserted here about a discovered one.
 Full reconcile loop against a real Kubernetes API server via `envtest`. The CEL
 rules and the ownership cascades cannot be exercised any other way.
 
-| #        | Scenario                                                                         | Type     | Test |
-|----------|----------------------------------------------------------------------------------|----------|------|
-| I-01     | `action: Restore` without `spec.backupRef`: rejected by the CEL rule             | Negative | —    |
-| ~~I-02~~ | `action: Import` with `spec.backupRef`. Withdrawn with the action                | —        | —    |
-| I-03     | `spec.action` outside the enum: rejected                                         | Negative | —    |
-| I-04     | `spec.action` changed after creation: rejected as immutable                      | Negative | —    |
-| I-05     | `spec.backupRef` changed after creation: rejected as immutable                   | Negative | —    |
-| I-06     | `spec.restore.claimName` changed after creation: rejected as immutable           | Negative | —    |
-| I-07     | `StorageBackup.spec.claimRef` changed after creation: rejected as immutable      | Negative | —    |
-| I-08     | `StorageBackupPolicy.spec.clusterRef` changed after creation: rejected           | Negative | —    |
-| I-09     | `spec.maxVersions` negative: rejected by the minimum                             | Boundary | —    |
-| I-10     | Short names `sbp`, `sb`, and `sbops` resolve to the same lists as the full kinds | Positive | —    |
-| I-11     | Deleting a policy garbage-collects the `StorageBackup` objects it owns           | Positive | —    |
-| I-12     | Deleting a policy leaves a hand-created `StorageBackup` alone                    | Negative | —    |
-| I-13     | Deleting a `StorageBackupOps` garbage-collects the claim it restored             | Positive | —    |
-| I-14     | Two policies in two namespaces with the same name: neither reads the other       | Negative | —    |
-| I-15     | A policy selecting a claim in its own namespace only                             | Negative | —    |
-| I-16     | The controller's role covers creating claims and reading volumes                 | Positive | —    |
+| #        | Scenario                                                                                                | Type     | Test |
+|----------|---------------------------------------------------------------------------------------------------------|----------|------|
+| I-01     | `action: Restore` without `spec.backupRef`: rejected by the CEL rule                                    | Negative | —    |
+| ~~I-02~~ | `action: Import` with `spec.backupRef`. Withdrawn with the action                                       | —        | —    |
+| I-03     | `spec.action` outside the enum: rejected                                                                | Negative | —    |
+| I-04     | `spec.action` changed after creation: rejected as immutable                                             | Negative | —    |
+| I-05     | `spec.backupRef` changed after creation: rejected as immutable                                          | Negative | —    |
+| I-06     | `spec.restore.claimName` changed after creation: rejected as immutable                                  | Negative | —    |
+| I-07     | `StorageBackup.spec.claimRef` changed after creation: rejected as immutable                             | Negative | —    |
+| I-08     | `StorageBackupPolicy.spec.clusterRef` changed after creation: rejected                                  | Negative | —    |
+| I-09     | `spec.maxVersions` or `spec.maxAge` in a manifest: pruned as unknown fields, the schedule alone decides | Boundary | —    |
+| I-10     | Short names `sbp`, `sb`, and `sbops` resolve to the same lists as the full kinds                        | Positive | —    |
+| I-11     | Deleting a policy garbage-collects the `StorageBackup` objects it owns                                  | Positive | —    |
+| I-12     | Deleting a policy leaves a hand-created `StorageBackup` alone                                           | Negative | —    |
+| I-13     | Deleting a `StorageBackupOps` garbage-collects the claim it restored                                    | Positive | —    |
+| I-14     | Two policies in two namespaces with the same name: neither reads the other                              | Negative | —    |
+| I-15     | A policy selecting a claim in its own namespace only                                                    | Negative | —    |
+| I-16     | The controller's role covers creating claims and reading volumes                                        | Positive | —    |
 
 ---
 
@@ -230,8 +230,8 @@ that can prove the layer does what it is for.
 | E-02     | Restoring that backup: the restored claim's checksums match the original exactly     | Positive | —    |
 | E-03     | A backup taken under load: the restore's checksums match the snapshot point          | Positive | —    |
 | E-04     | A policy on a schedule: backups appear at the interval, and retention prunes them    | Positive | —    |
-| E-05     | `spec.maxVersions` of 3: the fourth backup prunes the first                          | Boundary | —    |
-| E-06     | `spec.maxAge`: a backup older than it is pruned                                      | Boundary | —    |
+| E-05     | A schedule of `24h,3`: the fourth backup prunes the first                            | Boundary | —    |
+| E-06     | A schedule whose furthest tier reaches a week: a backup older than that is pruned    | Boundary | —    |
 | E-07     | An incremental chain: `previousBackupID` links them and each restores correctly      | Positive | —    |
 | E-08     | Deleting a base backup an incremental one depends on: what happens is recorded       | Negative | —    |
 | ~~E-09~~ | An import from a second cluster. Withdrawn with the action, replaced by `E-14`       | —        | —    |

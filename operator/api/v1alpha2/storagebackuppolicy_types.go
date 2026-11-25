@@ -66,9 +66,15 @@ type StorageBackupPolicySpec struct {
 	ConsistencyGroupName string `json:"consistencyGroupName,omitempty"`
 
 	// Schedule is the tiered schedule the control plane runs the policy on, as a
-	// space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7").
-	// Intervals must be strictly increasing, and the supported units are m, h,
-	// d, and w.
+	// space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7"):
+	// four quarter-hourly backups, eleven hourly, and seven daily. Intervals
+	// must be strictly increasing, and the supported units are m, h, d, and w.
+	//
+	// It is also the policy's whole statement of retention. The control plane
+	// keeps as many backups as the tiers' keep counts add up to, for as long as
+	// the furthest tier reaches back, and status.retention shows both numbers.
+	// There is no separate version or age cap to set, so the object cannot
+	// promise one thing in the schedule and another beside it.
 	//
 	// Immutable, and that is a property of the control plane rather than a
 	// choice. The control plane offers no call that applies a changed schedule:
@@ -82,21 +88,18 @@ type StorageBackupPolicySpec struct {
 	// +k8s:immutable
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
+}
 
-	// MaxVersions is how many backups of one claim to keep. Zero means no limit
-	// by count. Immutable, for the reason Schedule is.
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Versions"
-	// +kubebuilder:validation:Minimum=0
-	// +k8s:immutable
+// BackupRetention is what the schedule keeps, as the operator read it off the
+// tiers and asked the control plane to enforce.
+type BackupRetention struct {
+	// MaxVersions is how many backups of one claim the control plane keeps: the
+	// schedule's keep counts added up. Zero means no limit by count.
 	// +optional
-	MaxVersions *int32 `json:"maxVersions,omitempty"`
+	MaxVersions int32 `json:"maxVersions,omitempty"`
 
-	// MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
-	// by age. Retention is enforced by the control plane, not here. Immutable,
-	// for the reason Schedule is.
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Age"
-	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
-	// +k8s:immutable
+	// MaxAge is how long the control plane keeps a backup ("7d," "36h"): the
+	// reach of the schedule's furthest tier. Empty means no limit by age.
 	// +optional
 	MaxAge string `json:"maxAge,omitempty"`
 }
@@ -184,6 +187,12 @@ type StorageBackupPolicyStatus struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=status,displayName="Message"
 	// +optional
 	Message string `json:"message,omitempty"`
+
+	// Retention is what spec.schedule keeps, as derived from its tiers and
+	// handed to the control plane: the version count and the age the pruning
+	// honors. Absent while the policy has no schedule.
+	// +optional
+	Retention *BackupRetention `json:"retention,omitempty"`
 
 	// ObservedGeneration is the generation the rest of this status was computed
 	// from, so a stale status can be told from a current one.

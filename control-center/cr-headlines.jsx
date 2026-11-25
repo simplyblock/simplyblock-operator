@@ -171,8 +171,8 @@ const HEADLINES = {
       row("status.source.group.consistencyGroupName"), row("status.source.group.generation"), row("status.source.group.groupBackupID"), row("status.source.group.memberCount"), row("status.observedGeneration")]
   },
   StorageBackupPolicy: {
-    spec: [ro("spec.clusterRef", {link: "cluster"}), ro("spec.schedule"), ro("spec.maxVersions", {type: "number"}), ro("spec.maxAge"), row("spec.consistencyGroupName"), row("spec.claimSelector.matchLabels", {fmt: F.map})],
-    status: [row("status.phase"), row("status.message"), row("status.policyID"), row("status.clusterID"), row("status.lastBackupAt", {fmt: F.ago}), row("status.observedGeneration")],
+    spec: [ro("spec.clusterRef", {link: "cluster"}), ro("spec.schedule"), row("spec.consistencyGroupName"), row("spec.claimSelector.matchLabels", {fmt: F.map})],
+    status: [row("status.phase"), row("status.message"), row("status.policyID"), row("status.clusterID"), row("status.retention.maxVersions"), row("status.retention.maxAge"), row("status.lastBackupAt", {fmt: F.ago}), row("status.observedGeneration")],
     tables: [{path: "status.attachedClaims", title: "status.attachedClaims: the claims the policy covers", columns: ["name", "persistentVolumeName", "lvolID", "clusterID", "attachedAt"]},
       {path: "status.members", title: "status.members", columns: ["cluster", "clusterID", "policyID"]}]
   },
@@ -275,7 +275,7 @@ const STATIC_IMMUTABLE = {
   ControlPlane: ["spec.source.local.tls"],
   SimplyblockDriver: ["spec.driverName"],
   ClusterDeploymentConfig: ["spec.clusterRef", "spec.environment"],
-  StorageBackupPolicy: ["spec.clusterRef", "spec.schedule", "spec.maxVersions", "spec.maxAge"],
+  StorageBackupPolicy: ["spec.clusterRef", "spec.schedule"],
   StorageBackup: ["spec.clusterRef", "spec.source"],
   StorageClusterOps: ["spec.clusterRef", "spec.action", "spec.cancelTask.taskID"], StorageNodeOps: ["spec.nodeRef", "spec.action", "spec.migrate.targetWorkerNode"],
   StorageDeviceOps: ["spec.deviceRef", "spec.action"], StoragePoolOps: ["spec.poolRef", "spec.action"],

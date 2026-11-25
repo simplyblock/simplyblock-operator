@@ -72,8 +72,10 @@ func TestCopyBackupPoliciesTurnsTheAnnotationIntoASelectorAndALabel(t *testing.T
 	if copied.Spec.ClusterRef != "production" || copied.Spec.Schedule != "24h,7" {
 		t.Errorf("spec = %+v, want the original's cluster and schedule", copied.Spec)
 	}
-	if copied.Spec.MaxVersions == nil || *copied.Spec.MaxVersions != 7 {
-		t.Errorf("maxVersions = %v, want 7", copied.Spec.MaxVersions)
+	// the v1alpha1 caps are not copied: the v1alpha2 policy states its
+	// retention in the schedule alone, and the operator derives the caps
+	if copied.Spec.Schedule != "24h,7" {
+		t.Errorf("schedule = %q, want the policy's schedule", copied.Spec.Schedule)
 	}
 	if copied.Spec.ClaimSelector == nil ||
 		copied.Spec.ClaimSelector.MatchLabels["storage.simplyblock.io/backup-policy"] != testPolicyName {

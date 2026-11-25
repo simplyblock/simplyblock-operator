@@ -21096,12 +21096,10 @@ const HEADLINES = {
   StorageBackupPolicy: {
     spec: [ro("spec.clusterRef", {
       link: "cluster"
-    }), ro("spec.schedule"), ro("spec.maxVersions", {
-      type: "number"
-    }), ro("spec.maxAge"), row("spec.consistencyGroupName"), row("spec.claimSelector.matchLabels", {
+    }), ro("spec.schedule"), row("spec.consistencyGroupName"), row("spec.claimSelector.matchLabels", {
       fmt: F.map
     })],
-    status: [row("status.phase"), row("status.message"), row("status.policyID"), row("status.clusterID"), row("status.lastBackupAt", {
+    status: [row("status.phase"), row("status.message"), row("status.policyID"), row("status.clusterID"), row("status.retention.maxVersions"), row("status.retention.maxAge"), row("status.lastBackupAt", {
       fmt: F.ago
     }), row("status.observedGeneration")],
     tables: [{
@@ -21392,7 +21390,7 @@ const STATIC_IMMUTABLE = {
   ControlPlane: ["spec.source.local.tls"],
   SimplyblockDriver: ["spec.driverName"],
   ClusterDeploymentConfig: ["spec.clusterRef", "spec.environment"],
-  StorageBackupPolicy: ["spec.clusterRef", "spec.schedule", "spec.maxVersions", "spec.maxAge"],
+  StorageBackupPolicy: ["spec.clusterRef", "spec.schedule"],
   StorageBackup: ["spec.clusterRef", "spec.source"],
   StorageClusterOps: ["spec.clusterRef", "spec.action", "spec.cancelTask.taskID"],
   StorageNodeOps: ["spec.nodeRef", "spec.action", "spec.migrate.targetWorkerNode"],

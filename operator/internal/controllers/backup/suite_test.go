@@ -160,6 +160,7 @@ type fakeControlPlane struct {
 	connection  lvol.Connection
 	connectErr  error
 	creates     int
+	created     []controlplane.CreateBackupPolicyParams
 	deletes     int
 	attaches    []string
 	detaches    []string
@@ -204,9 +205,10 @@ func (f *fakeControlPlane) BackupPolicyByName(
 }
 
 func (f *fakeControlPlane) CreateBackupPolicy(
-	context.Context, string, controlplane.CreateBackupPolicyParams,
+	_ context.Context, _ string, params controlplane.CreateBackupPolicyParams,
 ) (string, error) {
 	f.creates++
+	f.created = append(f.created, params)
 	if f.createErr != nil {
 		return "", f.createErr
 	}

@@ -330,12 +330,12 @@ func (g *genCtx) backups() {
 	policyID := g.uuid()
 	g.add(sbGroup, "storagebackuppolicies", g.ns, "nightly",
 		map[string]any{
-			"clusterRef": g.clusterName, "schedule": "0 2 * * *",
-			"maxVersions": float64(7), "maxAge": "168h",
+			"clusterRef": g.clusterName, "schedule": "15m,4 60m,11 24h,7",
 			"claimSelector": map[string]any{"matchLabels": map[string]any{"simplyblock.io/backup-policy": "nightly"}},
 		},
 		map[string]any{
 			"phase": "Active", "policyID": policyID, "clusterID": g.clusterUUID,
+			"retention": map[string]any{"maxVersions": float64(22), "maxAge": "7d"},
 			"attachedClaims": attached, "lastBackupAt": g.past(20),
 		}, nil)
 

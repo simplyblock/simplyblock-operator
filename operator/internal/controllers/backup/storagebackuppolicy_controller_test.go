@@ -360,3 +360,32 @@ func TestAnAttachedClaimRecordsItsCluster(t *testing.T) {
 		t.Errorf("attachedClaims = %+v, want the claim recorded in cluster %s", policy.Status.AttachedClaims, testClusterID)
 	}
 }
+
+// A policy states its retention once, in the schedule: the control plane's
+// version and age caps are read off the tiers and recorded in status, so the
+// object cannot carry two retention statements that disagree.
+func TestPolicyRetentionIsDerivedFromItsSchedule(t *testing.T) {
+	api := &fakeControlPlane{createdID: testPolicyID}
+	policy := policyObject(&metav1.LabelSelector{MatchLabels: map[string]string{"backup": "nightly"}})
+	policy.Spec.Schedule = "15m,4 60m,11 24h,7"
+	r := policyReconciler(t, api, testClusterObject(), policy)
+	if _, err := r.Reconcile(context.Background(), policyRequest()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	if len(api.created) != 1 {
+		t.Fatalf("created %d policies, want 1", len(api.created))
+	}
+	sent := api.created[0]
+	if sent.Schedule != "15m,4 60m,11 24h,7" || sent.MaxVersions != 22 || sent.MaxAge != "7d" {
+		t.Errorf("sent %+v, want the schedule with 22 versions and 7d derived from it", sent)
+	}
+
+	var got simplyblockv1alpha2.StorageBackupPolicy
+	if err := r.Get(context.Background(), policyRequest().NamespacedName, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Status.Retention == nil || got.Status.Retention.MaxVersions != 22 || got.Status.Retention.MaxAge != "7d" {
+		t.Errorf("status.retention = %+v, want 22 versions and 7d", got.Status.Retention)
+	}
+}

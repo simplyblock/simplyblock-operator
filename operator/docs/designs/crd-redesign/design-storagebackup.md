@@ -190,9 +190,17 @@ retention: a policy governs what is taken, not what is kept.
 
 ### 4.2 Schedule and retention
 
-`spec.schedule` is an interval, `spec.maxVersions` is how many backups to keep,
-and `spec.maxAge` is how long to keep them. All three are passed to the control
-plane, which does the scheduling and the pruning (§9).
+`spec.schedule` is the tiered schedule, and it is also the policy's whole
+statement of retention. The control plane's policy object takes a version cap
+and an age cap beside the schedule, and the operator reads both off the tiers
+rather than asking for them twice: the version cap is the keep counts added up,
+and the age cap is the reach of the tier that goes furthest back. `15m,4 60m,11
+24h,7` keeps 22 backups, the oldest a week old, and `status.retention` reports
+exactly that. An earlier revision carried `maxVersions` and `maxAge` in the spec
+beside the schedule, which let an object promise 88 backups over ten weeks in its
+tiers and 22 over a month in its caps, with nothing to say which was in force.
+All of it is passed to the control plane, which does the scheduling and the
+pruning (§9).
 
 **The schedule is the control plane's own format rather than cron**, because the
 control plane is what reads it. It is a space-separated list of
@@ -202,13 +210,13 @@ plane would refuse is refused at admission instead. Accepting cron here would me
 the operator translating one scheduling language into another and being the place
 a mistranslation lives.
 
-**All three are immutable, and that is a property of the control plane rather than
+**The schedule is immutable, and that is a property of the control plane rather than
 a choice.** §10 lists a `PUT` that applies a changed schedule, and the v2 API
 offers no such endpoint: it creates, deletes, attaches, and detaches a policy and
 nothing else. A mutable field the operator cannot reconcile would leave the
 declaration and the backups actually being taken permanently disagreeing, with the
-object still reporting `Active`, so all three are fixed at creation until the
-endpoint exists. Changing one means replacing the policy.
+object still reporting `Active`, so the schedule is fixed at creation until the
+endpoint exists. Changing it means replacing the policy.
 
 **The operator does not run the schedule.** It reconciles the policy into the
 control plane and reports what the control plane did. That is deliberate: a
@@ -572,8 +580,9 @@ from wherever it was taken.
 
 ## 9. Retention Is the Control Plane's
 
-`StorageBackupPolicy` carries `maxVersions` and `maxAge`, and the operator does
-not enforce either.
+`StorageBackupPolicy` states its retention in `spec.schedule`, the operator derives
+the version and age caps the control plane takes from it and reports them in
+`status.retention`, and the operator enforces neither.
 
 **The control plane prunes, and the operator reconciles what it finds.** A backup
 the control plane deleted becomes a `StorageBackup` whose subject is gone, and the
@@ -858,9 +867,16 @@ type StorageBackupPolicySpec struct {
 	// +optional
 	ClaimSelector *metav1.LabelSelector `json:"claimSelector,omitempty"`
 
-	// Schedule is the interval the control plane runs the policy on, in its own
-	// format: a space-separated list of <interval>,<retention> pairs, where an
-	// interval is a number and one of m, h, d, or w.
+	// Schedule is the tiered schedule the control plane runs the policy on, as a
+	// space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7"):
+	// four quarter-hourly backups, eleven hourly, and seven daily. Intervals
+	// must be strictly increasing, and the supported units are m, h, d, and w.
+	//
+	// It is also the policy's whole statement of retention. The control plane
+	// keeps as many backups as the tiers' keep counts add up to, for as long as
+	// the furthest tier reaches back, and status.retention shows both numbers.
+	// There is no separate version or age cap to set, so the object cannot
+	// promise one thing in the schedule and another beside it.
 	//
 	// Immutable, and that is a property of the control plane rather than a
 	// choice. §10 lists a PUT that applies a changed schedule, and the v2 API
@@ -874,19 +890,18 @@ type StorageBackupPolicySpec struct {
 	// +k8s:immutable
 	// +optional
 	Schedule string `json:"schedule,omitempty"`
+}
 
-	// MaxVersions is how many backups of one claim to keep. Zero means no limit
-	// by count. Immutable, for the reason Schedule is.
-	// +kubebuilder:validation:Minimum=0
-	// +k8s:immutable
+// BackupRetention is what the schedule keeps, as the operator read it off the
+// tiers and asked the control plane to enforce.
+type BackupRetention struct {
+	// MaxVersions is how many backups of one claim the control plane keeps: the
+	// schedule's keep counts added up. Zero means no limit by count.
 	// +optional
-	MaxVersions *int32 `json:"maxVersions,omitempty"`
+	MaxVersions int32 `json:"maxVersions,omitempty"`
 
-	// MaxAge is how long to keep a backup ("30d", "720h"). Empty means no limit
-	// by age. Retention is enforced by the control plane, not here. Immutable,
-	// for the reason Schedule is.
-	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
-	// +k8s:immutable
+	// MaxAge is how long the control plane keeps a backup ("7d," "36h"): the
+	// reach of the schedule's furthest tier. Empty means no limit by age.
 	// +optional
 	MaxAge string `json:"maxAge,omitempty"`
 }

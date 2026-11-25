@@ -199,6 +199,7 @@ func (r *StorageBackupPolicyReconciler) Reconcile(ctx context.Context, req ctrl.
 				status.ClusterID, status.PolicyID, status.Members = members[0].ClusterID, members[0].PolicyID, nil
 			}
 			status.AttachedClaims = attached
+			status.Retention = derivedRetention(&policy)
 			status.Message = fmt.Sprintf("The policy is active and covers %d claim(s)", len(attached))
 			status.LastBackupAt = r.lastBackupAt(ctx, &policy)
 		})
@@ -241,6 +242,7 @@ func (r *StorageBackupPolicyReconciler) reconcileGroupPolicy(
 					status.Members = members
 				}
 				status.AttachedClaims = nil
+				status.Retention = derivedRetention(policy)
 				status.Message = fmt.Sprintf(
 					"The policy is active and backs up consistency group %s as one unit", name)
 				status.LastBackupAt = r.lastBackupAt(ctx, policy)
@@ -338,12 +340,30 @@ func (r *StorageBackupPolicyReconciler) ensurePolicy(
 		return "", err
 	}
 
+	// The control plane takes a version cap and an age cap beside the
+	// schedule, and both are read off the schedule's tiers rather than
+	// declared twice: a policy states its retention once.
+	retention, err := controlplane.ScheduleRetention(policy.Spec.Schedule)
+	if err != nil {
+		return "", fmt.Errorf("spec.schedule: %w", err)
+	}
 	return r.API.CreateBackupPolicy(ctx, clusterID, controlplane.CreateBackupPolicyParams{
 		Name:        policy.Name,
 		Schedule:    policy.Spec.Schedule,
-		MaxAge:      policy.Spec.MaxAge,
-		MaxVersions: ptr.FromOrZero(policy.Spec.MaxVersions),
+		MaxAge:      retention.MaxAge,
+		MaxVersions: retention.MaxVersions,
 	})
+}
+
+// derivedRetention is status.retention for a policy: what its schedule keeps,
+// or nothing when it has no schedule. A schedule the CRD's pattern let through
+// but the parser refuses reports nothing here and fails the create instead.
+func derivedRetention(policy *simplyblockv1alpha2.StorageBackupPolicy) *simplyblockv1alpha2.BackupRetention {
+	retention, err := controlplane.ScheduleRetention(policy.Spec.Schedule)
+	if err != nil || (retention.MaxVersions == 0 && retention.MaxAge == "") {
+		return nil
+	}
+	return &simplyblockv1alpha2.BackupRetention{MaxVersions: retention.MaxVersions, MaxAge: retention.MaxAge}
 }
 
 // reconcileMembership attaches the volumes behind newly matching claims and

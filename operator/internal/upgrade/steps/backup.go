@@ -32,7 +32,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/upgrade"
@@ -149,12 +148,11 @@ func (c copyBackupPolicies) Apply(
 			ClaimSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{backupPolicyKey: policy.Name},
 			},
+			// The v1alpha1 caps are not carried over: a StorageBackupPolicy
+			// states its retention in the schedule alone, and the operator
+			// derives the caps the control plane takes from it.
 			Schedule: policy.Spec.Schedule,
-			MaxAge:   policy.Spec.MaxAge,
 		},
-	}
-	if policy.Spec.MaxVersions > 0 {
-		copied.Spec.MaxVersions = ptr.To(int32(policy.Spec.MaxVersions))
 	}
 	if err := s.Client.Create(ctx, copied); err != nil && !apierrors.IsAlreadyExists(err) {
 		return fmt.Errorf("creating StorageBackupPolicy %s: %w", policy.Name, err)
