@@ -59,6 +59,9 @@ type component struct {
 	// kind is how its readiness is read.
 	kind componentKind
 
+	// object is the workload's name where it differs from name.
+	object string
+
 	// essential is whether this component at zero ready makes the control plane
 	// Unavailable rather than Degraded.
 	essential bool
@@ -67,6 +70,14 @@ type component struct {
 	// not self-evident. It is read by nothing and exists so the table explains
 	// itself where it is edited.
 	why string
+}
+
+// objectName is the name of the workload behind the component.
+func (c component) objectName() string {
+	if c.object != "" {
+		return c.object
+	}
+	return c.name
 }
 
 // componentTable is every workload the managed install applies, in the order
@@ -114,7 +125,8 @@ var componentTable = []component{
 	},
 	{
 		name: ComponentPrometheus, kind: kindStatefulSet, essential: false,
-		why: "it keeps the record of what happened; the fleet serves without it",
+		object: prometheusStatefulSet,
+		why:    "it keeps the record of what happened; the fleet serves without it",
 	},
 	{
 		name: ComponentFDBExporter, kind: kindDeployment, essential: false,
@@ -139,7 +151,7 @@ func observe(
 		switch comp.kind {
 		case kindDeployment:
 			var d appsv1.Deployment
-			err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: comp.name}, &d)
+			err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: comp.objectName()}, &d)
 			switch {
 			case errors.IsNotFound(err):
 			case err != nil:
@@ -151,7 +163,7 @@ func observe(
 
 		case kindStatefulSet:
 			var s appsv1.StatefulSet
-			err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: comp.name}, &s)
+			err := c.Get(ctx, client.ObjectKey{Namespace: namespace, Name: comp.objectName()}, &s)
 			switch {
 			case errors.IsNotFound(err):
 			case err != nil:

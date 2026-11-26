@@ -32,7 +32,10 @@ const clusterFileHashAnnotation = "storage.simplyblock.io/cluster-file-hash"
 func (r *ControlPlaneReconciler) managementAPIStamped(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) ([]client.Object, error) {
-	objects := managementAPIObjects(cp)
+	objects, err := r.prometheusGated(ctx, cp, managementAPIObjects(cp))
+	if err != nil {
+		return nil, err
+	}
 
 	var file corev1.ConfigMap
 	key := client.ObjectKey{Namespace: cp.Namespace, Name: clusterFileConfigMapName}

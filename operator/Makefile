@@ -176,6 +176,14 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+# PROMETHEUS_OPERATOR_VERSION is the prometheus-operator release embedded as a
+# prerequisite. Change it and run the target below to update.
+PROMETHEUS_OPERATOR_VERSION ?= v0.95.2
+
+.PHONY: prometheus-operator-manifest
+prometheus-operator-manifest: ## Regenerate the embedded prometheus-operator from its upstream bundle.
+	hack/update-prometheus-operator.sh $(PROMETHEUS_OPERATOR_VERSION)
+
 ##@ Build
 
 .PHONY: build

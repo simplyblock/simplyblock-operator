@@ -35,7 +35,8 @@ type wantedPrerequisite struct {
 // only when it issues the TLS certificate. When the volumes name no
 // StorageClass of their own, an EKS cluster gets the EBS CSI driver and a gp3
 // class of it (chooseEBSClass), and any other cluster local-path. The snapshot
-// controller is for the CSI driver, so it is installed but never waited for.
+// controller is for the CSI driver and the prometheus-operator for metrics, so
+// both are installed but never waited for.
 func wantedPrerequisites(cp *simplyblockv1alpha2.ControlPlane, chooseEBSClass bool) []wantedPrerequisite {
 	local := cp.Spec.Source.Local
 	p := local.Prerequisites
@@ -51,7 +52,9 @@ func wantedPrerequisites(cp *simplyblockv1alpha2.ControlPlane, chooseEBSClass bo
 	case storageClassOf(cp) == "":
 		wanted = append(wanted, wantedPrerequisite{prerequisites.LocalPathProvisioner, p.InstallsLocalPathProvisioner(), true})
 	}
-	return append(wanted, wantedPrerequisite{prerequisites.SnapshotController, p.InstallsSnapshotController(), false})
+	return append(wanted,
+		wantedPrerequisite{prerequisites.SnapshotController, p.InstallsSnapshotController(), false},
+		wantedPrerequisite{prerequisites.PrometheusOperator, p.InstallsPrometheusOperator(), false})
 }
 
 // ensurePrerequisites installs every missing add-on its flag allows, upgrades
