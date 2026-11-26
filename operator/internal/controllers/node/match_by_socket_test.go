@@ -14,6 +14,8 @@ import (
 	"k8s.io/utils/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/cpinformer/subscriptions"
 )
 
 // onSocket is a reading of worker-1's node on one socket.
@@ -60,6 +62,40 @@ func TestASlotWhoseSocketHasNoNodeIsNotGivenAnotherSocketsNode(t *testing.T) {
 		[]string{"0", "1"}, 0, 0)
 	if found {
 		t.Error("slot 0 (socket 0) was matched to socket 1's node")
+	}
+}
+
+// The same slot, read from the control-plane stream's cache rather than the API,
+// which is where a running operator reads the node list from once the stream
+// has synced.
+//
+// Regression: simplyblock-operator#408, found live on a two-socket cluster —
+// socket 0's node on one worker was removed and deleted, and three seconds
+// later the slot-0 object held socket 1's node: the cache dropped the socket,
+// so the match fell back to port order with one node left on the worker.
+func TestASlotReadFromTheStreamIsNotGivenAnotherSocketsNode(t *testing.T) {
+	r, node, cluster := aMatcher(t, nil)
+	cluster.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{SocketsToUse: []string{"0", "1"}}
+	node.Spec.Slot = ptr.To(int32(0))
+
+	stream := subscriptions.NewNodeSubscription()
+	err := stream.Ingest(context.Background(), cpinformer.Event{
+		Kind:  cpinformer.EventSnapshot,
+		Scope: scopeOf(cluster.Status.UUID),
+		Data: []byte(`[{"id":"socket-1-node","status":"online","mgmt_ip":"` +
+			workerKubernetesIP + `","rpc_port":4430,"socket":1}]`),
+	})
+	if err != nil {
+		t.Fatalf("ingest: %v", err)
+	}
+	r.Nodes = stream
+
+	reading, found, err := r.matchBackendNode(context.Background(), node, cluster)
+	if err != nil {
+		t.Fatalf("matchBackendNode: %v", err)
+	}
+	if found {
+		t.Errorf("slot 0 (socket 0) was matched to %q, socket 1's node", reading.UUID)
 	}
 }
 
