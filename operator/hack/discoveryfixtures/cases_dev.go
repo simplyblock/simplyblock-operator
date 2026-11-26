@@ -227,6 +227,16 @@ func devCases() map[string]Case {
 				"partition out of the smallest disk, so every disk keeps carrying data. " +
 				"The note names forceJournalDevice for a run that wants a disk dedicated.",
 		},
+		"DEV-22": {
+			Family: "dev", Slug: "every-disk-in-an-array-nothing-uses",
+			Reports: []nodeprobe.Report{host("worker-01", single, disks(
+				nvme("nvme0n1", "0000:00:04.0", 0, 375*gb, idleRAIDMember()),
+				nvme("nvme0n2", "0000:00:05.0", 0, 375*gb, idleRAIDMember()),
+			))},
+			Note: "The array is assembled and nothing mounts it, holds it, or formatted it, " +
+				"on any environment. Both members are drafted, and the draft says the " +
+				"deployment stops md0 and erases the members' RAID superblocks.",
+		},
 		"DEV-16": {
 			Family: "dev", Slug: "a-fabric-namespace-of-another-product",
 			Reports: []nodeprobe.Report{host("worker-01", single, disks(

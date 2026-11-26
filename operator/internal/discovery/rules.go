@@ -145,13 +145,20 @@ func (c DeviceClass) Address(device nodeprobe.Device) string {
 
 // AvailableRule admits a device the probe found free.
 //
-// There are two waivers, and both are narrow on purpose. With
+// There are three waivers, and each is narrow on purpose. With
 // EnablePartitionedDevices, a device whose only refusal is its partition table
 // is admitted, and a device that is also mounted, held, or unreadable is not.
 // That is what blockdev.Candidate.OnlyRejectedFor guarantees on the probe's
 // side and what this rule spends here. A logical block device run also admits a
 // partition whose only refusal is being one, and only when the probe read it
 // and found it empty.
+//
+// Every run, on every environment, admits a member of a software-RAID array
+// nothing uses, refused for that alone: the probe established the array is not
+// mounted, holds nothing, and carries no content, and the configure on the
+// worker stops it before the storage node takes the member. Who assembled the
+// array plays no part. A member of an array that is in use is refused, as
+// RAIDMember, however the array came to be.
 type AvailableRule struct {
 	// AllowPartitioned waives a partition table, for the administrator who
 	// knows the table is stale.
@@ -172,6 +179,9 @@ func (r AvailableRule) Admit(_ nodeprobe.Report, device nodeprobe.Device) (bool,
 		return true, ""
 	}
 	if r.AllowPartitions && emptyPartition(device) {
+		return true, ""
+	}
+	if device.OnlyRejectedFor(string(blockdev.ReasonIdleRAIDMember)) {
 		return true, ""
 	}
 

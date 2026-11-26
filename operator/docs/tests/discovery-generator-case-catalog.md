@@ -121,6 +121,7 @@ constructing one directly.
 | DEV-19 | An iSCSI LUN on an NVMe run                                 | Refused for being the other class, before the iSCSI rule is reached                         | `CM`    |
 | DEV-20 | 4 equal virtio disks, block run, forceJournalDevice unset   | Drafted with the journal split: enableJournalDevice unset, every disk carries data          | `CM`    |
 | DEV-21 | Blank, formatted, and unread partitions, block run          | Regression: the blank one only. `TestPlanProposesABlankPartitionInABlockRun`                | `GO`    |
+| DEV-22 | 2 NVMe disks, members of an MD RAID array nothing uses      | Both drafted; the draft notes the deployment stops `md0` and erases its superblocks         | `CM`    |
 
 ## 3. NUMA topology
 

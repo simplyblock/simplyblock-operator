@@ -566,6 +566,21 @@ func raidMember() devOpt {
 	}
 }
 
+// idleRAIDMember is a disk a software-RAID array took that nothing uses: the
+// array is not mounted, holds nothing, and carries no content, so the probe
+// refuses the member on that ground alone and the kernel's refusal with it.
+func idleRAIDMember() devOpt {
+	return func(d *nodeprobe.Device) {
+		d.Available = false
+		d.Content = ""
+		d.Rejections = append(d.Rejections, nodeprobe.Rejection{
+			Reason: string(blockdev.ReasonIdleRAIDMember),
+			Detail: "a member of the MD RAID array md0 (raid0), which nothing mounts, holds, or " +
+				"formatted; taking the device stops the array",
+		})
+	}
+}
+
 // modeled overrides the device's model string.
 func modeled(model string) devOpt {
 	return func(d *nodeprobe.Device) { d.Model = model }

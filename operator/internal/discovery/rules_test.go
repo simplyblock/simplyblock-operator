@@ -8,6 +8,7 @@
 package discovery
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -494,5 +495,30 @@ func TestAvailableRuleSaysWhatHoldsADevice(t *testing.T) {
 	mounted := refused(disk("nvme1n1", "0000:00:05.0", 0, tb), blockdev.ReasonMounted)
 	if _, why := admit(AvailableRule{}, mounted); strings.Contains(why, mounted.Rejections[0].Detail) {
 		t.Errorf("the reason %q quotes the mount detail", why)
+	}
+}
+
+// Regression: 2026-11-17-unused-md-array-members — a worker whose disks were
+// assembled into an MD RAID array that nothing uses drafted none of them, on
+// every environment, although the array has nothing on it to lose.
+func TestAvailableRuleAdmitsTheMemberOfAnArrayNothingUses(t *testing.T) {
+	idle := blockdev.Rejection{Reason: blockdev.ReasonIdleRAIDMember,
+		Detail: "a member of the MD RAID array md0 (raid0), which nothing mounts, holds, or formatted"}
+
+	member := disk("nvme0n1", "0000:00:04.0", 0, tb)
+	member.Available = false
+	member.Content = ""
+	member.Rejections = []nodeprobe.Rejection{{Reason: string(idle.Reason), Detail: idle.Detail}}
+	if ok, why := admit(AvailableRule{}, member); !ok {
+		t.Errorf("refused the member of an idle array: %s", why)
+	}
+
+	// The waiver is for the array alone. A member that is also refused on a
+	// ground of its own keeps it.
+	readOnly := member
+	readOnly.Rejections = append(slices.Clone(member.Rejections),
+		nodeprobe.Rejection{Reason: string(blockdev.ReasonReadOnly)})
+	if ok, _ := admit(AvailableRule{}, readOnly); ok {
+		t.Error("admitted a read-only member of an idle array")
 	}
 }
