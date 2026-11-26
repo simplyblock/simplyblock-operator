@@ -45,9 +45,11 @@ DriverInfo:
     # Off for the reasons above; manifest-block-multinode.yaml turns them on.
     RWX: false
     capReadOnlyMany: false
-    # The driver reads PersistentVolume objects (topology, moved volumes), which
-    # is the case the suite says to keep this off for until it is verified.
-    multiplePVsSameID: false
+    # Verified on 2026-11-26: kubelet stages a filesystem volume at a path
+    # derived from its volume handle, so two PVs of one volume share one staging
+    # mount, staged and unstaged once. The suite's test covers filesystem
+    # volumes only.
+    multiplePVsSameID: true
     # NodeGetInfo reports no MaxVolumesPerNode yet.
     volumeLimits: false
     # run.sh decides: on where groupsnapshot.storage.k8s.io/v1 is served.
