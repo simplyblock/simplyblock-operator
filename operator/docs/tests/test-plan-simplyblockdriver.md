@@ -80,6 +80,8 @@ File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_te
 | U-112 | Unset or false: no init container and no host root volume                            | Negative | `TestNVMeTCPModuleInstallOffAddsNothing`               |
 | U-113 | An Ubuntu host is entered with `chroot` and runs the apt install                     | Positive | `TestNVMeTCPGuardEntersAnUbuntuHost`                   |
 | U-114 | A non-Ubuntu host, or one without `os-release`, is left alone and exits 0            | Negative | `TestNVMeTCPGuardLeavesOtherHostsAlone`                |
+| U-115 | `maxAttachedVolumesPerWorker` reaches the node plugin's flag, not the controller     | Positive | `TestAttachedVolumeLimitReachesOnlyTheNodePlugin`      |
+| U-116 | No limit renders no flag, so the node plugin's template is unchanged                 | Negative | `TestNoAttachedVolumeLimitRendersNothing`              |
 
 `U-44` holds the boundary design §4.1 draws. The `csi-snapshotter` sidecar is part
 of this driver's controller plugin, and the detection applies to the cluster's
@@ -421,11 +423,11 @@ row for.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 101       | 64      | 37          |
+| Unit        | 103       | 66      | 37          |
 | Integration | 23        | 0       | 23          |
 | E2E         | 13        | 0       | 13          |
 | Manual      | 3         | 0       | 3           |
-| **Total**   | **140**   | **64**  | **76**      |
+| **Total**   | **142**   | **66**  | **76**      |
 
 `I-12`, `U-74`, and `U-69` to `U-71` are superseded or retired and are not in the
 counts.

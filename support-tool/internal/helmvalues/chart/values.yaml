@@ -566,6 +566,15 @@ driver:
   # distributions are left unchanged.
   enableNVMeTCPModuleInstall: false
 
+  # How many simplyblock volumes one worker may have attached at a time. The
+  # node plugin reports it to the scheduler, which then sends no pod to a worker
+  # whose attached volumes would go past it. It counts volumes a worker uses,
+  # whichever storage nodes serve them; how many volumes one storage node serves
+  # is the cluster's maxSubsystemCount. 0 is no limit.
+  # -- Maximum number of simplyblock volumes attached to one worker at a time, enforced by the
+  # scheduler. `0` is no limit.
+  maxAttachedVolumesPerWorker: 0
+
   # Where the controller plugin runs. This is ordinary pod placement for one
   # workload, unlike the pair above.
   # -- Node selector for the CSI controller plugin.

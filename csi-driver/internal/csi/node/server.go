@@ -59,6 +59,9 @@ type Server struct {
 	kubeClient kubernetes.Interface
 	manager    *sbkube.Manager
 	guardian   *guardian.Guardian
+	// maxAttachedVolumes is how many volumes this worker may have attached at a
+	// time, reported to the scheduler by NodeGetInfo. Zero is no limit.
+	maxAttachedVolumes int64
 	// deviceMapper is whether this host can run the dmLinear indirection, as
 	// the probe at start found it. Set before the service serves.
 	deviceMapper bool

@@ -476,6 +476,32 @@ func TestDisablingDeviceMapperIndirectionReachesOnlyTheNodePlugin(t *testing.T) 
 	}
 }
 
+// U-115: maxAttachedVolumesPerWorker reaches the node plugin, which reports it
+// to the scheduler, and not the controller plugin, which attaches nothing on a
+// worker: a change that reached both would restart the controller for nothing.
+func TestAttachedVolumeLimitReachesOnlyTheNodePlugin(t *testing.T) {
+	d := testDriver("simplyblock")
+	d.Spec.MaxAttachedVolumesPerWorker = 40
+
+	node := containerNamed(nodeDaemonSet(d, testImage).Spec.Template.Spec.Containers, "csi-node")
+	if v, ok := argValue(node, "--max-attached-volumes-per-worker"); !ok || v != "40" {
+		t.Errorf("node plugin --max-attached-volumes-per-worker = %q (set: %v), want \"40\"", v, ok)
+	}
+	controller := containerNamed(controllerStatefulSet(d, testImage).Spec.Template.Spec.Containers, "csi-controller")
+	if v, ok := argValue(controller, "--max-attached-volumes-per-worker"); ok {
+		t.Errorf("the controller plugin carries --max-attached-volumes-per-worker=%s", v)
+	}
+}
+
+// U-116: no limit renders no flag, so a driver that sets none keeps the node
+// plugin's template as it was and an operator upgrade restarts no node plugin.
+func TestNoAttachedVolumeLimitRendersNothing(t *testing.T) {
+	node := containerNamed(nodeDaemonSet(testDriver("simplyblock"), testImage).Spec.Template.Spec.Containers, "csi-node")
+	if v, ok := argValue(node, "--max-attached-volumes-per-worker"); ok {
+		t.Errorf("a driver with no limit renders --max-attached-volumes-per-worker=%s", v)
+	}
+}
+
 // U-111: enableNVMeTCPModuleInstall adds the nvme-tcp-module init container.
 // It runs the driver's own image under the driver's pull policy, so a mirrored
 // or air-gapped registry needs nothing more, and it reaches the host through a

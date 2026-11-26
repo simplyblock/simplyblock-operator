@@ -457,6 +457,10 @@
         "enableNVMeTCPModuleInstall": {
           "type": "boolean"
         },
+        "maxAttachedVolumesPerWorker": {
+          "type": "integer",
+          "minimum": 0
+        },
         "controllerNodeSelector": {
           "type": "object"
         },

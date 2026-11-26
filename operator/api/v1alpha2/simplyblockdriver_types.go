@@ -366,6 +366,19 @@ type SimplyblockDriverSpec struct {
 	// +optional
 	EnableNVMeTCPModuleInstall *bool `json:"enableNVMeTCPModuleInstall,omitempty"`
 
+	// MaxAttachedVolumesPerWorker is how many simplyblock volumes one Kubernetes
+	// worker may have attached at a time. The node plugin reports it to the
+	// scheduler, which places no pod on a worker whose attached volumes would go
+	// past it, so such a pod goes to a worker with room or stays Pending rather
+	// than waiting on an attach the worker cannot take. It counts what a worker
+	// consumes, from any storage node, and is unrelated to how many volumes one
+	// storage node serves, which is StorageCluster spec.maxSubsystemCount. 0 is
+	// no limit. Changing it restarts every node plugin, and a worker already
+	// past a lowered limit keeps its volumes and takes no new ones.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxAttachedVolumesPerWorker int32 `json:"maxAttachedVolumesPerWorker,omitempty"`
+
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field
 	// existed. Adopting a deployment that already runs TLS requires this to

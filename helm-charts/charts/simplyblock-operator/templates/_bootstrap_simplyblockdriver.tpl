@@ -54,6 +54,8 @@ spec:
   enableCSIAddons: {{ .Values.csiaddons.create }}
   # Loads nvme-tcp on Ubuntu workers before the node plugin starts.
   enableNVMeTCPModuleInstall: {{ .Values.driver.enableNVMeTCPModuleInstall | default false }}
+  # Reported to the scheduler by the node plugin; 0 is no limit.
+  maxAttachedVolumesPerWorker: {{ .Values.driver.maxAttachedVolumesPerWorker | default 0 }}
   {{- if .Values.driver.image.repository }}
   image: "{{ .Values.driver.image.repository }}:{{ required "driver.image.tag is required when driver.image.repository is set: the field is a full reference and an untagged one is refused by the schema" .Values.driver.image.tag }}"
   {{- end }}

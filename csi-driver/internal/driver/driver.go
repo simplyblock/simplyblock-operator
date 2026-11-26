@@ -157,7 +157,7 @@ func Run(conf *config.Config) {
 			klog.Fatalf("the node plugin does not start: %s", err)
 		}
 		var err error
-		ns, err = startNodeServer(cd, kubeClient)
+		ns, err = startNodeServer(cd, kubeClient, conf.MaxAttachedVolumesPerWorker)
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
@@ -410,7 +410,9 @@ func recordStartRefusal(kubeClient kubernetes.Interface, conf *config.Config, re
 // every poll, so a single instance means a single PV watch and a single PVC
 // watch. It serves reads from cache once synced and falls back to the API until
 // then, so neither consumer needs a fallback of its own.
-func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (*node.Server, error) {
+func startNodeServer(
+	cd *csicommon.CSIDriver, kubeClient kubernetes.Interface, maxAttachedVolumes int64,
+) (*node.Server, error) {
 	manager := sbkube.NewManager(kubeClient)
 	manager.Start(context.Background())
 
@@ -422,6 +424,7 @@ func startNodeServer(cd *csicommon.CSIDriver, kubeClient kubernetes.Interface) (
 	// resumed before anything else: the deadline that would have resumed it
 	// went with that run.
 	ns.RecoverFreezes(context.Background())
+	ns.LimitAttachedVolumes(maxAttachedVolumes)
 
 	nodeName := cd.GetNodeID()
 	// Before the service serves: a fresh stage reads the answer.

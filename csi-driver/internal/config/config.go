@@ -13,6 +13,10 @@ type Config struct {
 	IsControllerServer bool
 	IsNodeServer       bool
 
+	// MaxAttachedVolumesPerWorker is how many volumes the node plugin lets the
+	// scheduler place on its worker at a time. Zero is no limit.
+	MaxAttachedVolumesPerWorker int64
+
 	// Link to the operator. The driver dials out and holds the connection, and the
 	// operator issues its RPCs back down it. Disabled by default, since the driver
 	// serves CSI whether or not it is linked.

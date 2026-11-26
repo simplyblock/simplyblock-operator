@@ -111,3 +111,35 @@ func TestNodeGetInfoKeepsTheSegmentsItAlreadyPublished(t *testing.T) {
 		}
 	}
 }
+
+// The scheduler counts a worker's attached simplyblock volumes against what
+// NodeGetInfo reports, and places no pod that would go past it. Without a
+// number a worker takes every pod sent its way, and the one past what it can
+// connect waits in ContainerCreating instead of going to a worker with room.
+func TestNodeGetInfoReportsTheAttachedVolumeLimit(t *testing.T) {
+	ns := topologyServer(t, labeledNode(nil))
+	ns.LimitAttachedVolumes(40)
+
+	resp, err := ns.NodeGetInfo(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("NodeGetInfo: %v", err)
+	}
+	if resp.GetMaxVolumesPerNode() != 40 {
+		t.Fatalf("NodeGetInfo reports %d attached volumes per worker, want the configured 40",
+			resp.GetMaxVolumesPerNode())
+	}
+}
+
+// No limit configured is reported as none: 0 is what CSI defines as unlimited,
+// so the scheduler does not count this driver's volumes at all.
+func TestNodeGetInfoReportsNoLimitByDefault(t *testing.T) {
+	ns := topologyServer(t, labeledNode(nil))
+
+	resp, err := ns.NodeGetInfo(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("NodeGetInfo: %v", err)
+	}
+	if resp.GetMaxVolumesPerNode() != 0 {
+		t.Fatalf("NodeGetInfo reports a limit of %d with none configured", resp.GetMaxVolumesPerNode())
+	}
+}
