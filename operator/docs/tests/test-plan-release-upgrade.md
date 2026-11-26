@@ -117,13 +117,14 @@ File: `operator/internal/controllers/cluster/rollingrestart_test.go`
 
 File: `operator/internal/controllers/cluster/writeprotection_test.go` (new)
 
-| #    | Scenario                                                                                                          | Type     | Test |
-|------|-------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-30 | Cluster on `V1`, every node online: one switch call, then `Succeeded` once the cluster reports `V2`               | Positive | —    |
-| U-31 | Cluster already on `V2`: succeeds at admission with `already on v2 write protection`, zero calls                  | Negative | —    |
-| U-32 | A node offline: holds in `CheckingPeers`, zero calls                                                              | Negative | —    |
-| U-33 | The switch call returns 404 (control plane without the endpoint): the operation fails naming the missing endpoint | Negative | —    |
-| U-34 | The switch call times out and is retried: the write-ahead guard keeps it to one call                              | Negative | —    |
+| #    | Scenario                                                                                                                                     | Type     | Test |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
+| U-30 | Cluster on `V1`, every node online: one switch call, then `Succeeded` once the cluster reports `V2`                                          | Positive | —    |
+| U-31 | Cluster already on `V2`: succeeds at admission with `already on v2 write protection`, zero calls                                             | Negative | —    |
+| U-32 | A node offline: holds in `CheckingPeers`, zero calls                                                                                         | Negative | —    |
+| U-33 | The switch call returns 404 (control plane without the endpoint): the operation fails naming the missing endpoint                            | Negative | —    |
+| U-34 | The switch call times out and is retried: the write-ahead guard keeps it to one call                                                         | Negative | —    |
+| U-74 | The switch call answers `409` (a node rejected it): the step holds, calls again on the next pass, and succeeds once the cluster reports `V2` | Negative | —    |
 
 ### Release Detection and Module Selection (design §6.1, §6.4)
 
@@ -182,7 +183,7 @@ File: `operator/internal/upgrade/releases/r26_4_0_beta7/module_test.go` (new)
 | U-62 | Target SPDK image in the module's unsupported table: `spdk-image-supports-sizing` refuses. A supported one passes                                              | Positive + Negative | —    |
 | U-63 | MDS StatefulSet with a `state` claim template: `pnfs-mds-legacy-state` deletes it with orphaned pods, the claims, the StorageClass, and the policy and binding | Positive            | —    |
 | U-64 | MDS without the claim template, or no MDS: the step is skipped, zero deletes                                                                                   | Negative            | —    |
-| U-65 | A cluster on `V1`: `write-protection-v2` creates the switch, then a restart with `selection: All`. On `V2`: nothing                                            | Positive + Negative | —    |
+| U-65 | A cluster on `V1`: `write-protection-v2` creates the switch and no rolling restart. On `V2`: nothing                                                           | Positive + Negative | —    |
 | U-66 | Release values carrying `driver.pnfs.mds.stateSize`: a warning finding, not an error                                                                           | Positive            | —    |
 
 ### Chart Rendering (design §7.2 to §7.4)
@@ -300,7 +301,7 @@ rollout waits without failing, then continues once the worker returns.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 73        | 0       | U-01 … U-73 |
+| Unit        | 74        | 0       | U-01 … U-74 |
 | Integration | 11        | 0       | I-01 … I-11 |
 | E2E         | 7         | 0       | E-01 … E-07 |
 | Manual      | 2         | 0       | M-01, M-02  |
@@ -311,7 +312,7 @@ rollout waits without failing, then continues once the worker returns.
 
 | #           | Gap                                          | Reason                                                                                                       |
 |-------------|----------------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| U-01 … U-73 | Every unit scenario                          | The design is a draft. Nothing is implemented                                                                |
+| U-01 … U-74 | Every unit scenario                          | The design is a draft. Nothing is implemented                                                                |
 | I-01 … I-11 | Every integration scenario                   | As above                                                                                                     |
 | E-01 … E-07 | Every end-to-end scenario                    | As above, and the rows need the control-plane prerequisites P0-1 to P0-4 of the design                       |
 | U-67 … U-73 | Chart rendering                              | The repository has no chart-rendering test harness yet                                                       |

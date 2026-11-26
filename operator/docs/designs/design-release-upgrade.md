@@ -26,13 +26,13 @@ user documentation follows phase 5, so that it describes what the tooling does.
 
 ## Phase 0 — External Prerequisites
 
-| #    | Prerequisite                                                                                                                                                          | Kind                    | Blocks                         | Status      |
-|------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|--------------------------------|-------------|
-| P0-1 | `POST /api/v2/clusters/{id}/storage-nodes/{node}/restart` accepts `spdk_image` and `spdk_proxy_image` and passes them to `restart_storage_node`                       | Control plane (`sbcli`) | Phase 1 (§5.2)                 | Not shipped |
-| P0-2 | The storage-node representation of API v2 reports `spdk_image` and `spdk_proxy_image`, the images the control plane starts the node with                              | Control plane (`sbcli`) | Phase 1 (§5.3), Phase 2 (§5.4) | Not shipped |
-| P0-3 | The control plane reports its default SPDK and SPDK proxy images (`SIMPLY_BLOCK_SPDK_ULTRA_IMAGE` and its proxy counterpart) through API v2                           | Control plane (`sbcli`) | Phase 1 (§5.1)                 | Not shipped |
-| P0-4 | API v2 exposes the write-protection switch that `sbctl cluster switch-write-protection` performs, and the cluster representation reports the write-protection version | Control plane (`sbcli`) | Phase 3 (§4.4)                 | Not shipped |
-| P0-5 | An SPDK image states which control-plane sizing it supports, readable without starting it                                                                             | Storage plane (SPDK)    | The capability check of §6.6   | Unknown     |
+| #    | Prerequisite                                                                                                                                                   | Kind                    | Blocks                         | Status      |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------|--------------------------------|-------------|
+| P0-1 | `POST /api/v2/clusters/{id}/storage-nodes/{node}/restart` accepts `spdk_image` and `spdk_proxy_image` and passes them to `restart_storage_node`                | Control plane (`sbcli`) | Phase 1 (§5.2)                 | Not shipped |
+| P0-2 | The storage-node representation of API v2 reports `spdk_image` and `spdk_proxy_image`, the images the control plane starts the node with                       | Control plane (`sbcli`) | Phase 1 (§5.3), Phase 2 (§5.4) | Not shipped |
+| P0-3 | The cluster representation of API v2 reports the default SPDK and SPDK proxy images (`default_spdk_image`, `default_spdk_proxy_image`)                         | Control plane (`sbcli`) | Phase 1 (§5.1)                 | Not shipped |
+| P0-4 | API v2 exposes the write-protection switch that `sbctl cluster switch-write-protection` performs, and the cluster representation reports `write_protection_v2` | Control plane (`sbcli`) | Phase 3 (§4.4)                 | Not shipped |
+| P0-5 | An SPDK image states which control-plane sizing it supports, readable without starting it                                                                      | Storage plane (SPDK)    | The capability check of §6.6   | Unknown     |
 
 Without P0-1 a restart cannot move a node to a new image, which is the gap this
 design exists to close, so phase 1 is not shippable without it. Without P0-2 the
@@ -135,8 +135,11 @@ is not leaving the cluster. A walk that failed on node seven of twenty restarts
 nodes one to six again when it is rerun.
 
 **The write-protection switch is a CLI command.** An upgraded cluster keeps v1
-distrib write protection until `sbctl cluster switch-write-protection` runs and
-every node is restarted again. API v2 has no endpoint for the switch, so a
+distrib write protection until `sbctl cluster switch-write-protection` runs.
+The switch sends a runtime RPC to every online node and rewrites the stored
+distrib parameters of every node, so an offline node comes back on v2 at its
+next restart and no node needs a restart for it (`switch_write_protection` in
+`simplyblock_core/cluster_ops.py`). API v2 has no endpoint for the switch, so a
 Kubernetes deployment cannot perform it through the operator.
 
 **The chart moves the control plane directly.** `_bootstrap_controlplane.tpl`
@@ -231,7 +234,7 @@ exist only as prose.
 │                     simplyblock control plane                          │
 │  POST …/storage-nodes/{node}/restart   {spdk_image, spdk_proxy_image}  │
 │  GET  …/storage-nodes/{node}           spdk_image, spdk_proxy_image    │
-│  POST …/clusters/{id}/write-protection (P0-4)                          │
+│  POST …/clusters/{id}/switch-write-protection (P0-4)                   │
 └────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -322,17 +325,19 @@ SwitchWriteProtection
     CheckingPeers ──► Switching ──► Completed
 ```
 
-| Step            | Side effect on entry                                  | Complete when                             |
-|-----------------|-------------------------------------------------------|-------------------------------------------|
-| `CheckingPeers` | None                                                  | Every node of the cluster is `online`     |
-| `Switching`     | The write-protection call of P0-4, once (write-ahead) | The cluster reports `writeProtection: V2` |
+| Step            | Side effect on entry                                      | Complete when                             |
+|-----------------|-----------------------------------------------------------|-------------------------------------------|
+| `CheckingPeers` | None                                                      | Every node of the cluster is `online`     |
+| `Switching`     | The write-protection call of P0-4, repeated after a `409` | The cluster reports `writeProtection: V2` |
 
 A cluster that already reports `V2` succeeds at admission time with the message
-`already on v2 write protection` and performs no call. The switch does not
-restart anything. The restart the control plane needs afterward is a
-`RollingRestart` with `selection: All`, which a release module requests as a
-separate step (§6.6), because a rolling restart is already an operation with
-its own walk, peer checks, and resume.
+`already on v2 write protection` and performs no call. The switch restarts
+nothing and needs no restart afterward: the control plane moves every online
+node's distribs at runtime and stores v2 in every node's distrib parameters, so
+a node that was offline comes back on v2. The control plane answers `409` when
+no node is online or a node rejected the switch, and leaves the cluster on v1.
+The step then holds and retries the call, which is safe because the switch is
+idempotent.
 
 ---
 
@@ -506,7 +511,7 @@ release after `26.4.0-beta6` (named here `r26_4_0_beta7`, see §15):
 | `reweight-pending-clear`     | Check |                     | Refuses while any lblk cluster reports a pending reweight, and names `cluster grow-devices` on the source release as the fix, because the target no longer completes one                                                                                                        |
 | `spdk-image-supports-sizing` | Check |                     | Refuses a target SPDK image that predates the hugepage and system-memory budgets of the target control plane (ultra #241, #245, #247), read from P0-5 or from a table in the module                                                                                             |
 | `pnfs-mds-legacy-state`      | Step  | `AfterCRDs`         | Where the MDS StatefulSet still has its `state` volume claim template: deletes the StatefulSet with orphaned pods, the `*-pnfs-mds-state` claims, the derived StorageClass, and the admission policy and its binding, so the target operator recreates the MDS with its standby |
-| `write-protection-v2`        | Step  | `AfterStoragePlane` | For each cluster reporting `V1`: a `StorageClusterOps` `SwitchWriteProtection`, then a `RollingRestart` with `selection: All`                                                                                                                                                   |
+| `write-protection-v2`        | Step  | `AfterStoragePlane` | For each cluster reporting `V1`: a `StorageClusterOps` `SwitchWriteProtection`                                                                                                                                                                                                  |
 | `helm-values-removed-keys`   | Check |                     | Reports `driver.pnfs.mds.stateSize` and `stateStorageClassName` in the release's values as a warning, because the target chart ignores them (§7.4)                                                                                                                              |
 
 Ordering the rolling restart before the write-protection switch is what makes
@@ -605,12 +610,11 @@ The rollout Job keeps no state. Every step it performs creates an operation with
 a name derived from the target release and the subject, and the operation is the
 record:
 
-| Step                             | Operation                                             |
-|----------------------------------|-------------------------------------------------------|
-| Control plane                    | `ControlPlaneOps` `upgrade-<target>`                  |
-| Rolling restart of cluster `<c>` | `StorageClusterOps` `upgrade-<target>-<c>-restart`    |
-| Write-protection switch of `<c>` | `StorageClusterOps` `upgrade-<target>-<c>-wp`         |
-| Second rolling restart of `<c>`  | `StorageClusterOps` `upgrade-<target>-<c>-wp-restart` |
+| Step                             | Operation                                          |
+|----------------------------------|----------------------------------------------------|
+| Control plane                    | `ControlPlaneOps` `upgrade-<target>`               |
+| Rolling restart of cluster `<c>` | `StorageClusterOps` `upgrade-<target>-<c>-restart` |
+| Write-protection switch of `<c>` | `StorageClusterOps` `upgrade-<target>-<c>-wp`      |
 
 Before creating an operation, a step reads it. One that exists and `Succeeded`
 is skipped, one that is `Pending` or `Running` is waited for, and one that
@@ -638,9 +642,9 @@ effect is present.
 | `POST` | `/api/v2/clusters/{id}/storage-nodes/{node}/restart` | Exists. Gains `spdk_image` and `spdk_proxy_image` (P0-1). The operator retries a restart only after reading the node's status (write-ahead, `design-storagecluster.md` §6.2), so the call needs no idempotency key |
 | `GET`  | `/api/v2/clusters/{id}/storage-nodes/{node}`         | Exists. Gains `spdk_image` and `spdk_proxy_image` in the response (P0-2)                                                                                                                                           |
 | `GET`  | `/api/v2/clusters/{id}/storage-nodes/`               | Exists. The same two fields per node, which the node stream delivers                                                                                                                                               |
-| `GET`  | The control plane's default images                   | New (P0-3). Where it lives is the control plane's choice, such as a field of the existing control-plane representation                                                                                             |
-| `POST` | `/api/v2/clusters/{id}/write-protection`             | New (P0-4). Idempotent: a cluster already on v2 answers success without acting                                                                                                                                     |
-| `GET`  | `/api/v2/clusters/{id}`                              | Exists. Gains the write-protection version (P0-4)                                                                                                                                                                  |
+| `GET`  | `/api/v2/clusters/{id}`                              | Exists. Gains `default_spdk_image` and `default_spdk_proxy_image`, behind the cluster's image prefix (P0-3)                                                                                                        |
+| `POST` | `/api/v2/clusters/{id}/switch-write-protection`      | New (P0-4). `204` once switched, `409` when no node is online or a node rejected it. Idempotent: a cluster already on v2 answers `204` without acting                                                              |
+| `GET`  | `/api/v2/clusters/{id}`                              | Exists. Gains `write_protection_v2` (P0-4)                                                                                                                                                                         |
 
 ---
 
@@ -770,13 +774,13 @@ control plane is replaced by the rollout Job's description.
 
 ## 15. Open Questions
 
-| #   | Question                                                                                                                                                                                  | Owner              |
-|-----|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| 1   | **The release after `26.4.0-beta6`:** its version decides the module name of §6.6 and the upgrade-notes page in the documentation                                                         | Release management |
-| 2   | **SPDK capability metadata (P0-5):** a label or an RPC that states which sizing an SPDK image supports, so §6.6's check needs no table                                                    | SPDK/Backend team  |
-| 3   | **Restart after the write-protection switch:** whether the switch needs every node restarted, or only the distribs reloaded, decides whether `write-protection-v2` adds a rolling restart | Control plane team |
-| 4   | **Clusters in parallel:** §6.5 rolls one `StorageCluster` after the other. A deployment with many small clusters may want them in parallel, which the operator's locks already allow      | —                  |
-| 5   | **The tool's image:** `simplyblock-upgrade` is built as binaries and published nowhere today. The hook needs it as a container image per release                                          | —                  |
+| #   | Question                                                                                                                                                                             | Owner              |
+|-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| 1   | **The release after `26.4.0-beta6`:** its version decides the module name of §6.6 and the upgrade-notes page in the documentation                                                    | Release management |
+| 2   | **SPDK capability metadata (P0-5):** a label or an RPC that states which sizing an SPDK image supports, so §6.6's check needs no table                                               | SPDK/Backend team  |
+| 3   | ~~**Restart after the write-protection switch**~~ **Resolved.** The switch converts online nodes at runtime and stores v2 for offline ones, so no restart follows it (§4.4)          | Resolved           |
+| 4   | **Clusters in parallel:** §6.5 rolls one `StorageCluster` after the other. A deployment with many small clusters may want them in parallel, which the operator's locks already allow | —                  |
+| 5   | **The tool's image:** `simplyblock-upgrade` is built as binaries and published nowhere today. The hook needs it as a container image per release                                     | —                  |
 
 ---
 
