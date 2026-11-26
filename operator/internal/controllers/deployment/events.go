@@ -58,6 +58,9 @@ const (
 	// AwaitingNodes is the expansion waiting for a node it created to come
 	// online before it asks for the cluster to be activated.
 	AwaitingNodes = "AwaitingNodes"
+	// ActivatedLate is a document that failed waiting for its nodes and whose
+	// nodes then came online: the activation it still owed was asked for.
+	ActivatedLate = "ActivatedLate"
 	// WaitingForPeerSite is a stretched cluster's leader whose own nodes are
 	// online but whose other site has not yet brought up the nodes the backend
 	// needs before the cluster can activate.

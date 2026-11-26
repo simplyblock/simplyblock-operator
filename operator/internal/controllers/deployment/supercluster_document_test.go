@@ -408,6 +408,46 @@ func TestEachMemberIsActivatedOnceItsNodesAreOnline(t *testing.T) {
 	}
 }
 
+// Holding the Activating deadline for a node that is still being provisioned
+// must not hold the step itself, or a member whose nodes are online waits for
+// another member's.
+func TestAMemberIsActivatedWhileAnotherMembersNodeIsBeingProvisioned(t *testing.T) {
+	ctx := context.Background()
+	config, objects := expandedMembers(true)
+	r := reconcilerFor(t, objects...)
+	if _, err := r.createNodes(ctx, config); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
+	setNodePhase(t, r.Client, "worker-1", simplyblockv1alpha2.StorageNodePhaseOnline)
+	if _, err := r.createNodes(ctx, readDocument(t, r)); err != nil {
+		t.Fatalf("createNodes: %v", err)
+	}
+	setNodePhase(t, r.Client, "worker-2", simplyblockv1alpha2.StorageNodePhaseProvisioning)
+	underADeadline(t, r, time.Now().Add(30*time.Minute))
+	config = withActivatingStep(t, r, readDocument(t, r), time.Now().Add(-time.Minute))
+
+	if _, err := r.expand(ctx, config); err != nil {
+		t.Fatalf("expand: %v", err)
+	}
+
+	var ops simplyblockv1alpha2.StorageClusterOpsList
+	if err := r.List(ctx, &ops); err != nil {
+		t.Fatalf("list the operations: %v", err)
+	}
+	if len(ops.Items) != 1 || ops.Items[0].Spec.ClusterRef != theCluster+"-fast-kqv" {
+		t.Errorf("%d activations were asked for; want the fast member's alone, whose node is online "+
+			"while the dense member's is being provisioned", len(ops.Items))
+	}
+	held := readDocument(t, r)
+	if held.Status.Phase != simplyblockv1alpha2.ClusterDeploymentConfigPhaseExpanding {
+		t.Errorf("phase = %q (%s), want Expanding while a node is on its way",
+			held.Status.Phase, held.Status.Message)
+	}
+	if deadline, has := held.Status.Step.KubeDeadline(); !has || !deadline.After(time.Now()) {
+		t.Errorf("the step's deadline was left at %v", deadline)
+	}
+}
+
 // prunedMembers is a client against an apiserver whose ClusterDeploymentConfig
 // schema predates status.members: it drops the field from every status write,
 // as pruning does, without an error.

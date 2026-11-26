@@ -62,9 +62,13 @@ const (
 	awaitingClusterDeadline = 30 * time.Minute
 	creatingNodesDeadline   = 10 * time.Minute
 
-	// activatingDeadline covers every node this document created coming online,
-	// which is a node add per worker and the cap serializes them. It is the
-	// longest step for that reason rather than because activating is slow.
+	// activatingDeadline bounds the step once nothing bounded is on its way any
+	// more: every node online and the activation not asked for, or a node that
+	// has stopped short of Online. While the node controller is working on a
+	// node under a deadline of its own the step's is moved
+	// (nodeBeingProvisioned), because that wait is already bounded and grows
+	// with the fleet: a node add per worker, serialized by the cap. A document
+	// that runs it out still activates if its nodes arrive (activateLate).
 	activatingDeadline = 60 * time.Minute
 )
 
@@ -1043,6 +1047,85 @@ func (r *ClusterDeploymentConfigReconciler) firstNodeRefNotOnline(
 		}
 	}
 	return "", "", nil
+}
+
+// nodeBeingProvisioned names a node the document created that the node
+// controller is working on under a deadline of its own, with its phase, or ""
+// when there is none.
+//
+// Only such a node holds the step's deadline, because only then is the wait
+// bounded by somebody. A node that is Pending or Provisioning with no step, or
+// with a step whose deadline has passed, is waiting on nothing that ends: one
+// the control plane recorded and never finished creating, one held behind a
+// network that is not there, one nobody has reconciled. Those run the step's
+// deadline as before, and so does any node that has stopped short of Online
+// (Failed, Offline). activateLate is what finishes the deployment if they come
+// online afterwards.
+func (r *ClusterDeploymentConfigReconciler) nodeBeingProvisioned(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (string, simplyblockv1alpha2.StorageNodePhase, error) {
+	var waiting string
+	var waitingPhase simplyblockv1alpha2.StorageNodePhase
+	for _, name := range config.Status.NodeRefs {
+		var node simplyblockv1alpha2.StorageNode
+		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+		if err := r.Get(ctx, key, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return "", "", fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		switch node.Status.Phase {
+		case simplyblockv1alpha2.StorageNodePhaseOnline:
+		case "", simplyblockv1alpha2.StorageNodePhasePending, simplyblockv1alpha2.StorageNodePhaseProvisioning:
+			deadline, bounded := node.Status.Step.KubeDeadline()
+			if node.Status.Step.State == "" || !bounded || !deadline.After(time.Now()) {
+				return "", "", nil
+			}
+			if waiting == "" {
+				waiting, waitingPhase = name, node.Status.Phase
+			}
+		default:
+			return "", "", nil
+		}
+	}
+	return waiting, waitingPhase, nil
+}
+
+// everyNodeRefOnline reports whether the nodes the document created are all
+// Online, and there is at least one. A node somebody removed is not waited for,
+// as in the step; a document with none left has no cluster to activate.
+func (r *ClusterDeploymentConfigReconciler) everyNodeRefOnline(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) (bool, error) {
+	found := 0
+	for _, name := range config.Status.NodeRefs {
+		var node simplyblockv1alpha2.StorageNode
+		key := client.ObjectKey{Namespace: config.Namespace, Name: name}
+		if err := r.Get(ctx, key, &node); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return false, fmt.Errorf("reading StorageNode %s: %w", name, err)
+		}
+		if node.Status.Phase != simplyblockv1alpha2.StorageNodePhaseOnline {
+			return false, nil
+		}
+		found++
+	}
+	return found > 0, nil
+}
+
+// rearmActivating moves the Activating step's deadline a full step ahead. It is
+// written only once half of it is spent, not on every pass.
+func (r *ClusterDeploymentConfigReconciler) rearmActivating(
+	ctx context.Context, config *simplyblockv1alpha2.ClusterDeploymentConfig,
+) error {
+	if deadline, has := config.Status.Step.KubeDeadline(); has && time.Until(deadline) >= activatingDeadline/2 {
+		return nil
+	}
+	rearmed := metav1.NewTime(time.Now().Add(activatingDeadline))
+	return r.recordStep(ctx, config, stepActivating, &rearmed)
 }
 
 // awaitingPeerSite reports a stretched leader whose own nodes are all online
