@@ -172,6 +172,7 @@ spec:
                   and the backups actually being taken permanently disagreeing, with the
                   object still reporting Active, so the schedule is fixed at creation until
                   that call exists. Changing one means replacing the policy.
+                  Left unset at creation, it cannot be set later.
                 pattern: ^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$
                 type: string
                 x-kubernetes-validations:
@@ -198,6 +199,10 @@ spec:
               rule: has(self.consistencyGroupName) == has(oldSelf.consistencyGroupName)
                 && (!has(self.consistencyGroupName) || self.consistencyGroupName ==
                 oldSelf.consistencyGroupName)
+            - message: 'spec.schedule cannot be set after creation: the control plane
+                reads it only when the policy is created, so a value added later would
+                be ignored'
+              rule: has(self.schedule) == has(oldSelf.schedule)
           status:
             description: status defines the observed state of StorageBackupPolicy
             properties:

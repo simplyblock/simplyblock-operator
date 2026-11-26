@@ -33,6 +33,7 @@ const (
 // down would be one nobody could rely on.
 // +kubebuilder:validation:XValidation:rule="!(has(self.claimSelector) && has(self.consistencyGroupName))",message="set at most one of claimSelector and consistencyGroupName: a policy backs up either independent claims or one whole consistency group"
 // +kubebuilder:validation:XValidation:rule="has(self.consistencyGroupName) == has(oldSelf.consistencyGroupName) && (!has(self.consistencyGroupName) || self.consistencyGroupName == oldSelf.consistencyGroupName)",message="consistencyGroupName is immutable, set or unset: the control plane has no call that detaches a policy from a group, so the old group, or the claims a selector had attached, would stay under the policy"
+// +kubebuilder:validation:XValidation:rule="has(self.schedule) == has(oldSelf.schedule)",message="spec.schedule cannot be set after creation: the control plane reads it only when the policy is created, so a value added later would be ignored"
 type StorageBackupPolicySpec struct {
 	// ClusterRef names the StorageCluster whose backup target this policy writes
 	// to.
@@ -78,6 +79,7 @@ type StorageBackupPolicySpec struct {
 	// and the backups actually being taken permanently disagreeing, with the
 	// object still reporting Active, so the schedule is fixed at creation until
 	// that call exists. Changing one means replacing the policy.
+	// Left unset at creation, it cannot be set later.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Schedule"
 	// +kubebuilder:validation:Pattern=`^(\d+[mhdw],\d+)( +\d+[mhdw],\d+)*$`
 	// +k8s:immutable

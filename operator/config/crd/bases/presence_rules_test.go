@@ -1,0 +1,38 @@
+// Optional fields an update may not set when they were left unset at
+// creation. The generated rule for an immutable optional field refuses a change
+// and a removal, but runs only where an old value exists, so a first
+// assignment after creation is admitted; these fields are read once, early,
+// and a value set later is ignored or retargets the work midway.
+
+package bases
+
+import (
+	"testing"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+)
+
+// claimPolicy is a policy over a claim selector, created with no schedule and
+// no retention.
+func claimPolicy() *simplyblockv1alpha2.StorageBackupPolicy {
+	return &simplyblockv1alpha2.StorageBackupPolicy{Spec: simplyblockv1alpha2.StorageBackupPolicySpec{
+		ClusterRef:    "cluster-1",
+		ClaimSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"backup": "daily"}},
+	}}
+}
+
+func asPolicySpec(f func(*simplyblockv1alpha2.StorageBackupPolicySpec)) func(client.Object) {
+	return func(o client.Object) { f(&o.(*simplyblockv1alpha2.StorageBackupPolicy).Spec) }
+}
+
+func TestABackupPolicyScheduleCannotBeAddedLater(t *testing.T) {
+	runTransitions(t, []transition{{
+		name:   "scheduling a policy created without a schedule",
+		create: claimPolicy(),
+		mutate: asPolicySpec(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) { s.Schedule = "15m,4 60m,11 24h,7" }),
+		denied: "spec.schedule cannot be set after creation",
+	}})
+}
