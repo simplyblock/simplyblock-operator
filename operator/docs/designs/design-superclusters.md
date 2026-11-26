@@ -817,8 +817,8 @@ discovery again is the correction.
 
 **Failure-domain mode is proposed only for a layout the control plane
 activates.** The control plane activates a new cluster in failure-domain mode
-only with at least parity+2 distinct domains and the same number of workers in
-each, and it checks this after the cluster is created and every node added.
+only with at least max(parity+2, data+parity) distinct domains (five for 4+1,
+six for 4+2) and the same number of workers in each, and it checks this after the cluster is created and every node added.
 A fleet labeled otherwise keeps its failure domains on the groups, and the draft
 leaves `enableFailureDomains` off with a note giving the reason. Four workers
 sharing one zone, as a single-zone lab labels them, is the common case.
