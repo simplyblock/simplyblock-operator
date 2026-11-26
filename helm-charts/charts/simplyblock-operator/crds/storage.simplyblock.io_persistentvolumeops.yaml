@@ -89,6 +89,8 @@ spec:
                   expressible from Validating and Migrating and not from Verifying, which
                   the action's graph declares rather than this field: once the copy has
                   finished, the volume has moved and there is nothing to undo.
+                  Setting it is final: an unwind withdrawn midway would resume the forward
+                  steps against a partly undone operation, so it cannot be withdrawn.
                 type: boolean
               action:
                 description: |-
@@ -246,6 +248,11 @@ spec:
                 and must be absent otherwise
               rule: 'self.action == ''JoinConsistencyGroup'' ? has(self.joinConsistencyGroup)
                 : !has(self.joinConsistencyGroup)'
+            - message: 'spec.abort cannot be withdrawn: the operation may already
+                be unwinding, and resuming it would run the forward steps against
+                a partly undone operation'
+              rule: '!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) &&
+                self.abort)'
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.

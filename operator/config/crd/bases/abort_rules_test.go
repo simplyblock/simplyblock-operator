@@ -25,6 +25,12 @@ func TestAbortCannotBeWithdrawn(t *testing.T) {
 			Action: simplyblockv1alpha2.OperatorOpsActionDiscover, Abort: true,
 			Discover: &simplyblockv1alpha2.DiscoverSpec{Workers: []string{"worker-1"}},
 		}}, func(o client.Object) { o.(*simplyblockv1alpha2.OperatorOps).Spec.Abort = false }},
+		{"PersistentVolumeOps", &simplyblockv1alpha2.PersistentVolumeOps{Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+			PersistentVolumeName: "pv-1", Action: simplyblockv1alpha2.PersistentVolumeOpsActionMigrate, Abort: true,
+			Migrate: &simplyblockv1alpha2.MigrateVolumeSpec{
+				TargetNodeRef: simplyblockv1alpha2.StorageNodeReference{Namespace: "default", Name: "node-1"},
+			},
+		}}, func(o client.Object) { o.(*simplyblockv1alpha2.PersistentVolumeOps).Spec.Abort = false }},
 	}
 	cases := make([]transition, 0, len(kinds))
 	for _, k := range kinds {
