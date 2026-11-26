@@ -34,6 +34,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -93,6 +94,11 @@ func (r *StorageNodeOpsReconciler) performMaintenanceStep(
 // multi-socket worker: two nodes on one host go into maintenance together, and the
 // pair is one worker's worth of unavailability — so the count is by distinct
 // worker.
+//
+// A failure domain is counted the same way on a cluster where a domain holds
+// one chunk of a stripe at most (maintenancedomains.go): every worker of one
+// domain is one domain's worth of unavailability, so the workers of a domain
+// are admitted together and the limit counts domains.
 func (r *StorageNodeOpsReconciler) maintenanceHold(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
@@ -113,7 +119,11 @@ func (r *StorageNodeOpsReconciler) maintenanceHold(
 		limit = *effective
 	}
 
-	inFlight, err := r.workersInMaintenance(ctx, ops, node)
+	layout, err := r.maintenanceLayout(ctx, &cluster)
+	if err != nil {
+		return false, err
+	}
+	inFlight, goingDown, err := r.unitsInMaintenance(ctx, ops, node, layout)
 	if err != nil {
 		return false, err
 	}
@@ -121,6 +131,15 @@ func (r *StorageNodeOpsReconciler) maintenanceHold(
 		return false, blockedf(MaintenanceQueued,
 			"%d of %d maintenance slots are taken by %v; this window waits its turn",
 			len(inFlight), limit, inFlight)
+	}
+	// The workers of one failure domain are admitted together and still go down
+	// one after another, because the control plane refuses a shutdown while
+	// another is in flight. The wait is taken here, where a window has hours,
+	// rather than in ShuttingDown, whose budget is that of one shutdown.
+	if len(goingDown) > 0 {
+		return false, blockedf(MaintenanceQueued,
+			"%v of failure domain %s is still being shut down; this window follows it",
+			goingDown, layout.unitOf(node))
 	}
 	return true, nil
 }
@@ -226,23 +245,26 @@ func (r *StorageNodeOpsReconciler) guardWorker(
 	return nil
 }
 
-// workersInMaintenance names the distinct workers whose maintenance window has
-// passed Holding, excluding this operation's own.
+// unitsInMaintenance names the distinct units, workers or failure domains as
+// the layout says, whose maintenance window has passed Holding, excluding this
+// operation's own unit. goingDown names the workers of this operation's own
+// failure domain whose window has not finished shutting its node down.
 //
 // A window still in Holding holds no slot: it is queued behind the same gate, and
 // counting it would let a deployment deadlock with every window waiting for every
 // other.
-func (r *StorageNodeOpsReconciler) workersInMaintenance(
+func (r *StorageNodeOpsReconciler) unitsInMaintenance(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageNodeOps,
 	node *simplyblockv1alpha2.StorageNode,
-) ([]string, error) {
+	layout maintenanceLayout,
+) (inFlight, goingDown []string, err error) {
 	var operations simplyblockv1alpha2.StorageNodeOpsList
 	if err := r.List(ctx, &operations, client.InNamespace(ops.Namespace)); err != nil {
-		return nil, fmt.Errorf("list the namespace's node operations: %w", err)
+		return nil, nil, fmt.Errorf("list the namespace's node operations: %w", err)
 	}
 
-	workers := map[string]struct{}{}
+	units := map[string]struct{}{}
 	for i := range operations.Items {
 		other := &operations.Items[i]
 		if other.Name == ops.Name ||
@@ -266,14 +288,25 @@ func (r *StorageNodeOpsReconciler) workersInMaintenance(
 		if target.Spec.WorkerNode == node.Spec.WorkerNode {
 			continue
 		}
-		workers[target.Spec.WorkerNode] = struct{}{}
+		// A worker of this operation's own failure domain holds no second slot
+		// either, where a domain is the unit. It is still waited for while its
+		// node is on the way down.
+		if layout.unitOf(&target) == layout.unitOf(node) {
+			if other.Status.Step.State == string(stepShuttingDown) {
+				goingDown = append(goingDown, target.Spec.WorkerNode)
+			}
+			continue
+		}
+		units[layout.unitOf(&target)] = struct{}{}
 	}
 
-	names := make([]string, 0, len(workers))
-	for worker := range workers {
-		names = append(names, worker)
+	inFlight = make([]string, 0, len(units))
+	for unit := range units {
+		inFlight = append(inFlight, unit)
 	}
-	return names, nil
+	slices.Sort(inFlight)
+	slices.Sort(goingDown)
+	return inFlight, goingDown, nil
 }
 
 // maintenanceShutDown blocks the eviction and takes the backend node down.
@@ -325,6 +358,14 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 		// Regression: 2026-09-29-maintenance-reissues-the-shutdown.
 		return false, nil
 	}
+	// Another node on its way down or back is the same refusal from the other
+	// side: the control plane takes one node through a shutdown at a time. The
+	// workers of one failure domain are in maintenance together, so this is
+	// the ordinary case for them and not a rare one.
+	busy, err := r.peerInTransition(ctx, node)
+	if err != nil || busy {
+		return false, err
+	}
 	_, err = r.once(ctx, ops, func() error {
 		if err := r.API.ShutdownNode(ctx, clusterID, nodeID); err != nil {
 			return fmt.Errorf("shut down node %s for maintenance: %w", ops.Spec.NodeRef, err)
@@ -332,6 +373,24 @@ func (r *StorageNodeOpsReconciler) maintenanceShutDown(
 		return nil
 	})
 	return false, err
+}
+
+// peerInTransition reports whether another node of the node's cluster is being
+// shut down or restarted.
+func (r *StorageNodeOpsReconciler) peerInTransition(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode,
+) (bool, error) {
+	var cluster simplyblockv1alpha2.StorageCluster
+	key := types.NamespacedName{Name: node.Spec.ClusterRef, Namespace: node.Namespace}
+	if err := r.Get(ctx, key, &cluster); err != nil {
+		return false, fmt.Errorf("read cluster %s: %w", node.Spec.ClusterRef, err)
+	}
+	layout, err := r.maintenanceLayout(ctx, &cluster)
+	if err != nil {
+		return false, err
+	}
+	_, busy := layout.inTransition(node)
+	return busy, nil
 }
 
 // maintenanceRelease takes the budget away so the eviction the drain is waiting
