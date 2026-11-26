@@ -25,14 +25,22 @@ import (
 const clusterFileHashAnnotation = "storage.simplyblock.io/cluster-file-hash"
 
 // managementAPIStamped is managementAPIObjects with the cluster-file hash on
-// every workload that mounts the file. A file that does not exist yet stamps
-// nothing: the FoundationDB operator writes it, and the next pass stamps it. A
-// file that vanishes leaves the stamp the workload already carries, so its
-// absence is not a template change.
+// every workload that mounts the file, and with the task runner's budget. A file
+// that does not exist yet stamps nothing: the FoundationDB operator writes it,
+// and the next pass stamps it. A file that vanishes leaves the stamp the
+// workload already carries, so its absence is not a template change.
+//
+// The task runner keeps the stamp it carries while it is adding a storage node
+// (taskshold.go): a coordinator move in the middle of an add is not a reason to
+// start the add again. It is stamped on the first pass after the add settles.
 func (r *ControlPlaneReconciler) managementAPIStamped(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) ([]client.Object, error) {
-	objects := managementAPIObjects(cp)
+	hold, err := r.tasksHoldNow(ctx, cp.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	objects := append(managementAPIObjects(cp), tasksDisruptionBudget(cp.Namespace, hold))
 
 	var file corev1.ConfigMap
 	key := client.ObjectKey{Namespace: cp.Namespace, Name: clusterFileConfigMapName}
@@ -45,8 +53,15 @@ func (r *ControlPlaneReconciler) managementAPIStamped(
 
 	hash := hashConfigMapData(file.Data)
 	for _, obj := range objects {
-		if d, ok := obj.(*appsv1.Deployment); ok && mountsClusterFile(d) {
-			stampPodTemplate(d, hash)
+		d, ok := obj.(*appsv1.Deployment)
+		if !ok || !mountsClusterFile(d) {
+			continue
+		}
+		stampPodTemplate(d, hash)
+		if hold.held && d.Name == ComponentTasks {
+			if err := r.keepLiveStamp(ctx, d); err != nil {
+				return nil, err
+			}
 		}
 	}
 	return objects, nil
@@ -60,16 +75,22 @@ func (r *ControlPlaneReconciler) keepLiveStamps(ctx context.Context, objects []c
 		if !ok || !mountsClusterFile(desired) {
 			continue
 		}
-		var live appsv1.Deployment
-		if err := r.Get(ctx, client.ObjectKeyFromObject(desired), &live); err != nil {
-			if apierrors.IsNotFound(err) {
-				continue
-			}
+		if err := r.keepLiveStamp(ctx, desired); err != nil {
 			return err
 		}
-		if hash, stamped := live.Spec.Template.Annotations[clusterFileHashAnnotation]; stamped {
-			stampPodTemplate(desired, hash)
-		}
+	}
+	return nil
+}
+
+// keepLiveStamp gives the desired Deployment the stamp its live object carries.
+// One that is not there yet, or carries none, is left as it was handed in.
+func (r *ControlPlaneReconciler) keepLiveStamp(ctx context.Context, desired *appsv1.Deployment) error {
+	var live appsv1.Deployment
+	if err := r.Get(ctx, client.ObjectKeyFromObject(desired), &live); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if hash, stamped := live.Spec.Template.Annotations[clusterFileHashAnnotation]; stamped {
+		stampPodTemplate(desired, hash)
 	}
 	return nil
 }

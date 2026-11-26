@@ -79,6 +79,10 @@ type ControlPlaneReconciler struct {
 	// the embedded manifest names.
 	NUMAPluginImage string
 
+	// Now is the clock the tasks hold is measured against. Nil is time.Now; a
+	// test sets it to move time without waiting.
+	Now func() time.Time
+
 	// OpenShift is whether the cluster is an OpenShift one. It decides the
 	// SELinux type the NUMA device plugin runs with (numaplugin.go), and
 	// whether a leftover anyuid SCC grant is removed (scc.go).
@@ -370,6 +374,11 @@ func (r *ControlPlaneReconciler) performInstallStep(
 func (r *ControlPlaneReconciler) steadyState(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
+	// First and by itself, so that the hold on the task runner is released on
+	// time whatever else this pass runs into (taskshold.go).
+	if err := r.applyTasksBudget(ctx, cp); err != nil {
+		return ctrl.Result{}, err
+	}
 	if err := r.applyEverything(ctx, cp); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -810,6 +819,10 @@ func (r *ControlPlaneReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// A Node's cordon, uncordon, or deletion reaches the control plane whose
 		// FoundationDB pods it carries (controlplane_hostmaintenance.go).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.nodeRequests)).
+		// A storage node entering or leaving its add raises or releases the hold
+		// on the task runner (taskshold.go).
+		Watches(&simplyblockv1alpha2.StorageNode{}, handler.EnqueueRequestsFromMapFunc(r.storageNodeRequests),
+			builder.WithPredicates(nodeAddStepChanged())).
 		Named("controlplane").
 		Complete(r)
 }
