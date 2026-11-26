@@ -429,7 +429,7 @@ func (r *OperatorOpsReconciler) inspect(
 		// Half the evidence still yields a conclusion, and the field is one a
 		// reviewer corrects, so this is recorded and not fatal.
 		r.event(ops, corev1.EventTypeWarning, EnvironmentPartiallyRead,
-			fmt.Sprintf("the API groups could not be listed, so the distribution was concluded from the nodes alone: %v", err))
+			fmt.Sprintf("the API server's groups or version could not be read, so the distribution was concluded from what could: %v", err))
 	}
 
 	if len(workers) == 0 {
@@ -603,7 +603,7 @@ func (r *OperatorOpsReconciler) write(
 		return false, err
 	}
 
-	planner := discoverypkg.Planner{KubeNodes: kubeNodes}
+	planner := discoverypkg.Planner{KubeNodes: kubeNodes, Environment: ops.Status.Environment}
 	plan := planner.Plan(collected, spec)
 
 	if len(plan.NodeSets) == 0 {
@@ -785,10 +785,9 @@ func (r *OperatorOpsReconciler) draftFor(
 	var notes []string
 
 	// What the probes read of the workers' own operating system, stated only
-	// when they agree: one document becomes one storage-node DaemonSet, which
-	// carries one host OS for every worker it schedules, so a fleet that
-	// disagrees has no answer to state and the note says which worker runs
-	// what.
+	// when they agree. It is the fleet's default, and a fleet that disagrees
+	// has none: its groups state their own, and the note says which worker
+	// runs what.
 	hostOS, hostOSNotes := discoverypkg.HostOSFor(plan)
 	config.Spec.HostOS = hostOS
 	notes = append(notes, hostOSNotes...)

@@ -56,6 +56,10 @@ type Planner struct {
 	// reports alone, and the workers carry a zero KubeNode.
 	KubeNodes map[string]KubeNode
 
+	// Environment is the distribution the run concluded for the cluster, which
+	// is the draft's spec.environment.
+	Environment simplyblockv1alpha2.KubernetesEnvironment
+
 	// SlotsPerWorker is how many storage nodes each worker runs, which decides
 	// how many workers a member holds. Zero is one, the layout of a draft that
 	// states none; a discovery run states none.
@@ -114,6 +118,10 @@ const (
 	// PlacementGroupInvalid names a placement-group value that cannot be a node
 	// set name, or whose workers cannot share a member.
 	PlacementGroupInvalid = "PlacementGroupInvalid"
+
+	// WorkerEnvironmentDiffers names the workers that run on another
+	// provider's Kubernetes than the cluster's control plane.
+	WorkerEnvironmentDiffers = "WorkerEnvironmentDiffers"
 
 	// NVMeMultipathUnavailable names a worker whose kernel is known to lack
 	// native NVMe multipath, which can host a storage node and cannot mount a
@@ -646,6 +654,8 @@ func (p Planner) Plan(reports []nodeprobe.Report, run *simplyblockv1alpha2.Disco
 	if run == nil || run.EnableFailureDomains == nil || *run.EnableFailureDomains {
 		plan.assignFailureDomains(failureDomainLabelOf(run))
 	}
+	plan.assignEnvironments(p.Environment)
+	plan.assignHostOS()
 	plan.noteMultipath()
 
 	if len(plan.Workers) > 0 && plan.Workers[0].Attachment == nil {

@@ -25,5 +25,6 @@ spec:
   hostOS:
     distro: ubuntu
     family: Debian
+    version: "22.04"
 status:
   step: {}

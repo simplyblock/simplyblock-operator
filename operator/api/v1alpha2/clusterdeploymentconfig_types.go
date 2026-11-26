@@ -152,6 +152,16 @@ type HostOSSpec struct {
 	// package manager.
 	// +optional
 	Family HostOSFamily `json:"family,omitempty"`
+
+	// Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+	// `2023`, `9.4`. It is what tells two releases of one distribution apart,
+	// such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+	// discovery run states it only when every worker it describes agrees, and a
+	// rolling distribution states none.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9][a-z0-9._-]*$`
+	Version string `json:"version,omitempty"`
 }
 
 // ClusterPortsSpec is where a cluster's storage nodes listen.
@@ -259,6 +269,7 @@ type NetworkAttachmentSelection struct {
 // makes ten identical machines one entry rather than ten.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.networkAttachment) || (!has(self.mgmtInterface) && !has(self.dataInterfaces))",message="a group names its network interfaces or its network attachments, not both"
+// +kubebuilder:validation:XValidation:rule="!has(self.environment) || !(self.environment in ['OpenShift', 'Talos'])",message="a group cannot run OpenShift or Talos, which each run a whole cluster"
 type NodeGroup struct {
 	// Name identifies the group within its node set, for a reader and for the
 	// events a validation failure emits.
@@ -345,6 +356,29 @@ type NodeGroup struct {
 	// JournalManager tunes the journal managers on these nodes.
 	// +optional
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
+
+	// Environment is the Kubernetes distribution these workers run on, where
+	// it is not the one spec.environment names. That is a cluster whose workers
+	// come from more than one provider, such as Google Anthos joining EKS and
+	// OKE node groups to a GKE control plane: spec.environment is the control
+	// plane's, and each group of workers from another provider states its own.
+	// The expansion spends it on the group's nodes, as
+	// StorageNode.spec.config.enableKubeletConfiguration, and a document that
+	// states spec.cluster.enableKubeletConfiguration has decided that for every
+	// group already. Unset is the document's environment. OpenShift and Talos
+	// are refused, because each is what a whole cluster runs.
+	// +optional
+	Environment KubernetesEnvironment `json:"environment,omitempty"`
+
+	// HostOS is the operating system these workers run, where it is not the
+	// one spec.hostOS names. That is a cluster whose workers run more than one,
+	// such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+	// distribution in two releases. The expansion gives it to each of the
+	// group's nodes as StorageNode.spec.config.hostOS, which decides what the
+	// storage node prepares on the worker before it starts. Unset is the
+	// document's host OS.
+	// +optional
+	HostOS *HostOSSpec `json:"hostOS,omitempty"`
 }
 
 // NodeSet is the organizational grouping of a deployment, usually a rack: the
@@ -885,6 +919,7 @@ type ExternalImageSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork) && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s, s.groups.all(g, !has(g.dataInterfaces)))",message="group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment) && self.environment == 'OpenShift')",message="spec.cluster.openshift is what a deployment onto OpenShift states, so spec.environment has to be OpenShift"
 // +kubebuilder:validation:XValidation:rule="!has(self.cluster) || !has(self.cluster.talosMachineConfig) || (has(self.environment) && self.environment == 'Talos')",message="spec.cluster.talosMachineConfig is what a deployment onto Talos states, so spec.environment has to be Talos"
+// +kubebuilder:validation:XValidation:rule="!has(self.environment) || !(self.environment in ['OpenShift', 'Talos']) || self.nodeSets.all(s, s.groups.all(g, !has(g.environment)))",message="every worker of an OpenShift or a Talos cluster runs it, so no group states an environment of its own"
 type ClusterDeploymentConfigSpec struct {
 	// Approved is the review gate. A document is expanded only once it is set,
 	// and is validated but otherwise inert before that, which is what makes
@@ -907,6 +942,9 @@ type ClusterDeploymentConfigSpec struct {
 	// produces, after which nothing reads it again. The worker's host OS is not
 	// among them and is stated in hostOS, because a distribution decides what
 	// Kubernetes does to a machine and not which packages the machine has.
+	// In a cluster whose workers come from more than one provider it is the
+	// control plane's, and a group of workers from another provider states its
+	// own in its environment.
 	// +optional
 	Environment KubernetesEnvironment `json:"environment,omitempty"`
 

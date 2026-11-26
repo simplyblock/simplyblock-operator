@@ -158,11 +158,58 @@ spec:
                             description: Bucket is the bucket backups are written
                               to and read from.
                             type: string
+                          credentials:
+                            description: |-
+                              Credentials is how this store's endpoint is authenticated to. Replaces
+                              CredentialsSecretRef, which could only ever name a Secret. Set exactly
+                              one of the two.
+                            properties:
+                              secretRef:
+                                description: |-
+                                  SecretRef names the Secret holding access_key_id and secret_access_key.
+                                  Required when source is Secret, and rejected when source is
+                                  ProviderChain.
+                                properties:
+                                  name:
+                                    default: ""
+                                    description: |-
+                                      Name of the referent.
+                                      This field is effectively required, but due to backwards compatibility is
+                                      allowed to be empty. Instances of this type with an empty value here are
+                                      almost certainly wrong.
+                                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                    type: string
+                                type: object
+                                x-kubernetes-map-type: atomic
+                              source:
+                                default: Secret
+                                description: |-
+                                  Source selects how credentials are obtained. Secret, the default, reads
+                                  a static access key and secret key from SecretRef. ProviderChain names
+                                  no Secret and authenticates through the AWS SDK's default credential
+                                  provider chain instead, which is how a cluster reaches its bucket with
+                                  no access key stored anywhere in Kubernetes.
+                                enum:
+                                - Secret
+                                - ProviderChain
+                                type: string
+                            required:
+                            - source
+                            type: object
+                            x-kubernetes-validations:
+                            - message: 'source: Secret requires secretRef'
+                              rule: self.source != 'Secret' || has(self.secretRef)
+                            - message: 'source: ProviderChain forbids secretRef'
+                              rule: self.source != 'ProviderChain' || !has(self.secretRef)
                           credentialsSecretRef:
                             description: |-
                               CredentialsSecretRef names the Secret holding the access key and the
-                              secret key. It is a reference rather than the values, because a spec is
-                              readable by anybody who can read the object.
+                              secret key.
+
+                              Deprecated: set Credentials instead, with source: Secret and this same
+                              name under secretRef. This field cannot express ProviderChain, so a
+                              store that authenticates without a static key has to use Credentials.
+                              Set exactly one of the two.
                             properties:
                               name:
                                 default: ""
@@ -186,9 +233,15 @@ spec:
                             type: string
                         required:
                         - bucket
-                        - credentialsSecretRef
                         - endpoint
                         type: object
+                        x-kubernetes-validations:
+                        - message: one of credentials and the deprecated credentialsSecretRef
+                            must be set
+                          rule: has(self.credentialsSecretRef) || has(self.credentials)
+                        - message: credentials and the deprecated credentialsSecretRef
+                            are exclusive
+                          rule: '!(has(self.credentialsSecretRef) && has(self.credentials))'
                       clusterMode:
                         default: Standard
                         description: |-
@@ -327,10 +380,10 @@ spec:
                       enableCpuTopology:
                         description: |-
                           EnableCpuTopology turns on topology-aware CPU assignment on the storage
-                          nodes. It is valid only when spec.environment is Vanilla, whose workers
-                          the environment does not describe. Every other environment decides it:
-                          OpenShift turns it on, and the rest leave it off. Unset on a Vanilla
-                          document leaves it off.
+                          nodes. Unset leaves it to spec.environment: OpenShift and Talos turn it on,
+                          and every other environment leaves it off. Stated, it replaces what the
+                          environment decides, for a fleet whose workers the environment does not
+                          describe.
                         type: boolean
                       enableDriveFormat:
                         description: |-
@@ -360,6 +413,10 @@ spec:
                           deployment's workers to the journal manager, instead of carving a journal
                           partition out of every device.
 
+                          For logical block devices it dedicates the smallest device of each node
+                          to the journal, instead of carving one journal partition out of that
+                          device (the default journal split), and needs two devices per node.
+
                           It is here rather than on a node set because it is immutable on the cluster
                           it lands on, for the reason SocketsToUse is: the on-disk layout a fleet was
                           built with is not one a later document can vary. It also costs a drive of
@@ -369,13 +426,20 @@ spec:
                       enableKubeletConfiguration:
                         description: |-
                           EnableKubeletConfiguration lets the storage nodes rewrite the kubelet
-                          configuration of their workers and restart the kubelet. It is valid only
-                          when spec.environment is Vanilla, for a fleet whose workers keep the
-                          configuration where the storage node cannot write it. Every other
-                          environment decides it: on for OpenShift, Rancher, and K3s, and off for
-                          Talos, EKS, GKE, AKS, and OKE, whose kubelet configuration is not
-                          writable or is rebuilt with every node. Unset on a Vanilla document
-                          turns it on.
+                          configuration of their workers and restart the kubelet. On OpenShift that
+                          is the KubeletConfig a storage node creates for its machine-config pool,
+                          and the rolling reboot of that pool which applying it takes.
+
+                          Unset leaves it to spec.environment: on for Vanilla, OpenShift, Rancher,
+                          K3s, and Talos (whose kubelet is configured through the Talos API), and
+                          off for EKS, GKE, AKS, and OKE, whose kubelet
+                          configuration is not writable or is rebuilt with every node. Stated, it
+                          replaces what the environment decides. A fleet that manages its kubelet
+                          configuration itself states it false: a storage node then neither
+                          rewrites the kubelet nor, on OpenShift, creates a KubeletConfig or waits
+                          for the pool to roll, so CPU pinning holds only if that kubelet already
+                          runs the static CPU manager. Stating it true on an environment whose
+                          kubelet is not writable makes the storage nodes fail to configure it.
                         type: boolean
                       enableMetadataJournal:
                         description: |-
@@ -404,6 +468,15 @@ spec:
                           It is on the document because it is immutable on the cluster: the control
                           plane takes it at cluster create and never re-applies it, so this is the
                           only moment it can be set at all.
+                        type: boolean
+                      enableSyncReplication:
+                        description: |-
+                          EnableSyncReplication opts the cluster into synchronous two-site
+                          replication. The cluster then spans exactly two sites and every node group
+                          declares a site (see NodeGroup.Site). It is on the document because it is
+                          immutable on the cluster it lands on: the backend accepts it only at
+                          cluster-create, so a cluster created without it is one nobody can turn it
+                          on for.
                         type: boolean
                       fabricType:
                         description: FabricType is the storage fabric.
@@ -484,6 +557,20 @@ spec:
                           the document is what makes it present when the cluster is created, where
                           setting it on the StorageCluster afterward races with that creation.
                         properties:
+                          kmip:
+                            description: KMIP stores keys in a KMIP-speaking appliance.
+                            properties:
+                              endpoint:
+                                description: |-
+                                  Endpoint is the KMIP server address, host:port, for example,
+                                  kmip.example.com:5696. Rejected unless it resolves to an external
+                                  address. No URL scheme: KMIP is a binary TTLV protocol over TLS, not
+                                  an HTTP API, so it has no scheme convention to validate against.
+                                pattern: ^[a-zA-Z0-9.-]+:[0-9]{1,5}$
+                                type: string
+                            required:
+                            - endpoint
+                            type: object
                           vault:
                             description: Vault stores keys in HashiCorp Vault.
                             properties:
@@ -522,6 +609,111 @@ spec:
                           succeed, since the cluster it would write is one the API server refuses.
                         maxLength: 63
                         type: string
+                      network:
+                        description: |-
+                          Network states the networks the storage nodes' SPDK pods attach to, which
+                          is spec.storageNodes.network of the cluster this document creates. It is
+                          set here and nowhere else, because a cluster's network is fixed when it is
+                          created. Unstated, the nodes run on the host network.
+                        properties:
+                          data:
+                            description: |-
+                              Data are the Multus networks the storage nodes serve volumes on, each a
+                              NetworkAttachmentDefinition the pod attaches to besides the pod network, which
+                              podNetwork must therefore state.
+                            items:
+                              description: |-
+                                StorageNetwork is one data network a storage node's SPDK pod attaches to
+                                through a NetworkAttachmentDefinition.
+                              properties:
+                                networkAttachmentRef:
+                                  description: |-
+                                    NetworkAttachmentRef is the Multus NetworkAttachmentDefinition in the
+                                    namespace of the storage cluster, and the key the nodes' addresses and
+                                    status use. The pod attaches to it and takes the interface the definition's
+                                    plugin creates.
+                                  properties:
+                                    addressPool:
+                                      description: |-
+                                        AddressPool is the range the operator takes each node's address on this
+                                        network from. Unset, the network takes the address the NIC the definition
+                                        moves holds on the worker.
+                                      properties:
+                                        first:
+                                          description: |-
+                                            First is the lowest address the operator may hand out. Unset, the range
+                                            starts at the subnet's first host address. It is set together with Last.
+                                          maxLength: 15
+                                          pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                          type: string
+                                        last:
+                                          description: |-
+                                            Last is the highest address the operator may hand out. Unset, the range
+                                            ends at the subnet's last host address. It is set together with First.
+                                          maxLength: 15
+                                          pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$
+                                          type: string
+                                        subnet:
+                                          description: |-
+                                            Subnet is the network's IPv4 subnet, such as 10.10.10.0/24. Its prefix
+                                            length is the one each node's address carries.
+                                          maxLength: 18
+                                          pattern: ^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])/(3[0-2]|[12]?[0-9])$
+                                          type: string
+                                      required:
+                                      - subnet
+                                      type: object
+                                      x-kubernetes-validations:
+                                      - message: first and last are set together
+                                        rule: has(self.first) == has(self.last)
+                                      - message: first and last must lie inside subnet
+                                        rule: '!has(self.first) || (cidr(self.subnet).containsIP(ip(self.first))
+                                          && cidr(self.subnet).containsIP(ip(self.last)))'
+                                    name:
+                                      description: Name is the definition's name.
+                                      maxLength: 253
+                                      minLength: 1
+                                      type: string
+                                  required:
+                                  - name
+                                  type: object
+                              required:
+                              - networkAttachmentRef
+                              type: object
+                            maxItems: 8
+                            type: array
+                            x-kubernetes-list-type: atomic
+                          podNetwork:
+                            description: |-
+                              PodNetwork puts the SPDK pods on the cluster CNI's network. Alone, the pod's
+                              one interface carries the RPC and the data, and a Service in front of the pod
+                              is the address peers and clients hold, since the pod's own address changes on
+                              every restart. The control plane keeps the Service and the ports it carries.
+                              With data networks, the RPC stays on that interface and the data moves to the
+                              networks' interfaces, whose addresses are stable, so no Service is kept.
+                            type: boolean
+                          spdkOnHostNetwork:
+                            description: |-
+                              SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
+                              host NICs. The NICs' names are not stated here, because a fleet's workers
+                              do not agree on what their NICs are called: each node names its own in
+                              its spec.config.dataInterfaces, which is allowed only in this mode.
+                            type: boolean
+                        type: object
+                        x-kubernetes-validations:
+                        - message: one of podNetwork and spdkOnHostNetwork must be
+                            set
+                          rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork)
+                            && self.spdkOnHostNetwork)
+                        - message: podNetwork and spdkOnHostNetwork are exclusive
+                          rule: '!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork)
+                            && self.spdkOnHostNetwork)'
+                        - message: 'data networks require podNetwork: true'
+                          rule: '!has(self.data) || self.data.size() == 0 || (has(self.podNetwork)
+                            && self.podNetwork)'
+                        - message: data networks must name distinct NetworkAttachmentDefinitions
+                          rule: '!has(self.data) || self.data.all(a, self.data.exists_one(b,
+                            b.networkAttachmentRef.name == a.networkAttachmentRef.name))'
                       nodeProvisioningBudget:
                         description: |-
                           NodeProvisioningBudget is how many workers the expansion may have in the
@@ -623,6 +815,60 @@ spec:
                         maxItems: 16
                         type: array
                         x-kubernetes-list-type: set
+                      stretched:
+                        description: |-
+                          Stretched makes the cluster one site of a stretched cluster, whose two
+                          sites are two Kubernetes clusters: the site this document's nodes join,
+                          the other site, and whether this site creates the cluster or adopts it.
+                          Written by the hub that manages both sites, and expanded verbatim into the
+                          StorageCluster. Requires enableSyncReplication; every node group's site
+                          must equal stretched.site.
+                        properties:
+                          peerCluster:
+                            description: |-
+                              PeerCluster is the other site's managed cluster: the name the hub knows
+                              it by, and the one the site link reaches that site's operator by. Empty
+                              means the same as peerSite.
+                            maxLength: 63
+                            type: string
+                          peerSite:
+                            description: |-
+                              PeerSite is the other site's backend name. Nodes the control plane reports
+                              on it are listed here as remote StorageNodes. Immutable.
+                            maxLength: 63
+                            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                          role:
+                            description: |-
+                              Role is Leader or Follower. A leader creates and activates the backend
+                              cluster and runs every cluster-wide operation; a follower adopts the
+                              cluster and manages only its own site's nodes. A change is a role swap,
+                              delivered from the hub.
+                            enum:
+                            - Leader
+                            - Follower
+                            type: string
+                          site:
+                            description: |-
+                              Site is the backend site every node this StorageCluster adds belongs to.
+                              Immutable: a site is a property of the installation.
+                            maxLength: 63
+                            pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                            type: string
+                            x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
+                        required:
+                        - peerSite
+                        - role
+                        - site
+                        type: object
+                        x-kubernetes-validations:
+                        - message: site and peerSite must differ
+                          rule: self.site != self.peerSite
                       stripe:
                         description: Stripe is the erasure-coding layout.
                         properties:
@@ -647,6 +893,19 @@ spec:
                           rule: '[has(self.dataChunks) ? self.dataChunks : 1, has(self.parityChunks)
                             ? self.parityChunks : 1] in [[1, 0], [1, 1], [2, 1], [4,
                             1], [1, 2], [2, 2], [4, 2]]'
+                      talosMachineConfig:
+                        description: |-
+                          TalosMachineConfig is who writes a Talos worker's machine config, the
+                          huge-page pool and the kubelet's CPU topology. Preprovisioned, the
+                          default, is the cluster's operator, before the nodes are added: a node
+                          verifies and fails its add with the patch to apply. Managed is the node
+                          itself, through the Talos API, which needs the os:admin credentials
+                          Secret in the namespace. It is valid only when spec.environment is
+                          Talos, and lands on StorageCluster.spec.storageNodes.talosMachineConfig.
+                        enum:
+                        - Preprovisioned
+                        - Managed
+                        type: string
                       tolerations:
                         description: |-
                           Tolerations are what the storage-node pods tolerate, and they expand into
@@ -751,6 +1010,9 @@ spec:
                       produces, after which nothing reads it again. The worker's host OS is not
                       among them and is stated in hostOS, because a distribution decides what
                       Kubernetes does to a machine and not which packages the machine has.
+                      In a cluster whose workers come from more than one provider it is the
+                      control plane's, and a group of workers from another provider states its
+                      own in its environment.
                     enum:
                     - Vanilla
                     - OpenShift
@@ -789,6 +1051,16 @@ spec:
                         - SUSE
                         - Alpine
                         - Arch
+                        type: string
+                      version:
+                        description: |-
+                          Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+                          `2023`, `9.4`. It is what tells two releases of one distribution apart,
+                          such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+                          discovery run states it only when every worker it describes agrees, and a
+                          rolling distribution states none.
+                        maxLength: 63
+                        pattern: ^[a-z0-9][a-z0-9._-]*$
                         type: string
                     type: object
                   images:
@@ -892,6 +1164,23 @@ spec:
                             - Always
                             - Never
                             - IfNotPresent
+                            type: string
+                        type: object
+                      talosctl:
+                        description: |-
+                          Talosctl is the talosctl image a Talos worker's node runs as a Job to
+                          reserve its huge pages through the Talos API. It is the fleet's, written
+                          to StorageCluster.spec.storageNodes.talosctlImage: one DaemonSet, one Job
+                          image. Unstated keeps the node agent's default; a deployment pins it to
+                          the cluster's Talos minor, or to a mirror on an air-gapped site. Read only
+                          for a document whose environment is Talos.
+                        properties:
+                          image:
+                            description: |-
+                              Image is the repository and tag, optionally digest-pinned, on any
+                              registry. An empty value is not written downstream, so the field it would
+                              fill keeps its own default.
+                            pattern: ^($|[a-z0-9]([a-z0-9.-]*[a-z0-9])?(:[0-9]+)?/[a-z0-9][a-z0-9._/-]*:[a-zA-Z0-9][a-zA-Z0-9._-]*(@sha256:[a-f0-9]{64})?)$
                             type: string
                         type: object
                     type: object
@@ -1028,6 +1317,29 @@ spec:
                                 - message: a device selection names NVMe addresses
                                     or block devices, not both
                                   rule: has(self.nvme) != has(self.block)
+                              environment:
+                                description: |-
+                                  Environment is the Kubernetes distribution these workers run on, where
+                                  it is not the one spec.environment names. That is a cluster whose workers
+                                  come from more than one provider, such as Google Anthos joining EKS and
+                                  OKE node groups to a GKE control plane: spec.environment is the control
+                                  plane's, and each group of workers from another provider states its own.
+                                  The expansion spends it on the group's nodes, as
+                                  StorageNode.spec.config.enableKubeletConfiguration, and a document that
+                                  states spec.cluster.enableKubeletConfiguration has decided that for every
+                                  group already. Unset is the document's environment. OpenShift and Talos
+                                  are refused, because each is what a whole cluster runs.
+                                enum:
+                                - Vanilla
+                                - OpenShift
+                                - Rancher
+                                - K3s
+                                - Talos
+                                - EKS
+                                - GKE
+                                - AKS
+                                - OKE
+                                type: string
                               failureDomain:
                                 description: |-
                                   FailureDomain is the label of the fault group every worker in this group
@@ -1039,6 +1351,48 @@ spec:
                                 maxLength: 63
                                 pattern: ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$
                                 type: string
+                              hostOS:
+                                description: |-
+                                  HostOS is the operating system these workers run, where it is not the
+                                  one spec.hostOS names. That is a cluster whose workers run more than one,
+                                  such as an EKS cluster with Amazon Linux and Ubuntu node groups, or one
+                                  distribution in two releases. The expansion gives it to each of the
+                                  group's nodes as StorageNode.spec.config.hostOS, which decides what the
+                                  storage node prepares on the worker before it starts. Unset is the
+                                  document's host OS.
+                                properties:
+                                  distro:
+                                    description: |-
+                                      Distro is the distribution's os-release ID, lowercase and verbatim:
+                                      `ubuntu`, `rocky`, `rhel`, `talos`. It is what the expansion reads.
+                                    maxLength: 63
+                                    pattern: ^[a-z0-9][a-z0-9._-]*$
+                                    type: string
+                                  family:
+                                    description: |-
+                                      Family is the packaging tradition Distro belongs to. A discovery run
+                                      concludes it from the distribution itself, or from the distributions its
+                                      os-release says it is built on, which is what places a derivative this
+                                      product has never heard of. It is left unstated for a host with no
+                                      package manager.
+                                    enum:
+                                    - Debian
+                                    - RedHat
+                                    - SUSE
+                                    - Alpine
+                                    - Arch
+                                    type: string
+                                  version:
+                                    description: |-
+                                      Version is the distribution's os-release VERSION_ID, verbatim: `22.04`,
+                                      `2023`, `9.4`. It is what tells two releases of one distribution apart,
+                                      such as Amazon Linux 2 and Amazon Linux 2023, which share the ID `amzn`. A
+                                      discovery run states it only when every worker it describes agrees, and a
+                                      rolling distribution states none.
+                                    maxLength: 63
+                                    pattern: ^[a-z0-9][a-z0-9._-]*$
+                                    type: string
+                                type: object
                               journalManager:
                                 description: JournalManager tunes the journal managers
                                   on these nodes.
@@ -1112,6 +1466,16 @@ spec:
                                 maxLength: 63
                                 pattern: ^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$
                                 type: string
+                              site:
+                                description: |-
+                                  Site is the replication site every worker in this group belongs to, one of
+                                  the cluster's two sites. Discovery seeds it from topology.kubernetes.io/zone,
+                                  as it does FailureDomain, since a sync cluster's two sites are its two zones.
+                                  Required when the cluster has enableSyncReplication=true, rejected otherwise.
+                                  It expands into StorageNode.spec.config.site, whose shape it shares.
+                                maxLength: 63
+                                pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                                type: string
                               spdkSystemMemory:
                                 description: |-
                                   SpdkSystemMemory is the memory the control plane starts SPDK with on these
@@ -1138,6 +1502,10 @@ spec:
                                 network attachments, not both
                               rule: '!has(self.networkAttachment) || (!has(self.mgmtInterface)
                                 && !has(self.dataInterfaces))'
+                            - message: a group cannot run OpenShift or Talos, which
+                                each run a whole cluster
+                              rule: '!has(self.environment) || !(self.environment
+                                in [''OpenShift'', ''Talos''])'
                           maxItems: 64
                           minItems: 1
                           type: array
@@ -1159,8 +1527,6 @@ spec:
                 - nodeSets
                 type: object
                 x-kubernetes-validations:
-                - message: an approved deployment config is immutable
-                  rule: '!has(oldSelf.approved) || !oldSelf.approved || self == oldSelf'
                 - message: approval cannot be withdrawn
                   rule: '!has(oldSelf.approved) || !oldSelf.approved || self.approved'
                 - message: 'every group of a node set must name the same device class:
@@ -1175,16 +1541,22 @@ spec:
                     document has more than one node set or names a cluster in clusterRef
                   rule: size(self.nodeSets) > 1 || has(self.clusterRef) || self.nodeSets.all(s,
                     !has(s.cluster))
+                - message: group dataInterfaces are allowed only with cluster.network.spdkOnHostNetwork
+                  rule: '!has(self.cluster) || !has(self.cluster.network) || (has(self.cluster.network.spdkOnHostNetwork)
+                    && self.cluster.network.spdkOnHostNetwork) || self.nodeSets.all(s,
+                    s.groups.all(g, !has(g.dataInterfaces)))'
                 - message: spec.cluster.openshift is what a deployment onto OpenShift
                     states, so spec.environment has to be OpenShift
                   rule: '!has(self.cluster) || !has(self.cluster.openshift) || (has(self.environment)
                     && self.environment == ''OpenShift'')'
-                - message: 'spec.cluster.enableCpuTopology and spec.cluster.enableKubeletConfiguration
-                    are stated only when spec.environment is Vanilla: every other
-                    environment decides both'
-                  rule: '!has(self.cluster) || (!has(self.cluster.enableCpuTopology)
-                    && !has(self.cluster.enableKubeletConfiguration)) || (has(self.environment)
-                    && self.environment == ''Vanilla'')'
+                - message: spec.cluster.talosMachineConfig is what a deployment onto
+                    Talos states, so spec.environment has to be Talos
+                  rule: '!has(self.cluster) || !has(self.cluster.talosMachineConfig)
+                    || (has(self.environment) && self.environment == ''Talos'')'
+                - message: every worker of an OpenShift or a Talos cluster runs it,
+                    so no group states an environment of its own
+                  rule: '!has(self.environment) || !(self.environment in [''OpenShift'',
+                    ''Talos'']) || self.nodeSets.all(s, s.groups.all(g, !has(g.environment)))'
               memberRef:
                 description: MemberRef names the FleetMember this cluster is built
                   in.

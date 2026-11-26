@@ -162,7 +162,7 @@ D 12.
   [Its management interface does not hold its node address and is on a different prefix than the other workers, or a data interface is on a different prefix than most workers.],
   [R 5.2, D 7.4],
   [The workers are split into several groups], [Compare the workers' reports],
-  [Workers share a group only with the same device names, management interface, data interfaces, and failure domain. In NVMe mode the device names are PCI addresses, so different slots make different groups.],
+  [Workers share a group only with the same device names, management interface, data interfaces, failure domain, and environment. In NVMe mode the device names are PCI addresses, so different slots make different groups. Workers from another provider than the control plane's get groups of their own (`WorkerEnvironmentDiffers`).],
   [D 10],
   [The draft has several node sets, so several clusters], [The node labels and the worker count],
   [More than 32 storage nodes for one role, workers in different regions, or `storage.simplyblock.io/placement-group` labels, including the `PlacementGroup` warnings.],
@@ -171,7 +171,7 @@ D 12.
   [Some workers carry no label (`TopologyIncomplete`), a value is invalid (`FailureDomainInvalid`), or the stripe does not fit the domains.],
   [R 8.1, D 10],
   [`hostOS` is missing from the draft], [The `ConfigWritten` events, and `hostOS` in the reports],
-  [The workers run different distributions, or a worker's os-release could not be read.],
+  [The workers run different distributions, in which case each group states its own `hostOS`, or a worker's os-release could not be read.],
   [D 4],
   [`vcpuCount` or `minHugePagesSize` is lower than expected], [`cpu` and `hugePages` in the reports],
   [Both come from the smallest worker, counted on the NUMA node the disks are on. Huge pages under 1 GiB leave the setting unset.],
@@ -183,7 +183,7 @@ D 12.
   [Set when every worker has exactly one disk smaller than all its others. Logical block device mode needs one.],
   [D 10, R 5.3],
   [The wrong platform (OpenShift, Talos, EKS, ...)], [`status.environment` of the OperatorOps, and an `EnvironmentPartiallyRead` warning],
-  [The markers that identify each platform were missing, or the API groups could not be listed. Set `spec.environment` in the draft.],
+  [The markers that identify each platform were missing, or the API server's groups or version could not be read. Set `spec.environment` in the draft.],
   [D 2, R 8.1],
 )
 

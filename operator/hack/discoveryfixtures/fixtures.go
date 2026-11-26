@@ -178,6 +178,17 @@ func runningUbuntu() nodeprobe.HostOS {
 	}
 }
 
+// runningAmazonLinux is the OS of an EKS node group on Amazon Linux 2023, whose
+// os-release ID is shared with Amazon Linux 2 and told apart by its version.
+func runningAmazonLinux() nodeprobe.HostOS {
+	amazon := runningUbuntu()
+	amazon.Distro = "amzn"
+	amazon.Family = string(inventory.OSFamilyRedHat)
+	amazon.Version = "2023"
+	amazon.PrettyName = "Amazon Linux 2023.6.20241212"
+	return amazon
+}
+
 // ubuntuKernel is the kernel Ubuntu 22.04 boots: native NVMe multipath on, and
 // the three optional capabilities as its stock kernel offers them on a virtual
 // machine without nested virtualization.
@@ -641,6 +652,12 @@ func kubeNode(name string, opts ...nodeOpt) corev1.Node {
 // role labels the node with what it is for, in Kubernetes' own convention.
 func role(name string) nodeOpt {
 	return func(n *corev1.Node) { n.Labels["node-role.kubernetes.io/"+name] = "" }
+}
+
+// labeled puts a label on the node, such as the node-pool label a managed
+// service puts on the nodes it provisions.
+func labeled(key, value string) nodeOpt {
+	return func(n *corev1.Node) { n.Labels[key] = value }
 }
 
 // reachableAt is the address the cluster reaches the machine on.

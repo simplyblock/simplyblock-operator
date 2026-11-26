@@ -179,6 +179,15 @@ spec:
                           type: string
                       type: object
                     type: array
+                  disableDeviceMapperIndirection:
+                    description: |-
+                      DisableDeviceMapperIndirection stages new volumes directly on their NVMe
+                      device instead of behind a device-mapper linear device. Without that
+                      layer a volume cannot move to another NVMe subsystem while a pod uses
+                      it, so it cannot join a consistency group live. The layer costs a little
+                      CPU per I/O. A change applies to volumes staged after it; a volume keeps
+                      the layout it was staged with until its pods stop and it is staged again.
+                    type: boolean
                   driverName:
                     default: csi.simplyblock.io
                     description: |-
@@ -198,6 +207,22 @@ spec:
                       CSIAddonsNode object, so it only works on a cluster that serves the
                       csiaddons.openshift.io CRDs. Without them it restarts in a loop, so leave
                       it false unless those CRDs are installed.
+                    type: boolean
+                  enableNVMeTCPModuleInstall:
+                    default: false
+                    description: |-
+                      EnableNVMeTCPModuleInstall loads the nvme-tcp kernel module on every
+                      worker that runs the node plugin, before the plugin starts. A privileged
+                      init container mounts the host's root and reads its /etc/os-release. On an
+                      Ubuntu host it loads nvme-tcp, installs linux-modules-extra for the
+                      running kernel with apt when the module is missing, and adds nvme-tcp to
+                      /etc/modules-load.d so it loads again after a reboot. Any other host is
+                      left unchanged with a warning in the init container's log. An Ubuntu
+                      worker needs its apt mirror when the package is missing, which is again
+                      the case after a kernel upgrade, and an install that fails holds the node
+                      plugin in Init and stalls a rolling update of the DaemonSet. Turning it
+                      off leaves /etc/modules-load.d/nvme-tcp.conf on the hosts. Changing it
+                      restarts every node plugin.
                     type: boolean
                   enableServiceAccountAuth:
                     default: false
@@ -507,6 +532,13 @@ spec:
                                   type: string
                               type: object
                             type: array
+                          unhealthyDeadline:
+                            description: |-
+                              UnhealthyDeadline is how long a booted guest may stay unhealthy before
+                              the pod restarts. The metadata server is a singleton in the data path of
+                              every pNFS volume, so a restart pauses all of them. 0s never restarts it.
+                              Unset keeps the runner's default of 90s.
+                            type: string
                         type: object
                     type: object
                   sidecarImages:
@@ -568,25 +600,25 @@ spec:
                       off the running objects.
                     properties:
                       enableMutualTLS:
-                        default: false
                         description: |-
                           EnableMutualTLS additionally requires each plugin to present a client
                           certificate, rather than dialing the control plane anonymously over
                           the encrypted connection EnableTLS alone provides. Ignored when
-                          EnableTLS is false, the same as the Helm value it replaces.
+                          EnableTLS is false, the same as the Helm value it replaces. Unset follows
+                          the ControlPlane's spec.source.local.tls.enableMutualTLS.
                         type: boolean
                       enableTLS:
-                        default: false
-                        description: EnableTLS turns on TLS between both plugins and
-                          the control plane.
+                        description: |-
+                          EnableTLS turns on TLS between both plugins and the control plane.
+                          Unset follows the ControlPlane's spec.source.local.tls.enableTLS.
                         type: boolean
                       provider:
-                        default: cert-manager
                         description: |-
                           Provider selects where the CA bundle (and, with EnableMutualTLS, the
                           client certificate) comes from. Required reading whenever EnableTLS is
                           true: the two providers mount a differently shaped volume, and neither
-                          shape can be inferred from anything else on this object.
+                          shape can be inferred from anything else on this object. Unset follows
+                          the ControlPlane's provider, and is cert-manager without one.
                         enum:
                         - OpenShift
                         - cert-manager

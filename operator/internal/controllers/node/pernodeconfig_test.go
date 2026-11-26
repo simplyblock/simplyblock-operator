@@ -15,12 +15,14 @@ package node
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
 
@@ -266,6 +268,78 @@ func TestANodeWithNoReservedCPUsWritesNoLine(t *testing.T) {
 	got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}))
 	if _, stated := got["RESERVED_SYSTEM_CPUS"]; stated {
 		t.Errorf("the entry carries RESERVED_SYSTEM_CPUS=%q with nothing stated", got["RESERVED_SYSTEM_CPUS"])
+	}
+}
+
+// Whether a worker's kubelet may be configured is a fact about the worker in a
+// cluster whose workers come from more than one provider, so a node that
+// states it overrides the fleet's value through its own entry. The agent
+// reads the inverted variable, so stating it on writes the skip off.
+func TestTheNodesKubeletConfigurationReachesItsOwnEntry(t *testing.T) {
+	for _, c := range []struct {
+		enable bool
+		want   string
+	}{{true, "false"}, {false, "true"}} {
+		node := &simplyblockv1alpha2.StorageNode{
+			Spec: simplyblockv1alpha2.StorageNodeSpec{
+				Config: simplyblockv1alpha2.StorageNodeConfig{EnableKubeletConfiguration: ptr.To(c.enable)},
+			},
+		}
+
+		got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, node))
+		if got["SKIP_KUBELET_CONFIGURATION"] != c.want {
+			t.Errorf("enableKubeletConfiguration=%t wrote SKIP_KUBELET_CONFIGURATION=%q, want %q",
+				c.enable, got["SKIP_KUBELET_CONFIGURATION"], c.want)
+		}
+	}
+}
+
+// A node that states none writes none, so the fleet's value on the pod decides.
+func TestANodeWithNoKubeletConfigurationWritesNoLine(t *testing.T) {
+	got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, &simplyblockv1alpha2.StorageNode{}))
+	if _, stated := got["SKIP_KUBELET_CONFIGURATION"]; stated {
+		t.Errorf("the entry carries SKIP_KUBELET_CONFIGURATION=%q with nothing stated",
+			got["SKIP_KUBELET_CONFIGURATION"])
+	}
+}
+
+// The operating system is a fact about the worker in a cluster whose workers
+// run more than one, so a node that states it overrides the fleet's value
+// through its own entry, in both directions. The agent reads it as the one flag
+// it acts on, and only the distribution decides that flag.
+func TestTheNodesHostOSReachesItsOwnEntry(t *testing.T) {
+	for _, c := range []struct {
+		os   simplyblockv1alpha2.HostOSSpec
+		want bool
+	}{
+		{simplyblockv1alpha2.HostOSSpec{Distro: simplyblockv1alpha2.DistroUbuntu, Family: simplyblockv1alpha2.HostOSFamilyDebian}, true},
+		{simplyblockv1alpha2.HostOSSpec{Distro: "amzn", Family: simplyblockv1alpha2.HostOSFamilyRedHat}, false},
+		{simplyblockv1alpha2.HostOSSpec{Distro: "rocky"}, false},
+	} {
+		node := &simplyblockv1alpha2.StorageNode{
+			Spec: simplyblockv1alpha2.StorageNodeSpec{
+				Config: simplyblockv1alpha2.StorageNodeConfig{HostOS: &c.os},
+			},
+		}
+
+		got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, node))
+		if want := strconv.FormatBool(c.want); got["UBUNTU_HOST"] != want {
+			t.Errorf("hostOS.distro=%q wrote UBUNTU_HOST=%q, want %q", c.os.Distro, got["UBUNTU_HOST"], want)
+		}
+	}
+}
+
+// A node that states no distribution writes no line, so the fleet's value on
+// the pod decides: a family alone does not say which kernel packages exist.
+func TestANodeWithNoHostOSDistroWritesNoLine(t *testing.T) {
+	for _, os := range []*simplyblockv1alpha2.HostOSSpec{nil, {Family: simplyblockv1alpha2.HostOSFamilyDebian}} {
+		node := &simplyblockv1alpha2.StorageNode{
+			Spec: simplyblockv1alpha2.StorageNodeSpec{Config: simplyblockv1alpha2.StorageNodeConfig{HostOS: os}},
+		}
+		got := entryOf(renderNodeConfig(&simplyblockv1alpha2.StorageCluster{}, node))
+		if _, stated := got["UBUNTU_HOST"]; stated {
+			t.Errorf("hostOS=%+v wrote UBUNTU_HOST=%q with no distribution stated", os, got["UBUNTU_HOST"])
+		}
 	}
 }
 

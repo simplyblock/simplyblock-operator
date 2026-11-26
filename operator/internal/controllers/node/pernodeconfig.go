@@ -239,7 +239,7 @@ func renderNodeConfig(
 			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
 			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
 		}
-		// By default the configure carves each node's journal partition from
+		// By default, the configure carves each node's journal partition from
 		// its smallest device (the journal split). enableJournalDevice asks for
 		// the smallest device to be dedicated to the journal instead.
 		if workload := cluster.Spec.StorageNodes; workload != nil &&
@@ -254,6 +254,19 @@ func renderNodeConfig(
 	// nothing.
 	if config.ReservedSystemCPU != "" {
 		fmt.Fprintf(&entry, "RESERVED_SYSTEM_CPUS=%s\n", utils.ShellQuote(config.ReservedSystemCPU))
+	}
+	// The kubelet flag is the same: a worker from another provider than the
+	// fleet's states its own, and one that states none writes no line. The agent
+	// reads the inverted variable the pod carries.
+	if config.EnableKubeletConfiguration != nil {
+		fmt.Fprintf(&entry, "SKIP_KUBELET_CONFIGURATION=%t\n", !*config.EnableKubeletConfiguration)
+	}
+	// So is the operating system, of which the agent acts on one fact: whether
+	// the worker is Ubuntu, which keeps the NVMe-oF modules in a package of its
+	// own. Only a stated distribution decides it, because a family alone does
+	// not say which kernel packages exist.
+	if os := config.HostOS; os != nil && os.Distro != "" {
+		fmt.Fprintf(&entry, "UBUNTU_HOST=%t\n", os.Distro == simplyblockv1alpha2.DistroUbuntu)
 	}
 	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
 	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))

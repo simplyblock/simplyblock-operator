@@ -12,9 +12,9 @@
 // Detection reads several markers per distribution rather than one, because
 // every single marker is the one that a release changes. An API group is the
 // strongest evidence there is, since only its own installer registers it; a
-// kubelet version suffix is next, since the distribution builds the binary; and
-// a label or an annotation is the weakest, since anything can write one. All of
-// them are read and all of them are recorded.
+// kubelet or API server version suffix is next, since the distribution builds
+// the binary; and a label or an annotation is the weakest, since anything can
+// write one. All of them are read and all of them are recorded.
 //
 // Nothing here fails. The distribution is a starting point a reviewer corrects,
 // so a cluster whose markers say nothing is vanilla Kubernetes rather than an
@@ -26,6 +26,7 @@ package inventory
 import (
 	"cmp"
 	"context"
+	"errors"
 	"slices"
 	"strings"
 
@@ -86,6 +87,11 @@ const (
 	// kubelet it ships.
 	SourceKubeletVersion Source = "KubeletVersion"
 
+	// SourceServerVersion is the same suffix in the API server's version, the
+	// one marker a managed control plane leaves: it runs no node a cluster can
+	// list.
+	SourceServerVersion Source = "ServerVersion"
+
 	// SourceOSImage is the operating-system image a node boots, as the kubelet
 	// reports it.
 	SourceOSImage Source = "OSImage"
@@ -109,6 +115,15 @@ type Evidence struct {
 	// label's key and value. It is what a reviewer reads to decide whether the
 	// conclusion was right.
 	Detail string
+}
+
+// ControlPlane is what the API server says about the cluster it serves.
+type ControlPlane struct {
+	// APIGroups are the API groups the server registers, by name.
+	APIGroups []string
+
+	// Version is the server's own build, as /version reports it in gitVersion.
+	Version string
 }
 
 // Environment is what a cluster was concluded to be.
@@ -232,69 +247,130 @@ var nodeKeyExactMarkers = map[string]Distribution{
 	"kubernetes.azure.com/cluster":   DistributionAKS,
 }
 
-// CollectEnvironment reads the API groups the server registers and concludes a
-// distribution from them and from the nodes it was given.
+// CollectEnvironment reads the API groups the server registers and the
+// server's version, and concludes a distribution from them and from the nodes
+// it was given.
 //
 // The two halves are separate calls because they fail separately and because
 // the nodes are almost always already at hand: a caller inspecting a fleet has
-// listed them for other reasons. An unreadable group list is not fatal — the
-// nodes alone still support a conclusion — so the error is returned beside an
-// Environment that was drawn from whatever was readable.
+// listed them for other reasons. An unreadable group list or version is not
+// fatal, since the nodes alone still support a conclusion, so the error is
+// returned beside an Environment drawn from whatever was readable.
 func CollectEnvironment(ctx context.Context, disco discovery.DiscoveryInterface, nodes []corev1.Node) (Environment, error) {
-	groups, err := serverGroups(ctx, disco)
-	return DetectEnvironment(groups, nodes), err
+	control, err := readControlPlane(ctx, disco)
+	return DetectEnvironment(control, nodes), err
 }
 
-// serverGroups lists the API groups the server registers, by name.
-func serverGroups(ctx context.Context, disco discovery.DiscoveryInterface) ([]string, error) {
+// readControlPlane reads the API groups the server registers, by name, and the
+// server's version.
+func readControlPlane(ctx context.Context, disco discovery.DiscoveryInterface) (ControlPlane, error) {
+	var control ControlPlane
 	if disco == nil {
-		return nil, nil
+		return control, nil
 	}
-	// ServerGroups takes no context, so the cancellation this call has to
-	// respect is checked around it rather than inside it.
+	// Neither call takes a context, so the cancellation this has to respect is
+	// checked around them rather than inside them.
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return control, err
 	}
-	list, err := disco.ServerGroups()
-	if err != nil {
-		return nil, err
+	var errs []error
+	if list, err := disco.ServerGroups(); err != nil {
+		errs = append(errs, err)
+	} else {
+		for _, group := range list.Groups {
+			control.APIGroups = append(control.APIGroups, group.Name)
+		}
 	}
-	names := make([]string, 0, len(list.Groups))
-	for _, group := range list.Groups {
-		names = append(names, group.Name)
+	if info, err := disco.ServerVersion(); err != nil {
+		errs = append(errs, err)
+	} else {
+		control.Version = info.GitVersion
 	}
-	return names, nil
+	return control, errors.Join(errs...)
 }
 
-// DetectEnvironment concludes a distribution from the API groups a server
-// registers and the nodes it runs.
+// DetectEnvironment concludes a distribution from what the API server says
+// about itself and from the nodes it runs.
 //
 // Both arguments are optional. A caller with only one of the two gets the
 // conclusion that half supports, and a caller with neither gets
 // DistributionVanilla, because the field this fills in is a starting point a
 // reviewer corrects rather than a question that has to be answered here.
-func DetectEnvironment(apiGroups []string, nodes []corev1.Node) Environment {
-	var evidence []Evidence
+//
+// A fleet whose workers agree, or say nothing, is concluded from every marker
+// at once by the precedence. A fleet whose workers disagree is one control plane
+// with workers from more than one provider, such as Google Anthos joining EKS
+// and OKE node groups to a GKE cluster, and there the precedence would name
+// whichever provider comes first in it. The control plane is the cluster's
+// answer instead, and the workers that differ from it are each concluded on
+// their own by NodeDistribution. Where the control plane carries no marker, the
+// precedence answers as before.
+func DetectEnvironment(control ControlPlane, nodes []corev1.Node) Environment {
+	own := controlPlaneEvidence(control)
+	evidence := slices.Clone(own)
 
-	for _, group := range apiGroups {
+	agree := true
+	var seen Distribution
+	for _, n := range nodes {
+		found := nodeEvidence(n)
+		evidence = append(evidence, found...)
+		if dist, ok := conclude(found); ok {
+			if seen != "" && dist != seen {
+				agree = false
+			}
+			seen = dist
+		}
+	}
+
+	env := Environment{Distribution: DistributionVanilla, Evidence: dedupe(evidence)}
+	if !agree {
+		if dist, ok := conclude(own); ok {
+			env.Distribution = dist
+			return env
+		}
+	}
+	if dist, ok := conclude(env.Evidence); ok {
+		env.Distribution = dist
+	}
+	return env
+}
+
+// NodeDistribution concludes a distribution from one node's own markers, and
+// reports false for a node that carries none. A node without a marker says
+// nothing about itself, which is not the same as saying it runs vanilla
+// Kubernetes, so a caller comparing one worker against its cluster leaves such
+// a node with the cluster's answer.
+func NodeDistribution(n corev1.Node) (Distribution, bool) {
+	return conclude(nodeEvidence(n))
+}
+
+// conclude applies the precedence to a set of findings, and reports false when
+// none of them points anywhere.
+func conclude(evidence []Evidence) (Distribution, bool) {
+	for _, dist := range precedence {
+		if slices.ContainsFunc(evidence, func(e Evidence) bool { return e.Distribution == dist }) {
+			return kubeletDecidesBetweenK3sAndRancher(dist, evidence), true
+		}
+	}
+	return "", false
+}
+
+// controlPlaneEvidence reads the API server's markers: the groups only one
+// distribution's installer registers, and the build suffix of its version,
+// which a distribution that builds the kubelet builds into the API server too.
+func controlPlaneEvidence(control ControlPlane) []Evidence {
+	var evidence []Evidence
+	for _, group := range control.APIGroups {
 		if dist, ok := apiGroupMarkers[group]; ok {
 			evidence = append(evidence, Evidence{dist, SourceAPIGroup, group})
 		}
 	}
-
-	for _, n := range nodes {
-		evidence = append(evidence, nodeEvidence(n)...)
-	}
-
-	env := Environment{Distribution: DistributionVanilla, Evidence: dedupe(evidence)}
-	for _, dist := range precedence {
-		if slices.ContainsFunc(env.Evidence, func(e Evidence) bool { return e.Distribution == dist }) {
-			env.Distribution = dist
-			break
+	for suffix, dist := range kubeletVersionMarkers {
+		if strings.Contains(control.Version, suffix) {
+			evidence = append(evidence, Evidence{dist, SourceServerVersion, control.Version})
 		}
 	}
-	env.Distribution = kubeletDecidesBetweenK3sAndRancher(env.Distribution, env.Evidence)
-	return env
+	return evidence
 }
 
 // kubeletDecidesBetweenK3sAndRancher turns a K3s conclusion into Rancher for a
@@ -308,15 +384,18 @@ func DetectEnvironment(apiGroups []string, nodes []corev1.Node) Environment {
 // kubelet decides, so the kubelet's own build suffix is asked: where it names
 // the Rancher family and no kubelet names K3s, the cluster is Rancher's.
 //
-// A cluster with kubelets of both, or with no kubelet version to read, keeps the
-// precedence's answer.
+// The API server's version counts as a kubelet's here, because the same build
+// produced both, and it is the one version there is when a fleet of mixed
+// workers is concluded from its control plane alone. A cluster with kubelets of
+// both, or with no version to read, keeps the precedence's answer.
 func kubeletDecidesBetweenK3sAndRancher(concluded Distribution, evidence []Evidence) Distribution {
 	if concluded != DistributionK3s {
 		return concluded
 	}
 	builtBy := func(dist Distribution) bool {
 		return slices.ContainsFunc(evidence, func(e Evidence) bool {
-			return e.Distribution == dist && e.Source == SourceKubeletVersion
+			return e.Distribution == dist &&
+				(e.Source == SourceKubeletVersion || e.Source == SourceServerVersion)
 		})
 	}
 	if builtBy(DistributionRancher) && !builtBy(DistributionK3s) {

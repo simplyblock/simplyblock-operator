@@ -352,31 +352,38 @@ File: `operator/internal/controllers/node/enrollment_test.go`
 
 File: `operator/internal/controllers/node/pernodeconfig_test.go`
 
-| #     | Scenario                                                                                   | Type     | Test                                                   |
-|-------|--------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
-| U-85  | Cluster sizing values appear in a worker's env file                                        | Positive | —                                                      |
-| U-86  | Cluster sizing is identical in every worker's entry                                        | Positive | —                                                      |
-| U-87  | Every key the init container reads is present, including the empty ones                    | Boundary | —                                                      |
-| U-88  | The cluster is missing its required sizing: the write is refused with a named error        | Negative | —                                                      |
-| U-89  | Every worker gets an entry carrying the cluster sizing                                     | Positive | —                                                      |
-| U-90  | Two nodes with different device filters get different entries                              | Positive | —                                                      |
-| U-91  | A node with no `spec.config`: its entry carries the empty values, not missing keys         | Boundary | —                                                      |
-| U-92  | A device list containing a shell metacharacter is quoted rather than interpolated          | Negative | —                                                      |
-| U-262 | `VCPU_COUNT` and `MAX_HUGE_PAGES_SIZE` come from the node's own sizing                     | Positive | —                                                      |
-| U-263 | Two nodes mid-roll: their entries differ in those two keys and agree on `MAX_SUBSYS_COUNT` | Boundary | —                                                      |
-| U-415 | A node stating `reservedSystemCPU`: its entry carries `RESERVED_SYSTEM_CPUS`               | Positive | `TestTheReservedCPUsReachTheNodesOwnEntry`             |
-| U-416 | A node stating none: no line is written, so the pod's fleet-wide value decides             | Boundary | `TestANodeWithNoReservedCPUsWritesNoLine`              |
-| U-417 | The agent's container exports that one variable out of the entry it sources, and no other  | Positive | `TestTheMainContainerExportsTheNodesReservedCPUs`      |
-| U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                        | Positive | —                                                      |
-| U-245 | A `deviceNames` entry that is a device path reaches the node as one                        | Positive | —                                                      |
-| U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given                  | Boundary | —                                                      |
-| U-247 | `deviceNames` set alongside `pcieAllowList`: the explicit list wins (design §3.1)          | Boundary | —                                                      |
-| U-93  | The ConfigMap is written before the DaemonSet on a fresh reconcile                         | Positive | —                                                      |
-| U-94  | A node deleted: its entry is removed from the ConfigMap                                    | Positive | —                                                      |
-| U-310 | A relocation clones the source worker's entry onto the target                              | Positive | `TestTheTargetInheritsTheSourcesEntryWithTheNewDrives` |
-| U-311 | Cloning from a worker that has no entry is refused rather than writing an empty one        | Negative | `TestCloningFromAWorkerWithNoEntryIsRefused`           |
-| U-312 | Cloning before the ConfigMap exists is not a failure: the ordinary pass writes it          | Boundary | `TestNothingToCloneFromIsNotAFailure`                  |
-| U-313 | The source worker's own entry is left alone by the clone                                   | Negative | `TestTheTargetInheritsTheSourcesEntryWithTheNewDrives` |
+| #     | Scenario                                                                                                 | Type     | Test                                                   |
+|-------|----------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------------|
+| U-85  | Cluster sizing values appear in a worker's env file                                                      | Positive | —                                                      |
+| U-86  | Cluster sizing is identical in every worker's entry                                                      | Positive | —                                                      |
+| U-87  | Every key the init container reads is present, including the empty ones                                  | Boundary | —                                                      |
+| U-88  | The cluster is missing its required sizing: the write is refused with a named error                      | Negative | —                                                      |
+| U-89  | Every worker gets an entry carrying the cluster sizing                                                   | Positive | —                                                      |
+| U-90  | Two nodes with different device filters get different entries                                            | Positive | —                                                      |
+| U-91  | A node with no `spec.config`: its entry carries the empty values, not missing keys                       | Boundary | —                                                      |
+| U-92  | A device list containing a shell metacharacter is quoted rather than interpolated                        | Negative | —                                                      |
+| U-262 | `VCPU_COUNT` and `MAX_HUGE_PAGES_SIZE` come from the node's own sizing                                   | Positive | —                                                      |
+| U-263 | Two nodes mid-roll: their entries differ in those two keys and agree on `MAX_SUBSYS_COUNT`               | Boundary | —                                                      |
+| U-415 | A node stating `reservedSystemCPU`: its entry carries `RESERVED_SYSTEM_CPUS`                             | Positive | `TestTheReservedCPUsReachTheNodesOwnEntry`             |
+| U-416 | A node stating none: no line is written, so the pod's fleet-wide value decides                           | Boundary | `TestANodeWithNoReservedCPUsWritesNoLine`              |
+| U-417 | The agent's container exports the node's overrides out of the entry it sources, and no other             | Positive | `TestTheMainContainerExportsTheNodesReservedCPUs`      |
+| U-535 | A node stating `enableKubeletConfiguration`: its entry carries the inverted `SKIP_KUBELET_CONFIGURATION` | Positive | `TestTheNodesKubeletConfigurationReachesItsOwnEntry`   |
+| U-536 | A node stating no kubelet flag: no line is written, so the pod's fleet-wide value decides                | Boundary | `TestANodeWithNoKubeletConfigurationWritesNoLine`      |
+| U-537 | A user edit of `spec.config.enableKubeletConfiguration` is refused, naming the field                     | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`    |
+| U-538 | A node stating `hostOS` with a distribution: its entry carries `UBUNTU_HOST`, true for `ubuntu` only     | Positive | `TestTheNodesHostOSReachesItsOwnEntry`                 |
+| U-539 | A node stating no `hostOS`, or one with a family and no distribution: no line is written                 | Boundary | `TestANodeWithNoHostOSDistroWritesNoLine`              |
+| U-540 | The agent's container exports `UBUNTU_HOST` out of the entry it sources                                  | Positive | `TestTheMainContainerExportsTheNodesReservedCPUs`      |
+| U-541 | A user edit of `spec.config.hostOS` is refused, naming the field                                         | Negative | `TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse`    |
+| U-244 | A `deviceNames` entry that is a PCI address reaches the node as one                                      | Positive | —                                                      |
+| U-245 | A `deviceNames` entry that is a device path reaches the node as one                                      | Positive | —                                                      |
+| U-246 | A mixed `deviceNames` list: both forms reach the node, in the order given                                | Boundary | —                                                      |
+| U-247 | `deviceNames` set alongside `pcieAllowList`: the explicit list wins (design §3.1)                        | Boundary | —                                                      |
+| U-93  | The ConfigMap is written before the DaemonSet on a fresh reconcile                                       | Positive | —                                                      |
+| U-94  | A node deleted: its entry is removed from the ConfigMap                                                  | Positive | —                                                      |
+| U-310 | A relocation clones the source worker's entry onto the target                                            | Positive | `TestTheTargetInheritsTheSourcesEntryWithTheNewDrives` |
+| U-311 | Cloning from a worker that has no entry is refused rather than writing an empty one                      | Negative | `TestCloningFromAWorkerWithNoEntryIsRefused`           |
+| U-312 | Cloning before the ConfigMap exists is not a failure: the ordinary pass writes it                        | Boundary | `TestNothingToCloneFromIsNotAFailure`                  |
+| U-313 | The source worker's own entry is left alone by the clone                                                 | Negative | `TestTheTargetInheritsTheSourcesEntryWithTheNewDrives` |
 
 ### Workload: Endpoints and Certificate Rotation (design §5.4)
 

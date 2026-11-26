@@ -1,16 +1,13 @@
-// What a fleet's probe reports say the workers' operating system is, as the one
-// statement a document can carry.
+// What a fleet's probe reports say the workers' operating system is: the one
+// statement the document carries for the fleet, and the one each group carries
+// for workers that run another.
 //
-// One document becomes one StorageCluster, which runs one storage-node
-// DaemonSet, which carries one UBUNTU_HOST for every worker it schedules. There
-// is nowhere for a per-worker answer to go, so this is a question about the
-// fleet rather than about a machine, and the only honest answer for a fleet
-// whose workers disagree is none at all.
-//
-// Concluding nothing is therefore a result and not a failure. It reaches the
-// reviewer as a note naming what each worker runs, which is the thing a person
-// can act on: either the fleet is wrong, or the document's hostOS is theirs to
-// state by hand.
+// The document states a host OS only where every worker agrees on it, which is
+// the default every node falls back to. A fleet whose workers disagree, such as
+// an EKS cluster with Amazon Linux and Ubuntu node groups, gets none for the
+// document, and each group states the one its workers run instead. Each node
+// carries its group's into its own per-node entry, which is how one storage-node
+// DaemonSet serves workers on different operating systems.
 
 package discovery
 
@@ -44,10 +41,8 @@ func HostOSFor(plan Plan) (*simplyblockv1alpha2.HostOSSpec, []string) {
 	}
 	if len(byDistro) > 1 {
 		return nil, []string{fmt.Sprintf(
-			"the workers do not run one operating system, so hostOS is unstated: %s. "+
-				"One document builds one cluster and one storage-node DaemonSet, which "+
-				"carries one host OS for every worker it schedules, so this is a fleet to "+
-				"correct or a hostOS to state by hand",
+			"the workers do not run one operating system, so spec.hostOS is unstated and "+
+				"each group states the one its workers run: %s",
 			distroSplit(byDistro))}
 	}
 
@@ -60,12 +55,60 @@ func HostOSFor(plan Plan) (*simplyblockv1alpha2.HostOSSpec, []string) {
 		}
 	}
 
+	byVersion := map[string][]string{}
+	for _, worker := range plan.Workers {
+		byVersion[worker.Report.HostOS.Version] = append(byVersion[worker.Report.HostOS.Version], worker.Name)
+	}
+
 	os := &simplyblockv1alpha2.HostOSSpec{Distro: distro, Family: familyOf(plan, distro)}
-	return os, []string{fmt.Sprintf(
-		"hostOS is %s%s, read from every worker's os-release. It is what ubuntuHost is "+
+	if len(byVersion) == 1 {
+		os.Version = slices.Collect(maps.Keys(byVersion))[0]
+	}
+	notes := []string{fmt.Sprintf(
+		"hostOS is %s%s%s, read from every worker's os-release. It is what ubuntuHost is "+
 			"decided by, and the one distribution that decides it is Ubuntu, whose NVMe-oF "+
 			"modules are in a package the base install does not carry",
-		distro, familyNote(os.Family))}
+		distro, versionNote(os.Version), familyNote(os.Family))}
+	if len(byVersion) > 1 {
+		notes = append(notes, fmt.Sprintf(
+			"the workers run more than one release of %s, so spec.hostOS states no version "+
+				"and each group states the release its workers run: %s",
+			distro, workersBy(byVersion, "no version")))
+	}
+	return os, notes
+}
+
+// versionNote is the version the note names after the distro, when one is stated.
+func versionNote(version string) string {
+	if version == "" {
+		return ""
+	}
+	return " " + version
+}
+
+// assignHostOS sets the host OS of every worker that does not run exactly the
+// one the document states, which the grouping then keeps apart.
+//
+// A worker whose os-release nothing read says nothing about itself, so it is
+// left on the document's, as a worker with no provider marker is left on the
+// cluster's environment.
+func (p *Plan) assignHostOS() {
+	document, _ := HostOSFor(*p)
+	for i := range p.Workers {
+		worker := &p.Workers[i]
+		read := worker.Report.HostOS
+		if read.Distro == "" {
+			continue
+		}
+		if document != nil && read.Distro == document.Distro && read.Version == document.Version {
+			continue
+		}
+		family := simplyblockv1alpha2.HostOSFamily(read.Family)
+		if family == "" {
+			family = simplyblockv1alpha2.HostOSFamily(inventory.FamilyOf(inventory.Distro(read.Distro)))
+		}
+		worker.HostOS = &simplyblockv1alpha2.HostOSSpec{Distro: read.Distro, Family: family, Version: read.Version}
+	}
 }
 
 // familyOf is the family the probes reported, or the one the distro itself
@@ -91,21 +134,22 @@ func familyNote(family simplyblockv1alpha2.HostOSFamily) string {
 }
 
 // distroSplit is which workers run what, ordered so that two runs over one fleet
-// read the same.
+// read the same. A worker whose os-release nothing read is named as such, so that
+// a split between a distribution and a blank says which is which.
 func distroSplit(byDistro map[string][]string) string {
-	distros := slices.Sorted(maps.Keys(byDistro))
-
-	parts := make([]string, 0, len(distros))
-	for _, distro := range distros {
-		workers := slices.Clone(byDistro[distro])
-		slices.Sort(workers)
-		parts = append(parts, fmt.Sprintf("%s on %s", orUnread(distro), strings.Join(workers, ", ")))
-	}
-	return strings.Join(parts, "; ")
+	return workersBy(byDistro, "an unread os-release")
 }
 
-// orUnread names the worker whose os-release nothing read, so that a split
-// between a distribution and a blank says which is which.
-func orUnread(distro string) string {
-	return cmp.Or(distro, "an unread os-release")
+// workersBy is which workers read which value, ordered so that two runs over one
+// fleet read the same, naming an empty value as blank.
+func workersBy(byValue map[string][]string, blank string) string {
+	values := slices.Sorted(maps.Keys(byValue))
+
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		workers := slices.Clone(byValue[value])
+		slices.Sort(workers)
+		parts = append(parts, fmt.Sprintf("%s on %s", cmp.Or(value, blank), strings.Join(workers, ", ")))
+	}
+	return strings.Join(parts, "; ")
 }

@@ -88,6 +88,12 @@ The distribution is concluded once per run from the API server and the node obje
 recorded as evidence. When markers of several distributions are present, the first in the order OpenShift,
 Talos, EKS, GKE, AKS, OKE, K3s, Rancher wins. Without any marker, the environment is `Vanilla`.
 
+Each node is also concluded on its own, from its own markers. When those disagree, the workers come from more
+than one provider, as when Google Anthos joins EKS and OKE node groups to a GKE control plane. The cluster's
+environment is then concluded from the API server alone, its API groups and its version, and falls back to the
+order above only when the API server carries no marker. A worker whose own conclusion differs from the
+cluster's is drafted into a group that states it (section on node facts below).
+
 #grid((1fr, 1.3fr, 3.6fr), ([Distribution], [Evidence source], [Markers]),
   [OpenShift], [API group], [`config.openshift.io`, `operator.openshift.io`, `route.openshift.io`, `security.openshift.io`, `machineconfiguration.openshift.io`],
   [OpenShift], [Node OS image], [Starts with `Red Hat Enterprise Linux CoreOS`],
@@ -97,15 +103,17 @@ Talos, EKS, GKE, AKS, OKE, K3s, Rancher wins. Without any marker, the environmen
   [Talos], [Node label or annotation key], [Prefix `talos.dev/`],
   [EKS], [Kubelet version], [Contains `-eks-`, for example `v1.30.8-eks-2d5f260`],
   [EKS], [Node label or annotation key], [Prefix `eks.amazonaws.com/`],
+  [EKS], [API server version], [Contains `-eks-`],
   [GKE], [Kubelet version], [Contains `-gke.`, for example `v1.30.5-gke.1014001`],
+  [GKE], [API server version], [Contains `-gke.`],
   [GKE], [Node label or annotation key], [Prefix `cloud.google.com/gke-`],
   [AKS], [Node label or annotation key], [Exactly `kubernetes.azure.com/agentpool` or `kubernetes.azure.com/cluster`. A longer key that starts with either, such as `kubernetes.azure.com/cluster-name`, is not a marker.],
   [OKE], [Node label or annotation key], [Prefix `oke.oraclecloud.com/`],
   [K3s], [API group], [`k3s.cattle.io`],
-  [K3s], [Kubelet version], [Contains `+k3s`],
+  [K3s], [Kubelet or API server version], [Contains `+k3s`],
   [K3s], [Node label or annotation key], [Prefix `k3s.io/`],
   [Rancher], [API group], [`management.cattle.io`, `provisioning.cattle.io`, `rke.cattle.io`],
-  [Rancher], [Kubelet version], [Contains `+rke2` or `+rke`],
+  [Rancher], [Kubelet or API server version], [Contains `+rke2` or `+rke`],
   [Rancher], [Node label or annotation key], [Prefix `rke2.io/`, `rke.cattle.io/`, `management.cattle.io/`, or `cattle.io/`],
 )
 
@@ -126,6 +134,7 @@ service. On EKS, GKE, AKS, OKE, and Talos the storage node leaves the kubelet co
   [Failure domain], [The label named by `spec.discover.failureDomainLabel`, default `topology.kubernetes.io/zone`], [At most 63 characters, letters, digits, `-`, `_`, and `.`, starting and ending with a letter or digit.], [When every worker carries a valid value, the draft sets `enableFailureDomains` and names each group's domain. Invalid or partly missing labels are reported as findings `FailureDomainInvalid` and `TopologyIncomplete`.],
   [Region], [Label `topology.kubernetes.io/region`], [Any value.], [Workers of different regions never share a member cluster.],
   [Placement group], [Label `storage.simplyblock.io/placement-group`], [A DNS label of at most 23 characters.], [One node set per value, instead of the automatic size split. Findings `PlacementGroupLabelIncomplete` and `PlacementGroupInvalid`.],
+  [Environment], [The node's own distribution markers (section on the cluster environment)], [Any marker in the table above. A node with none has no environment of its own.], [A worker on another distribution than the cluster's gets a group whose `environment` states it, reported as finding `WorkerEnvironmentDiffers`. Not done on OpenShift or Talos, and never to OpenShift or Talos.],
 )
 
 = Host operating system
@@ -143,9 +152,13 @@ Read from the host's `/etc/os-release` (`ID`, `ID_LIKE`, `VERSION_ID`, `PRETTY_N
 )
 
 #v(4pt)
-The draft sets `hostOS` (distribution and family) only when every worker reports the same distribution.
-Workers on different distributions, or a worker whose os-release could not be read, leave it unset with a note
-naming the workers.
+The draft sets `spec.hostOS` (distribution, family, and version) only when every worker reports the same distribution,
+and the version (`VERSION_ID`) only when they also agree on it. Workers on different distributions, or a worker whose
+os-release could not be read, leave it unset with a note naming the workers. Every worker that does not run exactly
+what `spec.hostOS` states is grouped by its operating system, and its group states its own `hostOS`: a fleet of
+Ubuntu and Amazon Linux 2023 workers becomes one group per operating system, and a fleet of Amazon Linux 2 and
+Amazon Linux 2023 workers, which share the ID `amzn`, gets the distribution with no version and one group per release.
+A worker whose os-release could not be read gets no `hostOS` of its own.
 
 == Kernel
 
@@ -458,7 +471,7 @@ draft's `spec.images` unchanged.]
 #v(4pt)
 #grid((1.4fr, 2.2fr, 3.2fr), ([Draft setting], [From], [Rule]),
   [Device names], [Run mode, PCI address, stable path], [NVMe mode (default): PCI address. Logical block device mode (`enableLogicalBlockDevices`): stable path, or the kernel path when udev published none.],
-  [Node groups], [Disks, interfaces, failure domain], [Workers with the same device names, management interface, data interfaces, and failure domain share one group.],
+  [Node groups], [Disks, interfaces, failure domain, environment], [Workers with the same device names, management interface, data interfaces, failure domain, and environment share one group.],
   [Node sets], [Role, region, placement-group label], [One node set per role. A role with more workers than one cluster holds (32 storage nodes) is split into member clusters of near-equal size, dealt in failure-domain order.],
   [Management and data interfaces], [Section 7], [Named per group.],
   [`enableDriveFormat`], [Not a reading], [On, unless the installation states otherwise.],
@@ -470,7 +483,8 @@ draft's `spec.images` unchanged.]
   [`enableFailureDomains`], [Failure-domain label], [On when every worker carries a valid value and the stripe fits the domains.],
   [`enableMetadataJournal`], [Block size, power-fail atomicity, atomic write unit, LBA formats], [On unless every device completes a 4K write whole as a storage node will have it: 4K blocks, or an aligned 4K write within the drive's power-fail atomicity and across none of its boundaries, or, where the drive states nothing, an atomic write unit from at most 4K up to at least 4K. With `enableDriveFormat`, an NVMe namespace not at 4K is judged at the plain 4K format it is reformatted to, or at format 0 where it has none, and its atomic write unit no longer applies. A device with no reading counts as one that needs the journal.],
   [`enableChecksumValidation`, `enableAtomicity4K`], [Same], [Never set: checksum validation is the reviewer's choice. A note says what turning it on would need: which devices have neither a metadata format (8 bytes or more) nor 4K blocks and report an atomic write unit that covers 4K, so need `enableAtomicity4K`, and which report one under 4K, so cannot be checked at all.],
-  [`hostOS`], [os-release], [Set when every worker runs the same distribution.],
+  [`hostOS`], [os-release], [Set when every worker runs the same distribution, and per group for workers that run another.],
+  [Group `environment`], [The worker's own distribution markers], [Set on a group whose workers run on another distribution than the cluster's.],
 )
 
 #pagebreak(weak: true)
@@ -628,8 +642,9 @@ under `spec.nodeSets[].cluster`, on a document with more than one node set or on
   [`enableChecksumValidation`, `socketsToUse`, `nodesPerSocket`], [Not set. Nothing the probe reads decides them. A note says what checksum validation would need on these devices.], [`enableChecksumValidation` is applied to each disk when the cluster is created and never afterward, so a cluster created without it cannot have it. Set `enableAtomicity4K` with it when the note names devices that need it.],
   [`enableAtomicity4K`], [Not set, because checksum validation is not.], [Safe only on a device that completes a 4K write whole. The note names the devices whose report says so.],
   [`tolerations`], [The tolerations the run probed with.], [What the storage-node pods tolerate. Correct it when the run's tolerations are not the fleet's taints.],
-  [`spec.hostOS`], [The workers' distribution, when they all run the same one.], [Set it when os-release was unreadable. One document states one host OS for all its workers, so workers on different distributions go into separate documents.],
-  [`spec.environment`], [The run's `status.environment`.], [Correct it when the platform was misread, for example after `EnvironmentPartiallyRead`.],
+  [`spec.hostOS`], [The workers' distribution, when they all run the same one.], [Set it when os-release was unreadable. Workers on another operating system are in groups that state their own `hostOS`, which overrides it for their nodes.],
+  [`spec.environment`], [The run's `status.environment`.], [Correct it when the platform was misread, for example after `EnvironmentPartiallyRead`. In a cluster with workers from several providers it is the control plane's.],
+  [Group `environment`], [The distribution of a group's workers, where it is not the cluster's.], [Decides the group's `enableKubeletConfiguration`, which matters only where CPU topology is on. A stated `spec.cluster.enableKubeletConfiguration` overrides it for every group.],
 )
 
 #v(4pt)

@@ -396,17 +396,21 @@ func BuildStorageNodeDaemonSet(
 								HostPort:      5000,
 								Protocol:      corev1.ProtocolTCP,
 							}},
-							// The entry is sourced and one variable is exported
-							// out of it, because sourcing alone sets a shell
-							// variable and exec only inherits what is exported.
-							// Only that one: exporting the entry wholesale would
-							// put the device lists and the class flag into the
-							// agent's environment, where nothing asked for them.
-							// An entry that states none leaves the pod's own
-							// RESERVED_SYSTEM_CPUS, which is the fleet's.
+							// The entry is sourced and the node's own overrides
+							// are exported out of it, because sourcing alone sets
+							// a shell variable and exec only inherits what is
+							// exported. Only those: exporting the entry wholesale
+							// would put the device lists and the class flag into
+							// the agent's environment, where nothing asked for
+							// them. An entry that states none of them leaves the
+							// pod's own RESERVED_SYSTEM_CPUS,
+							// SKIP_KUBELET_CONFIGURATION, and UBUNTU_HOST, which
+							// are the fleet's.
 							Command: []string{"sh", "-c",
 								`[ -f /etc/node-env/env.sh ] && . /etc/node-env/env.sh
 [ -n "${RESERVED_SYSTEM_CPUS}" ] && export RESERVED_SYSTEM_CPUS
+[ -n "${SKIP_KUBELET_CONFIGURATION}" ] && export SKIP_KUBELET_CONFIGURATION
+[ -n "${UBUNTU_HOST}" ] && export UBUNTU_HOST
 exec python3 simplyblock_web/node_webapp.py storage_node_k8s`,
 							},
 							// node_webapp.py needs root for device access, so the
