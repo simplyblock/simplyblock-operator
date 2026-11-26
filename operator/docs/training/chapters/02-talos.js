@@ -115,7 +115,7 @@ TRAINING.register({
         'From H, simplyblock derives two numbers:',
         { table: { head: ['Number', 'Rule', 'Here'], rows: [
           ['Pages to reserve per storage node', '(H + 1,000,000,000) / 2,000,000, rounded down', '3990 pages (7980 MiB)'],
-          ['The SPDK pod\'s request', 'H in MiB, rounded up to even, plus 512', '`hugepages-2Mi: 7170Mi`'],
+          ['The SPDK pod\'s request', 'H in MiB (rounded up), made even by rounding down, plus 512 MiB of headroom', '`hugepages-2Mi: 7170Mi`'],
         ] } },
         'Pages are reserved on the NUMA node the storage node runs on. Each worker here runs one storage node per NUMA node. So it needs 3990 pages on node 0 and 3990 pages on node 1.',
         { code: '$ kubectl get node worker-0 -o jsonpath=\'{.status.capacity.hugepages-2Mi}{"\\n"}\'\n15960Mi', title: 'What the kubelet reports once both NUMA nodes are reserved' },
