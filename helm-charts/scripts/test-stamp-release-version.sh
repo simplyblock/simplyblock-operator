@@ -14,6 +14,8 @@ CHART="$REPO/helm-charts/charts/simplyblock-operator"
 STAMP="$REPO/helm-charts/scripts/stamp-release-version.sh"
 YQ="${YQ:-$REPO/.bin/yq}"
 command -v "$YQ" >/dev/null 2>&1 || YQ=yq
+# A pin in the caller's environment would change every case below.
+unset SIMPLYBLOCK_IMAGE_TAG
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -57,6 +59,13 @@ check v26.4.0-1 v26.4.0-1 26.4.0.1
 check v26.4.0-12 v26.4.0-12 26.4.0.12
 # Only a numeric hotfix suffix is a fourth component; any other suffix is kept.
 check v0.0.0-lint v0.0.0-lint 0.0.0-lint
+
+# An operator-only release ships the simplyblock image of an earlier one, named
+# by the pin in release-images.env; the operator images keep the release tag.
+# Regression: 2026-11-26-operator-only-release-image-pins
+SIMPLYBLOCK_IMAGE_TAG=26.4.0-beta6.1 check v26.4.0-beta6.2 v26.4.0-beta6.2 26.4.0-beta6.1
+# An empty pin is no pin.
+SIMPLYBLOCK_IMAGE_TAG='' check v26.4.0-2 v26.4.0-2 26.4.0.2
 
 if [[ "$failures" -gt 0 ]]; then
   echo "$failures failure(s)"

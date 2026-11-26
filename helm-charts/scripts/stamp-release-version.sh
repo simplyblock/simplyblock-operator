@@ -24,7 +24,9 @@ CHART="$1"
 TAG="$2"
 # The operator image is pushed under the release tag verbatim, the simplyblock
 # image without the "v" and with a hotfix dash as a dot (26.3.2-1 is 26.3.2.1).
+# SIMPLYBLOCK_IMAGE_TAG (release-images.env) overrides the latter when set.
 VERSION="$(printf '%s' "${TAG#v}" | sed -E 's/-([0-9]+)$/.\1/')"
+VERSION="${SIMPLYBLOCK_IMAGE_TAG:-$VERSION}"
 VALUES="$CHART/values.yaml"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
