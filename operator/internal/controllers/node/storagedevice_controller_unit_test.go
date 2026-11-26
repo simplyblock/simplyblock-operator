@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -400,13 +401,13 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 	}
 }
 
-// The spec write races the same way the status write does: the mirror owns the
-// whole creation path, so a device whose object exists but carries no spec yet
-// is written on the next reconcile, and that write can be rejected too.
-func TestStorageDeviceSpecUpdateRetriesOnConflict(t *testing.T) {
-	// No spec: the mirror must fill it in, which is the write that conflicts.
+// The label write races the same way the status write does: the mirror writes
+// back the labels it owns when they drift, and that write can be rejected too.
+func TestStorageDeviceLabelUpdateRetriesOnConflict(t *testing.T) {
+	// No labels: the mirror must write its own, which is the write that conflicts.
 	existing := &simplyblockv1alpha2.StorageDevice{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
 	}
 
 	updates := 0
@@ -423,16 +424,53 @@ func TestStorageDeviceSpecUpdateRetriesOnConflict(t *testing.T) {
 	}, sdNodeObject(), existing)
 
 	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
-		t.Fatalf("a 409 on the spec write must be retried, not surfaced: %v", err)
+		t.Fatalf("a 409 on the label write must be retried, not surfaced: %v", err)
 	}
 	if updates < 2 {
-		t.Fatalf("expected the spec write to be retried, got %d attempt(s)", updates)
+		t.Fatalf("expected the label write to be retried, got %d attempt(s)", updates)
 	}
 	sd, err := getSD(t, r.Client)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if sd.Spec.NodeRef != sdNodeCR || sd.Spec.DeviceID != sdDevice {
-		t.Errorf("spec lost after the conflict retry: %+v", sd.Spec)
+	if len(sd.Labels) == 0 {
+		t.Errorf("labels lost after the conflict retry: %+v", sd.Labels)
+	}
+}
+
+// Both spec fields are immutable from creation, so the API server refuses any
+// spec write-back. A device object whose spec differs from what the mirror
+// computes, written by hand under the mirror's name, still has its status
+// mirrored rather than failing every pass on a write that can never succeed.
+func TestAMismatchedDeviceSpecStillMirrorsItsStatus(t *testing.T) {
+	existing := &simplyblockv1alpha2.StorageDevice{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: "hand-written"},
+	}
+	r := sdReconcilerWithInterceptor(t, sdOnlineCache(), interceptor.Funcs{
+		Update: func(
+			ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption,
+		) error {
+			var stored simplyblockv1alpha2.StorageDevice
+			if err := c.Get(ctx, client.ObjectKeyFromObject(obj), &stored); err != nil {
+				return err
+			}
+			if stored.Spec != obj.(*simplyblockv1alpha2.StorageDevice).Spec {
+				return apierrors.NewInvalid(simplyblockv1alpha2.GroupVersion.WithKind("StorageDevice").GroupKind(),
+					obj.GetName(), field.ErrorList{field.Invalid(field.NewPath("spec", "deviceID"), "", "field is immutable")})
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	}, sdNodeObject(), existing)
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != simplyblockv1alpha2.StorageDevicePhaseOnline {
+		t.Errorf("status not mirrored: %+v", sd.Status)
 	}
 }

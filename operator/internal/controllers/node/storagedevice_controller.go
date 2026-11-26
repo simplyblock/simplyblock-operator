@@ -448,16 +448,13 @@ func (r *StorageDeviceReconciler) upsert(
 		case err != nil:
 			return err
 		default:
-			// The spec and the labels are both the mirror's output, so both are
-			// written back when they drift. A label the mirror does not own is
-			// left where it is: the object is the operator's to describe and
-			// somebody else's to annotate.
-			changed := applyLabels(&sd, labels)
-			if sd.Spec != spec {
-				sd.Spec = spec
-				changed = true
-			}
-			if changed {
+			// The labels are the mirror's output and are written back when they
+			// drift. A label the mirror does not own is left where it is: the
+			// object is the operator's to describe and somebody else's to
+			// annotate. The spec is not written back: both of its fields are
+			// immutable from creation, so the API server would refuse the write
+			// on every pass, and the status below would never be mirrored.
+			if applyLabels(&sd, labels) {
 				if err := r.Update(ctx, &sd); err != nil {
 					return err
 				}
