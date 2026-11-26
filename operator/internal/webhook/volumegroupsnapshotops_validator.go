@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"net/http"
 
-	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	admissionv1 "k8s.io/api/admission/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
@@ -20,6 +19,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-volumegroupsnapshotops,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=volumegroupsnapshotops,verbs=create,versions=v1alpha2,name=vvolumegroupsnapshotops.simplyblock.io,admissionReviewVersions=v1
@@ -41,10 +41,9 @@ func (v *VolumeGroupSnapshotOpsValidator) Handle(ctx context.Context, req admiss
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	var vgs volumegroupsnapshotv1beta1.VolumeGroupSnapshot
-	err := v.Client.Get(ctx, types.NamespacedName{
+	_, err := groupsnapshot.GetVolumeGroupSnapshot(ctx, v.Client, types.NamespacedName{
 		Name: ops.Spec.VolumeGroupSnapshotRef, Namespace: ops.Namespace,
-	}, &vgs)
+	})
 	if apierrors.IsNotFound(err) {
 		return admission.Denied(fmt.Sprintf(
 			"spec.volumeGroupSnapshotRef %q does not name a VolumeGroupSnapshot in namespace %q",

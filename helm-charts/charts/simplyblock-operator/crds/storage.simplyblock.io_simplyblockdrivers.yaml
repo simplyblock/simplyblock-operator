@@ -29,6 +29,12 @@ spec:
     - jsonPath: .status.nodesTotal
       name: NodesTotal
       type: integer
+    - jsonPath: .status.remoteClustersTotal
+      name: RemoteClusters
+      type: integer
+    - jsonPath: .status.remoteClustersConnected
+      name: Connected
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -336,23 +342,25 @@ spec:
                 properties:
                   mds:
                     description: |-
-                      MDS runs the metadata server: one pod per storage cluster, whose QEMU
-                      guest runs the NFS server with its own kernel, so no node runs nfsd,
-                      mounts an export, or needs nfs-utils. The pod needs a node with
-                      /dev/kvm. Unset, no pNFS volume can be exported: its export waits in
-                      Pending until this is set.
+                      MDS runs the metadata server: per storage cluster, an active pod and,
+                      by default, one standby on another node, each a QEMU guest running the
+                      NFS server with its own kernel, so no node runs nfsd, mounts an
+                      export, or needs nfs-utils. The pods need nodes with /dev/kvm. Unset,
+                      no pNFS volume can be exported: its export waits in Pending until this
+                      is set.
                     properties:
                       dataNetwork:
                         description: |-
                           DataNetwork attaches the metadata server to the storage data network, so
-                          its guest reaches the storage nodes there rather than through the pod
-                          network. The pod gets a macvlan interface on whichever host interface
+                          its guests reach the storage nodes there rather than through the pod
+                          network. Each pod gets a macvlan interface on whichever host interface
                           carries the subnet, and runs only on nodes that have one, preferring
                           nodes that are not storage nodes. It needs Multus and the whereabouts IPAM
-                          plugin, which OpenShift ships. Unset, the guest reaches the storage nodes
-                          through the pod network, which needs the nodes to forward traffic
-                          arriving on their data interfaces. Changing it restarts the metadata
-                          server.
+                          plugin, which OpenShift ships, and a range of at least one address per
+                          pod. Unset, the guests reach the storage nodes through the pod network,
+                          which needs the nodes to forward traffic arriving on their data
+                          interfaces. Changing it rolls every guest onto the new template, the
+                          active last.
                         properties:
                           rangeEnd:
                             description: RangeEnd is the last address the metadata
@@ -405,18 +413,18 @@ spec:
                         additionalProperties:
                           type: string
                         description: |-
-                          NodeSelector is merged with the kvm-capable label the pod always
-                          requires.
+                          NodeSelector is merged with the kvm-capable label the pods always
+                          require. No two of the guests run on one node.
                         type: object
                       resources:
                         description: |-
-                          Resources are the pod's requests and limits. The guest's vCPUs are the
-                          whole cores the CPU limit covers, at least one, and its memory is the
-                          memory limit less 256Mi for QEMU, so the memory limit has to be at
-                          least 512Mi. A CPU or memory limit left unset defaults to 2 and 2Gi,
-                          and a memory request left unset to 512Mi, or the limit when that is
-                          lower. The guest returns the memory it frees to the node, so the pod
-                          uses about what the guest does.
+                          Resources are each pod's requests and limits, so every standby adds
+                          one pod's worth. The guest's vCPUs are the whole cores the CPU limit
+                          covers, at least one, and its memory is the memory limit less 256Mi for
+                          QEMU, so the memory limit has to be at least 512Mi. A CPU or memory
+                          limit left unset defaults to 2 and 2Gi, and a memory request left unset
+                          to 512Mi, or the limit when that is lower. The guest returns the memory
+                          it frees to the node, so each pod uses about what its guest does.
                         properties:
                           claims:
                             description: |-
@@ -474,30 +482,21 @@ spec:
                               More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                             type: object
                         type: object
-                      stateSize:
-                        anyOf:
-                        - type: integer
-                        - type: string
-                        default: 1Gi
+                      standbys:
+                        default: 1
                         description: |-
-                          StateSize is the size of the guest's state disk, which holds the NFS
-                          client-recovery database that lets clients reclaim their state after
-                          the pod restarts.
-                        pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
-                        x-kubernetes-int-or-string: true
-                      stateStorageClassName:
-                        description: |-
-                          StateStorageClassName is the storage class of the state disk, which is
-                          always a simplyblock volume so the pod can restart on any worker with
-                          its client-recovery database. A named class must be provisioned by this
-                          driver and must not be a pNFS class. Unset gives each storage cluster a
-                          class of its own, <driver>-<cluster>-pnfs-mds-state, derived from the
-                          cluster's simplyblock class without its QoS caps and reserved for the
-                          state disk by an admission policy. Read only when the metadata server is
-                          first created: a StatefulSet's claim template cannot change afterward.
-                        type: string
+                          Standbys is how many standby guests run beside the active one, each on
+                          its own node. A standby takes over when the active is lost, in about the
+                          time a restart takes. At 0, exports stay unserved after the loss of the
+                          active's node until the lost pod is deleted and started again
+                          elsewhere. Each standby needs another node offering KVM, and one
+                          without such a node stays pending while the active serves.
+                        format: int32
+                        maximum: 4
+                        minimum: 0
+                        type: integer
                       tolerations:
-                        description: Tolerations let the pod schedule onto tainted
+                        description: Tolerations let the pods schedule onto tainted
                           KVM nodes.
                         items:
                           description: |-
@@ -546,6 +545,55 @@ spec:
                         type: string
                     type: object
                 type: object
+              remoteClusters:
+                description: |-
+                  RemoteClusters are storage clusters served by a management API outside
+                  this Kubernetes cluster. The operator writes one entry per item into the
+                  Secret the CSI driver reads its clusters from.
+                items:
+                  description: |-
+                    RemoteStorageCluster is a storage cluster whose control plane runs outside
+                    this Kubernetes cluster, and which the CSI driver provisions volumes on.
+                  properties:
+                    clusterID:
+                      description: ClusterID is the storage cluster's UUID.
+                      pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                      type: string
+                    credentialsSecretRef:
+                      description: |-
+                        CredentialsSecretRef names a Secret in this namespace that holds the
+                        cluster secret under the key cluster_secret.
+                      properties:
+                        name:
+                          default: ""
+                          description: |-
+                            Name of the referent.
+                            This field is effectively required, but due to backwards compatibility is
+                            allowed to be empty. Instances of this type with an empty value here are
+                            almost certainly wrong.
+                            More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                          type: string
+                      type: object
+                      x-kubernetes-map-type: atomic
+                    endpoint:
+                      description: |-
+                        Endpoint is the base URL of the management API serving the cluster. An
+                        HTTPS endpoint must present a certificate from a publicly trusted CA.
+                      maxLength: 2048
+                      type: string
+                      x-kubernetes-validations:
+                      - message: endpoint must be an http or https URL
+                        rule: isURL(self) && url(self).getScheme() in ['https', 'http']
+                  required:
+                  - clusterID
+                  - credentialsSecretRef
+                  - endpoint
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-map-keys:
+                - clusterID
+                x-kubernetes-list-type: map
               sidecarImages:
                 description: |-
                   SidecarImages overrides the seven CSI sidecars, one field each. Unset
@@ -723,6 +771,55 @@ spec:
                 - Degraded
                 - Unavailable
                 type: string
+              remoteClusters:
+                description: |-
+                  RemoteClusters reports each remote cluster the CSI secret carries an
+                  entry for on behalf of spec.remoteClusters. It is also the record of
+                  which entries this driver wrote, so an item removed from the spec has its
+                  entry removed.
+                items:
+                  description: RemoteStorageClusterStatus is the observed state of
+                    one remote cluster.
+                  properties:
+                    clusterID:
+                      description: ClusterID is the cluster this item reports on.
+                      type: string
+                    lastProbeTime:
+                      description: LastProbeTime is when the management API was last
+                        asked.
+                      format: date-time
+                      type: string
+                    message:
+                      description: Message is the reason for the state, in one sentence.
+                      type: string
+                    state:
+                      description: State is the outcome of the last check.
+                      enum:
+                      - Connected
+                      - Unreachable
+                      - Unauthorized
+                      - CredentialsMissing
+                      - Conflict
+                      type: string
+                  required:
+                  - clusterID
+                  - state
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - clusterID
+                x-kubernetes-list-type: map
+              remoteClustersConnected:
+                format: int32
+                minimum: 0
+                type: integer
+              remoteClustersTotal:
+                description: |-
+                  RemoteClustersTotal is the number of listed remote clusters, and
+                  RemoteClustersConnected how many of them are Connected.
+                format: int32
+                minimum: 0
+                type: integer
               snapshotSupport:
                 description: |-
                   SnapshotSupport is whether the cluster already had snapshot support or the

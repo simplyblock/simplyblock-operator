@@ -71,6 +71,13 @@ const (
 	TaskCompleted = "TaskCompleted"
 	TaskCanceled  = "TaskCanceled"
 
+	// DevicesGrown, DevicesNotGrown, and DeviceShrunk report a GrowDevices: the
+	// factor every data device grew by and the capacity left unused, why
+	// nothing grew, and a warning per device whose block device shrank.
+	DevicesGrown    = "DevicesGrown"
+	DevicesNotGrown = "DevicesNotGrown"
+	DeviceShrunk    = "DeviceShrunk"
+
 	// TaskGaveUp is a task that left the window having been restarted, which is
 	// the control plane reporting a failure rather than a finish. Its own status
 	// says done either way, so the retry count is what separates them, and the

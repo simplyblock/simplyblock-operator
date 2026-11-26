@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -34,18 +35,27 @@ func (ns *Server) NodeGetVolumeStats(
 		return nil, status.Error(codes.InvalidArgument, "volume_path is required")
 	}
 
+	// A stat on the mount can succeed after the NVMe-oF device behind it is
+	// gone, so the stashed device path is checked on its own.
+	if vc, err := lookupVolumeContext(req.GetStagingTargetPath()); err == nil {
+		if devicePath := vc["devicePath"]; devicePath != "" && !pathExists(devicePath) {
+			return abnormalStats("NVMe device %s not found; volume has disconnected", devicePath), nil
+		}
+	}
+
 	st, err := os.Stat(volumePath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, status.Error(codes.NotFound, "volume_path not found")
 		}
-		return nil, status.Errorf(codes.Internal, "stat volume_path %q: %v", volumePath, err)
+		// EIO or ENOTCONN here means the mount is unhealthy.
+		return abnormalStats("stat %q failed: %v", volumePath, err), nil
 	}
 
 	if st.IsDir() {
 		var s unix.Statfs_t
 		if err := unix.Statfs(volumePath, &s); err != nil {
-			return nil, status.Errorf(codes.Internal, "statfs %q: %v", volumePath, err)
+			return abnormalStats("statfs %q failed: %v", volumePath, err), nil
 		}
 
 		// Compute in uint64 (Bsize is int64 on Linux but uint32 on darwin, and the block
@@ -80,12 +90,13 @@ func (ns *Server) NodeGetVolumeStats(
 					Available: availInodes,
 				},
 			},
+			VolumeCondition: &csi.VolumeCondition{},
 		}, nil
 	}
 
 	sizeBytes, err := mount.BlockSizeBytes(volumePath)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "get block size for %q: %v", volumePath, err)
+		return abnormalStats("get block size for %q failed: %v", volumePath, err), nil
 	}
 
 	return &csi.NodeGetVolumeStatsResponse{
@@ -97,7 +108,16 @@ func (ns *Server) NodeGetVolumeStats(
 				Available: int64(sizeBytes),
 			},
 		},
+		VolumeCondition: &csi.VolumeCondition{},
 	}, nil
+}
+
+// abnormalStats is the answer for a volume whose usage cannot be read: no
+// usage, and a condition kubelet turns into a Pod event.
+func abnormalStats(format string, args ...any) *csi.NodeGetVolumeStatsResponse {
+	return &csi.NodeGetVolumeStatsResponse{
+		VolumeCondition: &csi.VolumeCondition{Abnormal: true, Message: fmt.Sprintf(format, args...)},
+	}
 }
 
 // clusterClientFor resolves a cluster and pool to a control-plane client. A

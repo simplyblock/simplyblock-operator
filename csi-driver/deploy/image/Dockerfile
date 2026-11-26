@@ -17,11 +17,13 @@ WORKDIR /workspace
 COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
 
 COPY csi-driver/go.mod csi-driver/go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
 COPY atlas-lib/ /atlas-lib/
 COPY csi-driver/cmd/ cmd/
 COPY csi-driver/internal/ internal/
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -buildvcs=false -o spdkcsi ./cmd/
 
 FROM registry.access.redhat.com/ubi10/ubi:10.2
 LABEL name="simplyblock"
@@ -42,7 +44,9 @@ RUN if [ "$TARGETPLATFORM" = "linux/arm64" ]; then \
         dnf install -y https://yum.oracle.com/repo/OracleLinux/OL10/baseos/latest/x86_64/getPackage/oraclelinux-release-el10-1.0-17.el10.x86_64.rpm ; \
     fi
 
-RUN dnf update -y  --nogpgcheck
+# Changes daily in CI, so the package update below is not served from cache forever.
+ARG CACHE_KEY
+RUN echo "cache key: ${CACHE_KEY}" && dnf update -y  --nogpgcheck
 
 # lvm2 is what the node plugin's LVM layers shell out to: pvcreate, vgcreate,
 # lvcreate and the rest run in this container rather than through nsenter, so a

@@ -81,6 +81,9 @@ spec:
             # migration cannot be carried across and is drained instead.
             - --legacy-volume-migration
             {{- end }}
+            {{- if .Values.operatorMetrics.enabled }}
+            - --metrics-bind-address=:{{ .Values.operatorMetrics.port }}
+            {{- end }}
             {{- if .Values.metricsAPI.enabled }}
             - --metrics-api-bind-port={{ .Values.metricsAPI.port }}
             - --prometheus-url={{ .Values.metricsAPI.prometheusURL }}
@@ -195,6 +198,11 @@ spec:
             {{- if .Values.metricsAPI.enabled }}
             - name: metrics-api
               containerPort: {{ .Values.metricsAPI.port }}
+              protocol: TCP
+            {{- end }}
+            {{- if .Values.operatorMetrics.enabled }}
+            - name: metrics
+              containerPort: {{ .Values.operatorMetrics.port }}
               protocol: TCP
             {{- end }}
           livenessProbe:

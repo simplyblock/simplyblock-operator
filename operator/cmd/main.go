@@ -67,7 +67,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
-	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	workv1 "open-cluster-management.io/api/work/v1"
 
@@ -90,6 +89,7 @@ import (
 	volumecontrollers "github.com/simplyblock/simplyblock-operator/internal/controllers/volume"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/vrgfollow"
 	"github.com/simplyblock/simplyblock-operator/internal/csilink"
+	"github.com/simplyblock/simplyblock-operator/internal/mdsstate"
 	"github.com/simplyblock/simplyblock-operator/internal/placement"
 	"github.com/simplyblock/simplyblock-operator/internal/switchover"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
@@ -159,9 +159,10 @@ func init() {
 	// v1alpha1 stays registered because it is still the storage version and still
 	// served (design-property-renames.md §3.8).
 	utilruntime.Must(simplyblockv1alpha2.AddToScheme(scheme))
-	// external-snapshotter VolumeGroupSnapshot: the operator serves a validating
-	// webhook on it (design §9.4) but does not own the CRD.
-	utilruntime.Must(volumegroupsnapshotv1beta1.AddToScheme(scheme))
+	// external-snapshotter VolumeGroupSnapshot is deliberately not registered:
+	// a cluster serves it at v1beta1, v1beta2, or v1, and a typed read pins one.
+	// The operator reads it through internal/groupsnapshot instead, at the
+	// version served (GitHub #978).
 	// external-snapshotter VolumeSnapshot: the VolumeGroupSnapshotOps restore
 	// enumerates a group snapshot's member snapshots (design §7.4).
 	utilruntime.Must(snapshotv1.AddToScheme(scheme))
@@ -643,9 +644,24 @@ func main() {
 		Recorder:          mgr.GetEventRecorder("nfsexport-controller"),
 		OperatorNamespace: operatorNamespace,
 	}
+	// The metadata server's takeover. It needs the link to reach each guest, so
+	// it exists only with the link on; without it the driver coordinator still
+	// runs, with no switchover hook, and holds a scale-down.
+	var mdsFailover *controller.MDSFailoverReconciler
+	mdsHosts := &controller.MDSHostGate{}
 	if csiPeers != nil {
 		nfsExportReconciler.Assembler = controller.NewLinkAssembler(csiPeers)
 		nfsExportReconciler.Flows = csilink.NewFlows(csilink.RegistryNodePeers(csiPeers))
+		mdsGuests := csilink.NewMDSGuests(csiPeers)
+		nfsExportReconciler.Serving = controller.NewMDSServingGate(mgr.GetClient(), operatorNamespace, mdsGuests)
+		mdsFailover = &controller.MDSFailoverReconciler{
+			Client:            mgr.GetClient(),
+			Recorder:          mgr.GetEventRecorder("mds-failover"),
+			Guests:            mdsGuests,
+			Exports:           nfsExportReconciler,
+			OperatorNamespace: operatorNamespace,
+			Hosts:             mdsHosts,
+		}
 	}
 	if err := nfsExportReconciler.SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "NFSExport")
@@ -680,6 +696,12 @@ func main() {
 	if err := mgr.Add(&objectstorecontrollers.Collector{Client: mgr.GetClient()}); err != nil {
 		setupLog.Error(err, "unable to add the S3Bucket/ObjectStore collector")
 		os.Exit(1)
+	}
+	if mdsFailover != nil {
+		if err := mdsFailover.SetupWithManager(ctrlMgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "MDSFailover")
+			os.Exit(1)
+		}
 	}
 	if err := (&nodecontroller.StorageDeviceReconciler{
 		Client:   mgr.GetClient(),
@@ -1220,12 +1242,24 @@ func main() {
 	if siteLinkEnabled {
 		driverSiteLink = &driver.SiteLinkConfig{Address: siteLinkAddr, AgentNamespace: siteLinkNamespace}
 	}
+	// The metadata server's state volume and allowed hosts go through the
+	// control plane of the volume's cluster: a remote cluster's own endpoint,
+	// or the local one the data-protection band writes through.
+	mdsStateCoordinator := &mdsstate.Coordinator{
+		Client: mgr.GetClient(),
+		APIFor: driver.StateVolumeAPI(mgr.GetClient(), backupAPI),
+	}
+	if mdsFailover != nil {
+		mdsStateCoordinator.Switchover = mdsFailover
+	}
 	if err := (&driver.SimplyblockDriverReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Recorder:  mgr.GetEventRecorder("simplyblockdriver-controller"),
 		Snapshots: &driver.DiscoveredSnapshotAPI{Discovery: operatorOpsDiscovery},
 		SiteLink:  driverSiteLink,
+		MDSState:  mdsStateCoordinator,
+		OnHosts:   mdsHosts.Update,
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SimplyblockDriver")
 		os.Exit(1)
@@ -1619,6 +1653,8 @@ func main() {
 			}})
 		setupLog.Info("registered simplyblock-volume-placement mutating webhook")
 
+		// The path still names v1beta1, which every installed webhook
+		// configuration points at; the handler serves all three versions.
 		mgr.GetWebhookServer().Register("/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot",
 			&webhook.Admission{Handler: &internalwebhook.VolumeGroupSnapshotValidator{
 				Client:    mgr.GetClient(),

@@ -69,11 +69,15 @@ jobs:
           make kustomize
           echo "${{ github.workspace }}/operator/bin" >> "$GITHUB_PATH"
 
+      # Non-empty pins in release-images.env override the derived image tags.
       - name: Generate bundle
         run: |
+          set -a; . ../release-images.env; set +a
           make bundle \
             VERSION=${{ steps.version.outputs.bundle_version }} \
-            IMG_TAG=${{ steps.version.outputs.tag }}
+            IMG_TAG=${{ steps.version.outputs.tag }} \
+            ${SIMPLYBLOCK_IMAGE_TAG:+CLUSTER_IMAGE_TAG="$SIMPLYBLOCK_IMAGE_TAG"} \
+            ${ULTRA_IMAGE_TAG:+SPDK_IMAGE_TAG="$ULTRA_IMAGE_TAG"}
 
       # The same validation OperatorHub certification runs, before anything is pushed.
       - name: Validate bundle
@@ -81,7 +85,9 @@ jobs:
 
       # Red Hat's certification fails a bundle that names any image by tag alone.
       - name: Check every bundle image is pinned to this release
-        run: hack/check-bundle-pinned.sh bundle ${{ steps.version.outputs.tag }}
+        run: |
+          set -a; . ../release-images.env; set +a
+          hack/check-bundle-pinned.sh bundle ${{ steps.version.outputs.tag }}
 
       - name: Log in to Quay.io
         uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3

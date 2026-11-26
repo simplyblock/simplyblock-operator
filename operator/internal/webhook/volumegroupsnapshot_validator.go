@@ -2,11 +2,9 @@ package webhook
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/http"
 
-	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -15,10 +13,11 @@ import (
 
 	"github.com/simplyblock/atlas/kube"
 
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
 )
 
-// +kubebuilder:webhook:path=/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot,mutating=false,failurePolicy=fail,sideEffects=None,groups=groupsnapshot.storage.k8s.io,resources=volumegroupsnapshots,verbs=create,versions=v1beta1,name=vvolumegroupsnapshot.simplyblock.io,admissionReviewVersions=v1
+// +kubebuilder:webhook:path=/validate-groupsnapshot-storage-k8s-io-v1beta1-volumegroupsnapshot,mutating=false,failurePolicy=fail,sideEffects=None,groups=groupsnapshot.storage.k8s.io,resources=volumegroupsnapshots,verbs=create,versions=v1beta1;v1beta2;v1,name=vvolumegroupsnapshot.simplyblock.io,admissionReviewVersions=v1
 // +kubebuilder:rbac:groups=groupsnapshot.storage.k8s.io,resources=volumegroupsnapshotclasses,verbs=get;list;watch
 
 // VolumeGroupSnapshotValidator rejects, at kubectl apply, a VolumeGroupSnapshot
@@ -50,14 +49,14 @@ type VolumeGroupSnapshotValidator struct {
 //   - class not found or unreadable: the snapshot-controller will surface the
 //     broken class on its own; refusing here would punish other drivers.
 func (v *VolumeGroupSnapshotValidator) ownsVolumeGroupSnapshot(
-	ctx context.Context, vgs *volumegroupsnapshotv1beta1.VolumeGroupSnapshot,
+	ctx context.Context, vgs *groupsnapshot.VolumeGroupSnapshot,
 ) (bool, string) {
 	className := vgs.Spec.VolumeGroupSnapshotClassName
 	if className == nil || *className == "" {
 		return false, "no volumeGroupSnapshotClassName; not attributable to this driver"
 	}
-	class := &volumegroupsnapshotv1beta1.VolumeGroupSnapshotClass{}
-	if err := v.Client.Get(ctx, client.ObjectKey{Name: *className}, class); err != nil {
+	class, err := groupsnapshot.GetVolumeGroupSnapshotClass(ctx, v.Client, *className)
+	if err != nil {
 		return false, fmt.Sprintf("volume group snapshot class %q not readable; not validating", *className)
 	}
 	if class.Driver != kube.DriverName {
@@ -69,8 +68,10 @@ func (v *VolumeGroupSnapshotValidator) ownsVolumeGroupSnapshot(
 func (v *VolumeGroupSnapshotValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
 	log := logf.FromContext(ctx).WithValues("volumegroupsnapshot", req.Name, "namespace", req.Namespace)
 
-	vgs := &volumegroupsnapshotv1beta1.VolumeGroupSnapshot{}
-	if err := json.Unmarshal(req.Object.Raw, vgs); err != nil {
+	// Decoded at whichever version the request carries: the webhook is
+	// registered for every version of the group a cluster may serve.
+	vgs, err := groupsnapshot.DecodeVolumeGroupSnapshot(req.Object.Raw)
+	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
@@ -122,7 +123,7 @@ func (v *VolumeGroupSnapshotValidator) Handle(ctx context.Context, req admission
 // rule. It returns the matched PVCs and their shared group name, or a non-nil
 // denial response.
 func (v *VolumeGroupSnapshotValidator) labelCheck(
-	ctx context.Context, namespace string, vgs *volumegroupsnapshotv1beta1.VolumeGroupSnapshot,
+	ctx context.Context, namespace string, vgs *groupsnapshot.VolumeGroupSnapshot,
 ) ([]corev1.PersistentVolumeClaim, string, *admission.Response) {
 	deny := func(msg string) *admission.Response { r := admission.Denied(msg); return &r }
 

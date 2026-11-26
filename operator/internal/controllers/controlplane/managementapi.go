@@ -310,6 +310,7 @@ func webAPIDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deployment {
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Affinity:           spreadAcrossHosts(ComponentWebAPI),
+		SecurityContext:    pingSecurityContext(),
 		Containers: []corev1.Container{{
 			Name:            "webappapi",
 			Image:           localImage(cp),
@@ -486,10 +487,6 @@ func webAPIService(cp *simplyblockv1alpha2.ControlPlane) *corev1.Service {
 	}
 }
 
-// twoNodeEventCollectorBinary is where the control-plane image installs the Go
-// event collector (sbcli docker/Dockerfile, stage event-collector).
-const twoNodeEventCollectorBinary = "/usr/local/bin/sb-event-collector"
-
 // monitoringServices are the watchers the control plane runs: one per subject it
 // keeps state about. They are one pod rather than ten because each is a small
 // polling loop and the pod is what shares the cluster file and the log level.
@@ -515,7 +512,7 @@ func monitoringServices() []service {
 		// model has no per-cluster gate, and both idle while no cluster is a
 		// two-node cluster with arbitration on.
 		{name: "two-node-arbiter", module: "simplyblock_core/services/two_node_arbiter.py"},
-		{name: "two-node-event-collector", command: []string{twoNodeEventCollectorBinary}},
+		{name: "two-node-event-collector", module: "simplyblock_core/services/two_node_event_collector.py"},
 	}
 }
 
@@ -570,6 +567,7 @@ func servicePoolDeployment(
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Containers:         containers(services, managed, localImage(cp), pullPolicyOf(managed)),
+		SecurityContext:    pingSecurityContext(),
 		Volumes: append([]corev1.Volume{clusterFileVolumeSource()},
 			tlsVolume(managed)...),
 	}
@@ -615,6 +613,7 @@ func adminControlDeployment(cp *simplyblockv1alpha2.ControlPlane) *appsv1.Deploy
 	spec := corev1.PodSpec{
 		ServiceAccountName: serviceAccountName,
 		Affinity:           spreadAcrossHosts(ComponentAdminControl),
+		SecurityContext:    pingSecurityContext(),
 		Containers: []corev1.Container{{
 			Name:            "simplyblock-control",
 			Image:           localImage(cp),

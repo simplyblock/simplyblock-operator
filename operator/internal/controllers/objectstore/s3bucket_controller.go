@@ -158,6 +158,9 @@ func (r *S3BucketReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		// declining to act, and NFSExport's own Degraded carries the same
 		// rule.
 		if sm.CurrentState() == phaseReady {
+			if err := r.reconcileCapacity(ctx, &bucket); err != nil {
+				return ctrl.Result{}, err
+			}
 			export, err := r.matchingNFSExport(ctx, &bucket)
 			if err != nil {
 				return ctrl.Result{}, err
@@ -373,6 +376,43 @@ func (r *S3BucketReconciler) toDegraded(
 	})
 }
 
+// reconcileCapacity raises the backing PVC's requested storage to
+// spec.capacityBytes when the spec asks for more. It never lowers it: the CRD
+// rejects a decrease at admission, and a PVC cannot shrink in any case. The
+// expansion itself is the CSI resizer's work, so the bucket stays Ready while
+// it runs.
+func (r *S3BucketReconciler) reconcileCapacity(ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket) error {
+	var pvc corev1.PersistentVolumeClaim
+	key := client.ObjectKey{Namespace: bucket.Namespace, Name: pvcNameFor(bucket.Spec.BucketName)}
+	if err := r.Get(ctx, key, &pvc); err != nil {
+		// A missing PVC has nothing to expand. Mount delivery, which runs
+		// next, is what reports a Ready bucket whose volume is gone.
+		return client.IgnoreNotFound(err)
+	}
+	current := pvc.Spec.Resources.Requests[corev1.ResourceStorage]
+	if bucket.Spec.CapacityBytes <= current.Value() {
+		return nil
+	}
+	patch := client.MergeFrom(pvc.DeepCopy())
+	if pvc.Spec.Resources.Requests == nil {
+		pvc.Spec.Resources.Requests = corev1.ResourceList{}
+	}
+	pvc.Spec.Resources.Requests[corev1.ResourceStorage] = *resource.NewQuantity(bucket.Spec.CapacityBytes, resource.BinarySI)
+	if err := r.Patch(ctx, &pvc, patch); err != nil {
+		if apierrors.IsForbidden(err) {
+			// The StorageClass does not allow expansion. Retrying cannot
+			// change that, so the refusal is reported instead of returned.
+			r.event(bucket, corev1.EventTypeWarning, "CapacityExpansionRefused",
+				fmt.Sprintf("PVC %s cannot be expanded to %d bytes: %v", key.Name, bucket.Spec.CapacityBytes, err))
+			return nil
+		}
+		return fmt.Errorf("expanding PVC %s to %d bytes: %w", key.Name, bucket.Spec.CapacityBytes, err)
+	}
+	r.event(bucket, corev1.EventTypeNormal, "CapacityExpanding",
+		fmt.Sprintf("PVC %s requested storage raised from %s to %d bytes", key.Name, current.String(), bucket.Spec.CapacityBytes))
+	return nil
+}
+
 // ensurePVC creates the backing PersistentVolumeClaim if it does not already
 // exist, and returns the current copy either way. Idempotent: a reconcile
 // that died between the create and the status write finds the claim already
@@ -465,7 +505,7 @@ func (r *S3BucketReconciler) boundVolumeHandle(
 }
 
 // objectStoreExists reports whether spec.objectStoreRef names an ObjectStore
-// in the bucket's own namespace.
+// in the bucket's own namespace that is not being deleted.
 func (r *S3BucketReconciler) objectStoreExists(
 	ctx context.Context, bucket *simplyblockv1alpha2.S3Bucket,
 ) (bool, error) {
@@ -473,7 +513,9 @@ func (r *S3BucketReconciler) objectStoreExists(
 	err := r.Get(ctx, client.ObjectKey{Namespace: bucket.Namespace, Name: bucket.Spec.ObjectStoreRef}, &store)
 	switch {
 	case err == nil:
-		return true, nil
+		// An ObjectStore being deleted counts as missing: a new bucket must
+		// not hold its delete open indefinitely (design §9).
+		return store.DeletionTimestamp.IsZero(), nil
 	case apierrors.IsNotFound(err):
 		return false, nil
 	default:

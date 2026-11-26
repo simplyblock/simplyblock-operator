@@ -111,6 +111,11 @@ request that touches `operator/**`.
   `helm-charts/scripts/add-released-charts.sh`, and the branch is uploaded to
   `https://install.simplyblock.io/helm`. The branch holds every released chart,
   so a release from any release branch keeps the others.
+- **Image pins** (`release-images.env`): empty on main. An operator-only release
+  sets `SIMPLYBLOCK_IMAGE_TAG` and `ULTRA_IMAGE_TAG` on its release branch to the
+  tags of the release whose sbcli and SPDK images it reuses. `make bundle`,
+  `check-bundle-pinned.sh`, and the chart stamp then use those tags instead of
+  the ones derived from the release tag.
 
 The chart's `version:` is the release trigger, `appVersion:` is `latest`, and the
 component image tags live in `values.yaml`, so a new operator image needs both

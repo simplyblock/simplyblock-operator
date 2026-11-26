@@ -42,6 +42,7 @@ jobs:
         if: inputs.version != ''
         run: |
           make -C operator yq
+          set -a; . ./release-images.env; set +a
           helm-charts/scripts/stamp-release-version.sh \
             helm-charts/charts/simplyblock-operator "${{ inputs.version }}"
 

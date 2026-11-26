@@ -53,6 +53,7 @@ type S3BucketSpec struct {
 	// reconciles to a PVC expansion. A decrease is rejected, the same
 	// restriction the PVC it wraps already carries.
 	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:XValidation:rule="self >= oldSelf",message="capacityBytes cannot decrease"
 	CapacityBytes int64 `json:"capacityBytes"`
 
 	// StorageClassName names the StorageClass the backing PVC is created

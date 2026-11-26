@@ -92,6 +92,11 @@ func volumeSnapshotClass(d *simplyblockv1alpha2.SimplyblockDriver) *unstructured
 type SnapshotAPI interface {
 	// SnapshotAPIServed reports whether snapshot.storage.k8s.io/v1 is served.
 	SnapshotAPIServed(ctx context.Context) (bool, error)
+	// GroupSnapshotAPIVersion reports the newest version of
+	// groupsnapshot.storage.k8s.io served, or the empty string for none. The
+	// csi-snapshotter sidecar watches one version only, so the answer picks the
+	// sidecar (see withGroupSnapshotAPI).
+	GroupSnapshotAPIVersion(ctx context.Context) (string, error)
 }
 
 // snapshotOrigin is what status.snapshotSupport should read, and the empty
@@ -133,6 +138,25 @@ func (r *SimplyblockDriverReconciler) snapshotAPIServed(ctx context.Context) (bo
 		return false, fmt.Errorf("ask whether the cluster serves the snapshot API: %w", err)
 	}
 	return served, nil
+}
+
+// groupSnapshotAPIVersion asks the cluster which version of
+// groupsnapshot.storage.k8s.io it serves, and refuses to guess for the reason
+// snapshotAPIServed does: guessing none restarts a working controller without
+// group snapshots on a transient error. It is asked whether or not the
+// deployment wants volume snapshots, because the snapshotter sidecar runs
+// either way.
+func (r *SimplyblockDriverReconciler) groupSnapshotAPIVersion(ctx context.Context) (string, error) {
+	if r.Snapshots == nil {
+		return "", fmt.Errorf(
+			"no snapshot-API detector is configured, so which version of " +
+				"groupsnapshot.storage.k8s.io this cluster serves cannot be established")
+	}
+	version, err := r.Snapshots.GroupSnapshotAPIVersion(ctx)
+	if err != nil {
+		return "", fmt.Errorf("ask which group snapshot API version the cluster serves: %w", err)
+	}
+	return version, nil
 }
 
 // snapshotsEnabled reports whether this deployment includes snapshot support.

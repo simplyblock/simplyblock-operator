@@ -61,3 +61,28 @@ class ListPods(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class FullNodeName(unittest.TestCase):
+    """A pod's nodeName is the node's full name, though the runs carry the short one."""
+
+    NODES = ["vm01.simplyblock3.localdomain", "vm02.simplyblock3.localdomain"]
+
+    def test_a_short_name_resolves_to_the_nodes_full_name(self):
+        self.assertEqual("vm02.simplyblock3.localdomain", kube.full_node_name("vm02", self.NODES))
+
+    def test_a_full_name_is_kept(self):
+        self.assertEqual("vm01.simplyblock3.localdomain",
+                         kube.full_node_name("vm01.simplyblock3.localdomain", self.NODES))
+
+    def test_a_node_the_cluster_does_not_have_is_returned_as_given(self):
+        self.assertEqual("vm09", kube.full_node_name("vm09", self.NODES))
+
+    def test_a_short_name_two_nodes_share_is_not_guessed(self):
+        both = ["vm01.a.example", "vm01.b.example"]
+        self.assertEqual("vm01", kube.full_node_name("vm01", both))
+
+    def test_the_cluster_nodes_are_read_without_their_prefix(self):
+        cp = subprocess.CompletedProcess([], 0, stdout="node/vm01.x\nnode/vm02.x\n", stderr="")
+        with mock.patch.object(kube, "run", return_value=cp):
+            self.assertEqual(["vm01.x", "vm02.x"], kube.node_names())

@@ -1358,14 +1358,35 @@ func (r *StorageClusterReconciler) upsertCSICredentials(
 			Local:           true,
 			Sync:            ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
 			Site:            cluster.StretchedSite(),
-		}, peers, err == nil)
+		}, peers, err == nil, remoteClusterIDs(ctx, r.Client, r.Namespace))
 	})
+}
+
+// remoteClusterIDs is every cluster ID the SimplyblockDrivers in namespace
+// declare in spec.remoteClusters. Their entries belong to the driver, so a peer
+// prune leaves them. A failed read returns nil, and the prune then skips
+// nothing it would not have skipped before remote clusters existed.
+func remoteClusterIDs(ctx context.Context, c client.Reader, namespace string) map[string]bool {
+	var drivers simplyblockv1alpha2.SimplyblockDriverList
+	if err := c.List(ctx, &drivers, client.InNamespace(namespace)); err != nil {
+		logf.FromContext(ctx).Info("the SimplyblockDrivers could not be read; remote cluster entries "+
+			"are not protected from this sync's peer prune", "error", err.Error())
+		return nil
+	}
+	ids := map[string]bool{}
+	for _, d := range drivers.Items {
+		for _, rc := range d.Spec.RemoteClusters {
+			ids[rc.ClusterID] = true
+		}
+	}
+	return ids
 }
 
 // mergeCSICredentials writes own into creds and, when the control plane's
 // cluster list was read, one non-local entry per other cluster of that
-// list, pruning non-local entries the list no longer has.
-func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atlascp.Cluster, listed bool) {
+// list, pruning non-local entries the list no longer has. Entries of clusters
+// in remote are a SimplyblockDriver's, and are neither rewritten nor pruned.
+func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atlascp.Cluster, listed bool, remote map[string]bool) {
 	replaced := false
 	for i := range creds.Clusters {
 		if creds.Clusters[i].ClusterID == own.ClusterID {
@@ -1382,7 +1403,7 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atl
 	known := map[string]bool{}
 	for _, p := range peers {
 		known[p.ID] = true
-		if p.ID == own.ClusterID {
+		if p.ID == own.ClusterID || remote[p.ID] {
 			continue
 		}
 		entry := CSIClusterEntry{ClusterID: p.ID, ClusterEndpoint: own.ClusterEndpoint, ClusterSecret: p.Secret}
@@ -1406,7 +1427,7 @@ func mergeCSICredentials(creds *CSICredentials, own CSIClusterEntry, peers []atl
 	}
 	kept := creds.Clusters[:0]
 	for _, e := range creds.Clusters {
-		if e.Local || e.Peer || known[e.ClusterID] {
+		if e.Local || e.Peer || known[e.ClusterID] || remote[e.ClusterID] {
 			kept = append(kept, e)
 		}
 	}
@@ -1435,9 +1456,12 @@ func (r *StorageClusterReconciler) editCSICredentials(
 	return EditCSICredentials(ctx, r.Client, r.Namespace, edit)
 }
 
-// EditCSICredentials applies one change to the aggregate Secret the CSI driver
-// reads, in namespace. It retries on conflict because every cluster in the
-// deployment, and every ReplicationPair with a peer, writes the same object.
+// EditCSICredentials applies one change to the aggregate Secret in namespace,
+// creating it when absent. Every writer of the Secret goes through it: the
+// StorageCluster reconciler for local and peer entries, the SimplyblockDriver
+// reconciler for remote ones, and a ReplicationPair for the entry of a peer on
+// another control plane. It retries on conflict because they all write the
+// same object.
 func EditCSICredentials(
 	ctx context.Context, c client.Client, namespace string, edit func(*CSICredentials),
 ) error {
