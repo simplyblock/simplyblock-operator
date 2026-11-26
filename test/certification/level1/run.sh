@@ -34,6 +34,13 @@
 #                    provisioner is csi.simplyblock.io)
 #   SNAPSHOT_CLASS   its VolumeSnapshotClass (default: the one class whose driver
 #                    is csi.simplyblock.io)
+#   GROUP_SNAPSHOT   auto, on, or off: whether volume group snapshots are tested
+#                    (default auto: on when the cluster serves
+#                    groupsnapshot.storage.k8s.io/v1)
+#   GROUP_SNAPSHOT_CLASS
+#                    the VolumeGroupSnapshotClass to test with (default: the one
+#                    class whose driver is csi.simplyblock.io, or one the suite
+#                    generates for the driver when there is none)
 #   TESTS_IMAGE      override the tests image (default: oc adm release info --image-for=tests)
 #   RESULTS_DIR      where run directories go (default: results/ next to this script)
 #   LUN_STRESS_PODS  lower the LUN stress test's pod count (ocp-manifest.yaml) for
@@ -96,9 +103,54 @@ if [[ -z "${SNAPSHOT_CLASS:-}" ]]; then
   }
 fi
 
+# Volume group snapshots are tested where the API is generally available, which
+# is also where the suite can be told which class to use: before Kubernetes 1.35
+# its manifest has no GroupSnapshotClass section, and it ignores one it does not
+# know. A class of the driver's own is used when there is one; otherwise the
+# suite generates one for the driver (FromName).
+case "${GROUP_SNAPSHOT:-auto}" in
+  auto)
+    if oc api-versions | grep -qx 'groupsnapshot.storage.k8s.io/v1'; then
+      GROUP_SNAPSHOT=true GROUP_SNAPSHOT_WHY="the cluster serves groupsnapshot.storage.k8s.io/v1"
+    else
+      GROUP_SNAPSHOT=false GROUP_SNAPSHOT_WHY="the cluster does not serve groupsnapshot.storage.k8s.io/v1"
+    fi
+    ;;
+  on | true) GROUP_SNAPSHOT=true GROUP_SNAPSHOT_WHY="GROUP_SNAPSHOT=on" ;;
+  off | false) GROUP_SNAPSHOT=false GROUP_SNAPSHOT_WHY="GROUP_SNAPSHOT=off" ;;
+  *)
+    echo "GROUP_SNAPSHOT must be auto, on, or off" >&2
+    exit 2
+    ;;
+esac
+GROUP_SNAPSHOT_CLASS_SOURCE="FromName: false"
+if [[ "$GROUP_SNAPSHOT" == true ]]; then
+  if [[ -z "${GROUP_SNAPSHOT_CLASS:-}" ]]; then
+    candidates="$(oc get volumegroupsnapshotclass \
+      -o jsonpath="{range .items[?(@.driver==\"$DRIVER\")]}{.metadata.name}{\"\\n\"}{end}" | grep -v '^e2e-' || true)"
+    case "$(grep -c . <<<"$candidates" || true)" in
+      0) GROUP_SNAPSHOT_CLASS="" ;;
+      1) GROUP_SNAPSHOT_CLASS="$candidates" ;;
+      *)
+        echo "several volumegroupsnapshotclass objects use $DRIVER; set GROUP_SNAPSHOT_CLASS:" >&2
+        echo "$candidates" | sed 's/^/  /' >&2
+        exit 2
+        ;;
+    esac
+  fi
+  if [[ -n "$GROUP_SNAPSHOT_CLASS" ]]; then
+    GROUP_SNAPSHOT_CLASS_SOURCE="FromExistingClassName: $GROUP_SNAPSHOT_CLASS"
+  else
+    GROUP_SNAPSHOT_CLASS_SOURCE="FromName: true"
+  fi
+fi
+
 # What is under test has to exist before an hour of tests finds out it does not.
 oc get storageclass "$STORAGE_CLASS" >/dev/null
 oc get volumesnapshotclass "$SNAPSHOT_CLASS" >/dev/null
+if [[ -n "${GROUP_SNAPSHOT_CLASS:-}" ]]; then
+  oc get volumegroupsnapshotclass "$GROUP_SNAPSHOT_CLASS" >/dev/null
+fi
 # One run at a time: the LUN stress test expects nothing else beside it.
 if oc get namespace "$NAMESPACE" >/dev/null 2>&1; then
   echo "namespace $NAMESPACE exists: another run is active or was not cleaned up" >&2
@@ -111,6 +163,7 @@ VERSION="$(oc get clusterversion version -o jsonpath='{.status.desired.version}'
 RUN_DIR="${RESULTS_DIR:-$SCRIPT_DIR/results}/level1-$PROFILE-$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$RUN_DIR"
 sed -e "s|\${STORAGE_CLASS}|$STORAGE_CLASS|g" -e "s|\${SNAPSHOT_CLASS}|$SNAPSHOT_CLASS|g" \
+  -e "s|\${GROUP_SNAPSHOT_CLASS_SOURCE}|$GROUP_SNAPSHOT_CLASS_SOURCE|g" -e "s|\${GROUP_SNAPSHOT}|$GROUP_SNAPSHOT|g" \
   "$MANIFEST" >"$RUN_DIR/manifest.yaml"
 if [[ -n "${LUN_STRESS_PODS:-}" ]]; then
   [[ "$LUN_STRESS_PODS" =~ ^[1-9][0-9]*$ ]] || { echo "LUN_STRESS_PODS must be a positive number" >&2; exit 2; }
@@ -125,6 +178,7 @@ fi
   echo "profile:        $PROFILE"
   echo "storage class:  $STORAGE_CLASS"
   echo "snapshot class: $SNAPSHOT_CLASS"
+  echo "group snapshot: $GROUP_SNAPSHOT ($GROUP_SNAPSHOT_WHY)${GROUP_SNAPSHOT_CLASS:+, class $GROUP_SNAPSHOT_CLASS}"
   echo "extra args:     ${EXTRA_ARGS[*]-}"
   if [[ -n "$LEAVE_OUT" ]]; then
     echo "left out:       tests matching \"$LEAVE_OUT\" ($LEAVE_OUT_WHY)"

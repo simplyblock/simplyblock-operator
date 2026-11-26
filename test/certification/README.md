@@ -40,6 +40,14 @@ claim in that profile is ReadWriteMany, and simplyblock serves a ReadWriteMany
 filesystem only from a pNFS class. The main profile runs them. The run writes the
 list it ran to `tests.txt` and names what it left out in `run-info.txt`.
 
+Volume group snapshots are tested where the cluster serves
+`groupsnapshot.storage.k8s.io/v1`, the generally available API (OpenShift 4.23
+and 5.0, where Red Hat lists them as an optional test). Before that the suite's
+manifest has no way to name a VolumeGroupSnapshotClass, which arrived with
+Kubernetes 1.35, so the capability stays off. The script names a class of the
+driver's own when there is one and otherwise has the suite generate one;
+`GROUP_SNAPSHOT=on|off` overrides the choice, and `run-info.txt` records it.
+
 The manifests name the classes under test as `${STORAGE_CLASS}` and
 `${SNAPSHOT_CLASS}`. The script fills them in with the StorageClass and the
 VolumeSnapshotClass whose driver is `csi.simplyblock.io`, because the operator

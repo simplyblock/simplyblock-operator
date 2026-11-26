@@ -16,6 +16,10 @@ StorageClass:
   FromExistingClassName: ${STORAGE_CLASS}
 SnapshotClass:
   FromExistingClassName: ${SNAPSHOT_CLASS}
+# Read by suites built on Kubernetes 1.35 and later, ignored before; run.sh
+# fills it in when it turns groupSnapshot on.
+GroupSnapshotClass:
+  ${GROUP_SNAPSHOT_CLASS_SOURCE}
 DriverInfo:
   Name: csi.simplyblock.io
   SupportedSizeRange:
@@ -46,8 +50,8 @@ DriverInfo:
     multiplePVsSameID: false
     # NodeGetInfo reports no MaxVolumesPerNode yet.
     volumeLimits: false
-    # The upstream manifest has no field for a VolumeGroupSnapshotClass.
-    groupSnapshot: false
+    # run.sh decides: on where groupsnapshot.storage.k8s.io/v1 is served.
+    groupSnapshot: ${GROUP_SNAPSHOT}
     topology: false
     capacity: false
     volumeMountGroup: false
