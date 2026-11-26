@@ -187,7 +187,8 @@ discovery:
   # What the run is called. It is also what the draft is named after, unless
   # draft.name below states one, and the draft's name is what the proposed
   # StorageCluster is named after in turn, so a long name here is refused by the
-  # 37-character check on that last one.
+  # 37-character check on that last one. An existing run is never rewritten, so
+  # changing the values below on an upgrade discovers nothing until this changes.
   # -- Name of the discovery run, at most 18 characters. The draft is named `discovered-<name>`, and
   # its storage cluster `discovered-<name>-cluster`.
   name: initial-discovery
