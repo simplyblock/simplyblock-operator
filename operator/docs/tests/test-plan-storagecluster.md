@@ -333,6 +333,20 @@ wanted is that nothing is said rather than that a particular word is said.
 
 ---
 
+### Admission: Two-Node Timings
+
+The control plane runs every two-node cluster at a fixed 2500 ms hold and a
+fixed 1500 ms lease, and takes neither value from the operator. The fields stay
+in the schema so that manifests setting them still apply, and admission warns.
+
+Files: `operator/internal/webhook/storagecluster_validator_test.go` and
+`operator/internal/webhook/clusterdeploymentconfig_validator_test.go`
+
+| #     | Scenario                                                                                                                                                                                             | Type       | Test                                          |
+|-------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|-----------------------------------------------|
+| U-537 | A cluster setting `spec.arbitration.holdMs` or `leaseTtlMs` is admitted with a warning naming the field and the fixed value; one setting neither draws none (2026-11-26-two-node-timings-never-sent) | Regression | `TestTwoNodeTimingsAreAdmittedWithAWarning`   |
+| U-538 | A deployment document carrying `spec.cluster.arbitration.holdMs` is admitted with the same warning (2026-11-26-two-node-timings-never-sent)                                                          | Regression | `TestADocumentCarryingTwoNodeTimingsIsWarned` |
+
 ## 2. Integration Tests
 
 Full reconcile loop against a real Kubernetes API server via `envtest`, started

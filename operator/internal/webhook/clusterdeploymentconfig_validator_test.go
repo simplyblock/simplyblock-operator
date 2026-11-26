@@ -516,3 +516,20 @@ func TestApprovingASuperclusterChecksTheStripePerMember(t *testing.T) {
 	short.Spec.NodeSets = append(short.Spec.NodeSets, lone)
 	mustDeny(t, approve(t, existing, short), "lone")
 }
+
+// A document carrying holdMs or leaseTtlMs to the cluster it creates is warned
+// at the edit that writes them, whether it is a draft or an approval.
+//
+// Regression: 2026-11-26-two-node-timings-never-sent — see
+// TestTwoNodeTimingsAreAdmittedWithAWarning.
+func TestADocumentCarryingTwoNodeTimingsIsWarned(t *testing.T) {
+	config := testConfig()
+	config.Spec.Cluster.ClusterMode = simplyblockv1alpha2.ClusterModeDual
+	config.Spec.Cluster.Arbitration = &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(3000))}
+
+	response := review(t, nil, admissionv1.Create, nil, config)
+	mustAllow(t, response)
+	if warnings := strings.Join(response.Warnings, "\n"); !strings.Contains(warnings, "holdMs") {
+		t.Errorf("the draft drew no warning about holdMs: %q", response.Warnings)
+	}
+}

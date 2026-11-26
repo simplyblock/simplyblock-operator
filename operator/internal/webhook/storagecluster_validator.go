@@ -56,8 +56,24 @@ var superclusterSpecFields = map[string]bool{
 	"criticalThreshold": true,
 }
 
-// Handle admits a cluster when every rule below holds.
+// Handle admits a cluster when every rule below holds, and warns about the
+// fields an admitted cluster sets to no effect.
 func (v *StorageClusterValidator) Handle(
+	ctx context.Context, req admission.Request,
+) admission.Response {
+	response := v.admit(ctx, req)
+	if !response.Allowed || (req.Operation != admissionv1.Create && req.Operation != admissionv1.Update) {
+		return response
+	}
+	var cluster simplyblockv1alpha2.StorageCluster
+	if err := v.Decoder.Decode(req, &cluster); err != nil {
+		return response
+	}
+	return response.WithWarnings(twoNodeTimingWarnings("spec.arbitration", cluster.Spec.Arbitration)...)
+}
+
+// admit is the decision Handle reports.
+func (v *StorageClusterValidator) admit(
 	ctx context.Context, req admission.Request,
 ) admission.Response {
 	switch req.Operation {
