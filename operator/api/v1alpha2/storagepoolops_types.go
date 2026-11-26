@@ -77,6 +77,7 @@ const (
 )
 
 // StoragePoolOpsSpec is one operation to perform against one StoragePool.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type StoragePoolOpsSpec struct {
 	// PoolRef names the StoragePool this operation acts on, in this object's own
 	// namespace. The operation never owns its target, because deleting the
@@ -92,6 +93,8 @@ type StoragePoolOpsSpec struct {
 	Action StoragePoolOpsAction `json:"action"`
 
 	// Abort asks a running operation to stop at its next step and unwind.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 }
