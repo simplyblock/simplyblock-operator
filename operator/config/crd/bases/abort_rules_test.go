@@ -37,6 +37,9 @@ func TestAbortCannotBeWithdrawn(t *testing.T) {
 			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore, Abort: true,
 			Restore: &simplyblockv1alpha2.RestoreSpec{ClaimName: "restored", TargetPool: "pool-1"},
 		}}, func(o client.Object) { o.(*simplyblockv1alpha2.StorageBackupOps).Spec.Abort = false }},
+		{"StorageClusterOps", clusterOps(simplyblockv1alpha2.StorageClusterOpsActionActivate,
+			func(s *simplyblockv1alpha2.StorageClusterOpsSpec) { s.Abort = true }),
+			asClusterOps(func(s *simplyblockv1alpha2.StorageClusterOpsSpec) { s.Abort = false })},
 	}
 	cases := make([]transition, 0, len(kinds))
 	for _, k := range kinds {
