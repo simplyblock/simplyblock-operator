@@ -840,6 +840,9 @@ func (r *StorageClusterReconciler) sync(
 		if serviceClassesRead {
 			status.ServiceClasses = serviceClasses
 		}
+		status.WriteProtection = writeProtectionOf(reading.WriteProtectionV2)
+		status.DefaultSpdkImage = reading.DefaultSpdkImage
+		status.DefaultSpdkProxyImage = reading.DefaultSpdkProxyImage
 	})
 	if err != nil {
 		return ctrl.Result{}, err
@@ -891,7 +894,25 @@ func (r *StorageClusterReconciler) reading(
 		LostSite:          response.LostSite,
 		LostSiteState:     response.LostSiteState,
 		LeaderSite:        response.LeaderSite,
+
+		WriteProtectionV2:     response.WriteProtectionV2,
+		DefaultSpdkImage:      response.DefaultSpdkImage,
+		DefaultSpdkProxyImage: response.DefaultSpdkProxyImage,
 	}, nil
+}
+
+// writeProtectionOf is the generation the control plane reported, or empty when
+// it reported none: a control plane that predates the field has said nothing
+// about it, which is not the same as having said v1.
+func writeProtectionOf(v2 *bool) simplyblockv1alpha2.WriteProtectionVersion {
+	switch {
+	case v2 == nil:
+		return ""
+	case *v2:
+		return simplyblockv1alpha2.WriteProtectionV2
+	default:
+		return simplyblockv1alpha2.WriteProtectionV1
+	}
 }
 
 // readTasks is the window status.tasks publishes: the running and pending

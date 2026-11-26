@@ -37,6 +37,15 @@ type Cluster struct {
 	// in, and LostSiteState how far its drain or fence got.
 	LostSite      string
 	LostSiteState string
+	// WriteProtectionV2 is whether every distrib of the cluster runs v2 write
+	// protection. An upgraded cluster stays on v1 until SwitchWriteProtection.
+	// Nil from a control plane that predates the field.
+	WriteProtectionV2 *bool
+	// DefaultSpdkImage and DefaultSpdkProxyImage are the images the control
+	// plane starts a node with when its add or restart names none, behind the
+	// cluster's image prefix. Empty from a control plane that predates them.
+	DefaultSpdkImage      string
+	DefaultSpdkProxyImage string
 }
 
 // ClusterWorkloadNames are the Services a cluster's storage nodes are reached
@@ -227,7 +236,32 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 		LeaderSite:      ptr.From(d.LeaderSite, ""),
 		LostSite:        ptr.From(d.LostSite, ""),
 		LostSiteState:   ptr.From(d.LostSiteState, ""),
+
+		WriteProtectionV2:     d.WriteProtectionV2,
+		DefaultSpdkImage:      ptr.From(d.DefaultSpdkImage, ""),
+		DefaultSpdkProxyImage: ptr.From(d.DefaultSpdkProxyImage, ""),
 	}
+}
+
+// SwitchWriteProtection moves a cluster's distribs from v1 to v2 write
+// protection. The control plane switches every online node at runtime and
+// stores v2 for the others, so nothing has to restart. It is idempotent: a
+// cluster already on v2 succeeds without anything changing. A 409 means the
+// switch did not complete (no node online, or a node rejected it) and the
+// cluster stays on v1, so the call is worth repeating once the nodes are back.
+func (c *Client) SwitchWriteProtection(ctx context.Context, clusterID string) error {
+	cluster, err := parseUUID("cluster id", clusterID)
+	if err != nil {
+		return err
+	}
+	resp, err := c.api.ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostWithResponse(ctx, cluster)
+	if err != nil {
+		return fmt.Errorf("switch the write protection of cluster %s: %w", clusterID, err)
+	}
+	if code := resp.StatusCode(); code < 200 || code >= 300 {
+		return respError("switch the write protection of cluster "+clusterID, code, resp.Body)
+	}
+	return nil
 }
 
 // clusterParamsOf is the create body. A zero value is left out, so the control

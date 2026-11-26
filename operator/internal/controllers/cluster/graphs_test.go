@@ -32,6 +32,7 @@ import (
 var everyStep = []string{
 	"Awaiting", "AwaitingPod", "CheckingPeers", "Rebalancing", "RefreshingPod",
 	"Requesting", "RestartingNode", "ShuttingDown", "ShuttingDownNode", "Starting",
+	"Switching",
 }
 
 func TestTheStepEnumCoversEveryDeclaredState(t *testing.T) {
@@ -78,7 +79,7 @@ func celRuleValues(rule string) []string {
 // copy worth having.
 const opsStepCELRule = "!has(self.state) || self.state in " +
 	"['Requesting','Awaiting','ShuttingDown','Starting','CheckingPeers'," +
-	"'ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing']"
+	"'ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing','Switching']"
 
 // Every action the API accepts needs a graph, or an operation of that action
 // fails at its first pass with ErrUnknownAction rather than doing anything.
@@ -92,6 +93,7 @@ func TestEveryActionDeclaresAGraph(t *testing.T) {
 		simplyblockv1alpha2.StorageClusterOpsActionRestart,
 		simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
 		simplyblockv1alpha2.StorageClusterOpsActionCancelTask,
+		simplyblockv1alpha2.StorageClusterOpsActionSwitchWriteProtection,
 	} {
 		if _, ok := declared[action(a)]; !ok {
 			t.Errorf("action %s declares no graph", a)

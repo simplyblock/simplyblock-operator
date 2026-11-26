@@ -1564,6 +1564,8 @@ type ClusterDTO struct {
 	BackupEnabled               bool               `json:"backup_enabled"`
 	BlockSize                   int                `json:"block_size"`
 	Capacity                    CapacityStatDTO    `json:"capacity"`
+	DefaultSpdkImage            *string            `json:"default_spdk_image,omitempty"`
+	DefaultSpdkProxyImage       *string            `json:"default_spdk_proxy_image,omitempty"`
 	DeviceMode                  string             `json:"device_mode"`
 	DistrNdcs                   int                `json:"distr_ndcs"`
 	DistrNpcs                   int                `json:"distr_npcs"`
@@ -1602,6 +1604,7 @@ type ClusterDTO struct {
 	TlsEnabled                  bool               `json:"tls_enabled"`
 	UtilizationCritical         int                `json:"utilization_critical"`
 	UtilizationWarning          int                `json:"utilization_warning"`
+	WriteProtectionV2           *bool              `json:"write_protection_v2,omitempty"`
 }
 
 // ClusterDTOStatus defines model for ClusterDTO.Status.
@@ -2789,7 +2792,9 @@ type StorageNodeDTO struct {
 	SecondaryNodeId   *openapi_types.UUID     `json:"secondary_node_id"`
 	Site              *string                 `json:"site,omitempty"`
 	SnapshotsMax      int                     `json:"snapshots_max"`
+	SpdkImage         *string                 `json:"spdk_image,omitempty"`
 	SpdkMem           int                     `json:"spdk_mem"`
+	SpdkProxyImage    *string                 `json:"spdk_proxy_image,omitempty"`
 	Status            StorageNodeDTOStatus    `json:"status"`
 	TertiaryNodeId    *openapi_types.UUID     `json:"tertiary_node_id,omitempty"`
 	Uptime            *openapi_types.Duration `json:"uptime"`
@@ -3277,6 +3282,8 @@ type UnderscoreRestartParams struct {
 	NewSsdPcie     *[]string `json:"new_ssd_pcie,omitempty"`
 	NodeAddress    *string   `json:"node_address,omitempty"`
 	ReattachVolume *bool     `json:"reattach_volume,omitempty"`
+	SpdkImage      *string   `json:"spdk_image,omitempty"`
+	SpdkProxyImage *string   `json:"spdk_proxy_image,omitempty"`
 }
 
 // UnderscoreRestoreParams defines model for _RestoreParams.
@@ -6611,6 +6618,17 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue (the `ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost` operationId).
 	ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost(ctx context.Context, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID, body ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost Clusters:Switch-Write-Protection
+	//
+	// Move the cluster's distribs from v1 to v2 write protection.
+	//
+	// The runtime switch reaches every online node, and an offline node picks v2
+	// up from its stored parameters when it next restarts. A cluster already on v2
+	// succeeds without acting.
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/switch-write-protection (the `ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost` operationId).
+	ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersTasksListApiV2ClustersClusterIdTasksGet Clusters:Tasks:List
 	//
@@ -11181,6 +11199,27 @@ func (c *Client) ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsy
 // Corresponds with POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue (the `ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost` operationId).
 func (c *Client) ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost(ctx context.Context, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID, body ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostRequest(c.Server, clusterId, nqn, migrationId, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost Clusters:Switch-Write-Protection
+//
+// Move the cluster's distribs from v1 to v2 write protection.
+//
+// The runtime switch reaches every online node, and an offline node picks v2
+// up from its stored parameters when it next restarts. A cluster already on v2
+// succeeds without acting.
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/switch-write-protection (the `ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost` operationId).
+func (c *Client) ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostRequest(c.Server, clusterId)
 	if err != nil {
 		return nil, err
 	}
@@ -21485,6 +21524,40 @@ func NewClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnM
 	return req, nil
 }
 
+// NewClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostRequest constructs an http.Request for the ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost method
+func NewClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostRequest(server string, clusterId openapi_types.UUID) (*http.Request, error) {
+	var err error
+
+	var pathParam0 string
+
+	pathParam0, err = runtime.StyleParamWithOptions("simple", false, "cluster_id", clusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationPath, Type: "string", Format: "uuid"})
+	if err != nil {
+		return nil, err
+	}
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/%s/switch-write-protection", pathParam0)
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
 // NewClustersTasksListApiV2ClustersClusterIdTasksGetRequest constructs an http.Request for the ClustersTasksListApiV2ClustersClusterIdTasksGet method
 func NewClustersTasksListApiV2ClustersClusterIdTasksGetRequest(server string, clusterId openapi_types.UUID, params *ClustersTasksListApiV2ClustersClusterIdTasksGetParams) (*http.Request, error) {
 	var err error
@@ -24251,6 +24324,19 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue (the `ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost` operationId).
 	ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostWithResponse(ctx context.Context, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID, body ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostResponse, error)
+
+	// ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostWithResponse Clusters:Switch-Write-Protection
+	//
+	// Move the cluster's distribs from v1 to v2 write protection.
+	//
+	// The runtime switch reaches every online node, and an offline node picks v2
+	// up from its stored parameters when it next restarts. A cluster already on v2
+	// succeeds without acting.
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/{cluster_id}/switch-write-protection (the `ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost` operationId).
+	ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse, error)
 
 	// ClustersTasksListApiV2ClustersClusterIdTasksGetWithResponse Clusters:Tasks:List
 	//
@@ -32829,6 +32915,47 @@ func (r ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnM
 	return ""
 }
 
+type ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
 type ClustersTasksListApiV2ClustersClusterIdTasksGetResponse struct {
 	Body         []byte
 	HTTPResponse *http.Response
@@ -36930,6 +37057,25 @@ func (c *ClientWithResponses) ClustersSubsystemsMigrationsContinueApiV2ClustersC
 		return nil, err
 	}
 	return ParseClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePostResponse(rsp)
+}
+
+// ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostWithResponse Clusters:Switch-Write-Protection
+//
+// Move the cluster's distribs from v1 to v2 write protection.
+//
+// The runtime switch reaches every online node, and an offline node picks v2
+// up from its stored parameters when it next restarts. A cluster already on v2
+// succeeds without acting.
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/{cluster_id}/switch-write-protection (the `ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost` operationId).
+func (c *ClientWithResponses) ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostWithResponse(ctx context.Context, clusterId openapi_types.UUID, reqEditors ...RequestEditorFn) (*ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse, error) {
+	rsp, err := c.ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost(ctx, clusterId, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse(rsp)
 }
 
 // ClustersTasksListApiV2ClustersClusterIdTasksGetWithResponse Clusters:Tasks:List
@@ -43038,6 +43184,38 @@ func ParseClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNq
 			return nil, err
 		}
 		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse parses an HTTP response from a ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostWithResponse call
+func ParseClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse(rsp *http.Response) (*ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case rsp.StatusCode == 409:
+		break // No content-type
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

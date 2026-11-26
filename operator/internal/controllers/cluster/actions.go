@@ -49,6 +49,10 @@ func (r *StorageClusterOpsReconciler) perform(
 		return false, err
 	}
 
+	if ops.Spec.Action == simplyblockv1alpha2.StorageClusterOpsActionSwitchWriteProtection {
+		return r.switchWriteProtection(ctx, ops, clusterID, current)
+	}
+
 	switch current {
 	case stepRequesting:
 		return r.request(ctx, ops, clusterID)

@@ -56,6 +56,10 @@ const (
 	// NodeOnline says the node came up and is carrying its share.
 	NodeOnline = "NodeOnline"
 
+	// ImageOutOfDate says the node runs images other than its desired ones,
+	// so its next restart moves it.
+	ImageOutOfDate = "ImageOutOfDate"
+
 	// PodSchedulingFailed says the node's storage pod cannot be placed, which is
 	// the one Kubernetes-side failure a node's own status cannot show.
 	PodSchedulingFailed = "PodSchedulingFailed"

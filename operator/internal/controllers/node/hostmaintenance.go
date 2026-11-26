@@ -491,9 +491,12 @@ func (r *StorageNodeOpsReconciler) maintenanceRestart(
 	if reading.Status == nodeStatusInRestart {
 		return false, nil
 	}
-	params := RestartParams{
+	params, err := r.withDesiredImages(ctx, ops, RestartParams{
 		Force:          boolValue(ops.Spec.Force),
 		ReattachVolume: boolValue(ops.Spec.ReattachVolume),
+	})
+	if err != nil {
+		return false, err
 	}
 	_, err = r.once(ctx, ops, func() error {
 		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {

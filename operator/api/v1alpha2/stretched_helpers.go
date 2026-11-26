@@ -34,7 +34,8 @@ func (a StorageClusterOpsAction) IsClusterWide() bool {
 	switch a {
 	case StorageClusterOpsActionActivate, StorageClusterOpsActionExpand,
 		StorageClusterOpsActionShutdown, StorageClusterOpsActionStart,
-		StorageClusterOpsActionRestart, StorageClusterOpsActionRollingRestart:
+		StorageClusterOpsActionRestart, StorageClusterOpsActionRollingRestart,
+		StorageClusterOpsActionSwitchWriteProtection:
 		return true
 	default:
 		return false

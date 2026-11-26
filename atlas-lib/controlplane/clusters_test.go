@@ -11,8 +11,9 @@ import (
 	"github.com/simplyblock/atlas/errs"
 )
 
-// clusterDTO is a cluster as a control plane with the workload names reports it.
-const clusterDTO = `{"id":"` + testCluster + `","name":"prod","nqn":"nqn.2023-02.io.simplyblock:` + testCluster + `",` +
+// clusterDTOOpen is clusterDTO without its closing brace, so a test can add
+// fields a newer control plane reports.
+const clusterDTOOpen = `{"id":"` + testCluster + `","name":"prod","nqn":"nqn.2023-02.io.simplyblock:` + testCluster + `",` +
 	`"status":"active","is_re_balancing":false,"is_shrinking":true,"block_size":512,"distr_ndcs":2,"distr_npcs":1,` +
 	`"ha":true,"utilization_critical":0,"utilization_warning":0,"provisioned_capacity_critical":0,` +
 	`"provisioned_capacity_warning":0,"node_affinity":false,"anti_affinity":false,"enable_failure_domain":false,` +
@@ -20,7 +21,10 @@ const clusterDTO = `{"id":"` + testCluster + `","name":"prod","nqn":"nqn.2023-02
 	`"max_fault_tolerance":1,"backup_enabled":false,"capacity":{"date":0,"size_free":0,"size_prov":0,` +
 	`"size_total":0,"size_used":0,"size_util":0},"snode_api_service":"sb-prod-node-api",` +
 	`"spdk_proxy_service":"sb-prod-spdk-proxy","spdk_proxy_tls_secret":"sb-prod-spdk-proxy-tls",` +
-	`"node_label_suffix":"-kqv"}`
+	`"node_label_suffix":"-kqv"`
+
+// clusterDTO is a cluster as a control plane with the workload names reports it.
+const clusterDTO = clusterDTOOpen + "}"
 
 func prodWorkloadNames() ClusterWorkloadNames {
 	return ClusterWorkloadNames{

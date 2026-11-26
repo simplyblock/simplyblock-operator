@@ -75,6 +75,7 @@ func newClient(t *testing.T, objects ...client.Object) client.Client {
 			&simplyblockv1alpha2.StorageCluster{},
 			&simplyblockv1alpha2.StorageClusterOps{},
 			&simplyblockv1alpha2.StoragePool{},
+			&simplyblockv1alpha2.StorageNode{},
 		).
 		WithObjects(objects...).
 		WithIndex(&simplyblockv1alpha2.StorageCluster{}, superclusterRefIndex, superclusterRefOf).
@@ -235,6 +236,9 @@ type fakeControlPlane struct {
 	cancelTask   func(string, string) error
 	growDevices  func(string) (atlascp.ClusterDeviceGrowth, error)
 
+	switchWriteProtection      func(string) error
+	switchWriteProtectionCalls int
+
 	setLeaderSite     func(string, string) error
 	reachability      func(string, []string) ([]WorkerReachability, error)
 	serviceClasses    func(string) (ServiceClassConfig, error)
@@ -251,7 +255,9 @@ type fakeControlPlane struct {
 	deleteCalls       int
 	shutdownNodeCalls int
 	restartNodeCalls  int
-	cancelTaskCalls   int
+	// restartImages are the images each restart asked for, in call order.
+	restartImages   []NodeImages
+	cancelTaskCalls int
 
 	serviceClassesCalls    int
 	setServiceClassesCalls int
@@ -392,8 +398,9 @@ func (f *fakeControlPlane) ShutdownNode(_ context.Context, clusterID, nodeID str
 	return f.shutdownNode(clusterID, nodeID)
 }
 
-func (f *fakeControlPlane) RestartNode(_ context.Context, clusterID, nodeID string) error {
+func (f *fakeControlPlane) RestartNode(_ context.Context, clusterID, nodeID string, images NodeImages) error {
 	f.restartNodeCalls++
+	f.restartImages = append(f.restartImages, images)
 	if f.restartNode == nil {
 		return nil
 	}
@@ -531,4 +538,12 @@ func activeCluster() atlascp.Cluster {
 		NPCS:              1,
 		MaxFaultTolerance: 1,
 	}
+}
+
+func (f *fakeControlPlane) SwitchWriteProtection(_ context.Context, clusterID string) error {
+	f.switchWriteProtectionCalls++
+	if f.switchWriteProtection == nil {
+		f.t.Fatal("the control plane was asked to switch write protection and the test did not script it")
+	}
+	return f.switchWriteProtection(clusterID)
 }

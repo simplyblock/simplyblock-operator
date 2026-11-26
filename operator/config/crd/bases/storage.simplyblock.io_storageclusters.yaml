@@ -1523,6 +1523,23 @@ spec:
                       items:
                         type: string
                       type: array
+                    spdkImage:
+                      description: |-
+                        SpdkImage is the SPDK image every storage node of this cluster runs,
+                        unless the node's own spec.config.spdkImage overrides it. Unset follows
+                        the control plane's default SPDK image (status.defaultSpdkImage), so a
+                        cluster that states no image moves with its control plane. A change takes
+                        effect at each node's next restart, and nothing restarts a node because
+                        it changed.
+                      pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
+                      type: string
+                    spdkProxyImage:
+                      description: |-
+                        SpdkProxyImage is the SPDK proxy image every storage node of this cluster
+                        runs, unless the node's own spec.config.spdkProxyImage overrides it. It
+                        resolves like SpdkImage, against status.defaultSpdkProxyImage.
+                      pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
+                      type: string
                     talos:
                       description: |-
                         Talos states that the workers run Talos Linux: an immutable host with no
@@ -2049,6 +2066,16 @@ spec:
                 configured:
                   description: Configured records that initial setup completed.
                   type: boolean
+                defaultSpdkImage:
+                  description: |-
+                    DefaultSpdkImage is the SPDK image the control plane starts a node with
+                    when nothing names one, which a node's desired image falls back to.
+                  type: string
+                defaultSpdkProxyImage:
+                  description: |-
+                    DefaultSpdkProxyImage is the SPDK proxy image the control plane starts a
+                    node with when nothing names one.
+                  type: string
                 erasureCodingScheme:
                   description: |-
                     ErasureCodingScheme is the active layout, rendered as ndcs, an x, and
@@ -2542,6 +2569,15 @@ spec:
                     - spdkProxyService
                     - spdkProxyTLSSecret
                   type: object
+                writeProtection:
+                  description: |-
+                    WriteProtection is the distrib write-protection scheme the control plane
+                    reports for the cluster. A StorageClusterOps SwitchWriteProtection moves
+                    it from V1 to V2. Empty until the control plane has reported it.
+                  enum:
+                    - V1
+                    - V2
+                  type: string
               type: object
           type: object
           x-kubernetes-validations:

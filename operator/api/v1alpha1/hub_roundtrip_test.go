@@ -12,6 +12,7 @@
 package v1alpha1
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -469,5 +470,46 @@ func TestStorageClusterKMIPSurvivesTheV1Alpha1RoundTrip(t *testing.T) {
 
 	if diff := cmp.Diff(hub, &back); diff != "" {
 		t.Errorf("storing and reading back changed the object (-written +read):\n%s", diff)
+	}
+}
+
+// An OutOfDate walk and the nodes it passed over as current are hub-only: a
+// v1alpha1 client reading the operation back and writing it must not turn it
+// into a walk that restarts every node, or lose which nodes needed nothing
+// (design-release-upgrade.md §4.3, §14).
+func TestStorageClusterOpsOutOfDateWalkRoundTripsFromTheHub(t *testing.T) {
+	hub := &v1alpha2.StorageClusterOps{
+		ObjectMeta: metav1.ObjectMeta{Name: "ops-2", Namespace: "sb"},
+		Spec: v1alpha2.StorageClusterOpsSpec{
+			ClusterRef: "production",
+			Action:     v1alpha2.StorageClusterOpsActionRollingRestart,
+			RollingRestart: &v1alpha2.RollingRestartSpec{
+				RefreshSNodeAPI: true,
+				Selection:       v1alpha2.RollingRestartSelectionOutOfDate,
+			},
+		},
+		Status: v1alpha2.StorageClusterOpsStatus{
+			Phase: v1alpha2.StorageClusterOpsPhaseRunning,
+			RollingRestart: &v1alpha2.RollingRestartStatus{
+				Nodes:     []string{"node-a", "node-b", "node-c"},
+				NodeIndex: 2,
+				Current:   []string{"node-b"},
+			},
+		},
+	}
+
+	var stored StorageClusterOps
+	if err := stored.ConvertFrom(hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+	var back v1alpha2.StorageClusterOps
+	if err := stored.ConvertTo(&back); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	if back.Spec.RollingRestart == nil || back.Spec.RollingRestart.Selection != v1alpha2.RollingRestartSelectionOutOfDate {
+		t.Errorf("selection = %+v, want OutOfDate to survive", back.Spec.RollingRestart)
+	}
+	if back.Status.RollingRestart == nil || !slices.Equal(back.Status.RollingRestart.Current, []string{"node-b"}) {
+		t.Errorf("current = %+v, want [node-b] to survive", back.Status.RollingRestart)
 	}
 }

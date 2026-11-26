@@ -78,7 +78,7 @@ type ControlPlane interface {
 	// against.
 	StorageNodes(ctx context.Context, clusterID string) ([]utils.NodeStatusResponse, error)
 	ShutdownNode(ctx context.Context, clusterID, nodeID string) error
-	RestartNode(ctx context.Context, clusterID, nodeID string) error
+	RestartNode(ctx context.Context, clusterID, nodeID string, images NodeImages) error
 
 	// SetLeaderSite records site as the cluster's leader on the cluster record
 	// of a stretched cluster. Setting the value it already has is a success.
@@ -112,6 +112,11 @@ type ControlPlane interface {
 	// factor, the smallest growth of their block devices. It is synchronous and
 	// safe to repeat: without new growth nothing changes.
 	GrowDevices(ctx context.Context, clusterID string) (atlascp.ClusterDeviceGrowth, error)
+
+	// SwitchWriteProtection moves the cluster's distribs from v1 to v2 write
+	// protection. It is idempotent, and a 409 means the switch did not
+	// complete and the cluster stays on v1, which is worth asking again.
+	SwitchWriteProtection(ctx context.Context, clusterID string) error
 
 	// Endpoint is the base URL this call would currently reach the control
 	// plane at, resolved the same way every other call resolves it (§3.3).
@@ -246,6 +251,10 @@ func (c *httpControlPlane) Expand(ctx context.Context, clusterID string) error {
 	return c.post(ctx, fmt.Sprintf("/api/v2/clusters/%s/expand", clusterID), nil)
 }
 
+func (c *httpControlPlane) SwitchWriteProtection(ctx context.Context, clusterID string) error {
+	return c.post(ctx, fmt.Sprintf("/api/v2/clusters/%s/switch-write-protection", clusterID), nil)
+}
+
 func (c *httpControlPlane) GrowDevices(
 	ctx context.Context, clusterID string,
 ) (atlascp.ClusterDeviceGrowth, error) {
@@ -313,13 +322,24 @@ func (c *httpControlPlane) ShutdownNode(ctx context.Context, clusterID, nodeID s
 		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/shutdown", clusterID, nodeID), nil)
 }
 
+// NodeImages are the images a restart starts a node on. An empty one keeps the
+// image the control plane last started the node with.
+type NodeImages struct {
+	SpdkImage      string `json:"spdk_image,omitempty"`
+	SpdkProxyImage string `json:"spdk_proxy_image,omitempty"`
+}
+
 // RestartNode forces the restart, which is what the walk means by it: the node
 // was shut down by the step before, and a restart that declined because the
-// node is not running would leave the walk holding forever.
-func (c *httpControlPlane) RestartNode(ctx context.Context, clusterID, nodeID string) error {
+// node is not running would leave the walk holding forever. It carries the
+// node's desired images, which is what moves the node onto them.
+func (c *httpControlPlane) RestartNode(ctx context.Context, clusterID, nodeID string, images NodeImages) error {
 	return c.post(ctx,
 		fmt.Sprintf("/api/v2/clusters/%s/storage-nodes/%s/restart", clusterID, nodeID),
-		map[string]bool{"force": true})
+		struct {
+			Force bool `json:"force"`
+			NodeImages
+		}{Force: true, NodeImages: images})
 }
 
 func (c *httpControlPlane) SetLeaderSite(ctx context.Context, clusterID, site string) error {

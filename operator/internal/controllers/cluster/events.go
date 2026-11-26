@@ -123,6 +123,14 @@ const (
 	// after the walk was planned.
 	NodeSkipped = "NodeSkipped"
 
+	// NodeCurrent says an OutOfDate walk passed over a node because it already
+	// ran its desired images when the walk reached it.
+	NodeCurrent = "NodeCurrent"
+
+	// ImageMismatch says a node came back from the walk's restart on images
+	// other than its desired ones, so the walk stopped.
+	ImageMismatch = "ImageMismatch"
+
 	// FailureDomainNotReady says an activation is waiting because the cluster's
 	// failure domains do not yet hold an equal number of hosts.
 	FailureDomainNotReady = "FailureDomainNotReady"
