@@ -89,3 +89,37 @@ func TestATestFailoverSourceStorageClusterCannotBeAddedLater(t *testing.T) {
 		denied: "spec.sourceStorageCluster cannot be set after creation",
 	}})
 }
+
+func TestAGroupRestoresParametersCannotBeAddedLater(t *testing.T) {
+	restore := func(spec *simplyblockv1alpha2.RestoreOpsSpec) *simplyblockv1alpha2.VolumeGroupSnapshotOps {
+		return &simplyblockv1alpha2.VolumeGroupSnapshotOps{Spec: simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec{
+			VolumeGroupSnapshotRef: "group-snap-1", Action: simplyblockv1alpha2.VolumeGroupSnapshotOpsActionRestore,
+			Restore: spec,
+		}}
+	}
+	asSpec := func(f func(*simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec)) func(client.Object) {
+		return func(o client.Object) { f(&o.(*simplyblockv1alpha2.VolumeGroupSnapshotOps).Spec) }
+	}
+	runTransitions(t, []transition{
+		{
+			name:   "adding restore parameters to a restore created without them",
+			create: restore(nil),
+			mutate: asSpec(func(s *simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec) {
+				s.Restore = &simplyblockv1alpha2.RestoreOpsSpec{StorageClassName: "fast"}
+			}),
+			denied: "spec.restore cannot be set after creation",
+		},
+		{
+			name:   "setting a storage class on a running restore",
+			create: restore(&simplyblockv1alpha2.RestoreOpsSpec{NamePrefix: "restored"}),
+			mutate: asSpec(func(s *simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec) { s.Restore.StorageClassName = "fast" }),
+			denied: "field is immutable",
+		},
+		{
+			name:   "turning partial restore on mid-restore",
+			create: restore(&simplyblockv1alpha2.RestoreOpsSpec{NamePrefix: "restored"}),
+			mutate: asSpec(func(s *simplyblockv1alpha2.VolumeGroupSnapshotOpsSpec) { s.Restore.EnablePartialRestore = true }),
+			denied: "field is immutable",
+		},
+	})
+}

@@ -92,6 +92,7 @@ type RestoreOpsSpec struct {
 
 // VolumeGroupSnapshotOpsSpec defines the requested operation. The whole spec is
 // immutable: the object is a request.
+// +kubebuilder:validation:XValidation:rule="has(self.restore) == has(oldSelf.restore)",message="spec.restore cannot be set after creation: a restore reads it for every claim it builds, so parameters added midway would split one restored group across settings"
 type VolumeGroupSnapshotOpsSpec struct {
 	// VolumeGroupSnapshotRef names the VolumeGroupSnapshot, in this namespace,
 	// the operation acts on. Resolved at admission: a create naming a
@@ -107,6 +108,7 @@ type VolumeGroupSnapshotOpsSpec struct {
 
 	// Restore carries the parameters of the Restore action. Ignored for any
 	// other action.
+	// Left unset at creation, it cannot be set later.
 	// +k8s:immutable
 	// +optional
 	Restore *RestoreOpsSpec `json:"restore,omitempty"`
