@@ -76,6 +76,8 @@ spec:
                     Whether an abort is expressible from the current step is declared by that
                     action's graph rather than checked here. Discovery changes nothing, so an
                     aborted run leaves behind at most the config it had already written.
+                    Setting it is final: an unwind withdrawn midway would resume the forward
+                    steps against a partly undone operation, so it cannot be withdrawn.
                   type: boolean
                 action:
                   description: Action is the operation to perform.
@@ -617,6 +619,8 @@ spec:
               x-kubernetes-validations:
                 - message: 'spec.discover is immutable: the run reads it again at every step, so a change would mix two discoveries into one draft, and a finished run is the record of what produced its draft; create a new run instead'
                   rule: has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover)
+                - message: 'spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation'
+                  rule: '!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)'
             status:
               description: OperatorOpsStatus is the observed state of one operator operation.
               properties:

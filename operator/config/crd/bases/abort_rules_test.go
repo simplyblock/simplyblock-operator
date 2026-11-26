@@ -21,6 +21,10 @@ func TestAbortCannotBeWithdrawn(t *testing.T) {
 		{"ControlPlaneOps", &simplyblockv1alpha2.ControlPlaneOps{Spec: simplyblockv1alpha2.ControlPlaneOpsSpec{
 			ControlPlaneRef: "simplyblock", Action: simplyblockv1alpha2.ControlPlaneOpsActionRestart, Abort: true,
 		}}, func(o client.Object) { o.(*simplyblockv1alpha2.ControlPlaneOps).Spec.Abort = false }},
+		{"OperatorOps", &simplyblockv1alpha2.OperatorOps{Spec: simplyblockv1alpha2.OperatorOpsSpec{
+			Action: simplyblockv1alpha2.OperatorOpsActionDiscover, Abort: true,
+			Discover: &simplyblockv1alpha2.DiscoverSpec{Workers: []string{"worker-1"}},
+		}}, func(o client.Object) { o.(*simplyblockv1alpha2.OperatorOps).Spec.Abort = false }},
 	}
 	cases := make([]transition, 0, len(kinds))
 	for _, k := range kinds {
