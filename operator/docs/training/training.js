@@ -19,7 +19,8 @@
 // is judged, a right judgment is +1 and a wrong one is −1. Then two to four
 // manifest tasks follow, a YAML skeleton with blanks to fill in, each blank
 // judged against the values a correct manifest carries. A chapter is passed with
-// at least PASS_POINTS of the 75 question points and every task right.
+// at least PASS_POINTS of the 75 question points and at least two thirds of its
+// tasks right, rounded up: 2 of 3, 3 of 4.
 //
 // The pages have to be served over HTTP: the example manifests are fetched, and
 // a browser refuses fetch from a file:// page. `python3 -m http.server` in this
@@ -28,7 +29,9 @@
   const PER_RUN = 15;
   const PER_QUESTION = 5;
   const MAX_POINTS = PER_RUN * PER_QUESTION;
-  const PASS_POINTS = 45;
+  const PASS_POINTS = 50;
+  // The manifests a learner has to get right: two thirds of them, rounded up.
+  const tasksToPass = n => Math.ceil((2 * n) / 3);
   const MIN_PASSWORD = 10;
   const API = 'api';
   const QUIZ_PAGE = 'crd-quiz.html';
@@ -307,7 +310,7 @@
       ${problemsBlock(problems)}
       <div class="stack">
         <h1>Operator training <span class="key">by use case</span></h1>
-        <p class="lead">Each chapter takes one deployment or operation the way it is done in practice: the objects a user writes, in the order they are written, what the operator does with each, and what goes wrong. It ends in a test of fifteen questions and a few manifests to complete. Passing a chapter takes ${PASS_POINTS} of ${MAX_POINTS} question points and every manifest right.</p>
+        <p class="lead">Each chapter takes one deployment or operation the way it is done in practice: the objects a user writes, in the order they are written, what the operator does with each, and what goes wrong. It ends in a test of fifteen questions and a few manifests to complete. Passing a chapter takes ${PASS_POINTS} of ${MAX_POINTS} question points and two thirds of the manifests right, for example 2 of 3.</p>
       </div>
       ${account}
       <div class="card blue stack">
@@ -438,7 +441,7 @@
       ${sections.join('')}
       <section class="section card blue" id="test">
         <h2>Test</h2>
-        <p>Fifteen questions drawn from a bank of ${ch.questions.length}, with five answers each of which any number can be correct, then ${ch.tasks.length} ${plural(ch.tasks.length, 'manifest', 'manifests')} to complete. Every answer is judged, +1 for a right judgment and −1 for a wrong one, so the questions score −${MAX_POINTS} to +${MAX_POINTS}. The chapter is passed with at least ${PASS_POINTS} points and every manifest right.</p>
+        <p>Fifteen questions drawn from a bank of ${ch.questions.length}, with five answers each of which any number can be correct, then ${ch.tasks.length} ${plural(ch.tasks.length, 'manifest', 'manifests')} to complete. Every answer is judged, +1 for a right judgment and −1 for a wrong one, so the questions score −${MAX_POINTS} to +${MAX_POINTS}. The chapter is passed with at least ${PASS_POINTS} points and ${tasksToPass(ch.tasks.length)} of the ${ch.tasks.length} manifests right.</p>
         <div class="row">
           <button class="primary" id="startBtn">Start the test</button>
           ${apiAvailable ? '<button id="statsBtn">Statistics</button>' : ''}
@@ -642,8 +645,14 @@
     const points = totalPoints(state.results);
     const fully = state.results.filter(r => r.fullyRight).length;
     const tasksRight = state.taskResults.filter(r => r.right).length;
-    const passed = points >= PASS_POINTS && tasksRight === ch.tasks.length;
-    const why = passed ? 'Passed.' : points < PASS_POINTS && tasksRight < ch.tasks.length ? `Not passed: ${PASS_POINTS} points and every manifest right are needed.` : points < PASS_POINTS ? `Not passed: the manifests are right, but ${PASS_POINTS} question points are needed.` : 'Not passed: the questions are fine, but every manifest has to be right.';
+    const needTasks = tasksToPass(ch.tasks.length);
+    const pointsOk = points >= PASS_POINTS;
+    const tasksOk = tasksRight >= needTasks;
+    const passed = pointsOk && tasksOk;
+    const why = passed ? 'Passed.'
+      : !pointsOk && !tasksOk ? `Not passed: ${PASS_POINTS} points and ${needTasks} of ${ch.tasks.length} manifests right are needed.`
+      : !pointsOk ? `Not passed: enough manifests are right, but ${PASS_POINTS} question points are needed.`
+      : `Not passed: the points are enough, but ${needTasks} of ${ch.tasks.length} manifests have to be right.`;
     let record;
     if (!apiAvailable) record = '<p class="note">This copy is not connected to a results server, so the result is not recorded.</p>';
     else if (!learner) record = `<p class="note">You are not signed in, so this result is not recorded. <a href="index.html?next=${encodeURIComponent('chapter.html?c=' + ch.id)}#auth">Sign in or register</a> to have the next one recorded.</p>`;

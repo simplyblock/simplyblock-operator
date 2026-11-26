@@ -123,8 +123,9 @@ topics so no topic dominates, and scores them as the quiz does: every one of the
 five answers is judged, a right judgment is +1 and a wrong one is −1, so a
 question scores −5 to +5 and the questions −75 to +75. The manifest tasks are
 skeletons with blanks; a blank is right when its text equals an accepted value
-or matches an accepted `/regex/` in full. A chapter is passed with at least 45
-question points and every manifest right.
+or matches an accepted `/regex/` in full. A chapter is passed with at least 50
+question points and two thirds of its manifests right, rounded up: 2 of 3, or 3
+of 4.
 
 Write a bank in which the number of correct answers varies, from none to all
 five. The checker refuses a bank in which more than half the questions share one
