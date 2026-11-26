@@ -13287,6 +13287,11 @@
             "title": "Page Copy",
             "default": false
           },
+          "flex_geometry": {
+            "type": "boolean",
+            "title": "Flex Geometry",
+            "default": false
+          },
           "md_journal": {
             "type": "boolean",
             "title": "Md Journal",
@@ -13781,6 +13786,11 @@
           "page_copy": {
             "type": "boolean",
             "title": "Page Copy",
+            "default": false
+          },
+          "flex_geometry": {
+            "type": "boolean",
+            "title": "Flex Geometry",
             "default": false
           },
           "md_journal": {

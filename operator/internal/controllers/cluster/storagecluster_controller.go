@@ -1154,6 +1154,7 @@ func (r *StorageClusterReconciler) creationParams(
 		MetadataJournal:     ptr.BoolFromOrTrue(cluster.Spec.EnableMetadataJournal),
 		DeviceMode:          deviceMode(cluster.Spec.DeviceClass),
 		SingleNode:          cluster.Spec.ClusterMode == simplyblockv1alpha2.ClusterModeSingle,
+		FlexGeometry:        ptr.BoolFromOrFalse(cluster.Spec.FlexGeometry),
 		SyncReplication:     ptr.BoolFromOrFalse(cluster.Spec.EnableSyncReplication),
 		LeaderSite:          creatingLeaderSite(cluster),
 	}, nil

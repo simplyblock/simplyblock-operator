@@ -598,3 +598,51 @@ func TestStorageClusterMetadataJournalDefaultsOn(t *testing.T) {
 		})
 	}
 }
+
+// flexGeometry defaults off and is fixed at create: the backend lays out every
+// lvstore with the cluster size it implies, so neither turning it on nor
+// turning it off is something a live cluster can be asked for.
+func TestStorageClusterFlexGeometryDefaultsOffAndIsImmutable(t *testing.T) {
+	apiClient := apiServer(t)
+
+	for _, tc := range []struct {
+		name   string
+		stated *bool
+		want   bool
+	}{
+		{name: "unstated", want: false},
+		{name: "stated on", stated: ptr.To(true), want: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "flexgeo-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount: ptr.To(int32(10)),
+					VCPUCount:         ptr.To(int32(6)),
+					FlexGeometry:      tc.stated,
+				},
+			}
+			if err := apiClient.Create(context.Background(), cluster); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			t.Cleanup(func() { _ = apiClient.Delete(context.Background(), cluster) })
+
+			var stored simplyblockv1alpha2.StorageCluster
+			if err := apiClient.Get(context.Background(), client.ObjectKeyFromObject(cluster), &stored); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if stored.Spec.FlexGeometry == nil || *stored.Spec.FlexGeometry != tc.want {
+				t.Fatalf("flexGeometry = %v, want %v", stored.Spec.FlexGeometry, tc.want)
+			}
+
+			stored.Spec.FlexGeometry = ptr.To(!tc.want)
+			err := apiClient.Update(context.Background(), &stored)
+			if err == nil {
+				t.Fatal("expected the apiserver to reject the change, but it was accepted")
+			}
+			if !strings.Contains(err.Error(), "field is immutable") {
+				t.Fatalf("rejected for the wrong reason: %v", err)
+			}
+		})
+	}
+}

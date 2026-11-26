@@ -1008,6 +1008,17 @@ type StorageClusterSpec struct {
 	// +k8s:immutable
 	EnableNodeAffinity *bool `json:"enableNodeAffinity,omitempty"`
 
+	// FlexGeometry gives every lvstore of the cluster an 8 MiB cluster size,
+	// whatever the erasure-coding scheme of its volumes. Off (the default), the
+	// lvstore cluster is one 2 MiB page per data chunk of stripe: 2 MiB for 1+x,
+	// 4 MiB for 2+x, 8 MiB for 4+x. Either way the raid0 strip under an lvstore
+	// is its cluster size. The backend accepts it at cluster-create only, so a
+	// cluster created without it cannot be converted.
+	// +kubebuilder:default=false
+	// +optional
+	// +k8s:immutable
+	FlexGeometry *bool `json:"flexGeometry,omitempty"`
+
 	// EnableChecksumValidation turns on inline CRC validation of every I/O, for
 	// silent-data-error protection. The backend bakes the checksum method into
 	// each device at cluster-create time and never re-applies it, so it cannot
