@@ -80,7 +80,7 @@ the environment, into the writable scratch mount. Nothing is baked in.
 | `SB_K8S_HOST` | `kubernetes.default.svc` | SNI and Host — must be on the API server's certificate |
 | `SB_K8S_CA_FILE` | the projected SA CA | CA bundle used to verify it |
 | `SB_OPERATOR_URL` | `http://simplyblock-operator:8080` | operator API |
-| `SB_PROMETHEUS_URL` | `http://simplyblock-prometheus:9090` | metrics |
+| `SB_PROMETHEUS_URL` | empty | metrics, from `prometheus.simplyblock.prometheusURL`/`prometheusPORT` when set — the chart deploys no Prometheus of its own |
 | `SB_GRAYLOG_URL` | empty | the log store: Graylog's search API, which the Logs view reads (fully qualified, resolved per request); needs the njs module, GET on `/api/search/universal/{absolute,relative}` only, every response scrubbed of credentials (field names and credential-looking text in log lines). Empty: the Logs view falls back to a pod's live tail from the Kubernetes API |
 | `SB_GRAYLOG_USER`, `SB_GRAYLOG_PASSWORD_FILE` | `admin`, empty | HTTP Basic credentials attached by the proxy; the chart mounts the observability stack's own secret |
 | `SB_GRAYLOG_TOKEN_FILE` | empty | a Graylog access token instead (sent as `<token>:token`); wins over the password |

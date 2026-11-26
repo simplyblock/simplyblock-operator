@@ -5,6 +5,7 @@
 package controlplane
 
 import (
+	"context"
 	"os"
 	"slices"
 	"strings"
@@ -13,8 +14,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -240,5 +244,50 @@ func TestPrometheusClientCertificateOnlyUnderCertManagerMutualTLS(t *testing.T) 
 				t.Errorf("%s: the install carries %T %s", name, obj, prometheusClientCertificate)
 			}
 		}
+	}
+}
+
+// A prometheus-operator that already scrapes the management API, through the
+// chart's own prometheus.enabled path (bundled, or bring-your-own), makes this
+// control plane's own Prometheus redundant, so applyEverything leaves it out.
+func TestNoPrometheusWhenAServiceMonitorAlreadyScrapesTheManagementAPI(t *testing.T) {
+	cp := localControlPlane()
+	mapper := meta.NewDefaultRESTMapper(nil)
+	mapper.Add(serviceMonitorGVK, meta.RESTScopeNamespace)
+	sm := &unstructured.Unstructured{}
+	sm.SetGroupVersionKind(serviceMonitorGVK)
+	sm.SetName(ComponentWebAPI)
+	sm.SetNamespace(testNamespace)
+	c := fake.NewClientBuilder().WithScheme(testScheme(t)).WithRESTMapper(mapper).
+		WithObjects(cp, sm).Build()
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.applyEverything(context.Background(), cp); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	var sts appsv1.StatefulSet
+	key := client.ObjectKey{Namespace: testNamespace, Name: ComponentPrometheus}
+	if err := c.Get(context.Background(), key, &sts); !apierrors.IsNotFound(err) {
+		t.Errorf("Get the Prometheus StatefulSet: %v, want NotFound: a ServiceMonitor already "+
+			"scrapes the management API, so this control plane should not run a second Prometheus", err)
+	}
+}
+
+// Without a ServiceMonitor already scraping it, the control plane keeps
+// running its own Prometheus, exactly as it did before that check existed.
+func TestPrometheusStaysWhenNothingElseScrapesTheManagementAPI(t *testing.T) {
+	cp := localControlPlane()
+	c := newClient(t, cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.applyEverything(context.Background(), cp); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+
+	var sts appsv1.StatefulSet
+	key := client.ObjectKey{Namespace: testNamespace, Name: ComponentPrometheus}
+	if err := c.Get(context.Background(), key, &sts); err != nil {
+		t.Errorf("Get the Prometheus StatefulSet: %v, want it applied", err)
 	}
 }

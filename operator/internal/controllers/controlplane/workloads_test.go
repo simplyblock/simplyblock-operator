@@ -403,6 +403,25 @@ func TestEveryWorkloadThatReachesTheDatabaseMountsTheClusterFile(t *testing.T) {
 	}
 }
 
+// A ServiceMonitor selects a Service by the labels on the Service object
+// itself, not by the selector it carries toward its Pods. The two Services a
+// customer's own Prometheus needs to discover carry no labels otherwise, so
+// without this nothing external can ever find them.
+func TestTheExternallyReachableServicesCarryTheirComponentLabel(t *testing.T) {
+	cp := localControlPlane()
+	objects := managementAPIObjects(cp)
+
+	webAPI := findService(t, objects, ComponentWebAPI)
+	if got := webAPI.Labels[appLabel]; got != ComponentWebAPI {
+		t.Errorf("webAPIService labels[%q] = %q, want %q", appLabel, got, ComponentWebAPI)
+	}
+
+	exporter := findService(t, objects, ComponentFDBExporter)
+	if got := exporter.Labels[appLabel]; got != ComponentFDBExporter {
+		t.Errorf("fdbExporterService labels[%q] = %q, want %q", appLabel, got, ComponentFDBExporter)
+	}
+}
+
 // The monitoring pool and the task runner are the same pod with a different
 // service list, and both lists are non-empty. A pool built with no services is a
 // pod that starts and does nothing, which no count would notice.
@@ -732,5 +751,37 @@ func TestTheTwoNodeServicesNameWhatTheImageShips(t *testing.T) {
 	}
 	for name := range want {
 		t.Errorf("the monitoring pod runs no %s", name)
+	}
+}
+
+// A bring-your-own prometheus-operator's Prometheus pod scrapes as its own
+// ServiceAccount. Without naming that account here, webappapi's TokenReview
+// rejects every one of its scrapes with a 401.
+func TestExtraMetricsServiceAccountsReachTheManagementAPI(t *testing.T) {
+	t.Setenv(extraMetricsAccountsEnv,
+		" system:serviceaccount:monitoring:kube-prometheus-stack-prometheus , not-an-account,"+
+			"system:serviceaccount:a:b:c,system:serviceaccount:monitoring:kube-prometheus-stack-prometheus")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
+
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus," +
+		"system:serviceaccount:monitoring:kube-prometheus-stack-prometheus"; env.Value != want {
+		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
+	}
+}
+
+// Regression: an upgrade from 26.3 keeps the operator's own Prometheus, so its
+// account stays trusted even when the chart names no extra scraper.
+func TestTheOperatorsOwnPrometheusStaysTrusted(t *testing.T) {
+	t.Setenv(extraMetricsAccountsEnv, "")
+	cp := localControlPlane()
+
+	api := findDeployment(t, managementAPIObjects(cp), ComponentWebAPI)
+	env := findEnvVar(t, api, "SB_K8S_METRICS_SERVICE_ACCOUNTS")
+
+	if want := "system:serviceaccount:" + cp.Namespace + ":simplyblock-prometheus"; env.Value != want {
+		t.Errorf("SB_K8S_METRICS_SERVICE_ACCOUNTS = %q, want %q", env.Value, want)
 	}
 }

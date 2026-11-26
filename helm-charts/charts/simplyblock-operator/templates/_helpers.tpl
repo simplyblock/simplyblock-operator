@@ -21,6 +21,45 @@ true
 {{- end -}}
 {{- end -}}
 
+{{/* Whether this install is deploying its own prometheus-operator (the
+     kube-prometheus-stack dependency) rather than relying on one the customer
+     already runs. True only when both halves of it are actually on: the CRDs
+     without the controller (or the reverse) scrape nothing and own nothing,
+     so neither half alone is "bundling" anything.
+
+     This also decides whether prometheus-operator-servicemonitors.yaml and
+     prometheus-operator-alerting.yaml's own "does this cluster have the CRD"
+     checks apply at all: on a fresh install, .Capabilities.APIVersions is
+     captured before this same install's own kube-prometheus-stack dependency
+     creates its CRDs, so a literal capability check would fail an install
+     that was about to supply the CRD itself. Bundling skips that check and
+     trusts Helm's own install ordering instead; only the not-bundling path
+     still needs it, because then nothing else is going to create the CRD. */}}
+{{- define "simplyblock.bundlesPrometheusOperator" -}}
+{{- $kps := index .Values "kube-prometheus-stack" | default dict -}}
+{{- $crds := ($kps.crds | default dict).enabled -}}
+{{- $operator := ($kps.prometheusOperator | default dict).enabled -}}
+{{- if and $crds $operator -}}
+true
+{{- end -}}
+{{- end -}}
+
+{{/* The customer's own Prometheus, named to the management API's trusted
+     scrapers (SB_K8S_METRICS_SERVICE_ACCOUNTS). Empty until
+     prometheus.serviceAccount.name is set, same as sbcc.trustedAccount leaves
+     the Control Center's entry empty until it opts in. */}}
+{{- define "simplyblock.extraMetricsServiceAccount" -}}
+{{- $sa := .Values.prometheus.serviceAccount | default dict -}}
+{{- $accounts := list -}}
+{{- if $sa.name -}}
+{{- $accounts = append $accounts (printf "system:serviceaccount:%s:%s" ($sa.namespace | default .Release.Namespace) $sa.name) -}}
+{{- end -}}
+{{- if .Values.prometheus.enabled -}}
+{{- $accounts = append $accounts (printf "system:serviceaccount:%s:simplyblock-metrics-scraper" .Release.Namespace) -}}
+{{- end -}}
+{{- join "," $accounts -}}
+{{- end -}}
+
 {{- define "simplyblock.controlPlaneAddr" -}}
 {{- if .Values.csiConfig.simplybk.ip -}}
 {{ .Values.csiConfig.simplybk.ip }}

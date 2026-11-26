@@ -53,6 +53,9 @@ jobs:
           make -C operator yq
           helm-charts/scripts/test-image-values.sh
 
+      - name: Prometheus values
+        run: helm-charts/scripts/test-prometheus-values.sh
+
       - name: KMS setup script
         run: helm-charts/scripts/test-setup-kms.sh
 

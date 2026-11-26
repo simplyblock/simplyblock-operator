@@ -113,6 +113,6 @@ http://simplyblock-operator:8080
 {{- .Values.controlCenter.prometheusUrl -}}
 {{- else -}}
 {{- $p := ((.Values.prometheus).simplyblock) | default dict -}}
-{{- printf "http://%s:%v" ($p.prometheusURL | default "simplyblock-prometheus") ($p.prometheusPORT | default 9090) -}}
+{{- printf "http://%s:%v" ($p.prometheusURL | default (ternary "prometheus-operated" "simplyblock-prometheus" (.Values.prometheus.enabled | default false))) ($p.prometheusPORT | default 9090) -}}
 {{- end -}}
 {{- end -}}
