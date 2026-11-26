@@ -525,6 +525,99 @@ func TestPlanProposesABlankPartitionInABlockRun(t *testing.T) {
 	}
 }
 
+// Regression: lab, 2026-11-25. With enablePartitionedDevices, which the chart
+// sets, a disk carrying a blank partition passed the rules twice: once whole,
+// its partition table waived, and once as the partition. The draft named four
+// drives as eight devices.
+func TestPlanNeverProposesADiskAndItsPartitionTogether(t *testing.T) {
+	partition := func(name string) nodeprobe.Device {
+		d := refused(blockDisk(name, tb), blockdev.ReasonNotAWholeDisk)
+		d.Kind = string(blockdev.KindPartition)
+		d.Content = "Blank"
+		return d
+	}
+	fleet := func() []nodeprobe.Report {
+		return []nodeprobe.Report{report("worker-1",
+			refused(blockDisk("nvme0n1", 4*tb), blockdev.ReasonPartitioned),
+			partition("nvme0n1p1"),
+			refused(blockDisk("sdb", 4*tb), blockdev.ReasonPartitioned),
+			partition("sdb1"),
+			// A partition table nothing is proposed from: the waiver still
+			// hands the whole disk over.
+			refused(blockDisk("sdc", 4*tb), blockdev.ReasonPartitioned),
+			// Not a partition of sdb, whatever its name starts with.
+			blockDisk("sdb10x", 2*tb),
+		)}
+	}
+	run := func(filter *simplyblockv1alpha2.DeviceFilter) *simplyblockv1alpha2.DiscoverSpec {
+		return &simplyblockv1alpha2.DiscoverSpec{
+			EnableLogicalBlockDevices: ptr.To(true),
+			EnablePartitionedDevices:  ptr.To(true),
+			DeviceFilter:              filter,
+		}
+	}
+
+	plan := Planner{}.Plan(fleet(), run(nil))
+	if len(plan.NodeSets) != 1 {
+		t.Fatalf("built %+v, refusals %+v", plan.NodeSets, plan.Refusals)
+	}
+	var got []string
+	for _, group := range plan.NodeSets[0].Groups {
+		got = append(got, group.Devices.Block...)
+	}
+	slices.Sort(got)
+	if want := []string{"/dev/nvme0n1p1", "/dev/sdb1", "/dev/sdb10x", "/dev/sdc"}; !slices.Equal(got, want) {
+		t.Errorf("the draft names %v, want %v", got, want)
+	}
+	var refusedDisks []string
+	for _, refusal := range plan.Refusals {
+		if refusal.Rule == OverlapRule {
+			refusedDisks = append(refusedDisks, refusal.Device)
+			if !strings.Contains(refusal.Reason, "partition") {
+				t.Errorf("the refusal %q does not name the partition", refusal.Reason)
+			}
+		}
+	}
+	slices.Sort(refusedDisks)
+	if !slices.Equal(refusedDisks, []string{"nvme0n1", "sdb"}) {
+		t.Errorf("the disks refused for a proposed partition are %v, want nvme0n1 and sdb", refusedDisks)
+	}
+
+	// Denying the partition is how the administrator takes the whole disk.
+	denied := Planner{}.Plan(fleet(), run(&simplyblockv1alpha2.DeviceFilter{BlockDenyList: []string{"/dev/sdb1"}}))
+	got = nil
+	for _, set := range denied.NodeSets {
+		for _, group := range set.Groups {
+			got = append(got, group.Devices.Block...)
+		}
+	}
+	if !slices.Contains(got, "/dev/sdb") || slices.Contains(got, "/dev/sdb1") {
+		t.Errorf("with the partition denied the draft names %v, want the whole disk sdb", got)
+	}
+}
+
+func TestIsPartitionOf(t *testing.T) {
+	for _, c := range []struct {
+		partition, disk string
+		want            bool
+	}{
+		{"sda1", "sda", true},
+		{"sda12", "sda", true},
+		{"nvme0n1p1", "nvme0n1", true},
+		{"mmcblk0p2", "mmcblk0", true},
+		{"nvme0n11", "nvme0n1", false},
+		{"nvme0n1", "nvme0n1", false},
+		{"sdab1", "sda", false},
+		{"sdap1", "sda", false},
+		{"nvme0n1p", "nvme0n1", false},
+		{"sda1", "", false},
+	} {
+		if got := isPartitionOf(c.partition, c.disk); got != c.want {
+			t.Errorf("isPartitionOf(%q, %q) = %v, want %v", c.partition, c.disk, got, c.want)
+		}
+	}
+}
+
 func TestPlanAdvisesAGKEFleetWhoseDisksAreRAIDMembers(t *testing.T) {
 	// GKE builds the array itself, from a node pool's ephemeral-storage local
 	// SSDs, so a fleet whose every disk is an array member is a fleet whose

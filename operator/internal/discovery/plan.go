@@ -687,7 +687,79 @@ func admitDevices(report nodeprobe.Report, rules []DeviceRule) ([]nodeprobe.Devi
 			Rule: rule, Reason: reason, PreFilter: pre,
 		})
 	}
-	return admitted, refusals
+	admitted, overlapped := refuseDisksWithAnAdmittedPartition(report.Node, admitted)
+	return admitted, append(refusals, overlapped...)
+}
+
+// OverlapRule names the refusal of a disk one of whose partitions the same run
+// proposes.
+const OverlapRule = "disk and partition"
+
+// refuseDisksWithAnAdmittedPartition drops a whole disk from the admitted
+// devices when a partition of it is admitted too, so that a draft never names
+// the same storage twice.
+//
+// Both can pass the rules of one run. A logical block device run takes a blank
+// partition, and enablePartitionedDevices, which the chart sets, waives the
+// partition table of the disk the partition is on: on the lab this was found
+// on (2026-11-25) every drive carried a blank 200 GiB partition, and the draft
+// listed the drive by id and the partition by PARTUUID, eight devices for four
+// drives.
+//
+// The partition is the one kept. Taking it leaves the rest of the disk as it
+// is, and taking the disk destroys the partition the same draft hands over.
+// It is a pass over the admitted devices and not a DeviceRule because it is
+// about two devices that each passed every rule: a partition the deny list
+// refused is not admitted, and then its disk is not dropped.
+func refuseDisksWithAnAdmittedPartition(worker string, admitted []nodeprobe.Device) ([]nodeprobe.Device, []Refusal) {
+	var refusals []Refusal
+	kept := make([]nodeprobe.Device, 0, len(admitted))
+	for _, device := range admitted {
+		partition := ""
+		if device.Kind == string(blockdev.KindDisk) {
+			for _, other := range admitted {
+				if other.Kind == string(blockdev.KindPartition) && isPartitionOf(other.Name, device.Name) {
+					partition = other.Name
+					break
+				}
+			}
+		}
+		if partition == "" {
+			kept = append(kept, device)
+			continue
+		}
+		refusals = append(refusals, Refusal{
+			Worker: worker, Device: device.Name, Rule: OverlapRule,
+			Reason: fmt.Sprintf("its partition %s is proposed by this run, and a draft names a disk or "+
+				"its partitions, never both; deny the partition to have the whole disk proposed", partition),
+		})
+	}
+	return kept, refusals
+}
+
+// isPartitionOf reports whether the kernel name partition is a partition of
+// the disk named disk: the disk's name followed by the partition number, with
+// a "p" between them when the disk's own name ends in a digit (sda1,
+// nvme0n1p1, mmcblk0p2).
+func isPartitionOf(partition, disk string) bool {
+	number, found := strings.CutPrefix(partition, disk)
+	if !found || disk == "" {
+		return false
+	}
+	if last := disk[len(disk)-1]; last >= '0' && last <= '9' {
+		if number, found = strings.CutPrefix(number, "p"); !found {
+			return false
+		}
+	}
+	if number == "" {
+		return false
+	}
+	for _, c := range number {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // refuseWorker returns the first rule that declines the worker and its reason,
