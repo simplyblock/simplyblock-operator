@@ -17,8 +17,9 @@ Scenario IDs are permanent: `U-` unit (no cluster: pure functions, fake
 path), `M-` manual (needs failure injection or orchestration not yet automated).
 Types are `Positive`, `Negative`, `Boundary`, and `Regression`. The `Test` column
 names the implementing function, or `—` when the scenario is not yet covered, and
-every `—` also appears in §7. The design is a draft and nothing in it is
-implemented, so every row is `—`.
+every `—` also appears in §7. Phases 1 to 3 of the design are implemented in
+[#998](https://github.com/simplyblock/simplyblock-operator/pull/998), whose tests
+fill the `Test` column. Phases 4 and 5 are not implemented.
 
 Selected axes, from the `test-scenarios` skill's `references/axes.md`:
 
@@ -53,78 +54,78 @@ logic against a fake client. Numbering runs continuously across the groups.
 
 File: `operator/internal/controllers/node/images_test.go` (new)
 
-| #    | Scenario                                                                                                                                              | Type                | Test |
-|------|-------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|------|
-| U-01 | Node `spec.config.spdkImage` set, cluster and control-plane default set: the node's own image is desired                                              | Positive            | —    |
-| U-02 | Node image unset, cluster `spec.storageNodes.spdkImage` set: the cluster's image is desired                                                           | Positive            | —    |
-| U-03 | Node and cluster images unset: the control plane's default is desired                                                                                 | Positive            | —    |
-| U-04 | All three unset (the control plane reports no default): the desired image is empty, and no error is raised                                            | Boundary            | —    |
-| U-05 | The control plane's default endpoint returns 404 or 5xx: the desired image falls back to empty and the reconcile requeues instead of failing the node | Negative            | —    |
-| U-06 | The proxy image resolves from its own fields independently: node proxy set with node SPDK unset yields the node proxy and the cluster SPDK image      | Positive            | —    |
-| U-07 | The cluster image changes: the desired image of every node without its own override changes, and of a node with one does not                          | Positive + Negative | —    |
+| #    | Scenario                                                                                                                                              | Type                | Test                                                         |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|--------------------------------------------------------------|
+| U-01 | Node `spec.config.spdkImage` set, cluster and control-plane default set: the node's own image is desired                                              | Positive            | `TestTheDesiredImageIsTheNodesThenTheClustersThenTheDefault` |
+| U-02 | Node image unset, cluster `spec.storageNodes.spdkImage` set: the cluster's image is desired                                                           | Positive            | `TestTheDesiredImageIsTheNodesThenTheClustersThenTheDefault` |
+| U-03 | Node and cluster images unset: the control plane's default is desired                                                                                 | Positive            | `TestTheDesiredImageIsTheNodesThenTheClustersThenTheDefault` |
+| U-04 | All three unset (the control plane reports no default): the desired image is empty, and no error is raised                                            | Boundary            | `TestNothingAskedForLeavesTheDesiredImagesEmpty`             |
+| U-05 | The control plane's default endpoint returns 404 or 5xx: the desired image falls back to empty and the reconcile requeues instead of failing the node | Negative            | —                                                            |
+| U-06 | The proxy image resolves from its own fields independently: node proxy set with node SPDK unset yields the node proxy and the cluster SPDK image      | Positive            | `TestTheProxyImageResolvesOnItsOwn`                          |
+| U-07 | The cluster image changes: the desired image of every node without its own override changes, and of a node with one does not                          | Positive + Negative | —                                                            |
 
 ### ImagesCurrent Condition and Status (design §4.2)
 
 File: `operator/internal/controllers/node/images_test.go` (new)
 
-| #    | Scenario                                                                                                | Type     | Test |
-|------|---------------------------------------------------------------------------------------------------------|----------|------|
-| U-08 | Reported images equal desired: condition `True`, no event                                               | Positive | —    |
-| U-09 | Reported SPDK image differs: condition `False` with reason `ImageOutOfDate`, one `ImageOutOfDate` event | Negative | —    |
-| U-10 | Only the proxy image differs: condition `False`                                                         | Boundary | —    |
-| U-11 | The control plane reports no images (field absent): condition `Unknown`, no event                       | Negative | —    |
-| U-12 | The desired image is empty and the reported one set: condition `True`, because no image is asked for    | Boundary | —    |
-| U-13 | A repeated reconcile with no change emits no second event                                               | Negative | —    |
+| #    | Scenario                                                                                                               | Type     | Test                                             |
+|------|------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|
+| U-08 | Reported images equal desired: `imagesCurrent` true, not reported as becoming out of date                              | Positive | `TestANodeOnItsDesiredImagesIsCurrent`           |
+| U-09 | Reported SPDK image differs: `imagesCurrent` false, reported once as becoming out of date (the `ImageOutOfDate` event) | Negative | `TestANodeOnOtherImagesIsOutOfDateOnce`          |
+| U-10 | Only the proxy image differs: `imagesCurrent` false                                                                    | Boundary | `TestANodeOnOtherImagesIsOutOfDateOnce`          |
+| U-11 | The control plane reports no images (field absent): `imagesCurrent` unset, not reported as out of date                 | Negative | `TestANodeWhoseImagesAreNotReportedIsUnknown`    |
+| U-12 | The desired image is empty and the reported one set: `imagesCurrent` true, because no image is asked for               | Boundary | `TestNothingAskedForLeavesTheDesiredImagesEmpty` |
+| U-13 | A repeated pass on an out-of-date node does not report it again                                                        | Negative | `TestANodeOnOtherImagesIsOutOfDateOnce`          |
 
 ### Restart Parameters (design §5.2)
 
 File: `operator/internal/controllers/cluster/rollingrestart_test.go`, `operator/internal/controllers/node/actions_test.go`
 
-| #    | Scenario                                                                                                               | Type     | Test |
-|------|------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-14 | `RestartingNode` of a rolling restart sends `spdk_image` and `spdk_proxy_image` equal to the node's desired images     | Positive | —    |
-| U-15 | A `StorageNodeOps` `Restart` sends the same two fields                                                                 | Positive | —    |
-| U-16 | A desired image that is empty is omitted from the body, not sent as an empty string                                    | Boundary | —    |
-| U-17 | The restart call returns 4xx: the step fails with the control plane's message, the mock records one call               | Negative | —    |
-| U-18 | The restart call returns 5xx or times out: the step requeues, and the write-ahead guard keeps the retry to one restart | Negative | —    |
+| #    | Scenario                                                                                                               | Type     | Test                                                                                                                                                       |
+|------|------------------------------------------------------------------------------------------------------------------------|----------|------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-14 | `RestartingNode` of a rolling restart sends `spdk_image` and `spdk_proxy_image` equal to the node's desired images     | Positive | `TestEveryRestartOfTheWalkCarriesTheNodesDesiredImages`                                                                                                    |
+| U-15 | A `StorageNodeOps` `Restart` sends the same two fields                                                                 | Positive | `TestARestartOperationCarriesTheDesiredImages`, `TestTheRestartAfterMaintenanceCarriesTheDesiredImages`, `TestTheRelocationRestartCarriesTheDesiredImages` |
+| U-16 | A desired image that is empty is omitted from the body, not sent as an empty string                                    | Boundary | `TestARestartWithoutDesiredImagesNamesNone`, `TestANodeWithoutAnObjectIsRestartedOnTheImageItRuns`                                                         |
+| U-17 | The restart call returns 4xx: the step fails with the control plane's message, the mock records one call               | Negative | —                                                                                                                                                          |
+| U-18 | The restart call returns 5xx or times out: the step requeues, and the write-ahead guard keeps the retry to one restart | Negative | —                                                                                                                                                          |
 
 ### Verification After Restart (design §5.3)
 
 File: `operator/internal/controllers/cluster/rollingrestart_test.go`
 
-| #    | Scenario                                                                                                                                                         | Type     | Test |
-|------|------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-19 | Node online on its desired images: the walk advances                                                                                                             | Positive | —    |
-| U-20 | Node online on another SPDK image: the operation fails with `came back on <image>, expected <image>`, one `ImageMismatch` event, the mismatch counter increments | Negative | —    |
-| U-21 | Node online and the control plane reports no image: the walk advances with `image unverified` in the message                                                     | Boundary | —    |
+| #    | Scenario                                                                                                                                         | Type     | Test                                                    |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------------------|
+| U-19 | Node online on its desired images: the walk advances                                                                                             | Positive | `TestEveryRestartOfTheWalkCarriesTheNodesDesiredImages` |
+| U-20 | Node online on another SPDK image: the operation fails with `came back on <image>, expected <image>`, one `ImageMismatch` event on the operation | Negative | `TestANodeThatCameBackOnOtherImagesFailsTheWalk`        |
+| U-21 | Node online and the control plane reports no image: the walk advances without comparing                                                          | Boundary | —                                                       |
 
 ### OutOfDate Selection (design §4.3, §5.4)
 
 File: `operator/internal/controllers/cluster/rollingrestart_test.go`
 
-| #    | Scenario                                                                                                                         | Type     | Test |
-|------|----------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-22 | Five nodes, two out of date: the walk plans exactly those two, in the order `All` would                                          | Positive | —    |
-| U-23 | No node out of date: the operation succeeds with an empty walk and `every node runs its desired images`, no shutdown call        | Boundary | —    |
-| U-24 | A planned node becomes current before the walk reaches it: it is recorded in `current`, not `skipped`, and gets no shutdown call | Positive | —    |
-| U-25 | Every node's condition is `Unknown`: the operation is refused at admission with `use selection All`                              | Negative | —    |
-| U-26 | Some nodes `Unknown`, some `False`: only the `False` ones are planned, the `Unknown` ones are not restarted                      | Boundary | —    |
-| U-27 | Selection unset: defaults to `All`, every non-leaving node is planned as today                                                   | Positive | —    |
-| U-28 | Single-node cluster, out of date: the walk plans the node, and the peer check has no peers to wait for                           | Boundary | —    |
-| U-29 | A node leaving the cluster and out of date: not planned, as for `All`                                                            | Negative | —    |
+| #    | Scenario                                                                                                                              | Type     | Test                                                           |
+|------|---------------------------------------------------------------------------------------------------------------------------------------|----------|----------------------------------------------------------------|
+| U-22 | Five nodes, two out of date: the walk plans exactly those two, in the order `All` would                                               | Positive | `TestAnOutOfDateWalkRestartsOnlyTheNodesNotOnTheirImages`      |
+| U-23 | No node out of date: the operation succeeds with an empty walk and `every node runs its desired images`, no shutdown call             | Boundary | `TestAnOutOfDateWalkOfACurrentFleetRestartsNothing`            |
+| U-24 | A planned node becomes current before the walk reaches it: it is recorded in `current`, not `skipped`, and gets no shutdown call      | Positive | `TestANodeThatBecameCurrentBeforeTheWalkReachedItIsPassedOver` |
+| U-25 | Every node's `imagesCurrent` is unset: the operation fails when the walk is planned, naming `selection All`, and no node is shut down | Negative | `TestAnOutOfDateWalkIsRefusedWhenNoNodeReportsItsImages`       |
+| U-26 | Some nodes `Unknown`, some `False`: only the `False` ones are planned, the `Unknown` ones are not restarted                           | Boundary | —                                                              |
+| U-27 | Selection unset: defaults to `All`, every non-leaving node is planned as today                                                        | Positive | `TestARollingRestartWalksEveryNodeAndFinishes`                 |
+| U-28 | Single-node cluster, out of date: the walk plans the node, and the peer check has no peers to wait for                                | Boundary | —                                                              |
+| U-29 | A node leaving the cluster and out of date: not planned, as for `All`                                                                 | Negative | —                                                              |
 
 ### SwitchWriteProtection (design §4.4)
 
 File: `operator/internal/controllers/cluster/writeprotection_test.go` (new)
 
-| #    | Scenario                                                                                                                                     | Type     | Test |
-|------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|------|
-| U-30 | Cluster on `V1`, every node online: one switch call, then `Succeeded` once the cluster reports `V2`                                          | Positive | —    |
-| U-31 | Cluster already on `V2`: succeeds at admission with `already on v2 write protection`, zero calls                                             | Negative | —    |
-| U-32 | A node offline: holds in `CheckingPeers`, zero calls                                                                                         | Negative | —    |
-| U-33 | The switch call returns 404 (control plane without the endpoint): the operation fails naming the missing endpoint                            | Negative | —    |
-| U-34 | The switch call times out and is retried: the write-ahead guard keeps it to one call                                                         | Negative | —    |
-| U-74 | The switch call answers `409` (a node rejected it): the step holds, calls again on the next pass, and succeeds once the cluster reports `V2` | Negative | —    |
+| #    | Scenario                                                                                                                                     | Type     | Test                                        |
+|------|----------------------------------------------------------------------------------------------------------------------------------------------|----------|---------------------------------------------|
+| U-30 | Cluster on `V1`, every node online: one switch call, then `Succeeded` once the cluster reports `V2`                                          | Positive | `TestTheSwitchIsMadeOnceAndFinishesOnV2`    |
+| U-31 | Cluster already on `V2`: succeeds at admission with `already on v2 write protection`, zero calls                                             | Negative | `TestAClusterAlreadyOnV2IsNotSwitchedAgain` |
+| U-32 | A node offline: holds in `CheckingPeers`, zero calls                                                                                         | Negative | `TestTheSwitchWaitsForEveryNodeToBeOnline`  |
+| U-33 | The switch call returns 404 (control plane without the endpoint): the operation fails naming the missing endpoint                            | Negative | —                                           |
+| U-34 | The switch call times out and is retried: the write-ahead guard keeps it to one call                                                         | Negative | —                                           |
+| U-74 | The switch call answers `409` (a node rejected it): the step holds, calls again on the next pass, and succeeds once the cluster reports `V2` | Negative | —                                           |
 
 ### Release Detection and Module Selection (design §6.1, §6.4)
 
@@ -199,6 +200,27 @@ File: a chart-rendering test with the Helm SDK, as `operator/internal/upgrade/he
 | U-71 | A live `ControlPlane` exists: `spec.source.local.image` renders from it, not from `image.simplyblock`                                  | Positive   | —    |
 | U-72 | No live `ControlPlane`: the image renders from `image.simplyblock`                                                                     | Boundary   | —    |
 | U-73 | Values carrying a key the previous release removed pass the schema                                                                     | Regression | —    |
+
+### Cluster Record, Client, Conversion, and Admission (design §4.1, §4.4, §12, §14)
+
+Files: `operator/internal/controllers/cluster/upgrade_status_test.go`,
+`operator/internal/controllers/cluster/writeprotection_test.go`,
+`operator/internal/controllers/node/images_test.go`,
+`operator/api/v1alpha1/hub_roundtrip_test.go`,
+`operator/internal/webhook/stretched_admission_test.go`,
+`atlas-lib/controlplane/clusters_upgrade_test.go`
+
+| #    | Scenario                                                                                                                                            | Type                | Test                                                                                                                                                                                                                    |
+|------|-----------------------------------------------------------------------------------------------------------------------------------------------------|---------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-75 | The streamed cluster record's write-protection generation and default images reach `StorageCluster.status`: `V2`, `V1`, and empty when not reported | Positive + Negative | `TestTheStreamedWriteProtectionAndDefaultImagesReachTheStatus`                                                                                                                                                          |
+| U-76 | The same fields read directly while the stream has no snapshot                                                                                      | Positive            | `TestTheDirectlyReadWriteProtectionAndDefaultImagesReachTheStatus`                                                                                                                                                      |
+| U-77 | A control plane that does not report write protection fails the switch, with no call                                                                | Negative            | `TestAControlPlaneThatDoesNotReportWriteProtectionFailsTheSwitch`                                                                                                                                                       |
+| U-78 | A switch the control plane refused with `409` is not made again within its claim, and the operation stays `Running`                                 | Negative            | `TestARefusedSwitchIsNotRepeatedWithinItsClaim`                                                                                                                                                                         |
+| U-79 | `SwitchWriteProtection` on a stretched cluster's follower site is refused at admission                                                              | Negative            | `TestAFollowerRefusesClusterWideOperations`                                                                                                                                                                             |
+| U-80 | A `selection: OutOfDate` walk and its `current` list survive a `v1alpha1` round trip                                                                | Regression          | `TestStorageClusterOpsOutOfDateWalkRoundTripsFromTheHub`                                                                                                                                                                |
+| U-81 | The out-of-date gauge reads 1 for a node whose `imagesCurrent` is false, and 0 when true or unset                                                   | Positive + Boundary | `TestTheOutOfDateGaugeFollowsTheNode`                                                                                                                                                                                   |
+| U-82 | The streamed node carries its images into the reading the node controllers use                                                                      | Positive            | `TestTheStreamedNodeCarriesItsImages`                                                                                                                                                                                   |
+| U-83 | The atlas-lib client reads the default images and the generation, nil from an older control plane, and posts the switch, surfacing a `409`          | Positive + Negative | `TestGetClusterReadsTheDefaultImagesAndWriteProtection`, `TestGetClusterFromAnOlderControlPlaneReportsNoImages`, `TestSwitchWriteProtectionPostsTheSwitch`, `TestSwitchWriteProtectionReportsASwitchThatDidNotComplete` |
 
 ---
 
@@ -299,23 +321,29 @@ rollout waits without failing, then continues once the worker returns.
 
 ## 6. Coverage Summary
 
-| Class       | Scenarios | Covered | Not covered |
-|-------------|-----------|---------|-------------|
-| Unit        | 74        | 0       | U-01 … U-74 |
-| Integration | 11        | 0       | I-01 … I-11 |
-| E2E         | 7         | 0       | E-01 … E-07 |
-| Manual      | 2         | 0       | M-01, M-02  |
+| Class       | Scenarios | Covered | Not covered                                                                   |
+|-------------|-----------|---------|-------------------------------------------------------------------------------|
+| Unit        | 83        | 33      | U-05, U-07, U-17, U-18, U-21, U-26, U-28, U-29, U-33, U-34, U-74, U-35 … U-73 |
+| Integration | 11        | 0       | I-01 … I-11                                                                   |
+| E2E         | 7         | 0       | E-01 … E-07                                                                   |
+| Manual      | 2         | 0       | M-01, M-02                                                                    |
 
 ---
 
 ## 7. What Is Not Yet Covered
 
-| #           | Gap                                          | Reason                                                                                                       |
-|-------------|----------------------------------------------|--------------------------------------------------------------------------------------------------------------|
-| U-01 … U-74 | Every unit scenario                          | The design is a draft. Nothing is implemented                                                                |
-| I-01 … I-11 | Every integration scenario                   | As above                                                                                                     |
-| E-01 … E-07 | Every end-to-end scenario                    | As above, and the rows need the control-plane prerequisites P0-1 to P0-4 of the design                       |
-| U-67 … U-73 | Chart rendering                              | The repository has no chart-rendering test harness yet                                                       |
-| —           | Operator restart during the pre-upgrade hook | The hook runs before the new operator exists, and the old operator restarting changes nothing the hook reads |
-| —           | OLM-installed deployment                     | Out of scope for the hooks (design §2). The manual path E-05 is the same commands                            |
-| —           | Managed control plane end to end             | Needs a hub deployment in the e2e environment                                                                |
+| #                | Gap                                                                                            | Reason                                                                                                                                       |
+|------------------|------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|
+| U-05             | A failed read of the default images                                                            | Resolution reads `StorageCluster.status.defaultSpdkImage`, which a failed control-plane read leaves at its last value. No test pins that yet |
+| U-07             | A changed cluster image moves every node without an override                                   | The resolution is tested per node (U-01 to U-03). A reconcile-level test across several nodes is not written                                 |
+| U-17, U-18       | Restart call answers 4xx, 5xx, or times out                                                    | The restart sites keep their existing error handling, which the existing restart tests cover. No image-specific test                         |
+| U-21             | A node whose images the control plane does not report                                          | The comparison is skipped. No test pins it                                                                                                   |
+| U-26, U-28, U-29 | Mixed reported and unreported nodes, single-node cluster, leaving nodes in an `OutOfDate` walk | Not written yet                                                                                                                              |
+| U-33, U-34, U-74 | Switch call answering 404, timing out, or succeeding after a `409` once the claim lapses       | U-77 and U-78 cover the neighboring cases. The lease-expiry retry needs the claim's clock injected                                           |
+| U-35 … U-66      | Release modules and the rollout (design §6, §8)                                                | Phase 4 is not implemented                                                                                                                   |
+| U-67 … U-73      | Chart rendering                                                                                | Phase 5 is not implemented, and the repository has no chart-rendering test harness yet                                                       |
+| I-01 … I-11      | Every integration scenario                                                                     | Not written. The envtest harness does not run on the machine these tests were written on                                                     |
+| E-01 … E-07      | Every end-to-end scenario                                                                      | Phases 4 and 5 are not implemented                                                                                                           |
+| —                | Operator restart during the pre-upgrade hook                                                   | The hook runs before the new operator exists, and the old operator restarting changes nothing the hook reads                                 |
+| —                | OLM-installed deployment                                                                       | Out of scope for the hooks (design §2). The manual path E-05 is the same commands                                                            |
+| —                | Managed control plane end to end                                                               | Needs a hub deployment in the e2e environment                                                                                                |

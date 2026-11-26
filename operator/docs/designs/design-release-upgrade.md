@@ -2,20 +2,20 @@
 
 **Status:** Draft  
 **Author:** michael  
-**Date:** 2026-11-26  
+**Date:** 2026-11-26 (last updated 2026-11-27)  
 **Test Plan:** [`tests/test-plan-release-upgrade.md`](../tests/test-plan-release-upgrade.md)
 
 ---
 
 ## Phasing Overview
 
-| Phase       | Status  | Scope                                                                                                | Sections    |
-|-------------|---------|------------------------------------------------------------------------------------------------------|-------------|
-| **Phase 1** | Planned | A storage-node restart carries the SPDK images, and the control plane reports the images a node runs | §5, Phase 0 |
-| **Phase 2** | Planned | `RollingRestart` converges the fleet on the desired images and resumes where it stopped              | §4.3, §5.4  |
-| **Phase 3** | Planned | `SwitchWriteProtection` as a `StorageClusterOps` action                                              | §4.4        |
-| **Phase 4** | Planned | Release modules in `simplyblock-upgrade`, selected by source and target release                      | §6          |
-| **Phase 5** | Planned | The upgrade runs from the chart as a pre-upgrade hook Job and a rollout Job                          | §7          |
+| Phase       | Status                                                                           | Scope                                                                                                | Sections    |
+|-------------|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|-------------|
+| **Phase 1** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998)) | A storage-node restart carries the SPDK images, and the control plane reports the images a node runs | §5, Phase 0 |
+| **Phase 2** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998)) | `RollingRestart` converges the fleet on the desired images and resumes where it stopped              | §4.3, §5.4  |
+| **Phase 3** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998)) | `SwitchWriteProtection` as a `StorageClusterOps` action                                              | §4.4        |
+| **Phase 4** | Planned                                                                          | Release modules in `simplyblock-upgrade`, selected by source and target release                      | §6          |
+| **Phase 5** | Planned                                                                          | The upgrade runs from the chart as a pre-upgrade hook Job and a rollout Job                          | §7          |
 
 Each phase is useful on its own. Phases 1 and 2 already remove the manual image
 handling from a rolling upgrade, phase 3 removes the last step that needs `sbctl`,
@@ -278,16 +278,25 @@ SpdkProxyImage crdtypes.ImageReference `json:"spdkProxyImage,omitempty"`
 ```
 
 `StorageClusterStatus` gains `writeProtection`, the version the control plane
-reports (§4.4).
+reports (§4.4), and `defaultSpdkImage` and `defaultSpdkProxyImage`, the images
+the control plane starts a node with when nothing names one (P0-3). The cluster
+reconciler copies all three from the cluster record, so a node's reconciler
+resolves its desired images from objects it already reads (§5.1). A control
+plane that does not report the generation leaves `writeProtection` empty rather
+than `V1`.
 
 ### 4.2 StorageNode: The Images a Node Runs
 
 `StorageNodeStatus` gains `spdkImage` and `spdkProxyImage`, copied from what the
 control plane reports for the node (P0-2), and `desiredSpdkImage` and
 `desiredSpdkProxyImage`, the resolution of §5.1. A node whose two pairs differ is
-out of date, and the operator sets the condition `ImagesCurrent` to `False` with
-the reason `ImageOutOfDate`. The printer column `Images` shows that condition's
-status, so `kubectl get storagenodes` lists which nodes a rollout has not reached.
+out of date: `imagesCurrent` is `false`, and the node's reconciler emits
+`ImageOutOfDate` when it becomes so. `imagesCurrent` is unset when the control
+plane reports no images, because nothing is known then, and `true` for a node
+nobody asks an image of. The printer column `Images` shows it, so `kubectl get
+storagenodes` lists which nodes a rollout has not reached. `StorageNodeStatus`
+carries no conditions list, so the answer is a field of its own rather than a
+condition.
 
 ### 4.3 StorageClusterOps: RollingRestart Selection
 
@@ -330,8 +339,13 @@ SwitchWriteProtection
 | `CheckingPeers` | None                                                      | Every node of the cluster is `online`     |
 | `Switching`     | The write-protection call of P0-4, repeated after a `409` | The cluster reports `writeProtection: V2` |
 
-A cluster that already reports `V2` succeeds at admission time with the message
-`already on v2 write protection` and performs no call. The switch restarts
+`CheckingPeers` holds while any node that is not leaving the cluster is not
+`online`. A cluster that already reports `V2` succeeds without a call, and one
+whose control plane does not report the generation fails, because that control
+plane predates the switch. The action acts on the backend cluster as a whole, so
+on a stretched cluster it is refused on the follower site like the other
+cluster-wide actions, and the operation cannot be deleted while it is at
+`Switching`. The switch restarts
 nothing and needs no restart afterward: the control plane moves every online
 node's distribs at runtime and stores v2 in every node's distrib parameters, so
 a node that was offline comes back on v2. The control plane answers `409` when
@@ -349,7 +363,7 @@ A node's desired SPDK image is the first that is set of:
 
 1. `StorageNode.spec.config.spdkImage`
 2. `StorageCluster.spec.storageNodes.spdkImage`
-3. The control plane's default SPDK image (P0-3)
+3. `StorageCluster.status.defaultSpdkImage`, the control plane's default (P0-3)
 
 The SPDK proxy image resolves the same way from the proxy fields. The third
 source is what makes an upgrade need no image handling at all for a cluster that
@@ -365,11 +379,12 @@ empty, and a restart carries no image, which is today's behavior.
 
 ### 5.2 Every Restart Carries the Desired Images
 
-The operator calls the restart endpoint in two places: the `RestartingNode` step
-of `RollingRestart` (`restartNode` in `rollingrestart.go`) and the `Restart`
-action of `StorageNodeOps`. Both pass `spdk_image` and `spdk_proxy_image` from
-the node's `status.desiredSpdkImage` and `status.desiredSpdkProxyImage`, and
-both omit a field whose desired value is empty. The control plane stores what a
+The operator calls the restart endpoint from the `RestartingNode` step of
+`RollingRestart` (`restartNode` in `rollingrestart.go`) and from three
+`StorageNodeOps` actions: `Restart`, the restart that ends `HostMaintenance`, and
+the restart that relocates a node in `Migrate`. Every one passes `spdk_image` and
+`spdk_proxy_image` from the node's `status.desiredSpdkImage` and
+`status.desiredSpdkProxyImage`, and omits a field whose desired value is empty. The control plane stores what a
 restart starts the node with, so its own restarts later, such as the automatic
 restart after a node failure, keep the image the operator last asked for.
 
@@ -380,13 +395,13 @@ then compares the node's reported images with its desired ones. A mismatch fails
 the operation with the message
 `node <uuid> came back on <image>, expected <image>`, because a node the control
 plane silently started on a different image is not a node the walk may count as
-converged. When the control plane reports no image (P0-2 missing), the
-comparison is skipped and the message for the node says `image unverified`.
+converged. The operation emits `ImageMismatch`. When the control plane reports
+no image (P0-2 missing), the comparison is skipped and the walk carries on.
 
 ### 5.4 OutOfDate Selection and Resume
 
-With `selection: OutOfDate`, `planWalk` plans the nodes whose `ImagesCurrent`
-condition is `False`, in the order it plans them today. Each node is checked
+With `selection: OutOfDate`, `planWalk` plans the nodes whose `imagesCurrent`
+is `false`, in the order it plans them today. Each node is checked
 again when the walk reaches it, and a node that became current in the meantime
 (restarted by another operation or by the control plane) is passed over and
 recorded in `current`. A walk that stopped on node seven of twenty and is
@@ -394,9 +409,9 @@ started again plans only the nodes still out of date, which is the resume
 property the release upgrade relies on (§8).
 
 A cluster with no out-of-date node succeeds with an empty walk and the message
-`every node runs its desired images`. When P0-2 is missing, the condition is
-`Unknown` for every node and `OutOfDate` refuses at admission time with the
-message `the control plane does not report node images; use selection All`.
+`every node runs its desired images`. When P0-2 is missing, `imagesCurrent` is
+unset for every node, and the operation fails when the walk is planned, naming
+`selection All` as the one that works without images, before any node is touched.
 
 ---
 
@@ -496,7 +511,7 @@ Every upgrade runs these, and the modules add to them:
 | 4   | Wait until the operator Deployment runs the target version and is available                                                                                                                                          | `AfterOperator`     |
 | 5   | For a local control plane, a `ControlPlaneOps` `Upgrade` to the target's `simplyblock` image, and wait for `Succeeded`. For a managed one, check `ControlPlane.status.version` is at least the target's              | `AfterControlPlane` |
 | 6   | For each `StorageCluster`, one at a time: a `StorageClusterOps` `RollingRestart` with `selection: OutOfDate` and `refreshSNodeAPI: true`, and wait for `Succeeded`                                                   | `AfterStoragePlane` |
-| 7   | Verify: every node `online`, `ImagesCurrent` true, every cluster `Active` and not rebalancing                                                                                                                        |                     |
+| 7   | Verify: every node `online`, `imagesCurrent` true, every cluster `Active` and not rebalancing                                                                                                                        |                     |
 
 Steps 1 to 3 are the pre-upgrade hook, and steps 4 to 7 the rollout Job.
 
@@ -694,24 +709,24 @@ object every deployment has, it outlives both Jobs, and `kubectl describe
 controlplane` is where a user already looks for the deployment's version.
 Image events land on the `StorageNode` they concern.
 
-| On                | Event                                                                          | Type    | Reason                  |
-|-------------------|--------------------------------------------------------------------------------|---------|-------------------------|
-| ControlPlane      | The upgrade from the source to the target started, naming the selected modules | Normal  | ReleaseUpgradeStarted   |
-| ControlPlane      | A check refused the upgrade, naming the rule and its finding                   | Warning | ReleaseUpgradeRefused   |
-| ControlPlane      | The rollout is waiting for an operation it created, naming it                  | Normal  | ReleaseUpgradeWaiting   |
-| ControlPlane      | An operation the rollout created failed, so the rollout stopped                | Warning | ReleaseUpgradeFailed    |
-| ControlPlane      | Every step succeeded and the deployment runs the target                        | Normal  | ReleaseUpgradeSucceeded |
-| StorageNode       | The node's running images differ from its desired images                       | Normal  | ImageOutOfDate          |
-| StorageNode       | The node came back from a restart on an image other than the desired one       | Warning | ImageMismatch           |
-| StorageClusterOps | The walk passed over a node because it already runs its desired images         | Normal  | NodeCurrent             |
+| On                | Event                                                                                                | Type    | Reason                  |
+|-------------------|------------------------------------------------------------------------------------------------------|---------|-------------------------|
+| ControlPlane      | The upgrade from the source to the target started, naming the selected modules                       | Normal  | ReleaseUpgradeStarted   |
+| ControlPlane      | A check refused the upgrade, naming the rule and its finding                                         | Warning | ReleaseUpgradeRefused   |
+| ControlPlane      | The rollout is waiting for an operation it created, naming it                                        | Normal  | ReleaseUpgradeWaiting   |
+| ControlPlane      | An operation the rollout created failed, so the rollout stopped                                      | Warning | ReleaseUpgradeFailed    |
+| ControlPlane      | Every step succeeded and the deployment runs the target                                              | Normal  | ReleaseUpgradeSucceeded |
+| StorageNode       | The node's running images differ from its desired images                                             | Normal  | ImageOutOfDate          |
+| StorageClusterOps | A node came back from the walk's restart on an image other than the desired one, so the walk stopped | Warning | ImageMismatch           |
+| StorageClusterOps | The walk passed over a node because it already runs its desired images                               | Normal  | NodeCurrent             |
 
 ### Prometheus Metrics
 
-| Metric                                           | Labels    | Description                                                 |
-|--------------------------------------------------|-----------|-------------------------------------------------------------|
-| `simplyblock_storagenode_images_out_of_date`     | `cluster` | Gauge of nodes whose `ImagesCurrent` condition is `False`   |
-| `simplyblock_storagenode_image_mismatch_total`   | `cluster` | Counter of restarts that came back on an unexpected image   |
-| `simplyblock_rollingrestart_nodes_current_total` | `cluster` | Counter of nodes an `OutOfDate` walk passed over as current |
+| Metric                                                            | Labels            | Description                                                                                                       |
+|-------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------------------------------------------------|
+| `simplyblock_storagenode_images_out_of_date`                      | `cluster`, `node` | 1 while the node's `imagesCurrent` is `false`. Summed by `cluster`, the number of nodes a rollout has not reached |
+| `simplyblock_storagecluster_rolling_restart_image_mismatch_total` | `cluster`         | Counter of restarts that came back on an unexpected image                                                         |
+| `simplyblock_storagecluster_rolling_restart_nodes_current_total`  | `cluster`         | Counter of nodes an `OutOfDate` walk passed over as current                                                       |
 
 The Jobs export no metrics: they are short-lived processes, and the operations
 they create are what a dashboard follows.
@@ -719,7 +734,7 @@ they create are what a dashboard follows.
 `simplyblock_storagenode_images_out_of_date` is the load-bearing one. It is the
 alert for a fleet left half upgraded, which is the state a stopped rollout leaves
 behind and the one that otherwise goes unnoticed, since every node is `online`.
-`simplyblock_storagenode_image_mismatch_total` is the alert for a control plane
+`simplyblock_storagecluster_rolling_restart_image_mismatch_total` is the alert for a control plane
 that ignores the image a restart asked for.
 
 ---
@@ -824,6 +839,16 @@ const (
 	// V1 to V2.
 	// +optional
 	WriteProtection WriteProtectionVersion `json:"writeProtection,omitempty"`
+
+	// DefaultSpdkImage is the SPDK image the control plane starts a node with
+	// when nothing names one, which a node's desired image falls back to.
+	// +optional
+	DefaultSpdkImage string `json:"defaultSpdkImage,omitempty"`
+
+	// DefaultSpdkProxyImage is the SPDK proxy image the control plane starts a
+	// node with when nothing names one.
+	// +optional
+	DefaultSpdkProxyImage string `json:"defaultSpdkProxyImage,omitempty"`
 ```
 
 ---
@@ -857,16 +882,15 @@ Added to the type `design-storagenode.md` specifies.
 	// +optional
 	DesiredSpdkProxyImage string `json:"desiredSpdkProxyImage,omitempty"`
 
-// The condition type, beside the kind's existing ones.
-
-	// StorageNodeConditionImagesCurrent is True when the node runs its desired
-	// images, False with the reason ImageOutOfDate when it does not, and
-	// Unknown when the control plane reports no images.
-	StorageNodeConditionImagesCurrent = "ImagesCurrent"
+	// ImagesCurrent is true when the node runs its desired images and false
+	// when it does not, so a restart is due. Unset when the control plane
+	// reports no images and the answer is unknown.
+	// +optional
+	ImagesCurrent *bool `json:"imagesCurrent,omitempty"`
 
 // The printer column, on the root type.
 
-// +kubebuilder:printcolumn:name="Images",type=string,JSONPath=`.status.conditions[?(@.type=="ImagesCurrent")].status`
+// +kubebuilder:printcolumn:name="Images",type=boolean,JSONPath=".status.imagesCurrent"
 ```
 
 ---
