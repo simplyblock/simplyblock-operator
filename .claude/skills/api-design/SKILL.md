@@ -189,6 +189,20 @@ the once-set case and guards only the value. `references/consistency.md` has the
 generator source lines. Write CEL when the rejection message has to say something
 the generated one cannot.
 
+**Once set is the wrong meaning for an optional field read once.** A field that
+a controller reads at creation or early in a run, such as a backup policy's
+schedule or an operation's creator, ignores or misapplies a value first set
+later, and the generated pair admits that assignment. Add a spec-level
+`has(self.x) == has(oldSelf.x)` beside the marker, with a message saying why the
+value cannot arrive late, and keep the marker for the change and the removal.
+`config/crd/bases/presence_rules_test.go` shows the shape and its test. Keep the
+plain marker where a later first assignment is meant, such as a value an
+administrator fills in once it is known.
+
+An `abort` on an `Ops` kind is one-way: `!has(oldSelf.abort) || !oldSelf.abort ||
+(has(self.abort) && self.abort)` on the spec type. Withdrawing an abort midway
+resumes the forward steps against a partly undone operation.
+
 An `Ops` spec is immutable in its entirety: target, action, and parameters. The
 object is a request, and a request that can be rewritten while it runs is a
 different request.
