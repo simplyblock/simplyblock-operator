@@ -13277,6 +13277,11 @@
             "type": "boolean",
             "title": "Atomic 4K"
           },
+          "flex_geometry": {
+            "type": "boolean",
+            "title": "Flex Geometry",
+            "default": false
+          },
           "page_copy": {
             "type": "boolean",
             "title": "Page Copy",
@@ -13766,6 +13771,11 @@
           "atomic_4k": {
             "type": "boolean",
             "title": "Atomic 4K",
+            "default": false
+          },
+          "flex_geometry": {
+            "type": "boolean",
+            "title": "Flex Geometry",
             "default": false
           },
           "page_copy": {

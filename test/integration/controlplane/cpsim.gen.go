@@ -1565,6 +1565,7 @@ type ClusterDTO struct {
 	DistrNdcs                   int                `json:"distr_ndcs"`
 	DistrNpcs                   int                `json:"distr_npcs"`
 	EnableFailureDomain         bool               `json:"enable_failure_domain"`
+	FlexGeometry                *bool              `json:"flex_geometry,omitempty"`
 	Ha                          bool               `json:"ha"`
 	Id                          openapi_types.UUID `json:"id"`
 	InlineChecksum              bool               `json:"inline_checksum"`
@@ -1637,6 +1638,7 @@ type ClusterParams struct {
 	EnableFailureDomain  *bool                    `json:"enable_failure_domain,omitempty"`
 	EnableNodeAffinity   *bool                    `json:"enable_node_affinity,omitempty"`
 	Fabric               *string                  `json:"fabric,omitempty"`
+	FlexGeometry         *bool                    `json:"flex_geometry,omitempty"`
 	Ftt                  *ClusterParamsFtt        `json:"ftt,omitempty"`
 	HaType               *ClusterParamsHaType     `json:"ha_type,omitempty"`
 	HugepagesMem         *int                     `json:"hugepages_mem,omitempty"`
