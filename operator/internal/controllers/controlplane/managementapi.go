@@ -17,6 +17,7 @@
 package controlplane
 
 import (
+	"maps"
 	"os"
 	"slices"
 	"strconv"
@@ -68,7 +69,37 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		fdbExporterService(ns),
 	}
 	objects = append(objects, prometheusObjects(cp)...)
-	return append(objects, servingCertificateObjects(cp)...)
+	objects = append(objects, servingCertificateObjects(cp)...)
+	stampEKSRole(cp, objects)
+	return objects
+}
+
+// eksRoleTemplateAnnotation carries spec.source.local.eksRoleARN on the pod
+// template of every workload running as serviceAccountName. Amazon EKS's
+// pod-identity webhook injects the role when a pod is admitted, so a changed
+// role reaches running pods only through a new template: this annotation is
+// that change.
+const eksRoleTemplateAnnotation = "storage.simplyblock.io/eks-role-arn"
+
+// stampEKSRole sets eksRoleTemplateAnnotation on each Deployment among objects
+// that runs as serviceAccountName, writing a copy of the annotations so a map
+// shared between templates is never written through. A control plane without
+// a role stamps nothing, so removing the role is a template change too.
+func stampEKSRole(cp *simplyblockv1alpha2.ControlPlane, objects []client.Object) {
+	role := eksRoleARNAnnotation(cp)[utils.EKSRoleARNAnnotation]
+	if role == "" {
+		return
+	}
+	for _, obj := range objects {
+		d, ok := obj.(*appsv1.Deployment)
+		if !ok || d.Spec.Template.Spec.ServiceAccountName != serviceAccountName {
+			continue
+		}
+		annotations := make(map[string]string, len(d.Spec.Template.Annotations)+1)
+		maps.Copy(annotations, d.Spec.Template.Annotations)
+		annotations[eksRoleTemplateAnnotation] = role
+		d.Spec.Template.Annotations = annotations
+	}
 }
 
 // eksRoleARNAnnotation is the annotation that makes serviceAccountName

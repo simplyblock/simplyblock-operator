@@ -216,7 +216,7 @@ type LocalControlPlane struct {
 	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
 	//
-	// It is set when the ControlPlane is created. Afterward the operator writes
+	// It is set when the ControlPlane is created. Afterward, the operator writes
 	// it: a ControlPlaneOps of action Upgrade, which checks the control plane is
 	// Available and drains before it applies the image, or the chart's
 	// bootstrap apply of a changed image value. An edit by anyone else would
@@ -312,6 +312,12 @@ type LocalControlPlane struct {
 	// Left unset, the service accounts this operator creates carry no such
 	// annotation, which is correct off Amazon EKS and on an EKS cluster whose
 	// pods authenticate another way.
+	//
+	// The webhook injects the role when a pod is admitted, so a changed role
+	// reaches only new pods. The control plane's own workloads roll out on
+	// the change. Storage-node pods are not restarted, since a restart
+	// interrupts the data path: each StorageCluster records an EKSRoleChanged
+	// event, and a StorageClusterOps rolling restart applies the new role.
 	// +kubebuilder:validation:Pattern=`^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$`
 	// +optional
 	EKSRoleARN string `json:"eksRoleARN,omitempty"`
@@ -592,7 +598,7 @@ type ControlPlaneStatus struct {
 	// plane's volumes (FoundationDB, the object store, and Prometheus) when
 	// spec.source.local.foundationDB.storageClassName names none: on Amazon
 	// EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
-	// database is first applied, and never changed afterwards, because the
+	// database is first applied, and never changed afterward, because the
 	// volumes cannot move to another class.
 	// +optional
 	StorageClassName string `json:"storageClassName,omitempty"`
