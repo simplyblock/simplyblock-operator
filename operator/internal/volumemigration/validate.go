@@ -24,6 +24,14 @@ type Connection struct {
 	CtrlLossTmo    int    `json:"ctrlLossTmo,omitempty"`
 	FastIOFailTmo  int    `json:"fastIOFailTmo,omitempty"`
 	KeepAliveTmo   int    `json:"keepAliveTmo,omitempty"`
+
+	// HostNQN is the identity the path is connected as: the node's
+	// simplyblock host NQN (nqn.Host of its UID), the same one the CSI node
+	// plugin stages and reconnects the volume with. Empty connects as the
+	// kernel default, which is a different host to the control plane: host
+	// fencing, allowed_hosts and DHCHAP are keyed on the NQN, and a guard
+	// comparing the hosts on two sides of a cutover sees two machines.
+	HostNQN string `json:"hostNQN,omitempty"`
 }
 
 // Address is the "<ip>:<port>" form the host reports a controller at, which is how
@@ -73,6 +81,7 @@ func (c Connection) target() nvmeof.Target {
 		NrIOQueues:        c.NrIoQueues,
 		ReconnectDelaySec: c.ReconnectDelay,
 		KeepAliveTMOSec:   c.KeepAliveTmo,
+		HostNQN:           c.HostNQN,
 	}
 	// The two timeouts are sent whenever they are set to anything at all, including
 	// the negative "retry forever" and the zero "fail I/O at once" — atlas makes them
