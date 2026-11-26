@@ -46,3 +46,12 @@ func TestABackupPolicyMaxVersionsCannotBeAddedLater(t *testing.T) {
 		denied: "spec.maxVersions cannot be set after creation",
 	}})
 }
+
+func TestABackupPolicyMaxAgeCannotBeAddedLater(t *testing.T) {
+	runTransitions(t, []transition{{
+		name:   "capping the age of a policy created without a cap",
+		create: claimPolicy(),
+		mutate: asPolicySpec(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) { s.MaxAge = "30d" }),
+		denied: "spec.maxAge cannot be set after creation",
+	}})
+}

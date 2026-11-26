@@ -143,6 +143,7 @@ spec:
                   MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
                   by age. Retention is enforced by the control plane, not here. Immutable,
                   for the reason Schedule is.
+                  Left unset at creation, it cannot be set later.
                 pattern: ^[1-9]\d*[mhdw]$
                 type: string
                 x-kubernetes-validations:
@@ -208,6 +209,10 @@ spec:
                 plane reads it only when the policy is created, so a value added later
                 would be ignored'
               rule: has(self.maxVersions) == has(oldSelf.maxVersions)
+            - message: 'spec.maxAge cannot be set after creation: the control plane
+                reads it only when the policy is created, so a value added later would
+                be ignored'
+              rule: has(self.maxAge) == has(oldSelf.maxAge)
           status:
             description: status defines the observed state of StorageBackupPolicy
             properties:

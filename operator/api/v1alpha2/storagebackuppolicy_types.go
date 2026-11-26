@@ -35,6 +35,7 @@ const (
 // +kubebuilder:validation:XValidation:rule="has(self.consistencyGroupName) == has(oldSelf.consistencyGroupName) && (!has(self.consistencyGroupName) || self.consistencyGroupName == oldSelf.consistencyGroupName)",message="consistencyGroupName is immutable, set or unset: the control plane has no call that detaches a policy from a group, so the old group, or the claims a selector had attached, would stay under the policy"
 // +kubebuilder:validation:XValidation:rule="has(self.schedule) == has(oldSelf.schedule)",message="spec.schedule cannot be set after creation: the control plane reads it only when the policy is created, so a value added later would be ignored"
 // +kubebuilder:validation:XValidation:rule="has(self.maxVersions) == has(oldSelf.maxVersions)",message="spec.maxVersions cannot be set after creation: the control plane reads it only when the policy is created, so a value added later would be ignored"
+// +kubebuilder:validation:XValidation:rule="has(self.maxAge) == has(oldSelf.maxAge)",message="spec.maxAge cannot be set after creation: the control plane reads it only when the policy is created, so a value added later would be ignored"
 type StorageBackupPolicySpec struct {
 	// ClusterRef names the StorageCluster whose backup target this policy writes
 	// to.
@@ -99,6 +100,7 @@ type StorageBackupPolicySpec struct {
 	// MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
 	// by age. Retention is enforced by the control plane, not here. Immutable,
 	// for the reason Schedule is.
+	// Left unset at creation, it cannot be set later.
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Max Age"
 	// +kubebuilder:validation:Pattern=`^[1-9]\d*[mhdw]$`
 	// +k8s:immutable
