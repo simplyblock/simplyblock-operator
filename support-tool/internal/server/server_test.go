@@ -377,7 +377,7 @@ func TestTheValuesEditorChecksAndRenders(t *testing.T) {
 	}
 	joined := strings.Join(out.Commands, "\n")
 	if !strings.Contains(joined, "helm repo add simplyblock https://simplyblock.github.io/helm-charts/charts") ||
-		!strings.Contains(joined, "-f values.yaml") || !strings.Contains(joined, "--version 26.3.0") {
+		!strings.Contains(joined, "-f values.yaml") || !strings.Contains(joined, "--version 26.4-dev") {
 		t.Errorf("the commands are %v", out.Commands)
 	}
 }
