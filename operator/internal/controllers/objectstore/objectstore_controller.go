@@ -105,6 +105,7 @@ type ObjectStoreReconciler struct {
 // +kubebuilder:rbac:groups=cert-manager.io,resources=certificates,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 
 func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -141,17 +142,6 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	}
 	defer sm.Close()
 
-	if sm.IsTerminal() {
-		// Ready has no outgoing edge: a routine spec change (replicas,
-		// image, placement) reconciles the owned objects in place and
-		// stays Ready (design §6's own failure-table row for
-		// spec.replicas), it never returns to Provisioning or Pending.
-		if sm.CurrentState() == osPhaseReady {
-			return ctrl.Result{}, r.reconcileReady(ctx, &store)
-		}
-		return ctrl.Result{}, nil
-	}
-
 	if sm.TimeoutReached() {
 		reason, message, conditionType := r.provisioningFailure(ctx, &store)
 		return ctrl.Result{}, r.toDegraded(ctx, &store, sm, reason, message, conditionType)
@@ -162,6 +152,8 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return r.reconcilePending(ctx, &store, sm)
 	case osPhaseProvisioning:
 		return r.reconcileProvisioning(ctx, &store, sm, logger)
+	case osPhaseReady:
+		return r.reconcileReady(ctx, &store, sm)
 	default:
 		// restore refuses to build a machine for an unknown phase, so this
 		// is a known phase with nothing to do in it.
@@ -175,7 +167,7 @@ func (r *ObjectStoreReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 func (r *ObjectStoreReconciler) reconcilePending(
 	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase],
 ) (ctrl.Result, error) {
-	if err := r.applyOwnedObjects(ctx, store); err != nil {
+	if _, err := r.applyOwnedObjects(ctx, store); err != nil {
 		return ctrl.Result{}, fmt.Errorf("creating the gateway's Deployment, Service, and certificate: %w", err)
 	}
 
@@ -198,7 +190,7 @@ func (r *ObjectStoreReconciler) reconcilePending(
 func (r *ObjectStoreReconciler) reconcileProvisioning(
 	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase], logger logr,
 ) (ctrl.Result, error) {
-	if err := r.applyOwnedObjects(ctx, store); err != nil {
+	if _, err := r.applyOwnedObjects(ctx, store); err != nil {
 		return ctrl.Result{}, fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
 	}
 
@@ -239,29 +231,66 @@ func (r *ObjectStoreReconciler) reconcileProvisioning(
 // image, placement) converges without leaving Ready, and refreshes
 // status.readyReplicas. design §6's own failure-table row for
 // spec.replicas: "ordinary Deployment rolling scale-down... stays Ready."
-func (r *ObjectStoreReconciler) reconcileReady(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
-	if err := r.applyOwnedObjects(ctx, store); err != nil {
-		return fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
+//
+// A spec.tlsProvider change is the exception: once the previous issuer's
+// state is retired, the store returns to Provisioning and waits there for
+// the new issuer's certificate.
+func (r *ObjectStoreReconciler) reconcileReady(
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase],
+) (ctrl.Result, error) {
+	retired, err := r.applyOwnedObjects(ctx, store)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("reconciling the gateway's Deployment, Service, and certificate: %w", err)
+	}
+	if retired {
+		return r.reissue(ctx, store, sm)
 	}
 
 	_, readyReplicas, err := r.deploymentAvailable(ctx, store)
 	if err != nil {
-		return err
+		return ctrl.Result{}, err
 	}
 	if readyReplicas == store.Status.ReadyReplicas {
-		return nil
+		return ctrl.Result{}, nil
 	}
-	return r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
+	return ctrl.Result{}, r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
 		s.ReadyReplicas = readyReplicas
 	})
+}
+
+// reissue returns a Ready store to Provisioning after a spec.tlsProvider
+// change, with CertificateReady False until the new issuer's certificate is
+// in place.
+func (r *ObjectStoreReconciler) reissue(
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase],
+) (ctrl.Result, error) {
+	if err := sm.TransitionTo(ctx, osPhaseProvisioning); err != nil {
+		return ctrl.Result{}, fmt.Errorf("transition to Provisioning: %w", err)
+	}
+	message := fmt.Sprintf("spec.tlsProvider is now %s: the previous issuer's certificate was removed, "+
+		"waiting for the new one", store.Spec.TLSProvider)
+	r.event(store, corev1.EventTypeNormal, "TLSProviderChanged", message)
+	if err := r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
+		s.Phase = osPhaseProvisioning
+		setObjectStoreDeadline(s, sm)
+		meta.SetStatusCondition(&s.Conditions, metav1.Condition{
+			Type: conditionCertificateReady, Status: metav1.ConditionFalse, Reason: "TLSProviderChanged", Message: message,
+		})
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: objectStoreFreshCopyRequeue}, nil
 }
 
 // applyOwnedObjects creates or updates the gateway's ServiceAccount, Role,
 // and RoleBinding, the Deployment that runs as that ServiceAccount, the
 // Service, and the cert-manager Certificate where that provider is selected
 // (the OpenShift provider needs no object of its own: its annotation is
-// already on the Service buildService returns).
-func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *simplyblockv1alpha2.ObjectStore) error {
+// already on the Service buildService returns). It reports whether it
+// retired the state of a previously selected TLS provider.
+func (r *ObjectStoreReconciler) applyOwnedObjects(
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
+) (retired bool, err error) {
 	for _, owned := range []struct {
 		what string
 		obj  client.Object
@@ -271,21 +300,79 @@ func (r *ObjectStoreReconciler) applyOwnedObjects(ctx context.Context, store *si
 		{"the RoleBinding", buildRoleBinding(store)},
 	} {
 		if err := r.apply(ctx, owned.obj, store); err != nil {
-			return fmt.Errorf("%s: %w", owned.what, err)
+			return false, fmt.Errorf("%s: %w", owned.what, err)
 		}
 	}
 	if err := r.apply(ctx, buildDeployment(store), store); err != nil {
-		return fmt.Errorf("the Deployment: %w", err)
+		return false, fmt.Errorf("the Deployment: %w", err)
 	}
 	if err := r.applyService(ctx, store); err != nil {
-		return fmt.Errorf("the Service: %w", err)
+		return false, fmt.Errorf("the Service: %w", err)
+	}
+	// After the Service, which drops or adds the service CA's annotation, and
+	// before the Certificate, so the new issuer writes a fresh Secret rather
+	// than one the previous issuer still holds.
+	if retired, err = r.retirePreviousIssuer(ctx, store); err != nil {
+		return false, fmt.Errorf("retiring the previous TLS provider: %w", err)
 	}
 	if utils.IsCertManagerTLSProvider(store.Spec.TLSProvider) {
 		if err := r.applyCertificate(ctx, store); err != nil {
-			return fmt.Errorf("the certificate: %w", err)
+			return false, fmt.Errorf("the certificate: %w", err)
 		}
 	}
-	return nil
+	return retired, nil
+}
+
+// retirePreviousIssuer removes what the TLS provider not selected left
+// behind, so only one issuer writes the serving Secret: with OpenShift
+// selected, the store's cert-manager Certificate and a Secret cert-manager
+// wrote; with cert-manager selected, a Secret the service CA wrote. A Secret
+// neither issuer's annotation names this store on is never deleted. It
+// reports whether anything was deleted.
+func (r *ObjectStoreReconciler) retirePreviousIssuer(
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
+) (bool, error) {
+	retired := false
+	staleAnnotation := serviceCAOriginatingServiceAnnotation
+	if !utils.IsCertManagerTLSProvider(store.Spec.TLSProvider) {
+		staleAnnotation = certManagerCertificateNameAnnotation
+		var certificate unstructured.Unstructured
+		certificate.SetGroupVersionKind(certificateGVK)
+		certificate.SetNamespace(store.Namespace)
+		certificate.SetName(store.Name)
+		deleted, err := r.deleteIfPresent(ctx, &certificate)
+		if err != nil {
+			return false, fmt.Errorf("the cert-manager Certificate: %w", err)
+		}
+		retired = deleted
+	}
+
+	var secret corev1.Secret
+	err := r.Get(ctx, client.ObjectKey{Namespace: store.Namespace, Name: tlsSecretName(store.Name)}, &secret)
+	if apierrors.IsNotFound(err) {
+		return retired, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reading the serving Secret: %w", err)
+	}
+	if secret.Annotations[staleAnnotation] != store.Name {
+		return retired, nil
+	}
+	deleted, err := r.deleteIfPresent(ctx, &secret)
+	if err != nil {
+		return false, fmt.Errorf("the serving Secret: %w", err)
+	}
+	return retired || deleted, nil
+}
+
+// deleteIfPresent deletes obj, reporting whether it existed. A cluster
+// without cert-manager's CRDs has no Certificate to delete.
+func (r *ObjectStoreReconciler) deleteIfPresent(ctx context.Context, obj client.Object) (bool, error) {
+	err := r.Delete(ctx, obj)
+	if apierrors.IsNotFound(err) || meta.IsNoMatchError(err) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // apply writes an owned object (the Deployment, and the gateway's
@@ -404,15 +491,23 @@ func (r *ObjectStoreReconciler) deploymentAvailable(
 
 // certificateReady reports whether the cert-manager Certificate's own Ready
 // condition is True. The OpenShift provider creates no Certificate object at
-// all (its annotation is self-sufficient, §5), so it is read as ready
-// immediately: there is nothing this reconciler can observe about whether
-// the service-ca-operator has acted yet, the same boundary §9's failure
-// table draws around it.
+// all (its annotation is self-sufficient, §5), so for it the serving Secret
+// is what is read: ready once it exists and cert-manager did not write it.
+// After a switch from cert-manager, that is the service CA's Secret.
 func (r *ObjectStoreReconciler) certificateReady(
 	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
 ) (bool, error) {
 	if !utils.IsCertManagerTLSProvider(store.Spec.TLSProvider) {
-		return true, nil
+		var secret corev1.Secret
+		err := r.Get(ctx, client.ObjectKey{Namespace: store.Namespace, Name: tlsSecretName(store.Name)}, &secret)
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		_, issuedByCertManager := secret.Annotations[certManagerCertificateNameAnnotation]
+		return !issuedByCertManager, nil
 	}
 
 	var certificate unstructured.Unstructured
@@ -481,9 +576,10 @@ func (r *ObjectStoreReconciler) restore(
 }
 
 // objectStorePhases is the declared graph. An edge not written here is an
-// error at the transition rather than a silent status write. Ready has no
-// exit: it reconciles routine spec changes in place without leaving it
-// (design §6). Degraded returns to Provisioning, with a fresh deadline, once
+// error at the transition rather than a silent status write. Ready
+// reconciles routine spec changes in place without leaving it (design §6),
+// and returns to Provisioning only after a spec.tlsProvider change, to wait
+// for the new issuer's certificate (reissue). Degraded returns to Provisioning, with a fresh deadline, once
 // the object it was waiting on changes (reconcileDegraded).
 func objectStorePhases() statemachine.Config[osPhase] {
 	return statemachine.Config[osPhase]{
@@ -496,7 +592,7 @@ func objectStorePhases() statemachine.Config[osPhase] {
 					return objectStoreProvisioningDeadline, nil
 				},
 			},
-			osPhaseReady:    {To: []osPhase{}},
+			osPhaseReady:    {To: []osPhase{osPhaseProvisioning}},
 			osPhaseDegraded: {To: []osPhase{osPhaseProvisioning}},
 		},
 	}

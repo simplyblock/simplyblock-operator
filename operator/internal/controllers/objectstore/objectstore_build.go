@@ -78,7 +78,7 @@ const (
 	gatewayBucketStorageClassEnv  = "GATEWAY_BUCKET_STORAGE_CLASS"
 	gatewayBucketCapacityBytesEnv = "GATEWAY_BUCKET_CAPACITY_BYTES"
 	gatewayRegionEnv              = "GATEWAY_REGION"
-	// gatewayPortEnv is the address the gateway's S3 API binds, ":<port>".
+	// gatewayPortEnv is the address the gateway's S3 API binds, in the form :<port>.
 	gatewayPortEnv = "VGW_PORT"
 
 	// The env vars naming the serving certificate and key the gateway
@@ -147,6 +147,14 @@ func gatewayRootDir(store *simplyblockv1alpha2.ObjectStore) string {
 func tlsSecretName(name string) string {
 	return name
 }
+
+// The annotation each issuer writes on the serving Secret, naming the object
+// it issued the Secret for. Reading them tells which issuer wrote a Secret,
+// so a provider switch deletes only a Secret the previous issuer wrote.
+const (
+	certManagerCertificateNameAnnotation  = "cert-manager.io/certificate-name"
+	serviceCAOriginatingServiceAnnotation = "service.beta.openshift.io/originating-service-name"
+)
 
 // gatewayAntiAffinity keeps an ObjectStore's gateway replicas off the same
 // node as each other: required rather than preferred, matching

@@ -220,6 +220,8 @@ status:
 
 The `Service` this design creates is `ClusterIP`, named identically to the `ObjectStore`, selecting pods labeled `storage.simplyblock.io/objectstore=<name>`, and carrying exactly one port, `spec.port`. Its serving certificate is issued by `utils.BuildServiceServingCertificate(namespace, name, secretName)`, the identical call `operator/internal/webhook/certmanager.go` and `operator/internal/controllers/node/workload_controller.go` already make for their own Services, branching on `spec.tlsProvider` the same way `utils.NormalizeTLSProvider`/`TLSProviderSupported` already do. The resulting Secret is mounted into the gateway container at `/etc/simplyblock/tls`, and `GATEWAY_TLS_CERT_FILE` and `GATEWAY_TLS_KEY_FILE` point the gateway at its `tls.crt` and `tls.key`. The gateway re-reads both files when the provider rotates the Secret, so a renewed certificate is served without restarting the pod. `spec.port` is the only thing that varies between an `ObjectStore` and any other TLS-terminating Service in this operator.
 
+`spec.tlsProvider` can be changed on a running `ObjectStore`. Each issuer marks the Secret it writes, cert-manager with `cert-manager.io/certificate-name` and the service CA with `service.beta.openshift.io/originating-service-name`, and the reconciler reads that mark to remove what the previous issuer left behind: on a switch to `OpenShift`, the `ObjectStore`'s own `Certificate` and a Secret cert-manager wrote; on a switch to `cert-manager`, a Secret the service CA wrote. It deletes them after applying the Service, which adds or drops the service CA's annotation, and before applying the `Certificate`, so the new issuer writes a fresh Secret and the two issuers never write the same one. A Secret neither mark names this `ObjectStore` on is never deleted. The `ObjectStore` then returns to `Provisioning` until the new certificate is in place (§6). The Secret volume differs between the providers, so the Deployment rolls out: running pods keep serving the certificate they already mounted, and new pods start once the new issuer has written the Secret.
+
 Reaching this Service from outside the cluster is not this design's concern (§2 Non-Goals): it is an ordinary `ClusterIP` Service, fronted the same way any other one in the cluster is.
 
 ---
@@ -234,14 +236,18 @@ Reaching this Service from outside the cluster is not this design's concern (§2
     │  Deployment, Service, Certificate created
     ▼
   Provisioning     ← waiting on the Deployment to report Available and the
-    │                certificate to report Ready
+    │                certificate to report Ready (cert-manager: the
+    │                Certificate's Ready condition; OpenShift: the serving
+    │                Secret exists and cert-manager did not write it)
     │  both satisfied
     ▼
   Ready            ← status.conditions all True
     │  spec changed (replicas, image, placement): reconciles in place,
     │  stays Ready or returns to Provisioning, never Pending
     ▼
-  (re-enters Provisioning only via Degraded, never directly from Ready)
+  Provisioning     ← spec.tlsProvider changed: the previous issuer's
+                     Certificate and Secret deleted (§5), waiting on the
+                     new issuer's certificate
 
   Degraded         ← reached by refusing to act; not retried on a timer
     │  a Secret/ConfigMap named in spec.envFrom is created or changes,
@@ -259,14 +265,15 @@ Reaching this Service from outside the cluster is not this design's concern (§2
   finalizer removed, owned objects garbage-collected; no Deleting phase
 ```
 
-| Condition                                                                                                                   | Phase        | Result                                                                                                                                        |
-|-----------------------------------------------------------------------------------------------------------------------------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| The gateway image cannot be pulled, or the Deployment's pods crash-loop                                                     | Provisioning | Stays `Provisioning` past its deadline, then `Degraded`, `DeploymentAvailable` `False` with the pod's own reason                              |
-| The TLS provider cannot issue a certificate (cert-manager `Issuer` missing, OpenShift serving-cert controller not running)  | Provisioning | `Degraded`, `CertificateReady` `False` naming the cause                                                                                       |
-| Operator restarts mid-`Provisioning`                                                                                        | Provisioning | Resumes from `status`: re-reads the Deployment, Service, and Certificate rather than restarting from `Pending`                                |
-| The cause of a `Degraded` is fixed (missing `envFrom` reference created, `Issuer` created so the `Certificate` turns Ready) | Degraded     | Returns to `Provisioning` with a fresh deadline, noticed by the watch on the `envFrom` reference or a once-a-minute read of the `Certificate` |
-| `ObjectStore` deleted while `S3Bucket`s still reference it                                                                  | Any          | Finalizer held, phase unchanged, `BucketsRemaining` `True` naming the buckets, gateway keeps serving until the last one is deleted            |
-| `spec.replicas` lowered while gateway pods are serving traffic                                                              | Ready        | Ordinary `Deployment` rolling scale-down. This design adds no draining beyond what the gateway's own readiness probe already gives kubelet    |
+| Condition                                                                                                                   | Phase        | Result                                                                                                                                          |
+|-----------------------------------------------------------------------------------------------------------------------------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
+| The gateway image cannot be pulled, or the Deployment's pods crash-loop                                                     | Provisioning | Stays `Provisioning` past its deadline, then `Degraded`, `DeploymentAvailable` `False` with the pod's own reason                                |
+| The TLS provider cannot issue a certificate (cert-manager `Issuer` missing, OpenShift serving-cert controller not running)  | Provisioning | `Degraded`, `CertificateReady` `False` naming the cause                                                                                         |
+| Operator restarts mid-`Provisioning`                                                                                        | Provisioning | Resumes from `status`: re-reads the Deployment, Service, and Certificate rather than restarting from `Pending`                                  |
+| The cause of a `Degraded` is fixed (missing `envFrom` reference created, `Issuer` created so the `Certificate` turns Ready) | Degraded     | Returns to `Provisioning` with a fresh deadline, noticed by the watch on the `envFrom` reference or a once-a-minute read of the `Certificate`   |
+| `ObjectStore` deleted while `S3Bucket`s still reference it                                                                  | Any          | Finalizer held, phase unchanged, `BucketsRemaining` `True` naming the buckets, gateway keeps serving until the last one is deleted              |
+| `spec.replicas` lowered while gateway pods are serving traffic                                                              | Ready        | Ordinary `Deployment` rolling scale-down. This design adds no draining beyond what the gateway's own readiness probe already gives kubelet      |
+| `spec.tlsProvider` changed                                                                                                  | Ready        | The previous issuer's `Certificate` and Secret are deleted (§5), `CertificateReady` `False`, event `TLSProviderChanged`, back to `Provisioning` |
 
 ---
 
@@ -288,7 +295,7 @@ One `ObjectStore` reconciles independently of another. Nothing here is cluster-w
 
 ### 7.4 Interaction with Existing Controllers
 
-Creates and owns `Deployment`, `Service`, and `Certificate` (or sets the OpenShift serving-cert annotation, which needs no object of its own). Writes nothing outside objects it owns. `design-bucket-provisioning.md`'s `S3BucketReconciler` reads this design's Deployment and its pods (by the documented label), but never writes to anything this design owns.
+Creates and owns `Deployment`, `Service`, and `Certificate` (or sets the OpenShift serving-cert annotation, which needs no object of its own). Writes nothing outside objects it owns, with one exception: after a `spec.tlsProvider` change it deletes the serving Secret the previous issuer wrote (§5), which the issuer, not this reconciler, created. `design-bucket-provisioning.md`'s `S3BucketReconciler` reads this design's Deployment and its pods (by the documented label), but never writes to anything this design owns.
 
 ### 7.5 RBAC
 
@@ -298,6 +305,7 @@ Creates and owns `Deployment`, `Service`, and `Certificate` (or sets the OpenShi
 | `deployments.apps`                    | get, list, watch, create, update, delete | The gateway workload                                          |
 | `services`                            | get, list, watch, create, update, delete | The gateway's `ClusterIP` Service                             |
 | `certificates.cert-manager.io`        | get, list, watch, create, update, delete | The Service's serving certificate, cert-manager provider only |
+| `secrets`                             | get, list, watch, delete                 | The serving Secret the previous issuer wrote, after a switch  |
 
 ---
 
@@ -453,6 +461,8 @@ type ObjectStoreSpec struct {
 	// reusing utils.BuildServiceServingCertificate /
 	// utils.ServingCertServiceAnnotations (operator/internal/utils/tls.go).
 	// Always issued: an S3 gateway is assumed to always serve over TLS.
+	// Changing it deletes the previous issuer's Certificate and Secret and
+	// waits in Provisioning for the new issuer's certificate.
 	// +kubebuilder:validation:Enum=OpenShift;cert-manager
 	// +kubebuilder:default=OpenShift
 	// +optional

@@ -57,6 +57,18 @@ File: `internal/controllers/objectstore/objectstore_recovery_unit_test.go`
 | U-22 | `Degraded` on `CertificateReady`, the `Certificate` now `Ready` → `Provisioning`                                                                                                                                                                                                                   | Positive   | `TestDegradedObjectStoreRecoversWhenItsCertificateIsReady`   |
 | U-23 | An event on a `Secret` enqueues the `ObjectStore`s whose `envFrom` names it, and no other                                                                                                                                                                                                          | Positive   | `TestEnvFromReferenceEnqueuesTheObjectStoresNamingIt`        |
 
+### TLS Provider Switch (§5)
+
+File: `internal/controllers/objectstore/objectstore_tls_switch_unit_test.go`
+
+| #    | Scenario                                                                                                                                                                | Type     | Test                                                  |
+|------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------|
+| U-24 | `Ready`, `spec.tlsProvider` switched from `cert-manager` to `OpenShift` → the `Certificate` and the Secret cert-manager wrote are deleted, back to `Provisioning`       | Positive | `TestSwitchingToOpenShiftRetiresTheCertificate`       |
+| U-25 | `Ready`, `spec.tlsProvider` switched from `OpenShift` to `cert-manager` → the Secret the service CA wrote is deleted, the `Certificate` created, back to `Provisioning` | Positive | `TestSwitchingToCertManagerRetiresTheServiceCASecret` |
+| U-26 | `Ready`, the Secret written by the selected provider → kept, stays `Ready`                                                                                              | Negative | `TestAnUnchangedProviderRetiresNothing`               |
+| U-27 | A Secret neither issuer wrote → never deleted, under either provider                                                                                                    | Negative | `TestASecretNoIssuerWroteIsKept`                      |
+| U-28 | `OpenShift` provider, Deployment Available, no Secret yet → stays `Provisioning`; the service CA's Secret written → `Ready`                                             | Positive | `TestOpenShiftProvisioningWaitsForTheServiceCASecret` |
+
 ### Object Construction (§4, §5)
 
 File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
@@ -105,6 +117,7 @@ File: `internal/controllers/objectstore/objectstore_controller_test.go`
 | I-06 | Operator process restarted mid-`Provisioning` (envtest manager stopped and restarted) → resumes from `status` without re-creating owned objects                                                                                                                                                                                                | Positive   | `TestObjectStoreResumesMidProvisioningWithoutRecreatingTheDeployment`                                                                                                                                                                                                                                        |
 | I-07 | `spec.envFrom` names a `Secret` that does not exist → `Degraded`, event naming the missing reference (this reconciler does not validate the `Secret`'s existence, and kubelet reports its absence instead)                                                                                                                                     | Negative   | — (needs a real kubelet to produce `CreateContainerConfigError`; `envtest` runs none, same boundary §9's own failure-table row draws)                                                                                                                                                                        |
 | I-08 | `ObjectStore` deleted while an `S3Bucket` references it → the finalizer holds it, phase unchanged, `BucketsRemaining` `True` naming the bucket, delete completes once the bucket is gone. Regression: 2026-11-23-objectstore-deleted-under-its-buckets (CI run 45100042373, TC-S3-002: the gateway went away while its buckets stayed `Ready`) | Regression | `TestObjectStoreDeletionIsHeldWhileABucketReferencesIt`                                                                                                                                                                                                                                                      |
+| I-09 | `Ready` `cert-manager` `ObjectStore` switched to `OpenShift` → `Certificate` and cert-manager's Secret deleted, `TLSProviderChanged` event, `Provisioning`; the service CA's Secret written → `Ready`                                                                                                                                          | Positive   | `TestObjectStoreSwitchedToOpenShiftReissuesItsCertificate`                                                                                                                                                                                                                                                   |
 
 ---
 
@@ -149,13 +162,13 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 ## 5. Axis Coverage
 
-| Axis                | Values covered                                                         | IDs                    | Not covered                                                               |
-|---------------------|------------------------------------------------------------------------|------------------------|---------------------------------------------------------------------------|
-| TLS provider        | `OpenShift`, `cert-manager`                                            | U-14, U-15, E-01, E-02 | —                                                                         |
-| Replica count       | 1 (default), 2+, scaled in place                                       | U-11, I-03             | 0 (rejected by CRD validation, not a runtime scenario)                    |
-| Namespace scope     | single namespace                                                       | I-01                   | multi-namespace (no cross-namespace behavior exists to test)              |
-| Lifecycle / restart | mid-`Provisioning` operator restart, concurrent reconciles             | U-08, I-05, I-06       | —                                                                         |
-| Deletion            | `Ready` → deleted with no bucket, deleted while a bucket references it | I-04, I-08             | actual garbage collection of the owned objects (needs a real cluster, §7) |
+| Axis                | Values covered                                                         | IDs                                       | Not covered                                                               |
+|---------------------|------------------------------------------------------------------------|-------------------------------------------|---------------------------------------------------------------------------|
+| TLS provider        | `OpenShift`, `cert-manager`, switched both ways                        | U-14, U-15, U-24 … U-28, I-09, E-01, E-02 | —                                                                         |
+| Replica count       | 1 (default), 2+, scaled in place                                       | U-11, I-03                                | 0 (rejected by CRD validation, not a runtime scenario)                    |
+| Namespace scope     | single namespace                                                       | I-01                                      | multi-namespace (no cross-namespace behavior exists to test)              |
+| Lifecycle / restart | mid-`Provisioning` operator restart, concurrent reconciles             | U-08, I-05, I-06                          | —                                                                         |
+| Deletion            | `Ready` → deleted with no bucket, deleted while a bucket references it | I-04, I-08                                | actual garbage collection of the owned objects (needs a real cluster, §7) |
 
 ---
 
@@ -163,8 +176,8 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 | Class       | Scenarios                            | Covered | Not covered |
 |-------------|--------------------------------------|---------|-------------|
-| Unit        | 22 (U-16 dropped, U-17 … U-23 added) | 22      | —           |
-| Integration | 8                                    | 6       | I-05, I-07  |
+| Unit        | 27 (U-16 dropped, U-17 … U-28 added) | 27      | —           |
+| Integration | 9                                    | 7       | I-05, I-07  |
 | E2E         | 3                                    | 0       | E-01 … E-03 |
 
 ---
