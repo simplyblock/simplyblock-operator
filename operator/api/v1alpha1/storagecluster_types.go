@@ -355,12 +355,13 @@ type StorageClusterSpec struct {
 	// +optional
 	MaxHugePagesSize string `json:"maxHugePagesSize,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="vCPU Count"
-	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
-	// This is an explicit core count, not a percentage. Required: the core layout
+	// VCPUCount is the number of vCPUs allocated to SPDK on each worker, divided
+	// evenly across the worker's sockets and then between the storage nodes on
+	// each socket. This is an explicit core count, not a percentage. Required: the core layout
 	// it produces must match across the cluster, so it is stated rather than left
 	// to a per-node heuristic.
 	// +kubebuilder:validation:Required
-	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// The floor is 4 rather than a hardware limit: a worker must carry one core
 	// beyond this budget for the system, and the control plane's core layout
 	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
 	// +kubebuilder:validation:Minimum=4

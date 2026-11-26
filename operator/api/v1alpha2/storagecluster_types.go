@@ -893,14 +893,20 @@ type StorageClusterSpec struct {
 	// +optional
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
-	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
-	// as an explicit core count rather than a percentage. Unlike
-	// MaxSubsystemCount it is stamped onto a node when the node is created,
-	// because it describes the host that node runs on. Required: the core
-	// layout it produces must match across the cluster in steady state, so it
-	// is stated rather than left to a per-node heuristic.
+	// VCPUCount is the number of vCPUs allocated to SPDK on each worker, as an
+	// explicit core count rather than a percentage. Unlike MaxSubsystemCount it
+	// is stamped onto a node when the node is created, because it describes the
+	// host that node runs on. Required: the core layout it produces must match
+	// across the cluster in steady state, so it is stated rather than left to a
+	// per-node heuristic.
 	//
-	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// The budget is per worker, not per storage node. The control plane
+	// divides it evenly across the CPU sockets the worker's storage nodes use,
+	// the remainder going to the lower-numbered sockets, and then between the
+	// storage nodes on each socket. A worker running two storage nodes on one
+	// socket with a vcpuCount of 8 gives each of them 4.
+	//
+	// The floor is 4 rather than a hardware limit: a worker must carry one core
 	// beyond this budget for the system, and the control plane's core layout
 	// assigns no NVMe-oF poller core at all for a 2-vCPU budget. Required on
 	// every cluster except a supercluster.

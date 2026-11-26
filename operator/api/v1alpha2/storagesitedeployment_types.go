@@ -78,7 +78,9 @@ type StorageSiteSizing struct {
 	// +optional
 	Name string `json:"name,omitempty"`
 
-	// VCPUCount is the number of vCPUs each storage node takes.
+	// VCPUCount is the number of vCPUs SPDK takes on each worker, divided
+	// evenly across the worker's sockets and then between the storage nodes on
+	// each socket.
 	// +kubebuilder:validation:Minimum=1
 	// +optional
 	VCPUCount *int32 `json:"vcpuCount,omitempty"`
