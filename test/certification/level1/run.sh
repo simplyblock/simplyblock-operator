@@ -90,6 +90,8 @@ command -v oc >/dev/null || { echo "oc is not on PATH" >&2; exit 2; }
 
 # shellcheck source=../lib/classes.sh
 source "$SCRIPT_DIR/../lib/classes.sh"
+# shellcheck source=../lib/results.sh
+source "$SCRIPT_DIR/../lib/results.sh"
 if [[ -z "${STORAGE_CLASS:-}" ]]; then
   STORAGE_CLASS="$(find_class storageclass provisioner)" || {
     echo "set STORAGE_CLASS" >&2
@@ -296,34 +298,12 @@ done
 
 status="$(oc -n "$NAMESPACE" exec openshift-tests -- cat /results/exit-code)"
 
-# The results come over as one archive with its checksum, because a stream
-# through oc exec can end early without an error from either side: a tar piped
-# straight through lost the end of a 250 MB result set that way, exit code
-# included. A copy that does not match is fetched again.
-sha256() {
-  if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
-}
-oc -n "$NAMESPACE" exec openshift-tests -- \
-  sh -c 'tar czf /scratch/results.tar.gz -C /results . && sha256sum /scratch/results.tar.gz' \
-  >"$RUN_DIR/results.sha256"
-want="$(cut -d' ' -f1 "$RUN_DIR/results.sha256")"
-copied=""
-for attempt in 1 2 3; do
-  oc -n "$NAMESPACE" exec openshift-tests -- cat /scratch/results.tar.gz >"$RUN_DIR/results.tar.gz" || true
-  if [[ "$(sha256 "$RUN_DIR/results.tar.gz")" == "$want" ]]; then
-    copied=yes
-    break
-  fi
-  echo "results copy $attempt did not match its checksum" >&2
-done
-if [[ -z "$copied" ]]; then
+if ! fetch_results "$NAMESPACE" openshift-tests tests /results /scratch "$RUN_DIR"; then
   KEEP_NAMESPACE=yes
   echo "the results could not be copied; the test pod is kept in namespace $NAMESPACE," >&2
   echo "with the archive at /scratch/results.tar.gz. Delete the namespace when done." >&2
   echo "openshift-tests exit $status" >&2
   exit 1
 fi
-tar xzf "$RUN_DIR/results.tar.gz" -C "$RUN_DIR"
-rm "$RUN_DIR/results.tar.gz" "$RUN_DIR/results.sha256"
 echo "results: $RUN_DIR (openshift-tests exit $status)"
 exit "$status"

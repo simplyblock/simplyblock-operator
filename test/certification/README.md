@@ -8,7 +8,7 @@ rather than rebuilt by hand each time:
 |-------|----------------------------------------|-------------------------------------|-----------|
 | 1     | OpenShift CSI Certified                | `openshift-tests run openshift/csi` | `level1/` |
 | 2     | OpenShift Virtualization CSI Certified | KubeVirt storage checkup            | `level2/` |
-| 3     | Performance and Scale Tested           | `storage-cert-harness`              | not yet   |
+| 3     | Performance and Scale Tested           | `storage-cert-harness`              | `level3/` |
 
 ## Level 1
 
@@ -97,3 +97,42 @@ it rather than the run hiding it.
 Each run writes `results/level2-<UTC time>/` with `run-info.txt`, the result
 ConfigMap (`storage-checkup-config.yaml`), the checkup's log, the cluster
 version, the OpenShift Virtualization version, and the StorageProfiles.
+
+Level 1 copies the class under test for its own test classes, annotations
+included. On a cluster where that class is the default virtualization class, a
+Level 1 run briefly adds a second one, and CDI may point the golden images at the
+suite's short-lived copy (it records the choice in the DataImportCrons'
+`cdi.kubevirt.io/storage.import.storageClass` annotation). The next scheduled
+import chooses again.
+
+## Level 3
+
+Level 3 is Red Hat's storage certification harness
+(`github.com/openshift-storage-cert/storage-cert-harness`), whose
+`PARTNER-CERTIFICATION-GUIDE.md` is the procedure. The harness ships as an
+amd64-only image driven by Podman on a Linux host. `level3/run.sh` runs that
+image as a Pod in the cluster instead, with the arguments the harness's own
+partner scripts pass, so any workstation can drive it. It pins a harness commit
+and image digest, writes `backends.yaml` from the discovered classes, and fills
+the plan's nodes: three distinct Ready workers, which the harness Pod is kept
+off.
+
+```sh
+make level3-preflight KUBECONFIG=/abs/path/kubeconfig
+make level3-load-80 KUBECONFIG=/abs/path/kubeconfig EXTERNAL_LOAD="<what holds 80%>"
+make level3-no-load-80 KUBECONFIG=/abs/path/kubeconfig FAR_CONFIG=/abs/path/far-config.json
+make level3-package
+```
+
+Run 1 measures 4K random I/O latency while something else holds the storage at
+about 80% of its capacity. The harness does not generate that load, and
+`EXTERNAL_LOAD` records what did. Run 2 continues from run 1's report.
+TR-VIRT-007 fences a worker through its BMC with Fence Agents Remediation and
+needs `FAR_CONFIG`, a FenceAgentsRemediation manifest for that worker (the
+harness's `docs/cluster-setup-guide.md`, step 4). `SKIP=TR-VIRT-007` leaves it
+out, and `ONLY=`/`SKIP=` with any IDs mark a run as a rehearsal.
+
+Results land in `results/level3/` in the harness's layout:
+`certification-results/<profile>/{work,report}`, `logs/`, and
+`certification-results-level3.tar.gz` from the package step. A step's earlier
+output is kept beside the new one with a timestamp.
