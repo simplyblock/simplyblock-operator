@@ -205,6 +205,29 @@ func (c *Client) ClusterCapacity(ctx context.Context, clusterID string) (*Cluste
 	}, nil
 }
 
+// EstimateHugePages returns the huge-page memory, in MiB, calculate_minimum_hp_
+// memory would compute for a node with this maxSubsys/vcpuCount, with no
+// devices known yet. Stateless: no cluster needs to exist, and the result
+// carries no max_prov floor -- the caller clamps against that itself before
+// deriving the pod's actual MEM_MEGA figure (design-preprovisioned-hugepages.md
+// S:5 Step 1, S:7).
+func (c *Client) EstimateHugePages(ctx context.Context, maxSubsys, vcpuCount int32) (int64, error) {
+	what := "estimate huge pages"
+	resp, err := c.api.ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithResponse(
+		ctx, nil, cpapi.HugePagesEstimateParams{
+			MaxSubsys: int(maxSubsys),
+			VcpuCount: int(vcpuCount),
+		})
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", what, err)
+	}
+	d, err := payload(what, resp.JSON200, resp.StatusCode(), resp.Body)
+	if err != nil {
+		return 0, err
+	}
+	return int64(d.MinimumHpMemoryMib), nil
+}
+
 func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 	return Cluster{
 		ID:                d.Id.String(),

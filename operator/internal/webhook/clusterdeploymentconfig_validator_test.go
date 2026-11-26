@@ -516,3 +516,35 @@ func TestApprovingASuperclusterChecksTheStripePerMember(t *testing.T) {
 	short.Spec.NodeSets = append(short.Spec.NodeSets, lone)
 	mustDeny(t, approve(t, existing, short), "lone")
 }
+
+// --- HugePagesMode admission gate (design-preprovisioned-hugepages.md S:6.2) ---
+
+// U-24: a document carrying an unsupported mode is denied even as a draft --
+// unlike §5's checks, this is not "wrong about the world" and gains nothing
+// from the draft/approved asymmetry (design S:6.2).
+func TestADraftWithAnUnsupportedHugePagesModeIsDenied(t *testing.T) {
+	draft := testConfig()
+	draft.Spec.Cluster.HugePagesMode = simplyblockv1alpha2.HugePagesModeExclusive
+
+	mustDeny(t, review(t, nil, admissionv1.Create, nil, draft), "hugePagesMode")
+}
+
+// U-25: a node set's override is checked independently of the template, which
+// may be unset.
+func TestANodeSetOverrideWithAnUnsupportedHugePagesModeIsDenied(t *testing.T) {
+	draft := testConfig()
+	draft.Spec.NodeSets[0].Cluster = &simplyblockv1alpha2.NodeSetClusterOverrides{
+		HugePagesMode: simplyblockv1alpha2.HugePagesModeShared,
+	}
+
+	mustDeny(t, review(t, nil, admissionv1.Create, nil, draft), "hugePagesMode")
+}
+
+// Preprovisioned, the one supported mode, is admitted on a draft like any
+// other field.
+func TestADraftWithPreprovisionedHugePagesModeIsAdmitted(t *testing.T) {
+	draft := testConfig()
+	draft.Spec.Cluster.HugePagesMode = simplyblockv1alpha2.HugePagesModePreprovisioned
+
+	mustAllow(t, review(t, nil, admissionv1.Create, nil, draft))
+}

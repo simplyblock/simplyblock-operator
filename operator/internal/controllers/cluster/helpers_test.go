@@ -238,6 +238,7 @@ type fakeControlPlane struct {
 	reachability      func(string, []string) ([]WorkerReachability, error)
 	serviceClasses    func(string) (ServiceClassConfig, error)
 	setServiceClasses func(string, ServiceClassConfig) error
+	estimateHugePages func(maxSubsys, vcpuCount int32) (int64, error)
 
 	// The counters the write-ahead tests read. Each is the number of times the
 	// control plane was actually asked to do something, which is the only way
@@ -331,6 +332,13 @@ func (f *fakeControlPlane) Clusters(context.Context) ([]atlascp.Cluster, error) 
 		return nil, nil
 	}
 	return f.clusters()
+}
+
+func (f *fakeControlPlane) EstimateHugePages(_ context.Context, maxSubsys, vcpuCount int32) (int64, error) {
+	if f.estimateHugePages == nil {
+		return 0, nil
+	}
+	return f.estimateHugePages(maxSubsys, vcpuCount)
 }
 
 func (f *fakeControlPlane) DeleteCluster(_ context.Context, clusterID string) error {

@@ -141,6 +141,16 @@ spec:
                     description: EnableJournalDevice dedicates one device per node
                       to the journal.
                     type: boolean
+                  hugePagesMode:
+                    description: |-
+                      HugePagesMode selects how huge pages are managed for the site's storage
+                      nodes. See ClusterTemplate.HugePagesMode
+                      (design-preprovisioned-hugepages.md S:4.1).
+                    enum:
+                    - Preprovisioned
+                    - Exclusive
+                    - Shared
+                    type: string
                   maxSubsystemCount:
                     description: MaxSubsystemCount is the number of NVMe-oF subsystems
                       each node serves.
@@ -652,6 +662,21 @@ spec:
                       fabricType:
                         description: FabricType is the storage fabric.
                         maxLength: 32
+                        type: string
+                      hugePagesMode:
+                        description: |-
+                          HugePagesMode selects how huge pages are managed for this cluster's
+                          storage nodes. Preprovisioned assumes the workers already carry enough
+                          and checks that before any StorageNode is created, rather than letting a
+                          shortfall surface as a Pending SPDK pod (design-preprovisioned-hugepages.md
+                          S:5). It is the only mode this deployment can currently select: Exclusive
+                          and Shared are reserved for future platform-specific support and are
+                          refused at admission (same design, S:6.2). Left unset, no huge-page check
+                          runs, which is this deployment's behavior without this field.
+                        enum:
+                        - Preprovisioned
+                        - Exclusive
+                        - Shared
                         type: string
                       initContainerResources:
                         description: |-
@@ -1186,6 +1211,15 @@ spec:
                             rest. A field left unset takes the template's value. Valid on a document
                             with more than one node set, or one naming a cluster in clusterRef.
                           properties:
+                            hugePagesMode:
+                              description: |-
+                                HugePagesMode overrides the template's mode for this member. See
+                                ClusterTemplate.HugePagesMode.
+                              enum:
+                              - Preprovisioned
+                              - Exclusive
+                              - Shared
+                              type: string
                             maxSubsystemCount:
                               description: |-
                                 MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage

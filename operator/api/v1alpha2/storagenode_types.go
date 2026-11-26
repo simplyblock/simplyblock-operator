@@ -625,6 +625,15 @@ type StorageNodeStatus struct {
 	Remediation *NodeRemediationStatus `json:"remediation,omitempty"`
 
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions carries HugePagesReady, which a Preprovisioned node's
+	// reviewer, or a client watching the object, reads for the preprovisioned
+	// huge-page precheck's outcome (design-preprovisioned-hugepages.md S:5).
+	// The operator writes no other condition type yet.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // v1alpha2 is the storage version in the manifests this repository ships, which

@@ -26,6 +26,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/platform"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagecluster,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=storageclusters,verbs=create;update,versions=v1alpha2,name=vstoragecluster.simplyblock.io,admissionReviewVersions=v1
@@ -74,6 +75,11 @@ func (v *StorageClusterValidator) Handle(
 	}
 	if cluster.Namespace == "" {
 		cluster.Namespace = req.Namespace
+	}
+
+	if !platform.HugePagesModeSupported(cluster.Spec.HugePagesMode) {
+		return admission.Denied(fmt.Sprintf(
+			"spec.hugePagesMode %q is not supported on any platform yet", cluster.Spec.HugePagesMode))
 	}
 
 	if cluster.Spec.Supercluster != nil {

@@ -917,6 +917,15 @@ type StorageClusterSpec struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// HugePagesMode selects how huge pages are managed for this cluster's
+	// storage nodes. See ClusterTemplate.HugePagesMode
+	// (design-preprovisioned-hugepages.md S:4.1) for what each value does; a
+	// document's hugePagesMode is copied here the same way MinHugePagesSize
+	// already is.
+	// +kubebuilder:validation:Enum=Preprovisioned;Exclusive;Shared
+	// +optional
+	HugePagesMode HugePagesMode `json:"hugePagesMode,omitempty"`
+
 	// Stripe is the erasure-coding layout every volume in the cluster is
 	// written with. It describes on-disk layout, so it cannot change under a
 	// live cluster.
@@ -1470,6 +1479,15 @@ type StorageClusterStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// Conditions carries HugePagesReady, which a Preprovisioned cluster's
+	// reviewer, or a client watching the object, reads for the preprovisioned
+	// huge-page precheck's outcome (design-preprovisioned-hugepages.md S:5).
+	// The operator writes no other condition type yet.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // PlacementStrategy is how the operator ranks the members of a supercluster

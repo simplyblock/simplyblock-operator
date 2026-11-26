@@ -88,6 +88,13 @@ type StorageSiteSizing struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// HugePagesMode selects how huge pages are managed for the site's storage
+	// nodes. See ClusterTemplate.HugePagesMode
+	// (design-preprovisioned-hugepages.md S:4.1).
+	// +kubebuilder:validation:Enum=Preprovisioned;Exclusive;Shared
+	// +optional
+	HugePagesMode HugePagesMode `json:"hugePagesMode,omitempty"`
+
 	// MaxSubsystemCount is the number of NVMe-oF subsystems each node serves.
 	// +kubebuilder:validation:Minimum=1
 	// +optional

@@ -10,13 +10,17 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
+	resource "k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -24,6 +28,7 @@ import (
 	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/hugepages"
 )
 
 const operatorNS = "simplyblock-operator-system"
@@ -77,12 +82,42 @@ func nodeTestCluster(
 func validatorFor(t *testing.T, objects ...client.Object) *StorageNodeValidator {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	if err := clientgoscheme.AddToScheme(scheme); err != nil {
+		t.Fatalf("add to scheme: %v", err)
+	}
 	if err := simplyblockv1alpha2.AddToScheme(scheme); err != nil {
 		t.Fatalf("add to scheme: %v", err)
 	}
 	return &StorageNodeValidator{
 		Client:            fake.NewClientBuilder().WithScheme(scheme).WithObjects(objects...).Build(),
 		OperatorNamespace: operatorNS,
+	}
+}
+
+// stubEstimator is the "stub controlplane.Client" test-plan scenarios U-19
+// through U-28 call for: a fixed EstimateHugePages result or a fixed error,
+// no server involved.
+type stubEstimator struct {
+	mib int64
+	err error
+}
+
+func (s stubEstimator) EstimateHugePages(context.Context, int32, int32) (int64, error) {
+	return s.mib, s.err
+}
+
+// testWorkerNode is a Node with enough hugepages-2Mi allocatable for
+// nodeTestCluster's default sizing (formula 100MiB, no floor -> required =
+// (100/2)*2+512 = 612Mi), used by every Preprovisioned admission scenario
+// that does not itself vary capacity.
+func testWorkerNode(allocatableMiB int64) *corev1.Node {
+	qty := resource.NewQuantity(allocatableMiB*1024*1024, resource.BinarySI)
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: "worker-2"},
+		Status: corev1.NodeStatus{
+			Capacity:    corev1.ResourceList{"hugepages-2Mi": *qty},
+			Allocatable: corev1.ResourceList{"hugepages-2Mi": *qty},
+		},
 	}
 }
 
@@ -389,5 +424,98 @@ func TestAClusterWithNoStatedClassIsNVMe(t *testing.T) {
 	response := validator.Handle(context.Background(), createReq(t, node, someoneElse))
 	if response.Allowed {
 		t.Error("a device path was admitted on a cluster that states no class, which is NVMe")
+	}
+}
+
+// --- Preprovisioned huge-page precheck (design-preprovisioned-hugepages.md S:6) ---
+
+// U-19, U-20: Exclusive and Shared are refused at admission everywhere, this
+// webhook included, because platform.HugePagesModeSupported refuses both
+// unconditionally (design S:6.2). The denial is reached before the precheck
+// itself runs, so no ControlPlane or worker Node needs to exist for this case.
+func TestExclusiveAndSharedModesAreDeniedAtNodeAdmission(t *testing.T) {
+	for _, mode := range []simplyblockv1alpha2.HugePagesMode{
+		simplyblockv1alpha2.HugePagesModeExclusive,
+		simplyblockv1alpha2.HugePagesModeShared,
+	} {
+		t.Run(string(mode), func(t *testing.T) {
+			validator := validatorFor(t, nodeTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+				c.Spec.HugePagesMode = mode
+			}))
+			validator.ControlPlane = stubEstimator{mib: 100}
+
+			response := validator.Handle(context.Background(), createReq(t, testNode(nil), someoneElse))
+			if response.Allowed {
+				t.Errorf("hugePagesMode %s was admitted", mode)
+			}
+		})
+	}
+}
+
+// U-21: a Preprovisioned node whose named worker fails the precheck is denied,
+// citing InsufficientHugePages.
+func TestPreprovisionedNodeWithAnUndersizedWorkerIsDenied(t *testing.T) {
+	validator := validatorFor(t,
+		nodeTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModePreprovisioned
+			c.Spec.MinHugePagesSize = "" // isolate the formula's own 612Mi, not nodeTestCluster's 100G floor
+		}),
+		testWorkerNode(100), // far below the 612Mi this cluster's sizing requires
+	)
+	validator.ControlPlane = stubEstimator{mib: 100}
+
+	response := validator.Handle(context.Background(), createReq(t, testNode(nil), someoneElse))
+	if response.Allowed {
+		t.Fatal("a node naming an undersized worker was admitted")
+	}
+	if !strings.Contains(response.Result.Message, hugepages.ReasonInsufficientHugePages) {
+		t.Errorf("the refusal does not cite %s: %s", hugepages.ReasonInsufficientHugePages, response.Result.Message)
+	}
+}
+
+// U-22: a Preprovisioned node whose named worker passes is admitted.
+func TestPreprovisionedNodeWithAReadyWorkerIsAdmitted(t *testing.T) {
+	validator := validatorFor(t,
+		nodeTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModePreprovisioned
+			c.Spec.MinHugePagesSize = "" // isolate the formula's own 612Mi, not nodeTestCluster's 100G floor
+		}),
+		testWorkerNode(10000),
+	)
+	validator.ControlPlane = stubEstimator{mib: 100}
+
+	response := validator.Handle(context.Background(), createReq(t, testNode(nil), someoneElse))
+	if !response.Allowed {
+		t.Errorf("a node naming a ready worker was refused: %s", response.Result.Message)
+	}
+}
+
+// U-23: hugePagesMode unset admits without ever asking the ControlPlane -- a
+// nil ControlPlane would panic if Evaluate were called, so this also proves
+// the precheck is skipped rather than merely passing.
+func TestHugePagesModeUnsetSkipsThePrecheckEntirely(t *testing.T) {
+	validator := validatorFor(t, nodeTestCluster(nil))
+	validator.ControlPlane = nil
+
+	response := validator.Handle(context.Background(), createReq(t, testNode(nil), someoneElse))
+	if !response.Allowed {
+		t.Errorf("a node on a cluster with no hugePagesMode was refused: %s", response.Result.Message)
+	}
+}
+
+// U-28: an unreachable or erroring ControlPlane fails the create closed
+// (design S:9, S:13 Q1) rather than admitting it.
+func TestControlPlaneErrorDuringPrecheckDeniesTheCreate(t *testing.T) {
+	validator := validatorFor(t,
+		nodeTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			c.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModePreprovisioned
+		}),
+		testWorkerNode(10000),
+	)
+	validator.ControlPlane = stubEstimator{err: errors.New("control plane unreachable")}
+
+	response := validator.Handle(context.Background(), createReq(t, testNode(nil), someoneElse))
+	if response.Allowed {
+		t.Fatal("a create was admitted while the precheck's control-plane call errored")
 	}
 }

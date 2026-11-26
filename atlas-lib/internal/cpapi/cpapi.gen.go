@@ -2118,6 +2118,17 @@ type HTTPValidationError struct {
 	Detail *[]ValidationError `json:"detail,omitempty"`
 }
 
+// HugePagesEstimateDTO defines model for HugePagesEstimateDTO.
+type HugePagesEstimateDTO struct {
+	MinimumHpMemoryMib int `json:"minimum_hp_memory_mib"`
+}
+
+// HugePagesEstimateParams defines model for HugePagesEstimateParams.
+type HugePagesEstimateParams struct {
+	MaxSubsys int `json:"max_subsys"`
+	VcpuCount int `json:"vcpu_count"`
+}
+
 // KMIPKMSSettings A KMIP-speaking key management appliance.
 type KMIPKMSSettings struct {
 	Provider  *KMIPKMSSettingsProvider `json:"provider,omitempty"`
@@ -3137,6 +3148,11 @@ type ClustersCreateApiV2ClustersPostParams struct {
 // ClustersCreateApiV2ClustersPostParamsResponseFormat defines parameters for ClustersCreateApiV2ClustersPost.
 type ClustersCreateApiV2ClustersPostParamsResponseFormat string
 
+// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams defines parameters for ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost.
+type ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams struct {
+	ClusterId *openapi_types.UUID `form:"cluster_id,omitempty" json:"cluster_id,omitempty"`
+}
+
 // ClustersDeleteApiV2ClustersClusterIdDeleteParams defines parameters for ClustersDeleteApiV2ClustersClusterIdDelete.
 type ClustersDeleteApiV2ClustersClusterIdDeleteParams struct {
 	Force *bool `form:"force,omitempty" json:"force,omitempty"`
@@ -3546,6 +3562,9 @@ type ManagementNodeDetailApiV2ManagementNodesManagementNodeIdGetParams struct {
 
 // ClustersCreateApiV2ClustersPostJSONRequestBody defines body for ClustersCreateApiV2ClustersPost for application/json ContentType.
 type ClustersCreateApiV2ClustersPostJSONRequestBody = ClusterParams
+
+// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody defines body for ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost for application/json ContentType.
+type ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody = HugePagesEstimateParams
 
 // ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody defines body for ClustersUpdateApiV2ClustersClusterIdPut for application/json ContentType.
 type ClustersUpdateApiV2ClustersClusterIdPutJSONRequestBody = UpdatableClusterParameters
@@ -4343,6 +4362,40 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /api/v2/clusters/ (the `ClustersCreateApiV2ClustersPost` operationId).
 	ClustersCreateApiV2ClustersPost(ctx context.Context, params *ClustersCreateApiV2ClustersPostParams, body ClustersCreateApiV2ClustersPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBody Clusters:Sizing:Hugepages-Estimate
+	//
+	// The huge-page memory calculate_minimum_hp_memory would compute for a
+	// node with this max_subsys/vcpu_count, with no devices known yet -- the
+	// figure a Preprovisioned precheck compares a worker's capacity against
+	// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+	//
+	// Stateless and idempotent: no cluster needs to exist, and this takes no
+	// hugepages_mem floor -- the caller already has it and has to apply that
+	// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+	// S:5 Step 1).
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+	ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBody(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost Clusters:Sizing:Hugepages-Estimate
+	//
+	// The huge-page memory calculate_minimum_hp_memory would compute for a
+	// node with this max_subsys/vcpu_count, with no devices known yet -- the
+	// figure a Preprovisioned precheck compares a worker's capacity against
+	// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+	//
+	// Stateless and idempotent: no cluster needs to exist, and this takes no
+	// hugepages_mem floor -- the caller already has it and has to apply that
+	// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+	// S:5 Step 1).
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+	ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, body ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// ClustersDeleteApiV2ClustersClusterIdDelete Clusters:Delete
 	//
@@ -6412,6 +6465,60 @@ func (c *Client) ClustersCreateApiV2ClustersPostWithBody(ctx context.Context, pa
 // Corresponds with POST /api/v2/clusters/ (the `ClustersCreateApiV2ClustersPost` operationId).
 func (c *Client) ClustersCreateApiV2ClustersPost(ctx context.Context, params *ClustersCreateApiV2ClustersPostParams, body ClustersCreateApiV2ClustersPostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewClustersCreateApiV2ClustersPostRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBody Clusters:Sizing:Hugepages-Estimate
+//
+// The huge-page memory calculate_minimum_hp_memory would compute for a
+// node with this max_subsys/vcpu_count, with no devices known yet -- the
+// figure a Preprovisioned precheck compares a worker's capacity against
+// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+//
+// Stateless and idempotent: no cluster needs to exist, and this takes no
+// hugepages_mem floor -- the caller already has it and has to apply that
+// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+// S:5 Step 1).
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+func (c *Client) ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBody(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost Clusters:Sizing:Hugepages-Estimate
+//
+// The huge-page memory calculate_minimum_hp_memory would compute for a
+// node with this max_subsys/vcpu_count, with no devices known yet -- the
+// figure a Preprovisioned precheck compares a worker's capacity against
+// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+//
+// Stateless and idempotent: no cluster needs to exist, and this takes no
+// hugepages_mem floor -- the caller already has it and has to apply that
+// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+// S:5 Step 1).
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+func (c *Client) ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, body ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -10923,6 +11030,73 @@ func NewClustersCreateApiV2ClustersPostRequestWithBody(server string, params *Cl
 			}
 
 		}
+
+		if params.ClusterId != nil {
+
+			if queryFrag, err := runtime.StyleParamWithOptions("form", true, "cluster_id", *params.ClusterId, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "", Format: ""}); err != nil {
+				return nil, err
+			} else {
+				for _, qp := range strings.Split(queryFrag, "&") {
+					rawQueryFragments = append(rawQueryFragments, qp)
+				}
+			}
+
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequest calls the generic ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost builder with application/json body
+func NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequest(server string, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, body ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequestWithBody constructs an http.Request for the ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost method, with any body, and a specified content type
+func NewClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostRequestWithBody(server string, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/api/v2/clusters/sizing/hugepages-estimate")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
 
 		if params.ClusterId != nil {
 
@@ -20968,6 +21142,40 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with POST /api/v2/clusters/ (the `ClustersCreateApiV2ClustersPost` operationId).
 	ClustersCreateApiV2ClustersPostWithResponse(ctx context.Context, params *ClustersCreateApiV2ClustersPostParams, body ClustersCreateApiV2ClustersPostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersCreateApiV2ClustersPostResponse, error)
 
+	// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBodyWithResponse Clusters:Sizing:Hugepages-Estimate
+	//
+	// The huge-page memory calculate_minimum_hp_memory would compute for a
+	// node with this max_subsys/vcpu_count, with no devices known yet -- the
+	// figure a Preprovisioned precheck compares a worker's capacity against
+	// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+	//
+	// Stateless and idempotent: no cluster needs to exist, and this takes no
+	// hugepages_mem floor -- the caller already has it and has to apply that
+	// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+	// S:5 Step 1).
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+	ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBodyWithResponse(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse, error)
+
+	// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithResponse Clusters:Sizing:Hugepages-Estimate
+	//
+	// The huge-page memory calculate_minimum_hp_memory would compute for a
+	// node with this max_subsys/vcpu_count, with no devices known yet -- the
+	// figure a Preprovisioned precheck compares a worker's capacity against
+	// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+	//
+	// Stateless and idempotent: no cluster needs to exist, and this takes no
+	// hugepages_mem floor -- the caller already has it and has to apply that
+	// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+	// S:5 Step 1).
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+	ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithResponse(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, body ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse, error)
+
 	// ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse Clusters:Delete
 	//
 	// Delete an empty cluster, or with force bring it down completely: every
@@ -23378,6 +23586,54 @@ func (r ClustersCreateApiV2ClustersPostResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ClustersCreateApiV2ClustersPostResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *HugePagesEstimateDTO
+	// JSON422 the response for an HTTP 422 `application/json` response
+	JSON422 *HTTPValidationError
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse) GetJSON200() *HugePagesEstimateDTO {
+	return r.JSON200
+}
+
+// GetJSON422 returns the response for an HTTP 422 `application/json` response
+func (r ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse) GetJSON422() *HTTPValidationError {
+	return r.JSON422
+}
+
+// GetBody returns the raw response body bytes
+func (r ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -31719,6 +31975,52 @@ func (c *ClientWithResponses) ClustersCreateApiV2ClustersPostWithResponse(ctx co
 	return ParseClustersCreateApiV2ClustersPostResponse(rsp)
 }
 
+// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBodyWithResponse Clusters:Sizing:Hugepages-Estimate
+//
+// The huge-page memory calculate_minimum_hp_memory would compute for a
+// node with this max_subsys/vcpu_count, with no devices known yet -- the
+// figure a Preprovisioned precheck compares a worker's capacity against
+// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+//
+// Stateless and idempotent: no cluster needs to exist, and this takes no
+// hugepages_mem floor -- the caller already has it and has to apply that
+// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+// S:5 Step 1).
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+func (c *ClientWithResponses) ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBodyWithResponse(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse, error) {
+	rsp, err := c.ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse(rsp)
+}
+
+// ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithResponse Clusters:Sizing:Hugepages-Estimate
+//
+// The huge-page memory calculate_minimum_hp_memory would compute for a
+// node with this max_subsys/vcpu_count, with no devices known yet -- the
+// figure a Preprovisioned precheck compares a worker's capacity against
+// before any StorageNode exists (design-preprovisioned-hugepages.md S:7).
+//
+// Stateless and idempotent: no cluster needs to exist, and this takes no
+// hugepages_mem floor -- the caller already has it and has to apply that
+// clamp, and the MEM_MEGA rounding that follows it, itself (same design,
+// S:5 Step 1).
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /api/v2/clusters/sizing/hugepages-estimate (the `ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost` operationId).
+func (c *ClientWithResponses) ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithResponse(ctx context.Context, params *ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostParams, body ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostJSONRequestBody, reqEditors ...RequestEditorFn) (*ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse, error) {
+	rsp, err := c.ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePost(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse(rsp)
+}
+
 // ClustersDeleteApiV2ClustersClusterIdDeleteWithResponse Clusters:Delete
 //
 // Delete an empty cluster, or with force bring it down completely: every
@@ -35464,6 +35766,39 @@ func ParseClustersCreateApiV2ClustersPostResponse(rsp *http.Response) (*Clusters
 	switch {
 	case rsp.StatusCode == 201:
 		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest HTTPValidationError
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON422 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse parses an HTTP response from a ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostWithResponse call
+func ParseClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse(rsp *http.Response) (*ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClustersSizingHugepagesEstimateApiV2ClustersSizingHugepagesEstimatePostResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest HugePagesEstimateDTO
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
 		var dest HTTPValidationError

@@ -268,6 +268,9 @@ func sizingTemplate(s *simplyblockv1alpha2.StorageSiteSizing) map[string]any {
 	if s.MinHugePagesSize != "" {
 		tpl["minHugePagesSize"] = s.MinHugePagesSize
 	}
+	if s.HugePagesMode != "" {
+		tpl["hugePagesMode"] = s.HugePagesMode
+	}
 	if s.MaxSubsystemCount != nil {
 		tpl["maxSubsystemCount"] = *s.MaxSubsystemCount
 	}
@@ -647,6 +650,9 @@ func sizingApplied(s *simplyblockv1alpha2.StorageSiteSizing, tpl *simplyblockv1a
 		return false
 	}
 	if s.MinHugePagesSize != "" && tpl.MinHugePagesSize != s.MinHugePagesSize {
+		return false
+	}
+	if s.HugePagesMode != "" && tpl.HugePagesMode != s.HugePagesMode {
 		return false
 	}
 	if !eq32(s.VCPUCount, tpl.VCPUCount) || !eq32(s.MaxSubsystemCount, tpl.MaxSubsystemCount) ||

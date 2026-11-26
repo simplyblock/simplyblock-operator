@@ -35,11 +35,17 @@ import (
 	"strings"
 
 	admissionv1 "k8s.io/api/admission/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
+	"github.com/simplyblock/atlas/ptr"
+
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/discovery"
+	"github.com/simplyblock/simplyblock-operator/internal/hugepages"
+	"github.com/simplyblock/simplyblock-operator/internal/platform"
 )
 
 // matchPolicy=Equivalent is load-bearing rather than a default worth inheriting.
@@ -51,6 +57,8 @@ import (
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-storagenode,mutating=false,failurePolicy=fail,matchPolicy=Equivalent,sideEffects=None,groups=storage.simplyblock.io,resources=storagenodes,verbs=create;update,versions=v1alpha2,name=vstoragenode.simplyblock.io,admissionReviewVersions=v1
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusters,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=nodes,verbs=get
+// +kubebuilder:rbac:groups="",resources=pods,verbs=list
 
 // StorageNodeValidator admits a StorageNode write.
 type StorageNodeValidator struct {
@@ -61,6 +69,11 @@ type StorageNodeValidator struct {
 	// in it is the operator itself, and is the one identity permitted to write the
 	// guarded fields of §3.2.
 	OperatorNamespace string
+
+	// ControlPlane answers the preprovisioned huge-page precheck's sizing
+	// question (design-preprovisioned-hugepages.md S:5 Step 1), reached only
+	// when the owning cluster's HugePagesMode is Preprovisioned.
+	ControlPlane hugepages.EstimateHugePagesClient
 }
 
 func (v *StorageNodeValidator) Handle(
@@ -123,6 +136,31 @@ func (v *StorageNodeValidator) admitCreate(
 	}
 	if denial := dataInterfacesDenial(&node.Spec.Config, &cluster); denial != "" {
 		return admission.Denied(denial)
+	}
+
+	// Defense in depth alongside the cluster-level admission gate (§6.2): a
+	// StorageCluster carrying an unsupported mode should already be
+	// unreachable through the webhook that admits it, but a node is denied
+	// here too rather than trusting that it always was.
+	if !platform.HugePagesModeSupported(cluster.Spec.HugePagesMode) {
+		return admission.Denied(fmt.Sprintf(
+			"cluster %q has hugePagesMode %q, which is not supported on any platform yet",
+			cluster.Name, cluster.Spec.HugePagesMode))
+	}
+	if cluster.Spec.HugePagesMode == simplyblockv1alpha2.HugePagesModePreprovisioned {
+		denial, err := v.hugePagesDenial(ctx, node, &cluster)
+		switch {
+		case err != nil:
+			// Fail closed (design-preprovisioned-hugepages.md S:9, S:13 Q1): the
+			// node add fails downstream regardless once the reconcile reaches an
+			// unreachable control plane, so denying here only moves that
+			// failure earlier, not wider.
+			return admission.Denied(fmt.Sprintf(
+				"could not evaluate the preprovisioned huge-page precheck for worker %q: %v",
+				node.Spec.WorkerNode, err))
+		case denial != "":
+			return admission.Denied(denial)
+		}
 	}
 
 	// The operator writes a node's sizing itself, and a rolling hardware upgrade
@@ -319,6 +357,38 @@ func sizingDenial(
 			sizing.MinHugePagesSize, cluster.Name, want)
 	}
 	return ""
+}
+
+// hugePagesDenial reports why node's worker fails the preprovisioned
+// huge-page precheck, or the empty string when it passes. This is the
+// StorageNode-admission call site of design-preprovisioned-hugepages.md
+// S:6.1: the one worker spec.workerNode names, which catches a node written
+// directly against the API, or one added after a ClusterDeploymentConfig's
+// own check already ran against a worker that has since been contended
+// (same design, M-01).
+func (v *StorageNodeValidator) hugePagesDenial(
+	ctx context.Context, node *simplyblockv1alpha2.StorageNode, cluster *simplyblockv1alpha2.StorageCluster,
+) (string, error) {
+	var workerNode corev1.Node
+	if err := v.Client.Get(ctx, client.ObjectKey{Name: node.Spec.WorkerNode}, &workerNode); err != nil {
+		return "", fmt.Errorf("get worker node %q: %w", node.Spec.WorkerNode, err)
+	}
+	worker := discovery.KubeNodeOf(workerNode)
+
+	result, err := hugepages.Evaluate(ctx, v.Client, v.ControlPlane,
+		[]discovery.KubeNode{worker}, cluster.Status.UUID,
+		int32(ptr.IntFromOrZero(cluster.Spec.MaxSubsystemCount)),
+		int32(ptr.IntFromOrZero(cluster.Spec.VCPUCount)),
+		hugepages.MinHugePagesSizeMiB(cluster.Spec.MinHugePagesSize))
+	if err != nil {
+		return "", err
+	}
+	for _, w := range result.Workers {
+		if !w.Ready {
+			return fmt.Sprintf("%s: %s", w.Reason, w.Message), nil
+		}
+	}
+	return "", nil
 }
 
 // isOperator reports whether the request came from a service account in the

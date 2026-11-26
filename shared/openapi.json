@@ -146,6 +146,69 @@
         }
       }
     },
+    "/api/v2/clusters/sizing/hugepages-estimate": {
+      "post": {
+        "summary": "Clusters:Sizing:Hugepages-Estimate",
+        "description": "The huge-page memory calculate_minimum_hp_memory would compute for a\nnode with this max_subsys/vcpu_count, with no devices known yet -- the\nfigure a Preprovisioned precheck compares a worker's capacity against\nbefore any StorageNode exists (design-preprovisioned-hugepages.md S:7).\n\nStateless and idempotent: no cluster needs to exist, and this takes no\nhugepages_mem floor -- the caller already has it and has to apply that\nclamp, and the MEM_MEGA rounding that follows it, itself (same design,\nS:5 Step 1).",
+        "operationId": "clusters_sizing_hugepages_estimate_api_v2_clusters_sizing_hugepages_estimate_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HugePagesEstimateParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HugePagesEstimateDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/": {
       "get": {
         "summary": "Clusters:Detail",
@@ -15088,6 +15151,40 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HugePagesEstimateDTO": {
+        "properties": {
+          "minimum_hp_memory_mib": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Minimum Hp Memory Mib"
+          }
+        },
+        "type": "object",
+        "required": [
+          "minimum_hp_memory_mib"
+        ],
+        "title": "HugePagesEstimateDTO"
+      },
+      "HugePagesEstimateParams": {
+        "properties": {
+          "max_subsys": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Max Subsys"
+          },
+          "vcpu_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Vcpu Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_subsys",
+          "vcpu_count"
+        ],
+        "title": "HugePagesEstimateParams"
       },
       "KMIPKMSSettings": {
         "properties": {

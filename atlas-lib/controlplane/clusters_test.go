@@ -328,3 +328,46 @@ func TestClientGetClusterReadsSyncReplicationAndTheLeaderSite(t *testing.T) {
 		}
 	}
 }
+
+// EstimateHugePages is stateless: it sends max_subsys/vcpu_count to the
+// sizing endpoint with no cluster_id, and reads back the computed MiB figure.
+func TestClientEstimateHugePages(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v2/clusters/sizing/hugepages-estimate" {
+			t.Errorf("path = %s", r.URL.Path)
+		}
+		var body map[string]int
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["max_subsys"] != 40 || body["vcpu_count"] != 4 {
+			t.Errorf("body = %+v", body)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"minimum_hp_memory_mib":6658}`))
+	})
+
+	got, err := c.EstimateHugePages(context.Background(), 40, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != 6658 {
+		t.Errorf("EstimateHugePages = %d, want 6658", got)
+	}
+}
+
+func TestClientEstimateHugePagesRefusalCarriesTheAnswer(t *testing.T) {
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		_, _ = w.Write([]byte(`{"detail":[{"loc":["body","max_subsys"],"msg":"bad","type":"value_error"}]}`))
+	})
+
+	_, err := c.EstimateHugePages(context.Background(), -1, 4)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	var statusErr *StatusError
+	if !errors.As(err, &statusErr) || statusErr.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("err = %v, want a 422 StatusError", err)
+	}
+}

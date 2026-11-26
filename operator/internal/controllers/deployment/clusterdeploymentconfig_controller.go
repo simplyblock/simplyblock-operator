@@ -46,6 +46,7 @@ import (
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/hugepages"
 )
 
 const (
@@ -82,6 +83,11 @@ type ClusterDeploymentConfigReconciler struct {
 	// Namespace is where the operator runs, which is where the ControlPlane
 	// singleton the expansion waits on lives.
 	Namespace string
+
+	// ControlPlane answers the preprovisioned huge-page precheck's sizing
+	// question (design-preprovisioned-hugepages.md S:5 Step 1, S:7), reached
+	// only when a unit's HugePagesMode is Preprovisioned.
+	ControlPlane hugepages.EstimateHugePagesClient
 }
 
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=get;list;watch;update;patch
@@ -99,6 +105,7 @@ type ClusterDeploymentConfigReconciler struct {
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=storageclusterops,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups=storage.simplyblock.io,resources=controlplanes,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=pods,verbs=list
 
 // SetupWithManager registers the controller.
 //
@@ -282,10 +289,16 @@ func (r *ClusterDeploymentConfigReconciler) performStep(
 		// check rather than a side effect.
 		return true, nil
 	case stepCreatingCluster:
+		if ready, err := r.hugePagesReady(ctx, config); err != nil || !ready {
+			return false, err
+		}
 		return r.createCluster(ctx, config)
 	case stepAwaitingCluster:
 		return r.awaitCluster(ctx, config)
 	case stepCreatingNodes:
+		if ready, err := r.hugePagesReady(ctx, config); err != nil || !ready {
+			return false, err
+		}
 		return r.createNodes(ctx, config)
 	case stepActivating:
 		return r.activateCluster(ctx, config)
@@ -630,6 +643,23 @@ func equalConfigStatus(a, b simplyblockv1alpha2.ClusterDeploymentConfigStatus) b
 	}
 	for i := range a.NodeRefs {
 		if a.NodeRefs[i] != b.NodeRefs[i] {
+			return false
+		}
+	}
+	return conditionsEqual(a.Conditions, b.Conditions)
+}
+
+// conditionsEqual compares conditions by what each is about rather than by
+// LastTransitionTime, which apimeta.SetStatusCondition stamps anew even when
+// nothing else about the condition changed.
+func conditionsEqual(a, b []metav1.Condition) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Type != b[i].Type || a[i].Status != b[i].Status ||
+			a[i].Reason != b[i].Reason || a[i].Message != b[i].Message ||
+			a[i].ObservedGeneration != b[i].ObservedGeneration {
 			return false
 		}
 	}

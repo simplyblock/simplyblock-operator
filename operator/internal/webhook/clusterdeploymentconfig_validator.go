@@ -51,6 +51,7 @@ import (
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/deployment"
+	"github.com/simplyblock/simplyblock-operator/internal/platform"
 )
 
 // +kubebuilder:webhook:path=/validate-storage-simplyblock-io-v1alpha2-clusterdeploymentconfig,mutating=false,failurePolicy=fail,sideEffects=None,groups=storage.simplyblock.io,resources=clusterdeploymentconfigs,verbs=create;update,versions=v1alpha2,name=vclusterdeploymentconfig.simplyblock.io,admissionReviewVersions=v1
@@ -91,6 +92,15 @@ func (v *ClusterDeploymentConfigValidator) Handle(
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
+	// Unlike §5's five checks below, this runs on a draft too: Exclusive and
+	// Shared are not "wrong about the world" in the way a missing worker is --
+	// there is no future state of the cluster that would make either valid
+	// without a code change, so a draft gains nothing by being allowed to carry
+	// one (design-preprovisioned-hugepages.md S:6.2).
+	if denial := hugePagesModeDenial(config); denial != "" {
+		return admission.Denied(denial)
+	}
+
 	namespace := config.Namespace
 	if namespace == "" {
 		// A namespaced object created through a namespaced endpoint may arrive
@@ -129,6 +139,29 @@ func (v *ClusterDeploymentConfigValidator) Handle(
 	return admission.Denied(fmt.Sprintf(
 		"this document cannot be approved, and approving it is what makes it "+
 			"immutable: %s", strings.Join(messages, "; ")))
+}
+
+// hugePagesModeDenial reports why the document's HugePagesMode -- the
+// template's or any node set's override -- is unsupported, or the empty
+// string when every one of them is (design-preprovisioned-hugepages.md
+// S:6.2).
+func hugePagesModeDenial(config *simplyblockv1alpha2.ClusterDeploymentConfig) string {
+	if config.Spec.Cluster != nil {
+		if mode := config.Spec.Cluster.HugePagesMode; !platform.HugePagesModeSupported(mode) {
+			return fmt.Sprintf(
+				"spec.cluster.hugePagesMode %q is not supported on any platform yet", mode)
+		}
+	}
+	for _, set := range config.Spec.NodeSets {
+		if set.Cluster == nil {
+			continue
+		}
+		if mode := set.Cluster.HugePagesMode; !platform.HugePagesModeSupported(mode) {
+			return fmt.Sprintf(
+				"node set %q's hugePagesMode %q is not supported on any platform yet", set.Name, mode)
+		}
+	}
+	return ""
 }
 
 // problem is one thing wrong with an approval, carrying the reason it is counted

@@ -1157,10 +1157,11 @@ func main() {
 	// because a pod may name its image by a tag the registry has since moved and
 	// what a Job needs is the reference the operator was deployed with.
 	if err := (&deployment.ClusterDeploymentConfigReconciler{
-		Client:    mgr.GetClient(),
-		Scheme:    mgr.GetScheme(),
-		Recorder:  mgr.GetEventRecorder("clusterdeploymentconfig-controller"),
-		Namespace: operatorNamespace,
+		Client:       mgr.GetClient(),
+		Scheme:       mgr.GetScheme(),
+		Recorder:     mgr.GetEventRecorder("clusterdeploymentconfig-controller"),
+		Namespace:    operatorNamespace,
+		ControlPlane: clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 	}).SetupWithManager(ctrlMgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ClusterDeploymentConfig")
 		os.Exit(1)
@@ -1514,6 +1515,7 @@ func main() {
 			&webhook.Admission{Handler: &internalwebhook.StorageNodeValidator{
 				Client:            mgr.GetClient(),
 				OperatorNamespace: operatorNamespace,
+				ControlPlane:      clustercontroller.NewControlPlane(controlPlaneEndpoint, controlPlaneCredential),
 			}})
 		setupLog.Info("registered storagenode validating webhook")
 

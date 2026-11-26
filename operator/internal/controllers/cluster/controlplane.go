@@ -56,6 +56,13 @@ type ControlPlane interface {
 	// reports false rather than an error when there is none, because "no such
 	// cluster" is the ordinary answer on the creation path.
 	ClusterByName(ctx context.Context, name string) (atlascp.Cluster, bool, error)
+
+	// EstimateHugePages answers the preprovisioned huge-page precheck's sizing
+	// question (design-preprovisioned-hugepages.md S:5 Step 1, S:7): the MiB
+	// of hugepages-2Mi the control plane's own formula would compute for a
+	// node of this maxSubsys/vcpuCount, with no devices known yet. Stateless,
+	// like CreateCluster: it runs before any cluster exists.
+	EstimateHugePages(ctx context.Context, maxSubsys, vcpuCount int32) (int64, error)
 	// Clusters lists every cluster of the control plane, as ClusterByName
 	// reads them.
 	Clusters(ctx context.Context) ([]atlascp.Cluster, error)
@@ -202,6 +209,19 @@ func (c *httpControlPlane) ClusterByName(
 		}
 	}
 	return atlascp.Cluster{}, false, nil
+}
+
+// EstimateHugePages calls through the operator's own admin context, the same
+// one CreateCluster uses: there is no cluster yet to carry a credential of
+// its own.
+func (c *httpControlPlane) EstimateHugePages(
+	ctx context.Context, maxSubsys, vcpuCount int32,
+) (int64, error) {
+	api, err := c.atlasFor(c.adminContext(ctx))
+	if err != nil {
+		return 0, err
+	}
+	return api.EstimateHugePages(ctx, maxSubsys, vcpuCount)
 }
 
 // atlasFor is atlas-lib's client for one call: the endpoint and connection this

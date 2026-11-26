@@ -479,6 +479,21 @@ spec:
                     description: FabricType is the storage fabric.
                     maxLength: 32
                     type: string
+                  hugePagesMode:
+                    description: |-
+                      HugePagesMode selects how huge pages are managed for this cluster's
+                      storage nodes. Preprovisioned assumes the workers already carry enough
+                      and checks that before any StorageNode is created, rather than letting a
+                      shortfall surface as a Pending SPDK pod (design-preprovisioned-hugepages.md
+                      S:5). It is the only mode this deployment can currently select: Exclusive
+                      and Shared are reserved for future platform-specific support and are
+                      refused at admission (same design, S:6.2). Left unset, no huge-page check
+                      runs, which is this deployment's behavior without this field.
+                    enum:
+                    - Preprovisioned
+                    - Exclusive
+                    - Shared
+                    type: string
                   initContainerResources:
                     description: |-
                       InitContainerResources sizes both of the storage node's init containers,
@@ -1183,6 +1198,15 @@ spec:
                         rest. A field left unset takes the template's value. Valid on a document
                         with more than one node set, or one naming a cluster in clusterRef.
                       properties:
+                        hugePagesMode:
+                          description: |-
+                            HugePagesMode overrides the template's mode for this member. See
+                            ClusterTemplate.HugePagesMode.
+                          enum:
+                          - Preprovisioned
+                          - Exclusive
+                          - Shared
+                          type: string
                         maxSubsystemCount:
                           description: |-
                             MaxSubsystemCount is the maximum number of NVMe-oF subsystems each storage
@@ -1471,6 +1495,73 @@ spec:
                   dependency: nothing resolves it after expansion, which is what makes the
                   document safe to delete.
                 type: string
+              conditions:
+                description: |-
+                  Conditions carries HugePagesReady, which a Preprovisioned document's
+                  reviewer, or a client watching the object, reads for the preprovisioned
+                  huge-page precheck's outcome (design-preprovisioned-hugepages.md S:5).
+                  It blocks CreatingCluster and CreatingNodes rather than the document's
+                  own validity, so it is reported separately from status.message, which a
+                  retried check can flip back to True without a new approval. The
+                  operator writes no other condition type yet.
+                items:
+                  description: Condition contains details for one aspect of the current
+                    state of this API Resource.
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - type
+                x-kubernetes-list-type: map
               expansionStartedAt:
                 description: |-
                   ExpansionStartedAt is when the expansion machine was born, which is the

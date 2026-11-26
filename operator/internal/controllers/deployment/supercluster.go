@@ -117,6 +117,9 @@ func applyOverrides(
 	if overrides.MinHugePagesSize != "" {
 		template.MinHugePagesSize = overrides.MinHugePagesSize
 	}
+	if overrides.HugePagesMode != "" {
+		template.HugePagesMode = overrides.HugePagesMode
+	}
 	if len(overrides.SocketsToUse) > 0 {
 		template.SocketsToUse = overrides.SocketsToUse
 	}

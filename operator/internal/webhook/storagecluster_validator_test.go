@@ -174,3 +174,66 @@ func TestUpdatingTheOnlyClusterIsAdmitted(t *testing.T) {
 			response.Result.Message)
 	}
 }
+
+// --- HugePagesMode admission gate (design-preprovisioned-hugepages.md S:6.2) ---
+
+// U-26: a create stating an unsupported mode is denied.
+func TestAClusterWithAnUnsupportedHugePagesModeIsDenied(t *testing.T) {
+	scheme := newClusterScheme(t)
+	validator := &StorageClusterValidator{
+		Client:  fake.NewClientBuilder().WithScheme(scheme).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+
+	cluster := clusterAt("cluster1", "first")
+	cluster.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModeExclusive
+
+	response := validator.Handle(context.Background(), clusterRequest(t, admissionv1.Create, cluster))
+	if response.Allowed {
+		t.Fatal("a cluster with hugePagesMode Exclusive was admitted")
+	}
+}
+
+// U-27: an update flipping an already-Preprovisioned cluster to Exclusive is
+// denied just as a create stating it outright would be.
+func TestAnUpdateFlippingHugePagesModeToAnUnsupportedOneIsDenied(t *testing.T) {
+	scheme := newClusterScheme(t)
+	old := clusterAt("cluster1", "first")
+	old.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModePreprovisioned
+	validator := &StorageClusterValidator{
+		Client:  fake.NewClientBuilder().WithScheme(scheme).WithObjects(old).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+
+	updated := old.DeepCopy()
+	updated.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModeExclusive
+
+	oldEncoded, err := json.Marshal(old)
+	if err != nil {
+		t.Fatalf("encode the old cluster: %v", err)
+	}
+	req := clusterRequest(t, admissionv1.Update, updated)
+	req.OldObject = runtime.RawExtension{Raw: oldEncoded}
+
+	response := validator.Handle(context.Background(), req)
+	if response.Allowed {
+		t.Fatal("an update flipping hugePagesMode to Exclusive was admitted")
+	}
+}
+
+// Preprovisioned, the one supported mode, is admitted like any other field.
+func TestAClusterWithPreprovisionedHugePagesModeIsAdmitted(t *testing.T) {
+	scheme := newClusterScheme(t)
+	validator := &StorageClusterValidator{
+		Client:  fake.NewClientBuilder().WithScheme(scheme).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+
+	cluster := clusterAt("cluster1", "first")
+	cluster.Spec.HugePagesMode = simplyblockv1alpha2.HugePagesModePreprovisioned
+
+	response := validator.Handle(context.Background(), clusterRequest(t, admissionv1.Create, cluster))
+	if !response.Allowed {
+		t.Errorf("a cluster with hugePagesMode Preprovisioned was refused: %s", response.Result.Message)
+	}
+}

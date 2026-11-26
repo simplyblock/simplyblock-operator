@@ -100,6 +100,26 @@ const (
 	KubernetesEnvironmentOKE       KubernetesEnvironment = "OKE"
 )
 
+// HugePagesMode is how a cluster's storage nodes obtain the huge pages SPDK
+// needs. See ClusterTemplate.HugePagesMode.
+// +kubebuilder:validation:Enum=Preprovisioned;Exclusive;Shared
+type HugePagesMode string
+
+const (
+	// HugePagesModePreprovisioned assumes the workers already carry enough
+	// huge pages for the cluster's sizing. The only mode available today; see
+	// platform.HugePagesModeSupported.
+	HugePagesModePreprovisioned HugePagesMode = "Preprovisioned"
+
+	// HugePagesModeExclusive has simplyblock configure and own the host's
+	// huge-page pool. Not implemented on any platform; refused at admission.
+	HugePagesModeExclusive HugePagesMode = "Exclusive"
+
+	// HugePagesModeShared requests huge pages alongside other consumers of
+	// the host. Not implemented on any platform; refused at admission.
+	HugePagesModeShared HugePagesMode = "Shared"
+)
+
 // HostOSFamily is the packaging tradition a Linux distribution belongs to.
 //
 // It is the coarse half of what a host OS is, and the half most decisions are
@@ -395,6 +415,12 @@ type NodeSetClusterOverrides struct {
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
+	// HugePagesMode overrides the template's mode for this member. See
+	// ClusterTemplate.HugePagesMode.
+	// +kubebuilder:validation:Enum=Preprovisioned;Exclusive;Shared
+	// +optional
+	HugePagesMode HugePagesMode `json:"hugePagesMode,omitempty"`
+
 	// SocketsToUse are the NUMA sockets that run storage nodes on this member's
 	// workers. With NodesPerSocket it decides how many storage nodes each worker
 	// runs.
@@ -463,6 +489,18 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:MaxLength=32
 	// +optional
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
+
+	// HugePagesMode selects how huge pages are managed for this cluster's
+	// storage nodes. Preprovisioned assumes the workers already carry enough
+	// and checks that before any StorageNode is created, rather than letting a
+	// shortfall surface as a Pending SPDK pod (design-preprovisioned-hugepages.md
+	// S:5). It is the only mode this deployment can currently select: Exclusive
+	// and Shared are reserved for future platform-specific support and are
+	// refused at admission (same design, S:6.2). Left unset, no huge-page check
+	// runs, which is this deployment's behavior without this field.
+	// +kubebuilder:validation:Enum=Preprovisioned;Exclusive;Shared
+	// +optional
+	HugePagesMode HugePagesMode `json:"hugePagesMode,omitempty"`
 
 	// EnableDriveFormat formats every device the document names before a storage
 	// node takes it, which is how a drive carrying anything already is made
@@ -1019,6 +1057,18 @@ type ClusterDeploymentConfigStatus struct {
 	// which nothing in memory and no step deadline supplies.
 	// +optional
 	ExpansionStartedAt *metav1.Time `json:"expansionStartedAt,omitempty"`
+
+	// Conditions carries HugePagesReady, which a Preprovisioned document's
+	// reviewer, or a client watching the object, reads for the preprovisioned
+	// huge-page precheck's outcome (design-preprovisioned-hugepages.md S:5).
+	// It blocks CreatingCluster and CreatingNodes rather than the document's
+	// own validity, so it is reported separately from status.message, which a
+	// retried check can flip back to True without a new approval. The
+	// operator writes no other condition type yet.
+	// +listType=map
+	// +listMapKey=type
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }
 
 // +kubebuilder:object:root=true

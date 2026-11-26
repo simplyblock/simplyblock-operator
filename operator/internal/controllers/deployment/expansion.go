@@ -336,6 +336,7 @@ func (r *ClusterDeploymentConfigReconciler) buildCluster(
 			EnableAtomicity4K:        template.EnableAtomicity4K,
 			EnableMetadataJournal:    template.EnableMetadataJournal,
 			MinHugePagesSize:         template.MinHugePagesSize,
+			HugePagesMode:            template.HugePagesMode,
 			Stripe:                   template.Stripe,
 			ClusterMode:              template.ClusterMode,
 			EnableArbitration:        template.EnableArbitration,
