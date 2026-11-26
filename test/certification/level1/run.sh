@@ -28,8 +28,10 @@
 #
 # Environment:
 #   KUBECONFIG       required; a cluster-admin kubeconfig
-#   STORAGE_CLASS    the StorageClass under test (default simplyblock-csi-sc)
-#   SNAPSHOT_CLASS   its VolumeSnapshotClass (default simplyblock-csi-snapshotclass)
+#   STORAGE_CLASS    the StorageClass under test (default: the one class whose
+#                    provisioner is csi.simplyblock.io)
+#   SNAPSHOT_CLASS   its VolumeSnapshotClass (default: the one class whose driver
+#                    is csi.simplyblock.io)
 #   TESTS_IMAGE      override the tests image (default: oc adm release info --image-for=tests)
 #   RESULTS_DIR      where run directories go (default: results/ next to this script)
 #   LUN_STRESS_PODS  lower the LUN stress test's pod count (ocp-manifest.yaml) for
@@ -70,8 +72,36 @@ if [[ -z "${KUBECONFIG:-}" || ! -r "$KUBECONFIG" ]]; then
 fi
 command -v oc >/dev/null || { echo "oc is not on PATH" >&2; exit 2; }
 
-STORAGE_CLASS="${STORAGE_CLASS:-simplyblock-csi-sc}"
-SNAPSHOT_CLASS="${SNAPSHOT_CLASS:-simplyblock-csi-snapshotclass}"
+# The classes under test are found by their driver unless named: the operator
+# names its StorageClass after the storage cluster, so the name changes with
+# every deployment. More than one candidate is a choice the script does not make.
+DRIVER="csi.simplyblock.io"
+find_class() {
+  local kind="$1" field="$2" names
+  names="$(oc get "$kind" -o jsonpath="{range .items[?(@.$field==\"$DRIVER\")]}{.metadata.name}{\"\\n\"}{end}")"
+  if [[ -z "$names" ]]; then
+    echo "no $kind uses $DRIVER" >&2
+    return 1
+  fi
+  if [[ "$(wc -l <<<"$names")" -ne 1 ]]; then
+    echo "several $kind objects use $DRIVER; name the one under test:" >&2
+    echo "$names" | sed 's/^/  /' >&2
+    return 1
+  fi
+  echo "$names"
+}
+if [[ -z "${STORAGE_CLASS:-}" ]]; then
+  STORAGE_CLASS="$(find_class storageclass provisioner)" || {
+    echo "set STORAGE_CLASS" >&2
+    exit 2
+  }
+fi
+if [[ -z "${SNAPSHOT_CLASS:-}" ]]; then
+  SNAPSHOT_CLASS="$(find_class volumesnapshotclass driver)" || {
+    echo "set SNAPSHOT_CLASS" >&2
+    exit 2
+  }
+fi
 
 # What is under test has to exist before an hour of tests finds out it does not.
 oc get storageclass "$STORAGE_CLASS" >/dev/null

@@ -36,8 +36,11 @@ ReadOnlyMany for raw block only, so those two run separately on the block
 patterns (`level1/manifest.yaml` has the detail).
 
 The manifests name the classes under test as `${STORAGE_CLASS}` and
-`${SNAPSHOT_CLASS}`; set them when the cluster's differ from the defaults
-(`simplyblock-csi-sc`, `simplyblock-csi-snapshotclass`).
+`${SNAPSHOT_CLASS}`. The script fills them in with the StorageClass and the
+VolumeSnapshotClass whose driver is `csi.simplyblock.io`, because the operator
+names its StorageClass after the storage cluster and the name changes with every
+deployment. When more than one class of either kind uses the driver, the script
+stops and lists them. Set `STORAGE_CLASS` or `SNAPSHOT_CLASS` to pick one.
 
 Each run writes `results/level1-<profile>-<UTC time>/` with the rendered
 manifests, `run-info.txt` (OpenShift version, image, classes), the full log, the
