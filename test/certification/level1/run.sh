@@ -17,7 +17,9 @@
 #
 # For the length of a run the script keeps a namespace with a ServiceAccount
 # bound to cluster-admin, which openshift-tests needs; both are removed on exit,
-# including on an interrupt. Results land in
+# including on an interrupt. The one exception is a run whose results could not
+# be copied: the binding goes, and the namespace stays with the test pod and its
+# results until someone deletes it. Results land in
 # $RESULTS_DIR/level1-<profile>-<UTC time>/: the rendered manifests,
 # run-info.txt, the full log, the JUnit files under junit/, the monitor output,
 # and the suite's exit code.
@@ -74,11 +76,15 @@ command -v oc >/dev/null || { echo "oc is not on PATH" >&2; exit 2; }
 
 # The classes under test are found by their driver unless named: the operator
 # names its StorageClass after the storage cluster, so the name changes with
-# every deployment. More than one candidate is a choice the script does not make.
+# every deployment. The suite's own copies (e2e-<namespace>-e2e-sc<suffix>) are
+# not candidates, because a failed test can leave one behind. More than one
+# candidate is a choice the script does not make.
 DRIVER="csi.simplyblock.io"
 find_class() {
   local kind="$1" field="$2" names
-  names="$(oc get "$kind" -o jsonpath="{range .items[?(@.$field==\"$DRIVER\")]}{.metadata.name}{\"\\n\"}{end}")"
+  names="$(oc get "$kind" -o jsonpath="{range .items[?(@.$field==\"$DRIVER\")]}{.metadata.name}{\"\\n\"}{end}")" ||
+    return 1
+  names="$(grep -v '^e2e-' <<<"$names" || true)"
   if [[ -z "$names" ]]; then
     echo "no $kind uses $DRIVER" >&2
     return 1
@@ -137,10 +143,13 @@ fi
 } | tee "$RUN_DIR/run-info.txt"
 
 LOG_PID=""
+KEEP_NAMESPACE=""
 cleanup() {
   [[ -n "$LOG_PID" ]] && kill "$LOG_PID" 2>/dev/null || true
   oc delete clusterrolebinding "$BINDING" --ignore-not-found >/dev/null || true
-  oc delete namespace "$NAMESPACE" --ignore-not-found --wait=false >/dev/null || true
+  if [[ -z "$KEEP_NAMESPACE" ]]; then
+    oc delete namespace "$NAMESPACE" --ignore-not-found --wait=false >/dev/null || true
+  fi
 }
 trap cleanup EXIT
 
@@ -175,7 +184,7 @@ spec:
   - name: tests
     image: $TESTS_IMAGE
     env:
-    - {name: HOME, value: /results}
+    - {name: HOME, value: /scratch}
     - {name: TMPDIR, value: /scratch}
     - {name: KUBECONFIG, value: /scratch/kubeconfig}
     - {name: TEST_CSI_DRIVER_FILES, value: /manifests/manifest.yaml}
@@ -227,7 +236,36 @@ until oc -n "$NAMESPACE" exec openshift-tests -- test -f /results/exit-code 2>/d
   sleep "$POLL_SECONDS"
 done
 
-oc -n "$NAMESPACE" exec openshift-tests -- tar cf - -C /results . | tar xf - -C "$RUN_DIR"
-status="$(cat "$RUN_DIR/exit-code")"
+status="$(oc -n "$NAMESPACE" exec openshift-tests -- cat /results/exit-code)"
+
+# The results come over as one archive with its checksum, because a stream
+# through oc exec can end early without an error from either side: a tar piped
+# straight through lost the end of a 250 MB result set that way, exit code
+# included. A copy that does not match is fetched again.
+sha256() {
+  if command -v sha256sum >/dev/null; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+}
+oc -n "$NAMESPACE" exec openshift-tests -- \
+  sh -c 'tar czf /scratch/results.tar.gz -C /results . && sha256sum /scratch/results.tar.gz' \
+  >"$RUN_DIR/results.sha256"
+want="$(cut -d' ' -f1 "$RUN_DIR/results.sha256")"
+copied=""
+for attempt in 1 2 3; do
+  oc -n "$NAMESPACE" exec openshift-tests -- cat /scratch/results.tar.gz >"$RUN_DIR/results.tar.gz" || true
+  if [[ "$(sha256 "$RUN_DIR/results.tar.gz")" == "$want" ]]; then
+    copied=yes
+    break
+  fi
+  echo "results copy $attempt did not match its checksum" >&2
+done
+if [[ -z "$copied" ]]; then
+  KEEP_NAMESPACE=yes
+  echo "the results could not be copied; the test pod is kept in namespace $NAMESPACE," >&2
+  echo "with the archive at /scratch/results.tar.gz. Delete the namespace when done." >&2
+  echo "openshift-tests exit $status" >&2
+  exit 1
+fi
+tar xzf "$RUN_DIR/results.tar.gz" -C "$RUN_DIR"
+rm "$RUN_DIR/results.tar.gz" "$RUN_DIR/results.sha256"
 echo "results: $RUN_DIR (openshift-tests exit $status)"
 exit "$status"

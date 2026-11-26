@@ -22,7 +22,8 @@ refuses those of another architecture.
 For the length of a run, the namespace `simplyblock-cert-level1` holds a
 ServiceAccount bound to cluster-admin, which `openshift-tests` needs. The script
 removes both when it exits, also on an interrupt, and refuses to start while the
-namespace exists.
+namespace exists. When the results cannot be copied, the script keeps the
+namespace and the test pod and says where the archive is.
 
 ```sh
 make level1 KUBECONFIG=/abs/path/kubeconfig                  # every test pattern
