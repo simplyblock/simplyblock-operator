@@ -265,8 +265,9 @@ func TestAWideStripeIsNotActivatedOverTooFewDomains(t *testing.T) {
 	api := clusterReadingAt(utils.ClusterStatusUnready)
 	rec := &recorder{}
 	objects := []client.Object{
-		newTestCluster(withStripe(4, 1), func(c *simplyblockv1alpha2.StorageCluster) {
-			c.Spec.EnableFailureDomains = ptr.To(true)
+		newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			withFailureDomains(c)
+			c.Spec.Stripe.DataChunks = ptr.To(int32(4))
 		}, lockedBy(testOpsName)),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate),
 	}
