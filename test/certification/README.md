@@ -34,7 +34,11 @@ make level1-dry-run KUBECONFIG=/abs/path/kubeconfig          # list the tests, r
 Both profiles are needed for a complete result. The suite cannot scope a
 capability to one volume mode, and simplyblock serves ReadWriteMany and
 ReadOnlyMany for raw block only, so those two run separately on the block
-patterns (`level1/manifest.yaml` has the detail).
+patterns (`level1/manifest.yaml` has the detail). The block-multinode run leaves
+out the multiVolume tests that pair a block volume with a filesystem one: every
+claim in that profile is ReadWriteMany, and simplyblock serves a ReadWriteMany
+filesystem only from a pNFS class. The main profile runs them. The run writes the
+list it ran to `tests.txt` and names what it left out in `run-info.txt`.
 
 The manifests name the classes under test as `${STORAGE_CLASS}` and
 `${SNAPSHOT_CLASS}`. The script fills them in with the StorageClass and the

@@ -57,10 +57,17 @@ case "$PROFILE" in
   main)
     MANIFEST="$SCRIPT_DIR/manifest.yaml"
     RUN_FILTER=""
+    LEAVE_OUT=""
     ;;
   block-multinode)
     MANIFEST="$SCRIPT_DIR/manifest-block-multinode.yaml"
     RUN_FILTER='--run=\(block volmode\)'
+    # A block pattern whose test also claims a filesystem volume, which this
+    # profile asks for ReadWriteMany like every claim. simplyblock serves that
+    # only from a pNFS class, so the claim is refused by design; the main
+    # profile runs the same test with ReadWriteOnce.
+    LEAVE_OUT='should access to two volumes with different volume mode'
+    LEAVE_OUT_WHY='claims a ReadWriteMany filesystem volume, served only by a pNFS class; runs in the main profile'
     ;;
   *)
     echo "unknown profile '$PROFILE'; use main or block-multinode" >&2
@@ -139,6 +146,9 @@ fi
   echo "storage class:  $STORAGE_CLASS"
   echo "snapshot class: $SNAPSHOT_CLASS"
   echo "extra args:     ${EXTRA_ARGS[*]-}"
+  if [[ -n "$LEAVE_OUT" ]]; then
+    echo "left out:       tests matching \"$LEAVE_OUT\" ($LEAVE_OUT_WHY)"
+  fi
   echo "LUN stress:     $(sed -n 's/^  PodsTotal: //p' "$RUN_DIR/ocp-manifest.yaml") pods${LUN_STRESS_PODS:+ (lowered: rehearsal, not a submission)}"
 } | tee "$RUN_DIR/run-info.txt"
 
@@ -162,11 +172,25 @@ oc -n "$NAMESPACE" create configmap manifests \
   --from-file=ocp-manifest.yaml="$RUN_DIR/ocp-manifest.yaml" >/dev/null
 
 # The suite's arguments, quoted for the container's shell.
-ARGS="run openshift/csi --junit-dir /results/junit"
-[[ -n "$RUN_FILTER" ]] && ARGS+=" $(printf '%q' "$RUN_FILTER")"
+FILTER=""
+[[ -n "$RUN_FILTER" ]] && FILTER=" $(printf '%q' "$RUN_FILTER")"
+EXTRA=""
 for a in ${EXTRA_ARGS[@]+"${EXTRA_ARGS[@]}"}; do
-  ARGS+=" $(printf '%q' "$a")"
+  EXTRA+=" $(printf '%q' "$a")"
 done
+
+# A profile that leaves tests out runs from a list instead of the suite: the
+# suite's own dry run under the same filter, less the tests left out, which
+# matches a name in every pattern it appears in. The list lands in the results,
+# so a run shows exactly what it covered.
+if [[ -n "$LEAVE_OUT" ]]; then
+  SUITE="openshift-tests run openshift/csi --dry-run$FILTER >/scratch/suite-tests.txt"
+  # The dry run prints its log on the same stream; a test name is a quoted line.
+  SUITE+=" && grep '^\"' /scratch/suite-tests.txt | grep -v -F $(printf '%q' "$LEAVE_OUT") >/results/tests.txt"
+  SUITE+=" && openshift-tests run --junit-dir /results/junit -f /results/tests.txt$EXTRA"
+else
+  SUITE="openshift-tests run openshift/csi --junit-dir /results/junit$FILTER$EXTRA"
+fi
 
 # The Pod builds a kubeconfig from its ServiceAccount token, runs the suite in
 # /results (openshift-tests writes its monitor output into its working
@@ -209,7 +233,7 @@ spec:
       current-context: in-cluster
       KC
       cd /results
-      openshift-tests $ARGS
+      $SUITE
       echo \$? >/results/exit-code
       sleep 86400
     volumeMounts:
