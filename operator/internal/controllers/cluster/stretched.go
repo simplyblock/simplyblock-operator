@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
+	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/statemachine"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -57,6 +59,32 @@ func (r *StorageClusterReconciler) awaitLeader(
 		// is a cluster that cannot be adopted yet, and a hold in this step has
 		// no deadline to run out.
 		reason, refusal, err := r.followerPreflight(ctx, cluster, claim)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: clusterRetry}, err
+		}
+		if refusal != "" {
+			return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
+				corev1.EventTypeWarning, reason, refusal)
+		}
+		return r.enterCreationStep(ctx, cluster, machine,
+			simplyblockv1alpha2.StorageClusterStepAdopting)
+	}
+
+	if stretch := r.stretchedControlPlane(ctx); stretch != nil {
+		// On a stretched control plane the follower shares the leader's
+		// database: the cluster the leader created is in its own control
+		// plane's list, secret included, and no hub has to deliver it.
+		entry, listed, err := r.API.ClusterByName(ctx, cluster.Name)
+		if err != nil {
+			return ctrl.Result{RequeueAfter: clusterRetry}, r.note(ctx, cluster, err.Error())
+		}
+		if !listed {
+			return ctrl.Result{RequeueAfter: clusterRetry}, r.noteOnce(ctx, cluster,
+				corev1.EventTypeNormal, PeerClusterMissing, fmt.Sprintf(
+					"follower site %s: waiting for the leader site %s to create backend cluster %s "+
+						"in the shared control plane", stretch.Site, stretch.PeerSite, cluster.Name))
+		}
+		reason, refusal, err := r.followerPreflight(ctx, cluster, adoptionOf(entry))
 		if err != nil {
 			return ctrl.Result{RequeueAfter: clusterRetry}, err
 		}
@@ -181,6 +209,94 @@ func (r *StorageClusterReconciler) workersReachable(
 	return "", "", nil
 }
 
+// stretchedControlPlane is the site this operator's control plane is of a
+// stretched control plane (docs/designs/design-stretched-control-plane.md), nil on an
+// ordinary control plane or when none is configured.
+func (r *StorageClusterReconciler) stretchedControlPlane(
+	ctx context.Context,
+) *simplyblockv1alpha2.StretchedControlPlaneSpec {
+	if r.Stretch == nil {
+		return nil
+	}
+	return r.Stretch(ctx)
+}
+
+// checkStretchedSite refuses a StorageCluster that does not name the site its
+// control plane is of a stretched control plane: the cluster create carries
+// that site, every node this site adds joins it, and a StorageCluster that
+// names another site, or none, would create a cluster the other site's
+// StorageCluster cannot adopt as its peer.
+func checkStretchedSite(
+	cluster *simplyblockv1alpha2.StorageCluster, stretch *simplyblockv1alpha2.StretchedControlPlaneSpec,
+) error {
+	if stretch == nil {
+		return nil
+	}
+	s := cluster.Spec.Stretched
+	switch {
+	case s == nil:
+		return fmt.Errorf("this control plane is site %q of a stretched control plane: spec.stretched "+
+			"must name it (site %q, peerSite %q) with a role, so that the cluster is created for both sites",
+			stretch.Site, stretch.Site, stretch.PeerSite)
+	case s.Site != stretch.Site:
+		return fmt.Errorf("spec.stretched.site is %q but this control plane is site %q of a stretched "+
+			"control plane; the two must agree", s.Site, stretch.Site)
+	case s.PeerSite != stretch.PeerSite:
+		return fmt.Errorf("spec.stretched.peerSite is %q but this control plane's peer site is %q; "+
+			"the two must agree", s.PeerSite, stretch.PeerSite)
+	}
+	return nil
+}
+
+func stretchedSiteOf(stretch *simplyblockv1alpha2.StretchedControlPlaneSpec) string {
+	if stretch == nil {
+		return ""
+	}
+	return stretch.Site
+}
+
+func stretchedEndpointOf(stretch *simplyblockv1alpha2.StretchedControlPlaneSpec) string {
+	if stretch == nil {
+		return ""
+	}
+	return stretch.APIEndpoint
+}
+
+// registerSite registers this site's control plane with the cluster the
+// follower adopted, once: the cluster's management-node list already naming
+// the site means a previous pass did it, and a 409 from the control plane
+// means the same. The registration is what the leader's standby redirects
+// to once this site takes the lease, so it precedes the first node add.
+func (r *StorageClusterReconciler) registerSite(
+	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, found adoption,
+	stretch *simplyblockv1alpha2.StretchedControlPlaneSpec,
+) error {
+	nodes, err := r.API.ManagementNodes(ctx, found.UUID)
+	if err != nil {
+		return fmt.Errorf("listing the management nodes of backend cluster %s: %w", found.UUID, err)
+	}
+	for _, node := range nodes {
+		if node.Site == stretch.Site {
+			return nil
+		}
+	}
+	err = r.API.RegisterManagementNode(ctx, found.UUID, atlascp.RegisterManagementNodeParams{
+		Site: stretch.Site, APIEndpoint: stretch.APIEndpoint,
+	})
+	var refusal *atlascp.StatusError
+	if errors.As(err, &refusal) && refusal.StatusCode == http.StatusConflict {
+		err = nil
+	}
+	if err != nil {
+		return fmt.Errorf("registering site %s's control plane with backend cluster %s: %w",
+			stretch.Site, found.UUID, err)
+	}
+	r.Recorder.Eventf(cluster, nil, corev1.EventTypeNormal, SiteRegistered, SiteRegistered,
+		"Registered this site's control plane (%s, %s) with backend cluster %s",
+		stretch.Site, stretch.APIEndpoint, found.UUID)
+	return nil
+}
+
 // creatingLeaderSite is the leader site a create names: a stretched cluster's
 // leader names its own site, any other cluster none.
 func creatingLeaderSite(cluster *simplyblockv1alpha2.StorageCluster) string {
@@ -195,12 +311,21 @@ func creatingLeaderSite(cluster *simplyblockv1alpha2.StorageCluster) string {
 // the record names another or none. The control plane refuses a site it
 // records as lost, and the leader does not ask for it. A failed write is
 // logged and tried again on the next pass.
+//
+// On a stretched control plane the record's leader site is the control
+// plane's own: `control-plane set-leader-site` and `takeover` move it, and the
+// lease follows (docs/designs/design-stretched-control-plane.md). The
+// StorageCluster's role is only the role it was created with there, so this
+// site writing itself back would undo every planned move; it writes nothing.
 func (r *StorageClusterReconciler) recordLeaderSite(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster, reading subscriptions.ClusterDTO,
 ) {
 	s := cluster.Spec.Stretched
 	if s == nil || s.Role != simplyblockv1alpha2.StretchedRoleLeader ||
 		reading.LeaderSite == s.Site || reading.LostSite == s.Site {
+		return
+	}
+	if r.stretchedControlPlane(ctx) != nil {
 		return
 	}
 	if err := r.API.SetLeaderSite(ctx, cluster.Status.UUID, s.Site); err != nil {

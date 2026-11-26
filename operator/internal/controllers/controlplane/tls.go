@@ -18,6 +18,9 @@
 package controlplane
 
 import (
+	"net"
+	"net/url"
+
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -165,7 +168,38 @@ func servingCertificateObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Ob
 			spec["usages"] = []any{"digital signature", "key encipherment", "server auth", "client auth"}
 		}
 	}
+	addSiteEndpointName(cert.Object, local.Stretch)
 	return []client.Object{cert}
+}
+
+// addSiteEndpointName puts the host of a stretched site's apiEndpoint on the
+// management API's certificate. The other site's operator and every client
+// that follows a standby's redirect dial that address rather than the
+// Service, and verify the certificate against it.
+func addSiteEndpointName(obj map[string]any, stretch *simplyblockv1alpha2.StretchedControlPlaneSpec) {
+	if stretch == nil {
+		return
+	}
+	u, err := url.Parse(stretch.APIEndpoint)
+	if err != nil || u.Hostname() == "" {
+		return
+	}
+	spec, ok := obj["spec"].(map[string]any)
+	if !ok {
+		return
+	}
+	host := u.Hostname()
+	key := "dnsNames"
+	if net.ParseIP(host) != nil {
+		key = "ipAddresses"
+	}
+	names, _ := spec[key].([]any)
+	for _, n := range names {
+		if n == host {
+			return
+		}
+	}
+	spec[key] = append(names, host)
 }
 
 // servingCertAnnotations is the OpenShift half: the service CA signs from an

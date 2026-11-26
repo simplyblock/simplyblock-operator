@@ -14,6 +14,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,10 +22,12 @@ import (
 	"time"
 )
 
-// The two reads design-controlplane.md §8 names.
+// The two reads design-controlplane.md §8 names, and the one a stretched
+// control plane adds.
 const (
-	readyPath   = "/api/v2/_meta/ready"
-	versionPath = "/api/v2/_meta/version"
+	readyPath       = "/api/v2/_meta/ready"
+	versionPath     = "/api/v2/_meta/version"
+	datacentersPath = "/api/v2/_meta/fdb-datacenters"
 )
 
 // probeTimeout bounds one readiness check. It is short on purpose: the probe
@@ -48,6 +51,11 @@ type Prober interface {
 	// records that /_meta/version does not exist yet, so the caller publishes
 	// nothing rather than treating its absence as a failure.
 	Version(ctx context.Context, endpoint string) (string, error)
+	// Datacenters reports the FoundationDB data centers (dcid localities)
+	// whose processes are in the database, which is how one site of a
+	// stretched control plane learns that the other's region has joined. A
+	// control plane without the read answers nil, nil.
+	Datacenters(ctx context.Context, endpoint string) ([]string, error)
 }
 
 // HTTPProber probes over HTTP with a bearer token.
@@ -98,6 +106,27 @@ func (p *HTTPProber) Version(ctx context.Context, endpoint string) (string, erro
 		return "", fmt.Errorf("status=%d: %s", status, strings.TrimSpace(string(body)))
 	}
 	return parseVersion(body), nil
+}
+
+// Datacenters performs the datacenter read.
+func (p *HTTPProber) Datacenters(ctx context.Context, endpoint string) ([]string, error) {
+	body, status, err := p.get(ctx, endpoint, datacentersPath)
+	if err != nil {
+		return nil, err
+	}
+	if status == http.StatusNotFound {
+		return nil, nil
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("%s answered %d: %s", datacentersPath, status, strings.TrimSpace(string(body)))
+	}
+	var parsed struct {
+		Datacenters []string `json:"datacenters"`
+	}
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		return nil, fmt.Errorf("%s: %w", datacentersPath, err)
+	}
+	return parsed.Datacenters, nil
 }
 
 // get performs one request against a path of the endpoint.

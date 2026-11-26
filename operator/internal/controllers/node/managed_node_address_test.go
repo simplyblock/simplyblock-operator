@@ -44,12 +44,16 @@ func localControlPlaneSingleton() *simplyblockv1alpha2.ControlPlane {
 	}
 }
 
-func workerNode(name, internalIP string) *corev1.Node {
+// workerIP is opsWorker's internal address.
+const workerIP = "192.168.10.112"
+
+// workerNode is the opsWorker Node with its internal address.
+func workerNode() *corev1.Node {
 	return &corev1.Node{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: opsWorker},
 		Status: corev1.NodeStatus{
 			Addresses: []corev1.NodeAddress{
-				{Type: corev1.NodeInternalIP, Address: internalIP},
+				{Type: corev1.NodeInternalIP, Address: workerIP},
 			},
 		},
 	}
@@ -62,7 +66,7 @@ func workerNode(name, internalIP string) *corev1.Node {
 func TestNodeAddressUsesTheWorkersRealIPWhenTheControlPlaneIsManaged(t *testing.T) {
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(managedControlPlaneSingleton(), workerNode(opsWorker, "192.168.10.112")).
+		WithObjects(managedControlPlaneSingleton(), workerNode()).
 		Build()
 	w := &Workload{Client: c}
 
@@ -79,7 +83,7 @@ func TestNodeAddressUsesTheWorkersRealIPWhenTheControlPlaneIsManaged(t *testing.
 func TestNodeAddressKeepsTheDNSNameForALocalControlPlane(t *testing.T) {
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(localControlPlaneSingleton(), workerNode(opsWorker, "192.168.10.112")).
+		WithObjects(localControlPlaneSingleton(), workerNode()).
 		Build()
 	w := &Workload{Client: c}
 
@@ -96,7 +100,7 @@ func TestNodeAddressKeepsTheDNSNameForALocalControlPlane(t *testing.T) {
 func TestNodeAddressFallsBackToDNSWhenTheControlPlaneCannotBeRead(t *testing.T) {
 	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
 	c := fake.NewClientBuilder().WithScheme(scheme).
-		WithObjects(workerNode(opsWorker, "192.168.10.112")).
+		WithObjects(workerNode()).
 		Build()
 	w := &Workload{Client: c}
 
@@ -121,5 +125,33 @@ func TestNodeAddressFallsBackToDNSWhenTheWorkerNodeCannotBeRead(t *testing.T) {
 
 	if want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace, atlaskube.ConstantWorkloadNames()); got != want {
 		t.Errorf("NodeAddress = %q, want the per-pod DNS name %q", got, want)
+	}
+}
+
+// A stretched site keeps adding under the DNS name its own certificate names,
+// and also hands the worker's real address to the other site's control plane,
+// which cannot resolve this site's Services; an ordinary site hands none.
+func TestAStretchedSiteSendsTheWorkersAddressBesideTheName(t *testing.T) {
+	scheme := testsupport.NewScheme(t, corev1.AddToScheme)
+	stretched := localControlPlaneSingleton()
+	stretched.Spec.Source.Local.Stretch = &simplyblockv1alpha2.StretchedControlPlaneSpec{
+		Site: "b", PeerSite: "a", Role: simplyblockv1alpha2.StretchedControlPlaneRoleJoin,
+		APIEndpoint: "https://cp-b.example:5000",
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(stretched, workerNode()).Build()
+	w := &Workload{Client: c}
+	if got := w.StretchNodeIP(context.Background(), opsNamespace, opsWorker); got != "192.168.10.112" {
+		t.Errorf("StretchNodeIP = %q, want the worker's InternalIP", got)
+	}
+	want := utils.StorageNodeSetAPIAddress(opsWorker, opsNamespace, atlaskube.ConstantWorkloadNames())
+	if got := w.NodeAddress(context.Background(), opsNamespace, opsCluster, opsWorker); got != want {
+		t.Errorf("NodeAddress = %q, want the DNS name %q", got, want)
+	}
+
+	plain := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(localControlPlaneSingleton(), workerNode()).Build()
+	if got := (&Workload{Client: plain}).StretchNodeIP(context.Background(), opsNamespace, opsWorker); got != "" {
+		t.Errorf("an ordinary site sends node_ip %q", got)
 	}
 }

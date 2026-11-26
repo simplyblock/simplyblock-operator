@@ -127,6 +127,80 @@ func TestControlPlaneCELRefusesToChangeTheSource(t *testing.T) {
 	}
 }
 
+// One site of a stretched control plane names itself, the other site and its
+// role; a Join site also names where the Bootstrap site's connection string
+// is. The site is a property of the installation, so the block cannot be
+// added to, or removed from, a control plane that exists.
+func TestControlPlaneCELGuardsTheStretchedSite(t *testing.T) {
+	ctx := context.Background()
+	apiClient := apiServer(t)
+
+	stretch := func(role simplyblockv1alpha2.StretchedControlPlaneRole, seed bool) *simplyblockv1alpha2.StretchedControlPlaneSpec {
+		s := &simplyblockv1alpha2.StretchedControlPlaneSpec{
+			Site: "a", PeerSite: "b", Role: role, APIEndpoint: "http://cp-a.example:5000",
+		}
+		if seed {
+			s.SeedConnectionStringSecretRef = &corev1.LocalObjectReference{Name: "fdb-seed"}
+		}
+		return s
+	}
+	for _, tc := range []struct {
+		name    string
+		stretch *simplyblockv1alpha2.StretchedControlPlaneSpec
+		denied  string
+	}{
+		{name: "a Bootstrap site needs no seed", stretch: stretch(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap, false)},
+		{name: "a Join site with its seed", stretch: stretch(simplyblockv1alpha2.StretchedControlPlaneRoleJoin, true)},
+		{name: "a Join site without a seed would create a second database",
+			stretch: stretch(simplyblockv1alpha2.StretchedControlPlaneRoleJoin, false), denied: "seedConnectionStringSecretRef"},
+		{name: "a site that is its own peer", denied: "site and peerSite must differ",
+			stretch: &simplyblockv1alpha2.StretchedControlPlaneSpec{
+				Site: "a", PeerSite: "a", Role: simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap,
+				APIEndpoint: "http://cp-a.example:5000"}},
+		{name: "an endpoint that is not a URL", denied: "apiEndpoint",
+			stretch: &simplyblockv1alpha2.StretchedControlPlaneSpec{
+				Site: "a", PeerSite: "b", Role: simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap,
+				APIEndpoint: "cp-a.example:5000"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			namespace := freshNamespace(t, apiClient)
+			cp := &simplyblockv1alpha2.ControlPlane{
+				ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: namespace},
+				Spec: simplyblockv1alpha2.ControlPlaneSpec{Source: simplyblockv1alpha2.ControlPlaneSource{
+					Local: &simplyblockv1alpha2.LocalControlPlane{Image: testImage, Stretch: tc.stretch},
+				}},
+			}
+			err := apiClient.Create(ctx, cp)
+			switch {
+			case tc.denied != "" && err == nil:
+				t.Fatalf("admitted; want a denial naming %q", tc.denied)
+			case tc.denied != "":
+				if !strings.Contains(err.Error(), tc.denied) {
+					t.Errorf("denied with %q, want %q", err, tc.denied)
+				}
+			case err != nil:
+				t.Fatalf("a legal stretch block was denied: %v", err)
+			}
+		})
+	}
+
+	// Immutable: neither added to nor removed from a control plane that exists.
+	namespace := freshNamespace(t, apiClient)
+	cp := &simplyblockv1alpha2.ControlPlane{
+		ObjectMeta: metav1.ObjectMeta{Name: SingletonName, Namespace: namespace},
+		Spec: simplyblockv1alpha2.ControlPlaneSpec{Source: simplyblockv1alpha2.ControlPlaneSource{
+			Local: &simplyblockv1alpha2.LocalControlPlane{Image: testImage},
+		}},
+	}
+	if err := apiClient.Create(ctx, cp); err != nil {
+		t.Fatalf("create the control plane: %v", err)
+	}
+	cp.Spec.Source.Local.Stretch = stretch(simplyblockv1alpha2.StretchedControlPlaneRoleBootstrap, false)
+	if err := apiClient.Update(ctx, cp); err == nil || !strings.Contains(err.Error(), "immutable") {
+		t.Errorf("stretch was added to an existing control plane: %v", err)
+	}
+}
+
 // Changing the image within a managed source is an ordinary edit, and it is what
 // an Upgrade operation performs. The immutability rule covers the block rather
 // than its members, so this has to stay admitted.

@@ -34,7 +34,8 @@
             },
             "namespace": {
               "type": "string"
-            }
+            },
+            "caSecretName": { "type": "string" }
           }
         }
       },

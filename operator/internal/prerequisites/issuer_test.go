@@ -169,3 +169,27 @@ func TestCAChainKeeperRecreatesADeletedChain(t *testing.T) {
 	}
 	waitFor("recreated")
 }
+
+// A chain with CASecret signs with that existing CA: no root and no CA
+// Certificate are made, and the CA ClusterIssuer names the given Secret.
+func TestCAChainSignsWithAnExistingCASecret(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(clientgoscheme.Scheme).
+		WithObjects(certManagerController("cert-manager")).Build()
+	chain := CAChain{RootIssuer: SelfSignedIssuerName, CreateRoot: true, CASecret: "simplyblock-shared-ca-tls"}
+	if err := EnsureCAChain(context.Background(), c, chain); err != nil {
+		t.Fatalf("EnsureCAChain: %v", err)
+	}
+	if get(t, c, clusterIssuerGVK, "", SelfSignedIssuerName) != nil {
+		t.Error("a root ClusterIssuer was created although the CA already exists")
+	}
+	if get(t, c, certificateGVK, "cert-manager", caCertificateName) != nil {
+		t.Error("a CA Certificate was minted although the CA already exists")
+	}
+	ca := get(t, c, clusterIssuerGVK, "", CAIssuerName)
+	if ca == nil {
+		t.Fatal("the CA ClusterIssuer was not created")
+	}
+	if s, _, _ := unstructured.NestedString(ca.Object, "spec", "ca", "secretName"); s != "simplyblock-shared-ca-tls" {
+		t.Errorf("CA ClusterIssuer secretName = %q, want simplyblock-shared-ca-tls", s)
+	}
+}

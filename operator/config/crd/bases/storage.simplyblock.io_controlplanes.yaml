@@ -529,6 +529,91 @@ spec:
                                 More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                               type: object
                           type: object
+                        stretch:
+                          description: |-
+                            Stretch makes this control plane one site of a stretched control plane:
+                            two Kubernetes clusters, one per site, whose control planes share one
+                            FoundationDB laid out as two regions (one per site, three copies in
+                            each), one site leading at a time (docs/designs/design-stretched-control-plane.md).
+                            Unset, the control plane is an ordinary single-site installation.
+                            Immutable: a site is a property of the installation.
+                          properties:
+                            apiEndpoint:
+                              description: |-
+                                APIEndpoint is the URL of this site's management API as the other site
+                                and its clients reach it (a load balancer or node port, not the
+                                in-cluster Service). The other site's standby control plane redirects
+                                mutating calls to it while this site leads, and the operator records it
+                                on the cluster at creation (Bootstrap) or registration (Join).
+                              pattern: ^https?://.+
+                              type: string
+                            peerSite:
+                              description: PeerSite is the other site's name.
+                              maxLength: 63
+                              pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                              type: string
+                            role:
+                              description: |-
+                                Role is Bootstrap on the site that creates the database and Join on the
+                                one that joins it.
+                              enum:
+                                - Bootstrap
+                                - Join
+                              type: string
+                            seedConnectionStringSecretRef:
+                              description: |-
+                                SeedConnectionStringSecretRef names a Secret in the operator's namespace
+                                whose "cluster-file" key holds the connection string of the database the
+                                Bootstrap site created (its FoundationDB ConfigMap's cluster-file).
+                                Required on a Join site, ignored on the Bootstrap site.
+                              properties:
+                                name:
+                                  default: ""
+                                  description: |-
+                                    Name of the referent.
+                                    This field is effectively required, but due to backwards compatibility is
+                                    allowed to be empty. Instances of this type with an empty value here are
+                                    almost certainly wrong.
+                                    More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                                  type: string
+                              type: object
+                              x-kubernetes-map-type: atomic
+                            site:
+                              description: |-
+                                Site is the name of the site this control plane runs in. Every
+                                control-plane pod learns it, storage nodes added from this Kubernetes
+                                cluster carry it, and the StorageCluster of this site names the same
+                                site in spec.stretched.site.
+                              maxLength: 63
+                              pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                              type: string
+                            witnessSite:
+                              description: |-
+                                WitnessSite names a third site that holds FoundationDB coordinators and
+                                satellite logs but no control plane and no storage. With it, losing
+                                either site leaves the coordinator majority, so the survivor's database
+                                keeps answering and a takeover needs no FoundationDB recovery first.
+                                Once the witness's processes have joined (status.stretch.witnessJoined)
+                                both regions name it as their satellite. Both sites must name the same
+                                witness. The witness's own FoundationDBCluster joins through the
+                                Bootstrap site's connection string, runs log processes only, and does
+                                not configure the database (automationOptions.configureDatabase: false).
+                              maxLength: 63
+                              pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
+                              type: string
+                          required:
+                            - apiEndpoint
+                            - peerSite
+                            - role
+                            - site
+                          type: object
+                          x-kubernetes-validations:
+                            - message: site and peerSite must differ
+                              rule: self.site != self.peerSite
+                            - message: 'a Join site needs seedConnectionStringSecretRef: the connection string of the database the Bootstrap site created'
+                              rule: self.role != 'Join' || has(self.seedConnectionStringSecretRef)
+                            - message: witnessSite must differ from site and peerSite
+                              rule: '!has(self.witnessSite) || (self.witnessSite != self.site && self.witnessSite != self.peerSite)'
                         tls:
                           default: {}
                           description: |-
@@ -612,6 +697,9 @@ spec:
                       required:
                         - image
                       type: object
+                      x-kubernetes-validations:
+                        - message: 'stretch is immutable: a site is a property of the installation, and the database behind a stretched control plane is laid out for two sites'
+                          rule: has(self.stretch) == has(oldSelf.stretch)
                     managed:
                       description: Managed is a control plane that already exists.
                       properties:
@@ -823,6 +911,35 @@ spec:
                     database is first applied, and never changed afterwards, because the
                     volumes cannot move to another class.
                   type: string
+                stretch:
+                  description: |-
+                    Stretch is the state of this site of a stretched control plane; unset on
+                    an ordinary one.
+                  properties:
+                    peerJoined:
+                      description: |-
+                        PeerJoined is whether the other site's FoundationDB processes have been
+                        seen in the database. Until then the database is configured with this
+                        site's region alone (the other at a negative priority, so processes
+                        that join take no data); from then on with both regions usable. It is
+                        never unset: a peer that disappears later is a region outage, which the
+                        database rides out, not a reason to drop the region.
+                      type: boolean
+                    peerJoinedAt:
+                      description: PeerJoinedAt is when PeerJoined was first observed.
+                      format: date-time
+                      type: string
+                    witnessJoined:
+                      description: |-
+                        WitnessJoined is whether the witness site's FoundationDB processes have
+                        been seen in the database. From then on both regions name the witness
+                        as their satellite. Never unset, for the same reason as PeerJoined.
+                      type: boolean
+                    witnessJoinedAt:
+                      description: WitnessJoinedAt is when WitnessJoined was first observed.
+                      format: date-time
+                      type: string
+                  type: object
                 version:
                   description: Version is the version the management API reports.
                   type: string

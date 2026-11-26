@@ -12202,6 +12202,185 @@
           }
         }
       }
+    },
+    "/api/v2/clusters/{cluster_id}/control-plane/": {
+      "get": {
+        "tags": [
+          "control-plane"
+        ],
+        "summary": "Clusters:Control-Plane:Status",
+        "description": "The control plane's mode on this site, the lease, and the readiness\nof every site (``failback_ready`` per site: what a planned move gates\non).",
+        "operationId": "clusters_control_plane_status_api_v2_clusters__cluster_id__control_plane__get",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlPlaneStatusDTO"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/control-plane/leader-site": {
+      "post": {
+        "tags": [
+          "control-plane"
+        ],
+        "summary": "Clusters:Control-Plane:Leader-Site",
+        "description": "The planned move: refused while a readiness gate of the site is red\nunless ``force``; the lease then drains on the holder and moves within\na few seconds.",
+        "operationId": "clusters_control_plane_leader_site_api_v2_clusters__cluster_id__control_plane_leader_site_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeaderSiteParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SiteReadinessDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stretched cluster, or no control plane on the site"
+          },
+          "409": {
+            "description": "The site is not ready (detail.problems); pass force"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v2/clusters/{cluster_id}/control-plane/takeover": {
+      "post": {
+        "tags": [
+          "control-plane"
+        ],
+        "summary": "Clusters:Control-Plane:Takeover",
+        "description": "The unplanned move after the leading site is down. FoundationDB must\nanswer on the surviving site: when the coordinator majority was lost\nwith the leader, the FDB recovery comes first.",
+        "operationId": "clusters_control_plane_takeover_api_v2_clusters__cluster_id__control_plane_takeover_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TakeoverParams"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlPlaneStatusDTO"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Not a stretched cluster, a wrong site, or a confirmation that does not name the leading site"
+          },
+          "409": {
+            "description": "The confirmed site still answers (detail.alive)"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12583,7 +12762,14 @@
             "title": "Region"
           },
           "endpoint": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "title": "Endpoint"
           },
           "secondary_target": {
@@ -12877,7 +13063,14 @@
             "title": "Region"
           },
           "endpoint": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "title": "Endpoint"
           },
           "secondary_target": {
@@ -13368,6 +13561,11 @@
           "node_label_suffix": {
             "type": "string",
             "title": "Node Label Suffix"
+          },
+          "stretched_control_plane": {
+            "type": "boolean",
+            "title": "Stretched Control Plane",
+            "default": false
           }
         },
         "type": "object",
@@ -13813,6 +14011,21 @@
             "type": "string",
             "pattern": "^(-[a-z0-9]{1,3})?$",
             "title": "Node Label Suffix",
+            "default": ""
+          },
+          "stretched_control_plane": {
+            "type": "boolean",
+            "title": "Stretched Control Plane",
+            "default": false
+          },
+          "site": {
+            "type": "string",
+            "title": "Site",
+            "default": ""
+          },
+          "site_api_endpoint": {
+            "type": "string",
+            "title": "Site Api Endpoint",
             "default": ""
           }
         },

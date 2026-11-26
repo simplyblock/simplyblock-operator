@@ -1653,6 +1653,7 @@ func (r *StorageNodeReconciler) addParams(
 		SpdkSystemMemory: config.SpdkSystemMemory,
 		Expand:           ptr.BoolFromOrFalse(config.Expand),
 		Site:             config.Site,
+		NodeIP:           r.Workload.StretchNodeIP(ctx, node.Namespace, node.Spec.WorkerNode),
 	}
 
 	// The control plane's failure domain is an integer, and this API's is a label.

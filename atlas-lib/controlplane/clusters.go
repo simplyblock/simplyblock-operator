@@ -37,6 +37,9 @@ type Cluster struct {
 	// in, and LostSiteState how far its drain or fence got.
 	LostSite      string
 	LostSiteState string
+	// StretchedControlPlane is whether the cluster's control plane is split
+	// over two sites sharing one FoundationDB, one site leading at a time.
+	StretchedControlPlane bool
 }
 
 // ClusterWorkloadNames are the Services a cluster's storage nodes are reached
@@ -114,6 +117,14 @@ type CreateClusterParams struct {
 	// LeaderSite names the creating site the leader of a sync-replicated
 	// cluster; empty leaves it unset.
 	LeaderSite string
+	// StretchedControlPlane creates a cluster whose control plane is split
+	// over two sites sharing one FoundationDB (stretched-control-plane.md).
+	// Site is the creating control plane's site and SiteAPIEndpoint the URL
+	// the other site's standby redirects mutating calls to; both are
+	// required with it and refused without it.
+	StretchedControlPlane bool
+	Site                  string
+	SiteAPIEndpoint       string
 }
 
 // ClusterCapacityReading is one capacity sample of a cluster, in bytes.
@@ -227,6 +238,8 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 		LeaderSite:      ptr.From(d.LeaderSite, ""),
 		LostSite:        ptr.From(d.LostSite, ""),
 		LostSiteState:   ptr.From(d.LostSiteState, ""),
+
+		StretchedControlPlane: ptr.BoolFromOrFalse(d.StretchedControlPlane),
 	}
 }
 
@@ -235,38 +248,41 @@ func clusterFromDTO(d cpapi.ClusterDTO) Cluster {
 // zero value: md_journal defaults to on, so it is always stated.
 func clusterParamsOf(p CreateClusterParams) cpapi.ClusterParams {
 	body := cpapi.ClusterParams{
-		MaxSubsys:           p.MaxSubsys,
-		SpdkVcpuCount:       p.SpdkVCPUCount,
-		Name:                nonEmpty(p.Name),
-		CapWarn:             nonZero(p.CapWarn),
-		CapCrit:             nonZero(p.CapCrit),
-		ProvCapWarn:         nonZero(p.ProvCapWarn),
-		ProvCapCrit:         nonZero(p.ProvCapCrit),
-		DistrNdcs:           nonZero(p.NDCS),
-		DistrNpcs:           nonZero(p.NPCS),
-		EnableNodeAffinity:  isTrue(p.EnableNodeAffinity),
-		Fabric:              nonEmpty(p.Fabric),
-		CrName:              nonEmpty(p.CRName),
-		CrNamespace:         nonEmpty(p.CRNamespace),
-		CrPlural:            nonEmpty(p.CRPlural),
-		ClientDataNic:       nonEmpty(p.ClientDataNIC),
-		NvmfBasePort:        nonZero(p.NvmfBasePort),
-		RpcBasePort:         nonZero(p.RPCBasePort),
-		SnodeApiPort:        nonZero(p.SnodeAPIPort),
-		EnableFailureDomain: isTrue(p.EnableFailureDomain),
-		HugepagesMem:        nonZero(int(p.HugepagesMemBytes)),
-		InlineChecksum:      isTrue(p.InlineChecksum),
-		Atomic4k:            isTrue(p.Atomic4K),
-		MdJournal:           ptr.To(p.MetadataJournal),
-		IsSingleNode:        isTrue(p.SingleNode),
-		SyncReplication:     isTrue(p.SyncReplication),
-		LeaderSite:          nonEmpty(p.LeaderSite),
-		SnodeApiService:     nonEmpty(p.WorkloadNames.NodeAPIService),
-		SpdkProxyService:    nonEmpty(p.WorkloadNames.SpdkProxyService),
-		SpdkProxyTlsSecret:  nonEmpty(p.WorkloadNames.SpdkProxyTLSSecret),
-		NodeLabelSuffix:     nonEmpty(p.WorkloadNames.NodeLabelSuffix),
-		KmsSettings:         kmsSettingsOf(p.KMS),
-		BackupConfig:        backupConfigOf(p.Backup),
+		MaxSubsys:             p.MaxSubsys,
+		SpdkVcpuCount:         p.SpdkVCPUCount,
+		Name:                  nonEmpty(p.Name),
+		CapWarn:               nonZero(p.CapWarn),
+		CapCrit:               nonZero(p.CapCrit),
+		ProvCapWarn:           nonZero(p.ProvCapWarn),
+		ProvCapCrit:           nonZero(p.ProvCapCrit),
+		DistrNdcs:             nonZero(p.NDCS),
+		DistrNpcs:             nonZero(p.NPCS),
+		EnableNodeAffinity:    isTrue(p.EnableNodeAffinity),
+		Fabric:                nonEmpty(p.Fabric),
+		CrName:                nonEmpty(p.CRName),
+		CrNamespace:           nonEmpty(p.CRNamespace),
+		CrPlural:              nonEmpty(p.CRPlural),
+		ClientDataNic:         nonEmpty(p.ClientDataNIC),
+		NvmfBasePort:          nonZero(p.NvmfBasePort),
+		RpcBasePort:           nonZero(p.RPCBasePort),
+		SnodeApiPort:          nonZero(p.SnodeAPIPort),
+		EnableFailureDomain:   isTrue(p.EnableFailureDomain),
+		HugepagesMem:          nonZero(int(p.HugepagesMemBytes)),
+		InlineChecksum:        isTrue(p.InlineChecksum),
+		Atomic4k:              isTrue(p.Atomic4K),
+		MdJournal:             ptr.To(p.MetadataJournal),
+		IsSingleNode:          isTrue(p.SingleNode),
+		SyncReplication:       isTrue(p.SyncReplication),
+		LeaderSite:            nonEmpty(p.LeaderSite),
+		StretchedControlPlane: isTrue(p.StretchedControlPlane),
+		Site:                  nonEmpty(p.Site),
+		SiteApiEndpoint:       nonEmpty(p.SiteAPIEndpoint),
+		SnodeApiService:       nonEmpty(p.WorkloadNames.NodeAPIService),
+		SpdkProxyService:      nonEmpty(p.WorkloadNames.SpdkProxyService),
+		SpdkProxyTlsSecret:    nonEmpty(p.WorkloadNames.SpdkProxyTLSSecret),
+		NodeLabelSuffix:       nonEmpty(p.WorkloadNames.NodeLabelSuffix),
+		KmsSettings:           kmsSettingsOf(p.KMS),
+		BackupConfig:          backupConfigOf(p.Backup),
 	}
 	if p.DeviceMode != "" {
 		body.DeviceMode = ptr.To(cpapi.ClusterParamsDeviceMode(p.DeviceMode))

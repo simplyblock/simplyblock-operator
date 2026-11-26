@@ -31,6 +31,15 @@ func foundationDBSpecOf(cp *simplyblockv1alpha2.ControlPlane) *simplyblockv1alph
 	return nil
 }
 
+// stretchOf is spec.source.local.stretch: the site this control plane is of a
+// stretched control plane, nil on an ordinary installation.
+func stretchOf(cp *simplyblockv1alpha2.ControlPlane) *simplyblockv1alpha2.StretchedControlPlaneSpec {
+	if local := cp.Spec.Source.Local; local != nil {
+		return local.Stretch
+	}
+	return nil
+}
+
 // storageClassOf is the StorageClass of the control plane's volumes: the one
 // the spec names, else the one the operator chose on Amazon EKS and recorded
 // in the status. Empty leaves the claims to the cluster's default class.
