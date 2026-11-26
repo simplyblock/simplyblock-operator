@@ -33,4 +33,5 @@ jobs:
           # AfterAll: Ginkgo suite node (codespell lowercases it to "afterall")
           # notin: the Kubernetes label-selector set operator (control-center/mock)
           # aks: Azure Kubernetes Service, a KubernetesEnvironment value
-          ignore_words_list: "browseable,ro,NotIn,afterall,notin,aks"
+          # uptodate: the UpToDate condition of CDI's DataImportCron (test/certification)
+          ignore_words_list: "browseable,ro,NotIn,afterall,notin,aks,uptodate"
