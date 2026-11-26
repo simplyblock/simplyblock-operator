@@ -74,3 +74,18 @@ func TestAVolumeOperationsCreatorCannotBeAddedLater(t *testing.T) {
 		denied: "spec.creatorRef cannot be set after creation",
 	}})
 }
+
+func TestATestFailoverSourceStorageClusterCannotBeAddedLater(t *testing.T) {
+	drill := &simplyblockv1alpha2.TestFailover{Spec: simplyblockv1alpha2.TestFailoverSpec{
+		Scope: simplyblockv1alpha2.TestFailoverScopeGroup, SourceCluster: "site-a",
+		SourceRef: "group-1", BubbleCluster: "site-b",
+	}}
+	runTransitions(t, []transition{{
+		name:   "pinning a running drill to a storage cluster",
+		create: drill,
+		mutate: func(o client.Object) {
+			o.(*simplyblockv1alpha2.TestFailover).Spec.SourceStorageCluster = "4b5e1c2d-0000-4000-8000-000000000001"
+		},
+		denied: "spec.sourceStorageCluster cannot be set after creation",
+	}})
+}
