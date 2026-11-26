@@ -43,6 +43,9 @@ func TestAbortCannotBeWithdrawn(t *testing.T) {
 		{"StorageDeviceOps", &simplyblockv1alpha2.StorageDeviceOps{Spec: simplyblockv1alpha2.StorageDeviceOpsSpec{
 			DeviceRef: "device-1", Action: simplyblockv1alpha2.StorageDeviceOpsActionRestart, Abort: true,
 		}}, func(o client.Object) { o.(*simplyblockv1alpha2.StorageDeviceOps).Spec.Abort = false }},
+		{"StorageNodeOps", nodeOps(simplyblockv1alpha2.StorageNodeOpsActionShutdown,
+			func(s *simplyblockv1alpha2.StorageNodeOpsSpec) { s.Abort = true }),
+			asNodeOps(func(s *simplyblockv1alpha2.StorageNodeOpsSpec) { s.Abort = false })},
 	}
 	cases := make([]transition, 0, len(kinds))
 	for _, k := range kinds {

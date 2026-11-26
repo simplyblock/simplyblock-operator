@@ -137,6 +137,7 @@ type RemoveSpec struct {
 // +kubebuilder:validation:XValidation:rule="has(self.reattachVolume) == has(oldSelf.reattachVolume) && (!has(self.reattachVolume) || self.reattachVolume == oldSelf.reattachVolume)",message="spec.reattachVolume is immutable: it is read once, at the step that issues the restart, so a change is honored or ignored by when it lands, and the record would not say which"
 // +kubebuilder:validation:XValidation:rule="has(self.migrate) == has(oldSelf.migrate) && (!has(self.migrate) || self.migrate == oldSelf.migrate)",message="spec.migrate is immutable: Preparing, Relocating, and Promoting each read it, and the placement of the relocated node follows it, so a change or a removal mid-relocation binds one set of drives and records another, or fails the operation after the restart onto the target"
 // +kubebuilder:validation:XValidation:rule="has(self.remove) == has(oldSelf.remove) && (!has(self.remove) || self.remove == oldSelf.remove)",message="spec.remove is immutable: Validating, MigratingVolumes, and Verifying each read the system-volume pattern, and Verifying deletes the volumes it matches, so a pattern changed mid-drain deletes volumes the drain should have moved"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type StorageNodeOpsSpec struct {
 	// NodeRef names the StorageNode this operation acts on. The operation never
 	// owns its target, because deleting the record of an operation must not delete
@@ -156,6 +157,8 @@ type StorageNodeOpsSpec struct {
 	// this type freeze every parameter block and flag. Whether an
 	// abort is expressible from the current step is declared by that action's
 	// graph rather than checked here.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 
