@@ -328,7 +328,10 @@ type SimplyblockDriverSpec struct {
 
 	// EnableVolumeSnapshots decides whether snapshot support is part of this
 	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
-	// controller where the cluster serves neither. False applies none of them.
+	// controller where the cluster serves neither. False applies none of them,
+	// and turning it false removes the VolumeSnapshotClass this deployment
+	// applied. Existing snapshots are kept: their content carries the driver
+	// and the deletion policy itself.
 	// +kubebuilder:default=true
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`

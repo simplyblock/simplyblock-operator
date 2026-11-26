@@ -193,7 +193,12 @@ whose control plane has to be configured for both.
 deployment.** It defaults to true, and true is the `VolumeSnapshotClass` for
 `spec.driverName`, plus the CRDs and a controller where the cluster serves
 neither (§4.1). False applies none of them, which is the chart's
-`snapshotclass.create` and `snapshotcontroller.create` as one field.
+`snapshotclass.create` and `snapshotcontroller.create` as one field. Turning it
+false also removes the `VolumeSnapshotClass` applied while it was true, when it
+carries this deployment's `managed-by` label: an apply never deletes, and a class
+left behind keeps taking new `VolumeSnapshot`s for a deployment that no longer
+offers them. Existing snapshots are kept, since their `VolumeSnapshotContent`
+carries the driver and the deletion policy itself.
 
 **`enableCSIAddons` decides whether the controller plugin runs the csi-addons
 sidecar.** It defaults to false. The sidecar publishes a `CSIAddonsNode`, so it
@@ -1217,7 +1222,10 @@ type SimplyblockDriverSpec struct {
 
 	// EnableVolumeSnapshots decides whether snapshot support is part of this
 	// deployment: the VolumeSnapshotClass for DriverName, and the CRDs and a
-	// controller where the cluster serves neither. False applies none of them.
+	// controller where the cluster serves neither. False applies none of them,
+	// and turning it false removes the VolumeSnapshotClass this deployment
+	// applied. Existing snapshots are kept: their content carries the driver
+	// and the deletion policy itself.
 	// +kubebuilder:default=true
 	// +optional
 	EnableVolumeSnapshots *bool `json:"enableVolumeSnapshots,omitempty"`

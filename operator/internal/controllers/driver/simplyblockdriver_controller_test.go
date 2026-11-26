@@ -19,6 +19,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -463,5 +464,72 @@ func TestTurningCSIAddonsOffRemovesItsRBAC(t *testing.T) {
 		if !apierrors.IsNotFound(err) {
 			t.Errorf("%T %s still there with csi-addons off (err %v)", obj, obj.GetName(), err)
 		}
+	}
+}
+
+// snapshotClassGone reports whether the deployment's snapshot class is absent.
+func snapshotClassGone(t *testing.T, c client.Client, d *simplyblockv1alpha2.SimplyblockDriver) bool {
+	t.Helper()
+	class := &unstructured.Unstructured{}
+	class.SetGroupVersionKind(volumeSnapshotClassGVK)
+	err := c.Get(t.Context(), client.ObjectKey{Name: names(d).snapshotClass}, class)
+	if err != nil && !apierrors.IsNotFound(err) {
+		t.Fatalf("reading the snapshot class: %v", err)
+	}
+	return apierrors.IsNotFound(err)
+}
+
+// disableSnapshots turns the deployment's snapshot support off.
+func disableSnapshots(t *testing.T, c client.Client, d *simplyblockv1alpha2.SimplyblockDriver) *simplyblockv1alpha2.SimplyblockDriver {
+	t.Helper()
+	var live simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(d), &live); err != nil {
+		t.Fatal(err)
+	}
+	off := false
+	live.Spec.EnableVolumeSnapshots = &off
+	if err := c.Update(t.Context(), &live); err != nil {
+		t.Fatal(err)
+	}
+	return &live
+}
+
+// Turning snapshots off removes the snapshot class applied while they were on:
+// left behind, it keeps taking new VolumeSnapshots for a deployment that no
+// longer offers them. Existing snapshots do not need it, since their content
+// carries the driver and the deletion policy itself.
+func TestTurningSnapshotsOffRemovesTheSnapshotClass(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme, Snapshots: servingCluster}
+
+	reconcileOnce(t, r, d)
+	if snapshotClassGone(t, c, d) {
+		t.Fatal("no snapshot class was applied with snapshots on")
+	}
+
+	reconcileOnce(t, r, disableSnapshots(t, c, d))
+
+	if !snapshotClassGone(t, c, d) {
+		t.Error("the snapshot class is still there with snapshots off")
+	}
+}
+
+// A class of the same name this deployment did not mark is somebody else's,
+// and turning snapshots off leaves it alone.
+func TestTurningSnapshotsOffKeepsAClassNotItsOwn(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	off := false
+	d.Spec.EnableVolumeSnapshots = &off
+	foreign := volumeSnapshotClass(d)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d, foreign).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{Client: c, Scheme: scheme, Snapshots: servingCluster}
+
+	reconcileOnce(t, r, d)
+
+	if snapshotClassGone(t, c, d) {
+		t.Error("a snapshot class this deployment did not mark was deleted")
 	}
 }
