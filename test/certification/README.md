@@ -4,11 +4,11 @@ The test runs behind simplyblock's Red Hat certifications, kept here so they can
 be repeated for every supported OpenShift version and every simplyblock release
 rather than rebuilt by hand each time:
 
-| Level | Certification                          | Tool                                                  | Here      |
-|-------|----------------------------------------|-------------------------------------------------------|-----------|
-| 1     | OpenShift CSI Certified                | `openshift-tests run openshift/csi`                   | `level1/` |
-| 2     | OpenShift Virtualization CSI Certified | OpenShift Virtualization storage checkup (to confirm) | not yet   |
-| 3     | Performance and Scale Tested           | `storage-cert-harness`                                | not yet   |
+| Level | Certification                          | Tool                                | Here      |
+|-------|----------------------------------------|-------------------------------------|-----------|
+| 1     | OpenShift CSI Certified                | `openshift-tests run openshift/csi` | `level1/` |
+| 2     | OpenShift Virtualization CSI Certified | KubeVirt storage checkup            | `level2/` |
+| 3     | Performance and Scale Tested           | `storage-cert-harness`              | not yet   |
 
 ## Level 1
 
@@ -60,3 +60,32 @@ the count with `LUN_STRESS_PODS=<n>`; `run-info.txt` then marks the run as a
 rehearsal.
 
 A filesystem ReadWriteMany run over a pNFS class is not part of this yet.
+
+## Level 2
+
+Red Hat's virtualization readiness tier is the Level 1 run plus OpenShift
+Virtualization's KubeVirt storage checkup, and the result to submit is the
+checkup's ConfigMap. `level2/run.sh` runs the checkup as a Job in the namespace
+`simplyblock-cert-level2`, in the checkup image the installed OpenShift
+Virtualization operator ships, and removes the namespace and its cluster-reader
+binding when it exits.
+
+```sh
+make level2 KUBECONFIG=/abs/path/kubeconfig
+```
+
+The checkup judges the cluster's whole storage setup, so the script prepares
+two things the driver does not decide. It makes the class under test the default
+virtualization class, where the golden images (the OS images VMs are cloned
+from) are imported, and refuses when another class already is. It then waits
+until every golden image is up to date, because the checkup fails on one that is
+not and skips its VM tests when there is none.
+
+A StorageProfile CDI cannot fill, such as one for a provisioner it does not know,
+fails the checkup whatever class is under test. On the lab cluster that is
+`local-path`, which the control plane's own volumes use; the submission explains
+it rather than the run hiding it.
+
+Each run writes `results/level2-<UTC time>/` with `run-info.txt`, the result
+ConfigMap (`storage-checkup-config.yaml`), the checkup's log, the cluster
+version, the OpenShift Virtualization version, and the StorageProfiles.

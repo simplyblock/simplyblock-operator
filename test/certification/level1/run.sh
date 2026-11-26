@@ -81,28 +81,8 @@ if [[ -z "${KUBECONFIG:-}" || ! -r "$KUBECONFIG" ]]; then
 fi
 command -v oc >/dev/null || { echo "oc is not on PATH" >&2; exit 2; }
 
-# The classes under test are found by their driver unless named: the operator
-# names its StorageClass after the storage cluster, so the name changes with
-# every deployment. The suite's own copies (e2e-<namespace>-e2e-sc<suffix>) are
-# not candidates, because a failed test can leave one behind. More than one
-# candidate is a choice the script does not make.
-DRIVER="csi.simplyblock.io"
-find_class() {
-  local kind="$1" field="$2" names
-  names="$(oc get "$kind" -o jsonpath="{range .items[?(@.$field==\"$DRIVER\")]}{.metadata.name}{\"\\n\"}{end}")" ||
-    return 1
-  names="$(grep -v '^e2e-' <<<"$names" || true)"
-  if [[ -z "$names" ]]; then
-    echo "no $kind uses $DRIVER" >&2
-    return 1
-  fi
-  if [[ "$(wc -l <<<"$names")" -ne 1 ]]; then
-    echo "several $kind objects use $DRIVER; name the one under test:" >&2
-    echo "$names" | sed 's/^/  /' >&2
-    return 1
-  fi
-  echo "$names"
-}
+# shellcheck source=../lib/classes.sh
+source "$SCRIPT_DIR/../lib/classes.sh"
 if [[ -z "${STORAGE_CLASS:-}" ]]; then
   STORAGE_CLASS="$(find_class storageclass provisioner)" || {
     echo "set STORAGE_CLASS" >&2
