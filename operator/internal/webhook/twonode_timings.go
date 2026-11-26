@@ -31,13 +31,14 @@ func twoNodeTimingWarnings(path string, arbitration *simplyblockv1alpha2.Arbitra
 		return nil
 	}
 	var warnings admission.Warnings
-	if arbitration.HoldMs != nil {
+	// Reading the deprecated fields is the point: the warning is that they are set.
+	if arbitration.HoldMs != nil { //nolint:staticcheck // SA1019: warning that the deprecated field is set
 		warnings = append(warnings, fmt.Sprintf(
 			"%s.holdMs has no effect and is deprecated: the control plane holds writes for a fixed "+
 				"%d ms after a node loses its peer, and the operator does not send the field. Remove it",
 			path, controlPlaneHoldMs))
 	}
-	if arbitration.LeaseTtlMs != nil {
+	if arbitration.LeaseTtlMs != nil { //nolint:staticcheck // SA1019: warning that the deprecated field is set
 		warnings = append(warnings, fmt.Sprintf(
 			"%s.leaseTtlMs has no effect and is deprecated: the control plane grants arbiter leases "+
 				"of a fixed %d ms, and the operator does not send the field. Remove it",
