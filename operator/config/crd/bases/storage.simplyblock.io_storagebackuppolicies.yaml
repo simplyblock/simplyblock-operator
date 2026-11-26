@@ -152,6 +152,7 @@ spec:
                 description: |-
                   MaxVersions is how many backups of one claim to keep. Zero means no limit
                   by count. Immutable, for the reason Schedule is.
+                  Left unset at creation, it cannot be set later.
                 format: int32
                 minimum: 0
                 type: integer
@@ -203,6 +204,10 @@ spec:
                 reads it only when the policy is created, so a value added later would
                 be ignored'
               rule: has(self.schedule) == has(oldSelf.schedule)
+            - message: 'spec.maxVersions cannot be set after creation: the control
+                plane reads it only when the policy is created, so a value added later
+                would be ignored'
+              rule: has(self.maxVersions) == has(oldSelf.maxVersions)
           status:
             description: status defines the observed state of StorageBackupPolicy
             properties:

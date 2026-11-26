@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
@@ -34,5 +35,14 @@ func TestABackupPolicyScheduleCannotBeAddedLater(t *testing.T) {
 		create: claimPolicy(),
 		mutate: asPolicySpec(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) { s.Schedule = "15m,4 60m,11 24h,7" }),
 		denied: "spec.schedule cannot be set after creation",
+	}})
+}
+
+func TestABackupPolicyMaxVersionsCannotBeAddedLater(t *testing.T) {
+	runTransitions(t, []transition{{
+		name:   "capping the versions of a policy created without a cap",
+		create: claimPolicy(),
+		mutate: asPolicySpec(func(s *simplyblockv1alpha2.StorageBackupPolicySpec) { s.MaxVersions = ptr.To(int32(5)) }),
+		denied: "spec.maxVersions cannot be set after creation",
 	}})
 }
