@@ -50,10 +50,17 @@ const (
 	osPhaseDegraded     = simplyblockv1alpha2.ObjectStorePhaseDegraded
 )
 
+// rolloutDeadlineExceeded is the reason a Deployment's Progressing condition
+// carries once a rollout has made no progress within its deadline.
+const rolloutDeadlineExceeded = "ProgressDeadlineExceeded"
+
 // Condition types this reconciler sets, design §4.2's own names.
 const (
 	conditionDeploymentAvailable = "DeploymentAvailable"
 	conditionCertificateReady    = "CertificateReady"
+	// DeploymentProgressing is False once a Ready store's rollout is stuck
+	// past the Deployment's progress deadline.
+	conditionDeploymentProgressing = "DeploymentProgressing"
 	// BucketsRemaining is True while a requested delete is held because
 	// S3Buckets still reference the ObjectStore (design §4.2).
 	conditionBucketsRemaining = "BucketsRemaining"
@@ -235,6 +242,11 @@ func (r *ObjectStoreReconciler) reconcileProvisioning(
 // A spec.tlsProvider change is the exception: once the previous issuer's
 // state is retired, the store returns to Provisioning and waits there for
 // the new issuer's certificate.
+//
+// It also keeps reading the Deployment: pods no longer Available send the
+// store back to Provisioning, whose deadline degrades it if they never
+// return, and a rollout stuck past its progress deadline degrades it at
+// once, while the old pods still serve. An ordinary rollout stays Ready.
 func (r *ObjectStoreReconciler) reconcileReady(
 	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase],
 ) (ctrl.Result, error) {
@@ -246,9 +258,21 @@ func (r *ObjectStoreReconciler) reconcileReady(
 		return r.reissue(ctx, store, sm)
 	}
 
-	_, readyReplicas, err := r.deploymentAvailable(ctx, store)
+	available, readyReplicas, err := r.deploymentAvailable(ctx, store)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	if !available {
+		return r.reprovision(ctx, store, sm)
+	}
+	if stuck, err := r.rolloutStuck(ctx, store); err != nil || stuck {
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, r.toDegraded(ctx, store, sm, rolloutDeadlineExceeded,
+			fmt.Sprintf("gateway Deployment %s made no rollout progress within its deadline; "+
+				"the pods already running keep serving", store.Name),
+			conditionDeploymentProgressing)
 	}
 	if readyReplicas == store.Status.ReadyReplicas {
 		return ctrl.Result{}, nil
@@ -256,6 +280,50 @@ func (r *ObjectStoreReconciler) reconcileReady(
 	return ctrl.Result{}, r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
 		s.ReadyReplicas = readyReplicas
 	})
+}
+
+// reprovision returns a Ready store whose Deployment is no longer Available
+// to Provisioning, with a fresh deadline, as on first install.
+func (r *ObjectStoreReconciler) reprovision(
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore, sm *statemachine.Machine[osPhase],
+) (ctrl.Result, error) {
+	if err := sm.TransitionTo(ctx, osPhaseProvisioning); err != nil {
+		return ctrl.Result{}, fmt.Errorf("transition to Provisioning: %w", err)
+	}
+	message := fmt.Sprintf("gateway Deployment %s is no longer Available", store.Name)
+	r.event(store, corev1.EventTypeWarning, "DeploymentUnavailable", message)
+	if err := r.writeStatus(ctx, store, func(s *simplyblockv1alpha2.ObjectStoreStatus) {
+		s.Phase = osPhaseProvisioning
+		setObjectStoreDeadline(s, sm)
+		meta.SetStatusCondition(&s.Conditions, metav1.Condition{
+			Type: conditionDeploymentAvailable, Status: metav1.ConditionFalse, Reason: "DeploymentUnavailable", Message: message,
+		})
+	}); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: objectStoreFreshCopyRequeue}, nil
+}
+
+// rolloutStuck reports whether the gateway Deployment's Progressing condition
+// says its rollout exceeded the progress deadline. Read only once the
+// Deployment controller has observed the current spec, so a condition left
+// from before a fixing edit does not count.
+func (r *ObjectStoreReconciler) rolloutStuck(
+	ctx context.Context, store *simplyblockv1alpha2.ObjectStore,
+) (bool, error) {
+	var deployment appsv1.Deployment
+	if err := r.Get(ctx, client.ObjectKey{Namespace: store.Namespace, Name: store.Name}, &deployment); err != nil {
+		return false, client.IgnoreNotFound(err)
+	}
+	if deployment.Status.ObservedGeneration < deployment.Generation {
+		return false, nil
+	}
+	for _, cond := range deployment.Status.Conditions {
+		if cond.Type == appsv1.DeploymentProgressing {
+			return cond.Status == corev1.ConditionFalse && cond.Reason == rolloutDeadlineExceeded, nil
+		}
+	}
+	return false, nil
 }
 
 // reissue returns a Ready store to Provisioning after a spec.tlsProvider
@@ -577,9 +645,10 @@ func (r *ObjectStoreReconciler) restore(
 
 // objectStorePhases is the declared graph. An edge not written here is an
 // error at the transition rather than a silent status write. Ready
-// reconciles routine spec changes in place without leaving it (design §6),
-// and returns to Provisioning only after a spec.tlsProvider change, to wait
-// for the new issuer's certificate (reissue). Degraded returns to Provisioning, with a fresh deadline, once
+// reconciles routine spec changes in place without leaving it (design §6).
+// It returns to Provisioning after a spec.tlsProvider change, to wait for
+// the new issuer's certificate (reissue), or when the Deployment is no longer
+// Available (reprovision), and degrades on a rollout stuck past its deadline. Degraded returns to Provisioning, with a fresh deadline, once
 // the object it was waiting on changes (reconcileDegraded).
 func objectStorePhases() statemachine.Config[osPhase] {
 	return statemachine.Config[osPhase]{
@@ -592,7 +661,7 @@ func objectStorePhases() statemachine.Config[osPhase] {
 					return objectStoreProvisioningDeadline, nil
 				},
 			},
-			osPhaseReady:    {To: []osPhase{osPhaseProvisioning}},
+			osPhaseReady:    {To: []osPhase{osPhaseProvisioning, osPhaseDegraded}},
 			osPhaseDegraded: {To: []osPhase{osPhaseProvisioning}},
 		},
 	}
@@ -759,7 +828,7 @@ func (r *ObjectStoreReconciler) reconcileDegraded(
 // degradedSince is when the ObjectStore degraded, read from the condition
 // toDegraded set False, and whether that condition is the certificate's.
 func degradedSince(store *simplyblockv1alpha2.ObjectStore) (since time.Time, onCertificate bool) {
-	for _, condType := range []string{conditionDeploymentAvailable, conditionCertificateReady} {
+	for _, condType := range []string{conditionDeploymentAvailable, conditionDeploymentProgressing, conditionCertificateReady} {
 		cond := meta.FindStatusCondition(store.Status.Conditions, condType)
 		if cond != nil && cond.Status == metav1.ConditionFalse && cond.LastTransitionTime.After(since) {
 			since, onCertificate = cond.LastTransitionTime.Time, condType == conditionCertificateReady

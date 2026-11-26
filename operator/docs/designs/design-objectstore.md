@@ -243,11 +243,15 @@ Reaching this Service from outside the cluster is not this design's concern (§2
     ▼
   Ready            ← status.conditions all True
     │  spec changed (replicas, image, placement): reconciles in place,
-    │  stays Ready or returns to Provisioning, never Pending
+    │  stays Ready through the rollout, never Pending
     ▼
   Provisioning     ← spec.tlsProvider changed: the previous issuer's
                      Certificate and Secret deleted (§5), waiting on the
-                     new issuer's certificate
+                     new issuer's certificate; or the Deployment is no
+                     longer Available, with a fresh deadline
+  Degraded         ← from Ready: the Deployment's rollout exceeded its
+                     progress deadline (DeploymentProgressing False), the
+                     pods already running still serving
 
   Degraded         ← reached by refusing to act; not retried on a timer
     │  a Secret/ConfigMap named in spec.envFrom is created or changes,
@@ -265,15 +269,17 @@ Reaching this Service from outside the cluster is not this design's concern (§2
   finalizer removed, owned objects garbage-collected; no Deleting phase
 ```
 
-| Condition                                                                                                                   | Phase        | Result                                                                                                                                          |
-|-----------------------------------------------------------------------------------------------------------------------------|--------------|-------------------------------------------------------------------------------------------------------------------------------------------------|
-| The gateway image cannot be pulled, or the Deployment's pods crash-loop                                                     | Provisioning | Stays `Provisioning` past its deadline, then `Degraded`, `DeploymentAvailable` `False` with the pod's own reason                                |
-| The TLS provider cannot issue a certificate (cert-manager `Issuer` missing, OpenShift serving-cert controller not running)  | Provisioning | `Degraded`, `CertificateReady` `False` naming the cause                                                                                         |
-| Operator restarts mid-`Provisioning`                                                                                        | Provisioning | Resumes from `status`: re-reads the Deployment, Service, and Certificate rather than restarting from `Pending`                                  |
-| The cause of a `Degraded` is fixed (missing `envFrom` reference created, `Issuer` created so the `Certificate` turns Ready) | Degraded     | Returns to `Provisioning` with a fresh deadline, noticed by the watch on the `envFrom` reference or a once-a-minute read of the `Certificate`   |
-| `ObjectStore` deleted while `S3Bucket`s still reference it                                                                  | Any          | Finalizer held, phase unchanged, `BucketsRemaining` `True` naming the buckets, gateway keeps serving until the last one is deleted              |
-| `spec.replicas` lowered while gateway pods are serving traffic                                                              | Ready        | Ordinary `Deployment` rolling scale-down. This design adds no draining beyond what the gateway's own readiness probe already gives kubelet      |
-| `spec.tlsProvider` changed                                                                                                  | Ready        | The previous issuer's `Certificate` and Secret are deleted (§5), `CertificateReady` `False`, event `TLSProviderChanged`, back to `Provisioning` |
+| Condition                                                                                                                                     | Phase        | Result                                                                                                                                                                                                                            |
+|-----------------------------------------------------------------------------------------------------------------------------------------------|--------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| The gateway image cannot be pulled, or the Deployment's pods crash-loop                                                                       | Provisioning | Stays `Provisioning` past its deadline, then `Degraded`, `DeploymentAvailable` `False` with the pod's own reason                                                                                                                  |
+| The TLS provider cannot issue a certificate (cert-manager `Issuer` missing, OpenShift serving-cert controller not running)                    | Provisioning | `Degraded`, `CertificateReady` `False` naming the cause                                                                                                                                                                           |
+| Operator restarts mid-`Provisioning`                                                                                                          | Provisioning | Resumes from `status`: re-reads the Deployment, Service, and Certificate rather than restarting from `Pending`                                                                                                                    |
+| The cause of a `Degraded` is fixed (missing `envFrom` reference created, `Issuer` created so the `Certificate` turns Ready)                   | Degraded     | Returns to `Provisioning` with a fresh deadline, noticed by the watch on the `envFrom` reference or a once-a-minute read of the `Certificate`                                                                                     |
+| `ObjectStore` deleted while `S3Bucket`s still reference it                                                                                    | Any          | Finalizer held, phase unchanged, `BucketsRemaining` `True` naming the buckets, gateway keeps serving until the last one is deleted                                                                                                |
+| `spec.replicas` lowered while gateway pods are serving traffic                                                                                | Ready        | Ordinary `Deployment` rolling scale-down. This design adds no draining beyond what the gateway's own readiness probe already gives kubelet                                                                                        |
+| The Deployment is no longer `Available`                                                                                                       | Ready        | Back to `Provisioning` with a fresh deadline, `DeploymentAvailable` `False`, event `DeploymentUnavailable`; the deadline degrades it if the pods do not return                                                                    |
+| A rollout makes no progress within the Deployment's `progressDeadlineSeconds` (an edited image that cannot be pulled, new pods crash-looping) | Ready        | `Degraded`, `DeploymentProgressing` `False` reason `ProgressDeadlineExceeded`, while the old pods keep serving. Read only once the Deployment controller observed the current spec. A spec edit returns it to `Provisioning` (§6) |
+| `spec.tlsProvider` changed                                                                                                                    | Ready        | The previous issuer's `Certificate` and Secret are deleted (§5), `CertificateReady` `False`, event `TLSProviderChanged`, back to `Provisioning`                                                                                   |
 
 ---
 
@@ -504,7 +510,7 @@ type ObjectStoreStatus struct {
 
 	// Conditions carries why an ObjectStore is Degraded, which a phase
 	// alone cannot express. Expected types: DeploymentAvailable,
-	// CertificateReady.
+	// DeploymentProgressing, CertificateReady.
 	// +optional
 	// +patchStrategy=merge
 	// +listType=map

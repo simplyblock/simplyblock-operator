@@ -134,7 +134,7 @@ type ObjectStoreStatus struct {
 
 	// Conditions carries why an ObjectStore is Degraded, which a phase
 	// alone cannot express. Expected types: DeploymentAvailable,
-	// CertificateReady.
+	// DeploymentProgressing, CertificateReady.
 	// +optional
 	// +patchStrategy=merge
 	// +listType=map

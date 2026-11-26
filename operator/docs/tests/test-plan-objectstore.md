@@ -69,6 +69,17 @@ File: `internal/controllers/objectstore/objectstore_tls_switch_unit_test.go`
 | U-27 | A Secret neither issuer wrote → never deleted, under either provider                                                                                                    | Negative | `TestASecretNoIssuerWroteIsKept`                      |
 | U-28 | `OpenShift` provider, Deployment Available, no Secret yet → stays `Provisioning`; the service CA's Secret written → `Ready`                                             | Positive | `TestOpenShiftProvisioningWaitsForTheServiceCASecret` |
 
+### Ready Reads Its Deployment (§6)
+
+File: `internal/controllers/objectstore/objectstore_ready_rollout_unit_test.go`
+
+| #    | Scenario                                                                                                                  | Type     | Test                                             |
+|------|---------------------------------------------------------------------------------------------------------------------------|----------|--------------------------------------------------|
+| U-29 | `Ready`, the Deployment no longer `Available` → `Provisioning` with a fresh deadline                                      | Positive | `TestAReadyStoreWhosePodsAreGoneProvisionsAgain` |
+| U-30 | `Ready`, the rollout `ProgressDeadlineExceeded`, old pods still `Available` → `Degraded`, `DeploymentProgressing` `False` | Negative | `TestAReadyStoreWithAStuckRolloutDegrades`       |
+| U-31 | `Ready`, a rollout in progress with pods `Available` → stays `Ready`                                                      | Positive | `TestAReadyStoreStaysReadyThroughARollout`       |
+| U-32 | `Ready`, a `ProgressDeadlineExceeded` reported before the Deployment controller observed the current spec → stays `Ready` | Boundary | `TestAStaleStuckRolloutLeavesAReadyStoreReady`   |
+
 ### Object Construction (§4, §5)
 
 File: `internal/controllers/objectstore/objectstore_build_unit_test.go`
@@ -176,7 +187,7 @@ repository's concern entirely (`design-objectstore.md` Open Question 2).
 
 | Class       | Scenarios                            | Covered | Not covered |
 |-------------|--------------------------------------|---------|-------------|
-| Unit        | 27 (U-16 dropped, U-17 … U-28 added) | 27      | —           |
+| Unit        | 31 (U-16 dropped, U-17 … U-32 added) | 31      | —           |
 | Integration | 9                                    | 7       | I-05, I-07  |
 | E2E         | 3                                    | 0       | E-01 … E-03 |
 
