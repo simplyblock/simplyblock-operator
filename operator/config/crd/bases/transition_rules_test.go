@@ -301,6 +301,47 @@ func TestControlPlaneUpdateRules(t *testing.T) {
 	})
 }
 
+func TestOperatorOpsUpdateRules(t *testing.T) {
+	discovery := func() *simplyblockv1alpha2.OperatorOps {
+		return &simplyblockv1alpha2.OperatorOps{Spec: simplyblockv1alpha2.OperatorOpsSpec{
+			Action:   simplyblockv1alpha2.OperatorOpsActionDiscover,
+			Discover: &simplyblockv1alpha2.DiscoverSpec{Workers: []string{"worker-1"}},
+		}}
+	}
+	asOps := func(f func(*simplyblockv1alpha2.OperatorOpsSpec)) func(client.Object) {
+		return func(o client.Object) { f(&o.(*simplyblockv1alpha2.OperatorOps).Spec) }
+	}
+	runTransitions(t, []transition{
+		{
+			name:   "pointing a discovery at other workers",
+			create: discovery(),
+			mutate: asOps(func(s *simplyblockv1alpha2.OperatorOpsSpec) { s.Discover.Workers = []string{"worker-9"} }),
+			denied: "spec.discover is immutable",
+		},
+		{
+			name:   "dropping the parameters of a discovery",
+			create: discovery(),
+			mutate: asOps(func(s *simplyblockv1alpha2.OperatorOpsSpec) { s.Discover = nil }),
+			denied: "spec.discover is immutable",
+		},
+		{
+			name:   "adding parameters to a discovery created without them",
+			create: &simplyblockv1alpha2.OperatorOps{Spec: simplyblockv1alpha2.OperatorOpsSpec{
+				Action: simplyblockv1alpha2.OperatorOpsActionDiscover,
+			}},
+			mutate: asOps(func(s *simplyblockv1alpha2.OperatorOpsSpec) {
+				s.Discover = &simplyblockv1alpha2.DiscoverSpec{Workers: []string{"worker-9"}}
+			}),
+			denied: "spec.discover is immutable",
+		},
+		{
+			name:   "aborting a discovery",
+			create: discovery(),
+			mutate: asOps(func(s *simplyblockv1alpha2.OperatorOpsSpec) { s.Abort = true }),
+		},
+	})
+}
+
 func siteDeployment() *simplyblockv1alpha2.StorageSiteDeployment {
 	return &simplyblockv1alpha2.StorageSiteDeployment{
 		Spec: simplyblockv1alpha2.StorageSiteDeploymentSpec{Cluster: "site-a", SiteNamespace: "simplyblock"},

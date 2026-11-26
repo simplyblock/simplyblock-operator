@@ -341,6 +341,8 @@ type DiscoverSpec struct {
 // It carries no target reference. Every other Ops kind in this group names the
 // entity it acts on; this one acts on the operator process, which is not a
 // resource in this API group, and the absent field is the signal.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover)",message="spec.discover is immutable: the run reads it again at every step, so a change would mix two discoveries into one draft, and a finished run is the record of what produced its draft; create a new run instead"
 type OperatorOpsSpec struct {
 	// Action is the operation to perform.
 	// +kubebuilder:validation:Required
@@ -354,7 +356,8 @@ type OperatorOpsSpec struct {
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 
-	// Discover parameterizes action Discover.
+	// Discover parameterizes action Discover. Immutable: a different discovery
+	// is a new run.
 	// +optional
 	Discover *DiscoverSpec `json:"discover,omitempty"`
 }

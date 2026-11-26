@@ -86,7 +86,9 @@ spec:
                     - message: field is immutable
                       rule: self == oldSelf
                 discover:
-                  description: Discover parameterizes action Discover.
+                  description: |-
+                    Discover parameterizes action Discover. Immutable: a different discovery
+                    is a new run.
                   properties:
                     clusterRef:
                       description: |-
@@ -622,6 +624,9 @@ spec:
               required:
                 - action
               type: object
+              x-kubernetes-validations:
+                - message: 'spec.discover is immutable: the run reads it again at every step, so a change would mix two discoveries into one draft, and a finished run is the record of what produced its draft; create a new run instead'
+                  rule: has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover)
             status:
               description: OperatorOpsStatus is the observed state of one operator operation.
               properties:
