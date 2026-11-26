@@ -434,3 +434,28 @@ func TestClientGetVolumeReplicationRelationshipNotFound(t *testing.T) {
 		t.Errorf("err = %v, want ErrNotFound for a volume with no replication relationship yet", err)
 	}
 }
+
+func TestClientFenceVolumeOrdersASupersededDemote(t *testing.T) {
+	var gotPath, gotQuery string
+	c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotQuery = r.URL.Path, r.URL.RawQuery
+		w.WriteHeader(http.StatusNoContent)
+	})
+	if err := c.FenceVolume(context.Background(), testHandle); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(gotPath, "/replication/demote") || gotQuery != "superseded=true" {
+		t.Errorf("request = %s?%s, want .../replication/demote?superseded=true", gotPath, gotQuery)
+	}
+}
+
+func TestClientFenceVolumeAnythingButDoneIsAnError(t *testing.T) {
+	for _, code := range []int{http.StatusAccepted, http.StatusBadRequest, http.StatusInternalServerError} {
+		c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(code)
+		})
+		if err := c.FenceVolume(context.Background(), testHandle); err == nil {
+			t.Errorf("HTTP %d: want an error, a fence is done or it failed", code)
+		}
+	}
+}

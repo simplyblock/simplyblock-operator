@@ -204,6 +204,31 @@ func (c *Client) DemoteVolume(ctx context.Context, h lvol.VolumeHandle) (bool, e
 	}
 }
 
+// FenceVolume orders the fence of a volume that was failed over to another
+// cluster: it is fenced and its replication stopped, with no final snapshot,
+// since its data is stale. The caller decides the volume was superseded; the
+// control plane does not detect it. Idempotent and synchronous: done, or an
+// error.
+func (c *Client) FenceVolume(ctx context.Context, h lvol.VolumeHandle) error {
+	cluster, pool, volume, err := h.Split()
+	if err != nil {
+		return err
+	}
+	superseded := true
+	resp, err := c.api.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostWithResponse(
+		ctx, cluster, pool, volume,
+		&cpapi.ClustersStoragePoolsVolumesReplicationDemoteApiV2ClustersClusterIdStoragePoolsPoolIdVolumesVolumeIdReplicationDemotePostParams{
+			Superseded: &superseded,
+		})
+	if err != nil {
+		return fmt.Errorf("fence volume %s: %w", h, err)
+	}
+	if code := resp.StatusCode(); code != http.StatusNoContent {
+		return respError("fence volume "+string(h), code, resp.Body)
+	}
+	return nil
+}
+
 // ResyncVolume reconciles a diverged copy back onto the current primary's
 // history. It configures the reverse direction only -- it never cuts over,
 // matching the design's own "it never merges": cutover is PromoteVolume's job

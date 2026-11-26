@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -31,6 +32,7 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
+	"github.com/simplyblock/simplyblock-operator/internal/controllers/cluster"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/controlplane"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 	"github.com/simplyblock/simplyblock-operator/internal/webapi"
@@ -59,6 +61,89 @@ type ReplicationPairReconciler struct {
 	// never runs (confirmed live: cross-cluster ReplicationPair authoring
 	// failed with "dial tcp: lookup simplyblock-webappapi ... no such host").
 	EndpointResolver controlplane.EndpointResolver
+
+	// CSINamespace is where the CSI driver's aggregate credentials Secret
+	// lives (the operator's namespace): a pair with a peer registers its
+	// target cluster there. Empty means the pair's own namespace.
+	CSINamespace string
+}
+
+// peerCredentials is what a pair's spec.peer resolves to.
+type peerCredentials struct {
+	endpoint string
+	secret   string
+	caCert   string
+}
+
+// peer reads the pair's peer credentials Secret; nil without spec.peer.
+func (r *ReplicationPairReconciler) peer(
+	ctx context.Context, pair *simplyblockv1alpha1.ReplicationPair,
+) (*peerCredentials, error) {
+	if pair.Spec.Peer == nil {
+		return nil, nil
+	}
+	var secret corev1.Secret
+	key := client.ObjectKey{Namespace: pair.Namespace, Name: pair.Spec.Peer.CredentialsSecretRef}
+	if err := r.Get(ctx, key, &secret); err != nil {
+		return nil, fmt.Errorf("read peer credentials %s: %w", key, err)
+	}
+	token := strings.TrimSpace(string(secret.Data["secret"]))
+	if token == "" {
+		return nil, fmt.Errorf("peer credentials %s have no key %q", key, "secret")
+	}
+	return &peerCredentials{
+		endpoint: strings.TrimRight(pair.Spec.Peer.Endpoint, "/"),
+		secret:   token,
+		caCert:   string(secret.Data["ca.crt"]),
+	}, nil
+}
+
+func (r *ReplicationPairReconciler) csiNamespace(pair *simplyblockv1alpha1.ReplicationPair) string {
+	if r.CSINamespace != "" {
+		return r.CSINamespace
+	}
+	return pair.Namespace
+}
+
+// registerPeerWithCSI gives the CSI driver an entry for the target cluster
+// through its own control plane, so a volume handle naming that cluster (a
+// failed-over volume's PV keeps its handle) resolves. The entry is marked
+// Peer: this site's control plane does not list the cluster, and the
+// StorageCluster controller would otherwise prune it.
+func (r *ReplicationPairReconciler) registerPeerWithCSI(
+	ctx context.Context, pair *simplyblockv1alpha1.ReplicationPair, targetUUID string, p *peerCredentials,
+) error {
+	return cluster.EditCSICredentials(ctx, r.Client, r.csiNamespace(pair), func(creds *cluster.CSICredentials) {
+		entry := cluster.CSIClusterEntry{
+			ClusterID: targetUUID, ClusterEndpoint: p.endpoint, ClusterSecret: p.secret, Peer: true,
+		}
+		for i := range creds.Clusters {
+			if creds.Clusters[i].ClusterID != targetUUID {
+				continue
+			}
+			if creds.Clusters[i].Local {
+				return // this site manages that cluster after all; its entry stands
+			}
+			creds.Clusters[i] = entry
+			return
+		}
+		creds.Clusters = append(creds.Clusters, entry)
+	})
+}
+
+// unregisterPeerWithCSI drops the entry registerPeerWithCSI wrote.
+func (r *ReplicationPairReconciler) unregisterPeerWithCSI(
+	ctx context.Context, pair *simplyblockv1alpha1.ReplicationPair, targetUUID string,
+) error {
+	return cluster.EditCSICredentials(ctx, r.Client, r.csiNamespace(pair), func(creds *cluster.CSICredentials) {
+		kept := creds.Clusters[:0]
+		for _, e := range creds.Clusters {
+			if !e.Peer || e.ClusterID != targetUUID {
+				kept = append(kept, e)
+			}
+		}
+		creds.Clusters = kept
+	})
 }
 
 // apiClient resolves the control-plane client for one reconcile call, through
@@ -137,9 +222,25 @@ func (r *ReplicationPairReconciler) Reconcile(ctx context.Context, req ctrl.Requ
 		return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
 	}
 
+	// A target on another control plane: its credentials, and the CSI
+	// driver's entry for it, refreshed every sync so a rotated secret reaches
+	// the driver.
+	peer, err := r.peer(ctx, &pair)
+	if err == nil && peer != nil {
+		err = r.registerPeerWithCSI(ctx, &pair, targetUUID, peer)
+	}
+	if err != nil {
+		log.Error(err, "failed to set up the peer control plane", "pair", pair.Name)
+		patch := client.MergeFrom(pair.DeepCopy())
+		pair.Status.Ready = false
+		pair.Status.Message = fmt.Sprintf("peer control plane: %v", err)
+		_ = r.Status().Patch(ctx, &pair, patch)
+		return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+	}
+
 	// Ensure the backend ReplicationTarget exists.
 	if pair.Status.BackendTargetID == "" {
-		targetID, err := r.ensureBackendTarget(ctx, &pair, apiClient, clusterUUID, targetUUID)
+		targetID, err := r.ensureBackendTarget(ctx, &pair, apiClient, clusterUUID, targetUUID, peer)
 		if err != nil {
 			log.Error(err, "failed to ensure backend ReplicationTarget", "pair", pair.Name)
 			patch := client.MergeFrom(pair.DeepCopy())
@@ -208,6 +309,17 @@ func (r *ReplicationPairReconciler) reconcileDelete(
 		log.Info("Deleted backend ReplicationTarget", "id", pair.Status.BackendTargetID)
 	}
 
+	if pair.Spec.Peer != nil {
+		targetUUID, err := utils.ResolveClusterUUID(ctx, r.Client, pair.Namespace, pair.Spec.TargetCluster)
+		if err == nil {
+			err = r.unregisterPeerWithCSI(ctx, pair, targetUUID)
+		}
+		if err != nil {
+			log.Error(err, "failed to remove the peer's CSI entry", "pair", pair.Name)
+			return ctrl.Result{RequeueAfter: replPairRequeueError}, nil
+		}
+	}
+
 	controllerutil.RemoveFinalizer(pair, utils.FinalizerReplicationPair)
 	return ctrl.Result{}, client.IgnoreNotFound(r.Update(ctx, pair))
 }
@@ -220,6 +332,7 @@ func (r *ReplicationPairReconciler) ensureBackendTarget(
 	apiClient *webapi.Client,
 	clusterUUID string,
 	targetUUID string,
+	peer *peerCredentials,
 ) (string, error) {
 	listEndpoint := fmt.Sprintf("/api/v2/clusters/%s/replication/targets", clusterUUID)
 	body, status, err := apiClient.Do(ctx, http.MethodGet, listEndpoint, nil)
@@ -243,6 +356,15 @@ func (r *ReplicationPairReconciler) ensureBackendTarget(
 	reqBody := map[string]interface{}{
 		"target_name":       fmt.Sprintf("simplyblock-repl-%s", pair.Spec.TargetCluster),
 		"target_cluster_id": targetUUID,
+	}
+	if peer != nil {
+		// The control plane checks the target through the peer's /info
+		// instead of its own database (sbcli: add_target(peer=...)).
+		reqBody["peer_endpoint"] = peer.endpoint
+		reqBody["peer_secret"] = peer.secret
+		if peer.caCert != "" {
+			reqBody["peer_ca_cert"] = peer.caCert
+		}
 	}
 	body, status, err = apiClient.Do(ctx, http.MethodPost, listEndpoint, reqBody)
 	if err != nil || status >= 300 {
