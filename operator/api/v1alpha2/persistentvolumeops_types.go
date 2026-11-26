@@ -323,6 +323,7 @@ type CreatorReference struct {
 // +kubebuilder:validation:XValidation:rule="self.action == 'Relocate' ? has(self.relocate) : !has(self.relocate)",message="relocate is required for action Relocate and must be absent otherwise"
 // +kubebuilder:validation:XValidation:rule="self.action == 'JoinConsistencyGroup' ? has(self.joinConsistencyGroup) : !has(self.joinConsistencyGroup)",message="joinConsistencyGroup is required for action JoinConsistencyGroup and must be absent otherwise"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
+// +kubebuilder:validation:XValidation:rule="has(self.creatorRef) == has(oldSelf.creatorRef)",message="spec.creatorRef cannot be set after creation: a creator names itself when it creates the operation, and one added later would cascade a hand-written operation as its fan-out"
 type PersistentVolumeOpsSpec struct {
 	// PersistentVolumeName names the PersistentVolume this operation acts on.
 	// It is a name rather than a reference because a PersistentVolume is
@@ -366,6 +367,7 @@ type PersistentVolumeOpsSpec struct {
 	// operation written by hand, which has no creator to cascade from.
 	// Immutable, because an operation changing whose fan-out it belongs to
 	// would change who cascades over it.
+	// Left unset at creation, it cannot be set later.
 	// +optional
 	// +k8s:immutable
 	CreatorRef *CreatorReference `json:"creatorRef,omitempty"`

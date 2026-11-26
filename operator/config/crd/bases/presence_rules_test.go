@@ -55,3 +55,22 @@ func TestABackupPolicyMaxAgeCannotBeAddedLater(t *testing.T) {
 		denied: "spec.maxAge cannot be set after creation",
 	}})
 }
+
+func TestAVolumeOperationsCreatorCannotBeAddedLater(t *testing.T) {
+	migrate := &simplyblockv1alpha2.PersistentVolumeOps{Spec: simplyblockv1alpha2.PersistentVolumeOpsSpec{
+		PersistentVolumeName: "pv-1", Action: simplyblockv1alpha2.PersistentVolumeOpsActionMigrate,
+		Migrate: &simplyblockv1alpha2.MigrateVolumeSpec{
+			TargetNodeRef: simplyblockv1alpha2.StorageNodeReference{Namespace: "default", Name: "node-1"},
+		},
+	}}
+	runTransitions(t, []transition{{
+		name:   "naming a creator on a hand-written migration",
+		create: migrate,
+		mutate: func(o client.Object) {
+			o.(*simplyblockv1alpha2.PersistentVolumeOps).Spec.CreatorRef = &simplyblockv1alpha2.CreatorReference{
+				Kind: "StorageNodeOps", Namespace: "default", Name: "remove-node-1", UID: "0b0e6c1e-0000-4000-8000-000000000001",
+			}
+		},
+		denied: "spec.creatorRef cannot be set after creation",
+	}})
+}

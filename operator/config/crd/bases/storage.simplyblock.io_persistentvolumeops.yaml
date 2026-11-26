@@ -111,6 +111,7 @@ spec:
                   operation written by hand, which has no creator to cascade from.
                   Immutable, because an operation changing whose fan-out it belongs to
                   would change who cascades over it.
+                  Left unset at creation, it cannot be set later.
                 properties:
                   kind:
                     description: Kind is the creating object's kind, which is StorageNodeOps
@@ -253,6 +254,10 @@ spec:
                 a partly undone operation'
               rule: '!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) &&
                 self.abort)'
+            - message: 'spec.creatorRef cannot be set after creation: a creator names
+                itself when it creates the operation, and one added later would cascade
+                a hand-written operation as its fan-out'
+              rule: has(self.creatorRef) == has(oldSelf.creatorRef)
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.
