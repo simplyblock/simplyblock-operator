@@ -748,9 +748,16 @@ spec:
                               endpoint:
                                 description: |-
                                   Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
-                                  Rejected unless it resolves to an external address.
-                                pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                                  It must use HTTPS, because the control plane talks to Vault over TLS only
+                                  and refuses any other scheme. Rejected unless it resolves to an external
+                                  address.
+                                pattern: ^[a-zA-Z][a-zA-Z0-9+.-]*://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                                 type: string
+                                x-kubernetes-validations:
+                                - message: the Vault endpoint must use https://, for
+                                    example https://vault.example.com:8200, because
+                                    the control plane refuses any other scheme
+                                  rule: self.startsWith('https://')
                             required:
                             - endpoint
                             type: object

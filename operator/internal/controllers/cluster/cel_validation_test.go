@@ -222,6 +222,49 @@ func TestStorageClusterKMSIsImmutableOnceSet(t *testing.T) {
 	}
 }
 
+// A Vault endpoint uses HTTPS: the control plane takes no other scheme, so an
+// HTTP endpoint is refused at admission with a message saying so.
+//
+// Regression: 2026-11-26-vault-http-endpoint-admitted — the CRD admitted
+// http://, which the control plane refuses with a 422 when the operator creates
+// the cluster, after the document was approved.
+func TestAVaultEndpointMustUseHTTPS(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	for endpoint, wantDenied := range map[string]bool{
+		"https://vault.example.com:8200":  false,
+		"http://vault.example.com:8200":   true,
+		"HTTP://vault.example.com:8200":   true,
+		"http://vault.example.com/v1/sys": true,
+	} {
+		t.Run(endpoint, func(t *testing.T) {
+			cluster := &simplyblockv1alpha2.StorageCluster{
+				ObjectMeta: metav1.ObjectMeta{GenerateName: "vault-", Namespace: "default"},
+				Spec: simplyblockv1alpha2.StorageClusterSpec{
+					MaxSubsystemCount: ptr.To(int32(10)),
+					VCPUCount:         ptr.To(int32(6)),
+					KMS: &simplyblockv1alpha2.KMSSpec{
+						Vault: &simplyblockv1alpha2.VaultKMS{Endpoint: endpoint},
+					},
+				},
+			}
+			err := apiClient.Create(ctx, cluster)
+			if err == nil {
+				t.Cleanup(func() { _ = apiClient.Delete(ctx, cluster) })
+			}
+			switch {
+			case wantDenied && err == nil:
+				t.Fatal("the endpoint was admitted")
+			case wantDenied && !strings.Contains(err.Error(), "must use https"):
+				t.Fatalf("refused for the wrong reason: %v", err)
+			case !wantDenied && err != nil:
+				t.Fatalf("the endpoint was refused: %v", err)
+			}
+		})
+	}
+}
+
 // TestStorageClusterDeviceClassIsImmutableFromCreation pins the ninth
 // immutable field (§3.2). It is defaulted rather than optional, so it is never
 // absent, and the field rule applies from creation with no first assignment to

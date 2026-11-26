@@ -267,8 +267,10 @@ type BackupCredentialsSecretRef struct {
 // HashicorpVaultSettings configures the HashiCorp Vault endpoint the cluster uses to store keys.
 type HashicorpVaultSettings struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Vault Base URL"
-	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z][a-zA-Z0-9+.-]*://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
+	// +kubebuilder:validation:XValidation:rule="self.startsWith('https://')",message="the Vault endpoint must use https://, for example https://vault.example.com:8200, because the control plane refuses any other scheme"
 	// BaseURL is the HashiCorp Vault endpoint (e.g., https://vault.example.com:8200).
+	// It must use HTTPS.
 	BaseURL string `json:"baseURL,omitempty"`
 }
 
