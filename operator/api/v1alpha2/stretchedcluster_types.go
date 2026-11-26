@@ -96,9 +96,8 @@ type StretchedSite struct {
 	SiteNamespace string `json:"siteNamespace,omitempty"`
 
 	// Discover is the discovery this site runs: which workers are inspected.
-	// Changing it before approval runs another discovery on this site only,
-	// which finds the site's draft already written and leaves it as it is.
-	// After approval it is refused.
+	// Immutable: another discovery would not rewrite the site's draft already
+	// written, so a different discovery is a new stretched cluster.
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 }
@@ -111,7 +110,7 @@ type StretchedSite struct {
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || (has(self.sizing) == has(oldSelf.sizing) && (!has(self.sizing) || self.sizing == oldSelf.sizing))",message="sizing cannot change once the stretched cluster is approved: the site's approved draft refuses the re-apply, and the request would report Failed for a running cluster"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || (has(self.images) == has(oldSelf.images) && (!has(self.images) || self.images == oldSelf.images))",message="images cannot change once the stretched cluster is approved: the sites' approved drafts refuse the re-apply, and the request would report Failed for a running cluster"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && s.siteNamespace == o.siteNamespace))",message="a site's siteNamespace is immutable: the views that project the site back are not re-pointed, so a new namespace splits that site's flow between two namespaces and fails the request"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && has(s.discover) == has(o.discover) && (!has(s.discover) || s.discover == o.discover)))",message="discover cannot change once the stretched cluster is approved"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && has(s.discover) == has(o.discover) && (!has(s.discover) || s.discover == o.discover)))",message="a site's discover is immutable: another discovery does not rewrite the site's draft already written, so a different discovery is a new stretched cluster"
 type StretchedClusterSpec struct {
 	// ClusterName is the backend cluster's name, and the name of the
 	// StorageCluster on both sites. Immutable.

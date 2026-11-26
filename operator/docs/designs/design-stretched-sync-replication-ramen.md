@@ -603,7 +603,7 @@ The cluster record carries `leader_site` (§12): the leader's create sets it, an
 
 ### 11.2 Node operations on a site
 
-A site's own `StorageNodeOps` behave as on a single-site cluster, and the backend already refuses or waits where the two-site model requires it (`sync-replication.md` §6, "Node restart"; §8). Adding a worker to a site after approval is the existing day-two path on that site: a `StorageNode` for the worker, with the site's `site`, added through the site's operator (the leader for its own site, the follower for its own). The `StretchedCluster`'s discovery is not rerun once approved.
+A site's own `StorageNodeOps` behave as on a single-site cluster, and the backend already refuses or waits where the two-site model requires it (`sync-replication.md` §6, "Node restart"; §8). Adding a worker to a site after approval is the existing day-two path on that site: a `StorageNode` for the worker, with the site's `site`, added through the site's operator (the leader for its own site, the follower for its own). A site's discovery is fixed when the `StretchedCluster` is created and is never rerun.
 
 ### 11.3 Upgrades
 
@@ -807,8 +807,8 @@ type StretchedSite struct {
 	SiteNamespace string `json:"siteNamespace,omitempty"`
 
 	// Discover is the discovery this site runs: which workers are inspected.
-	// Changing it before approval runs another discovery on this site only,
-	// which rewrites this site's draft; after approval it is refused.
+	// Immutable: another discovery would not rewrite the site's draft already
+	// written, so a different discovery is a new stretched cluster.
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 }
@@ -818,7 +818,7 @@ type StretchedSite struct {
 // +kubebuilder:validation:XValidation:rule="self.sites[0].site != self.sites[1].site",message="the two sites must name different backend sites"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster))",message="the managed clusters of a stretched cluster cannot be replaced"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval is one-way: an approved stretched cluster cannot be un-approved"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && has(s.discover) == has(o.discover) && (!has(s.discover) || s.discover == o.discover)))",message="discover cannot change once the stretched cluster is approved"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.sites) || oldSelf.sites.all(o, self.sites.exists(s, s.cluster == o.cluster && has(s.discover) == has(o.discover) && (!has(s.discover) || s.discover == o.discover)))",message="a site's discover is immutable: another discovery does not rewrite the site's draft already written, so a different discovery is a new stretched cluster"
 type StretchedClusterSpec struct {
 	// ClusterName is the backend cluster's name, and the name of the
 	// StorageCluster on both sites. Immutable.
