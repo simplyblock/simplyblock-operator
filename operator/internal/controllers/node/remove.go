@@ -202,8 +202,14 @@ func (r *StorageNodeOpsReconciler) drainValidate(
 // computed here, from the StorageNodes, by the rule the control plane enforces
 // (cluster.RemovalBalanceViolation). The control plane's own admission, which
 // also covers fault-tolerance headroom, replica relocation, and active tasks,
-// is asked through its read-only check; a control plane that does not offer
-// one runs the admission inside prepare-removal only, as it always has.
+// is asked through its read-only check.
+//
+// A control plane that does not offer the check runs the admission inside
+// prepare-removal only, after the drain has shut the node down. No other call
+// asks it without acting on it: prepare-removal on a running node admits it,
+// marks it pending_removal, and shuts it down forced, inside one request. The
+// drain therefore goes on, and says before the shutdown what was not checked
+// and what a refusal then costs (RemovalAdmissionUnchecked).
 func (r *StorageNodeOpsReconciler) removalRefusal(
 	ctx context.Context, ops *simplyblockv1alpha2.StorageNodeOps, clusterID, nodeID string,
 ) (string, error) {
@@ -215,10 +221,20 @@ func (r *StorageNodeOpsReconciler) removalRefusal(
 	if err != nil {
 		return "", fmt.Errorf("ask the removal admission of node %s: %w", ops.Spec.NodeRef, err)
 	}
+	if !offered {
+		r.emit(ctx, ops, corev1.EventTypeWarning, RemovalAdmissionUnchecked, fmt.Sprintf(
+			"node %s is shut down before the control plane's removal admission runs, because this "+
+				"control plane offers no read-only check. The shutdown checks fault-tolerance headroom "+
+				"and active tasks, and the failure-domain balance was checked here. Replica relocation "+
+				"and the rest of the admission run only in prepare-removal: a refusal there leaves the "+
+				"node offline and fails the operation, and a Restart operation brings the node back",
+			ops.Spec.NodeRef))
+		return "", nil
+	}
 	// The flag decides, not the text: a refusal that comes without a reason
 	// is still a refusal, and reading it as an admission would shut the node
 	// down for a removal the control plane declined.
-	if offered && !answer.Admitted {
+	if !answer.Admitted {
 		if answer.Reason == "" {
 			return "the control plane did not admit the removal and gave no reason", nil
 		}

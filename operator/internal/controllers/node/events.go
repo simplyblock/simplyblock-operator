@@ -125,6 +125,12 @@ const (
 	// has been done, until the condition changes or somebody decides.
 	RemovalNotAdmitted = "RemovalNotAdmitted"
 
+	// RemovalAdmissionUnchecked says the control plane offers no read-only
+	// removal admission, so the drain shuts the node down before the admission
+	// runs. A refusal in prepare-removal then leaves the node offline, which the
+	// warning says before the shutdown rather than after it.
+	RemovalAdmissionUnchecked = "RemovalAdmissionUnchecked"
+
 	// DrainCompleted says every volume has been migrated off the node.
 	DrainCompleted = "DrainCompleted"
 

@@ -17,8 +17,10 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/simplyblock/atlas/ptr"
@@ -141,4 +143,57 @@ func TestARefusalWithNoReasonStillHoldsValidation(t *testing.T) {
 
 	done, err := performing(t, r, aDrain(), stepValidating)
 	notAdmitted(t, done, err, "gave no reason")
+}
+
+// warningsFor drains the recorded events and returns the warnings of reason.
+func warningsFor(r *StorageNodeOpsReconciler, reason string) []string {
+	recorder := r.Recorder.(*events.FakeRecorder)
+	var found []string
+	for {
+		select {
+		case line := <-recorder.Events:
+			if strings.HasPrefix(line, corev1.EventTypeWarning+" "+reason+" ") {
+				found = append(found, line)
+			}
+		default:
+			return found
+		}
+	}
+}
+
+// A control plane that does not offer the read-only admission check runs the
+// admission in prepare-removal, after the drain has shut the node down. The
+// drain still goes on, and says so in a warning before the shutdown: what was
+// not checked, and that a refusal then leaves the node offline. A control plane
+// that answers the check draws no such warning.
+//
+// Regression: 2026-11-26-removal-admission-not-served — the control plane
+// serves no removal-admission endpoint, the operator read the 404 as a check
+// not offered and went on in silence, and a refusal in prepare-removal left the
+// node it had shut down offline with nothing saying why the risk was taken.
+func TestAnUncheckedRemovalIsAnnouncedBeforeTheShutdown(t *testing.T) {
+	api := aControlPlane()
+	api.admissionAbsent = true
+	r, _ := anOpsWorld(t, api)
+
+	if done, err := performing(t, r, aDrain(), stepValidating); err != nil || !done {
+		t.Fatalf("done, err = %v, %v; want Validating to finish", done, err)
+	}
+	warned := warningsFor(r, "RemovalAdmissionUnchecked")
+	if len(warned) == 0 {
+		t.Fatal("Validating passed a removal nothing checked, with no RemovalAdmissionUnchecked warning")
+	}
+	for _, says := range []string{"replica", "offline"} {
+		if !strings.Contains(strings.ToLower(warned[0]), says) {
+			t.Errorf("warning = %q, want it to say %q", warned[0], says)
+		}
+	}
+
+	checked, _ := anOpsWorld(t, aControlPlane())
+	if done, err := performing(t, checked, aDrain(), stepValidating); err != nil || !done {
+		t.Fatalf("done, err = %v, %v; want Validating to finish", done, err)
+	}
+	if warned := warningsFor(checked, "RemovalAdmissionUnchecked"); len(warned) != 0 {
+		t.Errorf("an admitted removal drew %q", warned)
+	}
 }
