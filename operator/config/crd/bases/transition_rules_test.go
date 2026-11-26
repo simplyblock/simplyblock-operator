@@ -325,7 +325,7 @@ func TestOperatorOpsUpdateRules(t *testing.T) {
 			denied: "spec.discover is immutable",
 		},
 		{
-			name:   "adding parameters to a discovery created without them",
+			name: "adding parameters to a discovery created without them",
 			create: &simplyblockv1alpha2.OperatorOps{Spec: simplyblockv1alpha2.OperatorOpsSpec{
 				Action: simplyblockv1alpha2.OperatorOpsActionDiscover,
 			}},
