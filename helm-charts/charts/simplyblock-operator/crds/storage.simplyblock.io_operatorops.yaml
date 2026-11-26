@@ -472,9 +472,6 @@ spec:
                             With data networks, the RPC stays on that interface and the data moves to the
                             networks' interfaces, whose addresses are stable, so no Service is kept.
                           type: boolean
-                          x-kubernetes-validations:
-                            - message: field is immutable
-                              rule: self == oldSelf
                         spdkOnHostNetwork:
                           description: |-
                             SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
@@ -482,15 +479,8 @@ spec:
                             do not agree on what their NICs are called: each node names its own in
                             its spec.config.dataInterfaces, which is allowed only in this mode.
                           type: boolean
-                          x-kubernetes-validations:
-                            - message: field is immutable
-                              rule: self == oldSelf
                       type: object
                       x-kubernetes-validations:
-                        - message: field podNetwork is immutable once set
-                          rule: '!has(oldSelf.podNetwork) || has(self.podNetwork)'
-                        - message: field spdkOnHostNetwork is immutable once set
-                          rule: '!has(oldSelf.spdkOnHostNetwork) || has(self.spdkOnHostNetwork)'
                         - message: one of podNetwork and spdkOnHostNetwork must be set
                           rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)
                         - message: podNetwork and spdkOnHostNetwork are exclusive

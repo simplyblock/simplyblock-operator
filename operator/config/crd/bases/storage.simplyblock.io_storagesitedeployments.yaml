@@ -302,9 +302,6 @@ spec:
                             bucket:
                               description: Bucket is the bucket backups are written to and read from.
                               type: string
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                             credentials:
                               description: |-
                                 Credentials is how this store's endpoint is authenticated to. Replaces
@@ -328,9 +325,6 @@ spec:
                                       type: string
                                   type: object
                                   x-kubernetes-map-type: atomic
-                                  x-kubernetes-validations:
-                                    - message: field is immutable
-                                      rule: self == oldSelf
                                 source:
                                   default: Secret
                                   description: |-
@@ -343,15 +337,10 @@ spec:
                                     - Secret
                                     - ProviderChain
                                   type: string
-                                  x-kubernetes-validations:
-                                    - message: field is immutable
-                                      rule: self == oldSelf
                               required:
                                 - source
                               type: object
                               x-kubernetes-validations:
-                                - message: field secretRef is immutable once set
-                                  rule: '!has(oldSelf.secretRef) || has(self.secretRef)'
                                 - message: 'source: Secret requires secretRef'
                                   rule: self.source != 'Secret' || has(self.secretRef)
                                 - message: 'source: ProviderChain forbids secretRef'
@@ -377,31 +366,18 @@ spec:
                                   type: string
                               type: object
                               x-kubernetes-map-type: atomic
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                             endpoint:
                               description: Endpoint is the S3 endpoint, for example, https://s3.example.com.
                               pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                               type: string
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                             region:
                               description: Region is the bucket's region, for endpoints that do not imply one.
                               type: string
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                           required:
                             - bucket
                             - endpoint
                           type: object
                           x-kubernetes-validations:
-                            - message: field region is immutable once set
-                              rule: '!has(oldSelf.region) || has(self.region)'
-                            - message: field credentialsSecretRef is immutable once set
-                              rule: '!has(oldSelf.credentialsSecretRef) || has(self.credentialsSecretRef)'
                             - message: one of credentials and the deprecated credentialsSecretRef must be set
                               rule: has(self.credentialsSecretRef) || has(self.credentials)
                             - message: credentials and the deprecated credentialsSecretRef are exclusive
@@ -860,9 +836,6 @@ spec:
                                 With data networks, the RPC stays on that interface and the data moves to the
                                 networks' interfaces, whose addresses are stable, so no Service is kept.
                               type: boolean
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                             spdkOnHostNetwork:
                               description: |-
                                 SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
@@ -870,15 +843,8 @@ spec:
                                 do not agree on what their NICs are called: each node names its own in
                                 its spec.config.dataInterfaces, which is allowed only in this mode.
                               type: boolean
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                           type: object
                           x-kubernetes-validations:
-                            - message: field podNetwork is immutable once set
-                              rule: '!has(oldSelf.podNetwork) || has(self.podNetwork)'
-                            - message: field spdkOnHostNetwork is immutable once set
-                              rule: '!has(oldSelf.spdkOnHostNetwork) || has(self.spdkOnHostNetwork)'
                             - message: one of podNetwork and spdkOnHostNetwork must be set
                               rule: (has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)
                             - message: podNetwork and spdkOnHostNetwork are exclusive
@@ -936,13 +902,7 @@ spec:
                               maxLength: 253
                               pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                               type: string
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                           type: object
-                          x-kubernetes-validations:
-                            - message: field machineConfigPool is immutable once set
-                              rule: '!has(oldSelf.machineConfigPool) || has(self.machineConfigPool)'
                         ports:
                           description: |-
                             Ports are where this cluster's storage nodes listen. Unstated, and for
@@ -1016,13 +976,11 @@ spec:
                             peerSite:
                               description: |-
                                 PeerSite is the other site's backend name. Nodes the control plane reports
-                                on it are listed here as remote StorageNodes. Immutable.
+                                on it are listed here as remote StorageNodes. Immutable on a
+                                StorageCluster.
                               maxLength: 63
                               pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                               type: string
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                             role:
                               description: |-
                                 Role is Leader or Follower. A leader creates and activates the backend
@@ -1038,13 +996,10 @@ spec:
                             site:
                               description: |-
                                 Site is the backend site every node this StorageCluster adds belongs to.
-                                Immutable: a site is a property of the installation.
+                                Immutable on a StorageCluster: a site is a property of the installation.
                               maxLength: 63
                               pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                               type: string
-                              x-kubernetes-validations:
-                                - message: field is immutable
-                                  rule: self == oldSelf
                           required:
                             - peerSite
                             - role

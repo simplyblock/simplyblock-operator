@@ -193,6 +193,24 @@ An `Ops` spec is immutable in its entirety: target, action, and parameters. The
 object is a request, and a request that can be rewritten while it runs is a
 different request.
 
+**A `ClusterDeploymentConfig` property is never immutable, nor immutable once
+set.** A draft takes any edit until it is approved, because correcting the draft
+is what the review is for, and the approval freezes all of it at once: the
+webhook (`internal/webhook/clusterdeploymentconfig_validator.go`, `afterApproval`)
+refuses every spec change to an approved document except the stretched role. So
+nothing below the CDC's `spec` carries `+k8s:immutable` or an `oldSelf` rule; the
+one update rule its schema has keeps approval one-way.
+
+The trap is a shared type. `ClusterTemplate` embeds the StorageCluster's own
+block types (`StorageNetworkSpec`, `BackupStoreSpec`, `OpenShiftSpec`,
+`StretchedSpec`), so a rule on one of those types lands in the draft too. A
+setting the StorageCluster freezes inside such a type is frozen by a rule on the
+StorageCluster's own spec type (`StorageClusterSpec` or `StorageNodesSpec`),
+guarded with `!has(oldSelf.block) || !has(self.block) || ...` so that it means
+what the field-level marker meant.
+`TestTheDeploymentConfigSchemaCarriesNoUpdateRuleButApproval` in
+`operator/config/crd/bases` fails on any other update rule in the CDC schema.
+
 ## A reference to another kind is resolved at admission
 
 **Every field naming another object in this API group is checked by a validating

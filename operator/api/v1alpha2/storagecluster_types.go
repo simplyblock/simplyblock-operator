@@ -220,14 +220,12 @@ type BackupCredentials struct {
 	// no access key stored anywhere in Kubernetes.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:default=Secret
-	// +k8s:immutable
 	Source BackupCredentialsSource `json:"source"`
 
 	// SecretRef names the Secret holding access_key_id and secret_access_key.
 	// Required when source is Secret, and rejected when source is
 	// ProviderChain.
 	// +optional
-	// +k8s:immutable
 	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
 }
 
@@ -262,23 +260,24 @@ func (b *BackupStoreSpec) EffectiveCredentials() (BackupCredentials, bool) {
 // given one later, and what changes when it changes is which backups have
 // objects, since the object set is derived from the location rather than
 // accumulated.
+//
+// A ClusterDeploymentConfig's template embeds this type, and a draft takes any
+// edit until it is approved, so the update rules are the
+// StorageClusterSpec's rather than this type's.
 // +kubebuilder:validation:XValidation:rule="has(self.credentialsSecretRef) || has(self.credentials)",message="one of credentials and the deprecated credentialsSecretRef must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.credentialsSecretRef) && has(self.credentials))",message="credentials and the deprecated credentialsSecretRef are exclusive"
 type BackupStoreSpec struct {
 	// Endpoint is the S3 endpoint, for example, https://s3.example.com.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
-	// +k8s:immutable
 	Endpoint string `json:"endpoint"`
 
 	// Bucket is the bucket backups are written to and read from.
 	// +kubebuilder:validation:Required
-	// +k8s:immutable
 	Bucket string `json:"bucket"`
 
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
-	// +k8s:immutable
 	Region string `json:"region,omitempty"`
 
 	// CredentialsSecretRef names the Secret holding the access key and the
@@ -289,7 +288,6 @@ type BackupStoreSpec struct {
 	// store that authenticates without a static key has to use Credentials.
 	// Set exactly one of the two.
 	// +optional
-	// +k8s:immutable
 	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
 
 	// Credentials is how this store's endpoint is authenticated to. Replaces
@@ -591,6 +589,10 @@ type ClusterTask struct {
 // and one without it does not, which is why there is no boolean beside it: a
 // block naming a machine-config pool on a cluster that also said it was not
 // OpenShift was expressible before and meant nothing.
+//
+// A ClusterDeploymentConfig's template embeds this type, and a draft takes any
+// edit until it is approved, so the update rules are the
+// StorageNodesSpec's rather than this type's.
 type OpenShiftSpec struct {
 	// MachineConfigPool names a machine-config role the storage nodes' own pool
 	// inherits from, beyond the worker role it always inherits.
@@ -607,7 +609,6 @@ type OpenShiftSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:default=worker
 	// +optional
-	// +k8s:immutable
 	// +simplyblock:advanced
 	MachineConfigPool string `json:"machineConfigPool,omitempty"`
 }
@@ -624,6 +625,7 @@ type OpenShiftSpec struct {
 // rollout and a hardware re-size can walk the fleet one machine at a time.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)",message="dataInterfaces are allowed only with network.spdkOnHostNetwork"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.openshift) || !has(self.openshift) || !has(oldSelf.openshift.machineConfigPool) || (has(self.openshift.machineConfigPool) && self.openshift.machineConfigPool == oldSelf.openshift.machineConfigPool)",message="spec.storageNodes.openshift.machineConfigPool is immutable once set"
 type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
@@ -826,22 +828,25 @@ const (
 
 // StretchedSpec is one site's part of a stretched cluster: the backend site its
 // nodes join, the other site's name, and the role it plays.
+//
+// A ClusterDeploymentConfig's template embeds this type, and a draft takes any
+// edit until it is approved, so the update rules are the StorageClusterSpec's
+// rather than this type's.
 // +kubebuilder:validation:XValidation:rule="self.site != self.peerSite",message="site and peerSite must differ"
 type StretchedSpec struct {
 	// Site is the backend site every node this StorageCluster adds belongs to.
-	// Immutable: a site is a property of the installation.
+	// Immutable on a StorageCluster: a site is a property of the installation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
-	// +k8s:immutable
 	Site string `json:"site"`
 
 	// PeerSite is the other site's backend name. Nodes the control plane reports
-	// on it are listed here as remote StorageNodes. Immutable.
+	// on it are listed here as remote StorageNodes. Immutable on a
+	// StorageCluster.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$`
-	// +k8s:immutable
 	PeerSite string `json:"peerSite"`
 
 	// PeerCluster is the other site's managed cluster: the name the hub knows
@@ -927,6 +932,14 @@ const (
 // +kubebuilder:validation:XValidation:rule="!(has(self.supercluster) && has(self.superclusterRef))",message="a supercluster cannot be a member of another"
 // +kubebuilder:validation:XValidation:rule="has(self.superclusterRef) || !has(self.disablePlacement)",message="disablePlacement is valid only on a member"
 // +kubebuilder:validation:XValidation:rule="!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || self.storageNodes.network.data.size() == 0 || !has(self.fabricType) || self.fabricType == 'tcp'",message="a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.backup) || !has(self.backup) || self.backup.endpoint == oldSelf.backup.endpoint",message="spec.backup.endpoint is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.backup) || !has(self.backup) || self.backup.bucket == oldSelf.backup.bucket",message="spec.backup.bucket is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.region) || (has(self.backup.region) && self.backup.region == oldSelf.backup.region)",message="spec.backup.region is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.credentialsSecretRef) || (has(self.backup.credentialsSecretRef) && self.backup.credentialsSecretRef == oldSelf.backup.credentialsSecretRef)",message="spec.backup.credentialsSecretRef is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.credentials) || !has(self.backup.credentials) || self.backup.credentials.source == oldSelf.backup.credentials.source",message="spec.backup.credentials.source is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.credentials) || !has(self.backup.credentials) || !has(oldSelf.backup.credentials.secretRef) || (has(self.backup.credentials.secretRef) && self.backup.credentials.secretRef == oldSelf.backup.credentials.secretRef)",message="spec.backup.credentials.secretRef is immutable once set"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.stretched) || !has(self.stretched) || self.stretched.site == oldSelf.stretched.site",message="spec.stretched.site is immutable: a site is a property of the installation"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.stretched) || !has(self.stretched) || self.stretched.peerSite == oldSelf.stretched.peerSite",message="spec.stretched.peerSite is immutable"
 type StorageClusterSpec struct {
 	// MaxSubsystemCount is the maximum number of NVMe-oF subsystems per storage
 	// node. It is the cluster's and no node carries a copy: every node's
@@ -1756,6 +1769,9 @@ func init() {
 // (podNetwork), which Multus data networks may add dedicated interfaces to. The
 // host network excludes the rest.
 //
+// A ClusterDeploymentConfig's template embeds this type, and a draft takes any
+// edit until it is approved, so the update rules are the
+// StorageNodesSpec's rather than this type's.
 // +kubebuilder:validation:XValidation:rule="(has(self.podNetwork) && self.podNetwork) || (has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)",message="one of podNetwork and spdkOnHostNetwork must be set"
 // +kubebuilder:validation:XValidation:rule="!(has(self.podNetwork) && self.podNetwork && has(self.spdkOnHostNetwork) && self.spdkOnHostNetwork)",message="podNetwork and spdkOnHostNetwork are exclusive"
 // +kubebuilder:validation:XValidation:rule="!has(self.data) || self.data.size() == 0 || (has(self.podNetwork) && self.podNetwork)",message="data networks require podNetwork: true"
@@ -1768,7 +1784,6 @@ type StorageNetworkSpec struct {
 	// With data networks, the RPC stays on that interface and the data moves to the
 	// networks' interfaces, whose addresses are stable, so no Service is kept.
 	// +optional
-	// +k8s:immutable
 	// +simplyblock:advanced
 	PodNetwork bool `json:"podNetwork,omitempty"`
 
@@ -1777,7 +1792,6 @@ type StorageNetworkSpec struct {
 	// do not agree on what their NICs are called: each node names its own in
 	// its spec.config.dataInterfaces, which is allowed only in this mode.
 	// +optional
-	// +k8s:immutable
 	// +simplyblock:advanced
 	SpdkOnHostNetwork bool `json:"spdkOnHostNetwork,omitempty"`
 

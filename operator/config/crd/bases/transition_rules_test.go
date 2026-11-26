@@ -18,6 +18,7 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/yaml"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -505,5 +506,47 @@ func TestS3BucketCapacityMustBePositive(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "capacityBytes") {
 			t.Errorf("capacityBytes %d: create error = %v, want a refusal naming capacityBytes", capacity, err)
 		}
+	}
+}
+
+// A ClusterDeploymentConfig is frozen by its approval and by nothing before it:
+// the webhook refuses every spec change to an approved document, and a draft
+// takes any edit. So the schema carries no update rule but the one that keeps
+// approval one-way. A rule anywhere below spec, usually arriving through a type
+// the template shares with the StorageCluster, would freeze a setting on a
+// draft nobody has reviewed yet; such a rule belongs on the StorageCluster.
+func TestTheDeploymentConfigSchemaCarriesNoUpdateRuleButApproval(t *testing.T) {
+	const approval = "!has(oldSelf.approved) || !oldSelf.approved || self.approved"
+	raw, err := FS.ReadFile("storage.simplyblock.io_clusterdeploymentconfigs.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var crd map[string]any
+	if err := yaml.Unmarshal(raw, &crd); err != nil {
+		t.Fatal(err)
+	}
+	var walk func(node any, path string)
+	walk = func(node any, path string) {
+		rules, _ := dig(node, "x-kubernetes-validations").([]any)
+		for _, r := range rules {
+			rule, _ := dig(r, "rule").(string)
+			if strings.Contains(rule, "oldSelf") && (path != ".spec" || rule != approval) {
+				t.Errorf("%s carries the update rule %q", path, rule)
+			}
+		}
+		props, _ := dig(node, "properties").(map[string]any)
+		for name, child := range props {
+			walk(child, path+"."+name)
+		}
+		if items := dig(node, "items"); items != nil {
+			walk(items, path+"[]")
+		}
+		if extra, ok := dig(node, "additionalProperties").(map[string]any); ok {
+			walk(extra, path+"{}")
+		}
+	}
+	versions, _ := dig(crd, "spec", "versions").([]any)
+	for _, v := range versions {
+		walk(dig(v, "schema", "openAPIV3Schema"), "")
 	}
 }
