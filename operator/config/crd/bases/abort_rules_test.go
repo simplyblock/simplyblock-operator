@@ -31,6 +31,12 @@ func TestAbortCannotBeWithdrawn(t *testing.T) {
 				TargetNodeRef: simplyblockv1alpha2.StorageNodeReference{Namespace: "default", Name: "node-1"},
 			},
 		}}, func(o client.Object) { o.(*simplyblockv1alpha2.PersistentVolumeOps).Spec.Abort = false }},
+		{"StorageBackupOps", &simplyblockv1alpha2.StorageBackupOps{Spec: simplyblockv1alpha2.StorageBackupOpsSpec{
+			ClusterRef: simplyblockv1alpha2.NamespacedDnsReference{Name: "cluster-1"},
+			BackupRef:  simplyblockv1alpha2.NamespacedReference{Name: "backup-1"},
+			Action:     simplyblockv1alpha2.StorageBackupOpsActionRestore, Abort: true,
+			Restore: &simplyblockv1alpha2.RestoreSpec{ClaimName: "restored", TargetPool: "pool-1"},
+		}}, func(o client.Object) { o.(*simplyblockv1alpha2.StorageBackupOps).Spec.Abort = false }},
 	}
 	cases := make([]transition, 0, len(kinds))
 	for _, k := range kinds {
