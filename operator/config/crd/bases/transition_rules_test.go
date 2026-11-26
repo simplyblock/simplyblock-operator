@@ -388,7 +388,15 @@ func TestStorageSiteDeploymentUpdateRules(t *testing.T) {
 			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) {
 				s.Discover.Workers = []string{"worker-9"}
 			}),
-			denied: "discover cannot change once",
+			denied: "discover is immutable",
+		},
+		{
+			name:   "rediscovering a deployment under review",
+			create: siteDeployment(),
+			mutate: asSiteDeployment(func(s *simplyblockv1alpha2.StorageSiteDeploymentSpec) {
+				s.Discover.Workers = []string{"worker-9"}
+			}),
+			denied: "discover is immutable",
 		},
 		{
 			name:   "resizing a deployment under review",

@@ -110,7 +110,7 @@ type StorageSiteSizing struct {
 // StorageSiteDeploymentSpec is the request for one site's storage cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval is one-way: an approved deployment cannot be un-approved"
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || (has(self.sizing) == has(oldSelf.sizing) && (!has(self.sizing) || self.sizing == oldSelf.sizing))",message="sizing cannot change once the deployment is approved: the site's approved draft refuses the re-apply, and the request would report Failed for a running cluster"
-// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || (has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover))",message="discover cannot change once the deployment is approved: the approved draft is the record of the deployment, and another discovery does not rewrite it"
+// +kubebuilder:validation:XValidation:rule="has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover)",message="discover is immutable: another discovery does not rewrite the draft already written, so a different discovery is a new deployment"
 type StorageSiteDeploymentSpec struct {
 	// Cluster is the OCM ManagedCluster the storage is deployed on. The request's
 	// ManifestWork and views live in its namespace on the hub. Immutable.
@@ -136,10 +136,9 @@ type StorageSiteDeploymentSpec struct {
 	// +optional
 	DraftName string `json:"draftName,omitempty"`
 
-	// Discover is the discovery the site runs first. Changing it before approval
-	// runs another discovery, which finds the draft already written and leaves
-	// it as it is; a different draft takes a new draftName. After approval it is
-	// refused.
+	// Discover is the discovery the site runs first. Immutable: another
+	// discovery would not rewrite the draft already written, so a different
+	// discovery is a new deployment.
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 
