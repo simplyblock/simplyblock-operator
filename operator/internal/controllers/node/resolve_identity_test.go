@@ -60,7 +60,7 @@ func (c countingBackend) AddNode(context.Context, string, utils.StorageNodeSetAd
 // aMatcher builds a reconciler over one worker whose Kubernetes address and
 // storage-plane address differ, which is the ordinary shape of a deployment
 // whose storage traffic is on its own network.
-func aMatcher(t *testing.T, readings []NodeReading, systemUUID string) (
+func aMatcher(t *testing.T, readings []NodeReading) (
 	*StorageNodeReconciler, *simplyblockv1alpha2.StorageNode, *simplyblockv1alpha2.StorageCluster,
 ) {
 	t.Helper()
@@ -69,7 +69,7 @@ func aMatcher(t *testing.T, readings []NodeReading, systemUUID string) (
 		ObjectMeta: metav1.ObjectMeta{Name: "worker-1"},
 		Status: corev1.NodeStatus{
 			Addresses: []corev1.NodeAddress{{Type: corev1.NodeInternalIP, Address: workerKubernetesIP}},
-			NodeInfo:  corev1.NodeSystemInfo{SystemUUID: systemUUID},
+			NodeInfo:  corev1.NodeSystemInfo{SystemUUID: workerSystemUUID},
 		},
 	}
 	node := aResolvingNode()
@@ -107,7 +107,7 @@ func TestANodeIsFoundWhenTheStoragePlaneIsItsOwnNetwork(t *testing.T) {
 		SystemUUID:   workerSystemUUID,
 		Hostname:     "worker-1_4422",
 		RPCPort:      4422,
-	}}, workerSystemUUID)
+	}})
 
 	reading, found, err := r.matchBackendNode(context.Background(), node, cluster)
 	if err != nil {
@@ -129,7 +129,7 @@ func TestANodeOfAnotherWorkerIsNotMatched(t *testing.T) {
 		ManagementIP: "192.168.10.99",
 		SystemUUID:   "ef7f45c7-ac2b-9a4f-ee58-08bfb8a41207",
 		RPCPort:      4422,
-	}}, workerSystemUUID)
+	}})
 
 	_, found, err := r.matchBackendNode(context.Background(), node, cluster)
 	if err != nil {
@@ -148,7 +148,7 @@ func TestTheAddressStillMatchesWhereNoSystemUUIDIsReported(t *testing.T) {
 		Status:       nodeStatusOnline,
 		ManagementIP: workerKubernetesIP,
 		RPCPort:      4422,
-	}}, workerSystemUUID)
+	}})
 
 	_, found, err := r.matchBackendNode(context.Background(), node, cluster)
 	if err != nil {
