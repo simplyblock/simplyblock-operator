@@ -255,9 +255,14 @@ func parseInfo(out string) []Mapping {
 	return found
 }
 
+// notFound reports whether a failed dmsetup call failed because the mapping is
+// not there. dmsetup words that differently by command and by build. An ioctl
+// answers `No such device or address`, other commands answer
+// `Device <name> not found`, and info -c on RHCOS answers `Device does not exist.`
 func notFound(out string, err error) bool {
 	for _, s := range []string{out, err.Error()} {
-		if strings.Contains(s, "No such device") || strings.Contains(s, "not found") {
+		if strings.Contains(s, "No such device") || strings.Contains(s, "not found") ||
+			strings.Contains(s, "does not exist") {
 			return true
 		}
 	}

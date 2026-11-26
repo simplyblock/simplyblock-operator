@@ -44,6 +44,21 @@ func TestReadOnlyOfAMissingMappingIsErrNotFound(t *testing.T) {
 	}
 }
 
+// Regression: 2026-11-26-dmsetup-info-does-not-exist. On RHCOS, dmsetup info -c
+// reports a missing mapping as `Device does not exist.`, which the not-found
+// check did not know. Every first read-only raw-block publish therefore failed
+// with Internal instead of creating its mapping (OpenShift CSI suite, multiVolume
+// `should concurrently access the single read-only volume from pods on the same node`).
+func TestReadOnlyOfAMissingMappingOnRHCOSIsErrNotFound(t *testing.T) {
+	r := &recorder{
+		out: map[string]string{"dmsetup info": "Device does not exist.\nCommand failed.\n"},
+		err: map[string]error{"dmsetup info": errors.New("exit status 1")},
+	}
+	if _, err := New(r.run).ReadOnly(context.Background(), "sbro-bcfb6d179c9263b6"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err = %v, want ErrNotFound", err)
+	}
+}
+
 // Regression: 2026-11-25-dm-reload-drops-readonly. A plain dmsetup reload loads
 // a writable table, verified on a RHEL 9 host: a mapping created --readonly
 // reads back L--w after one. Swap is what a namespace move and an expand run,
