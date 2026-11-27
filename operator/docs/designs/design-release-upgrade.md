@@ -736,14 +736,14 @@ Image events land on the `StorageNode` they concern.
 
 | Metric                                                            | Labels            | Description                                                                                                       |
 |-------------------------------------------------------------------|-------------------|-------------------------------------------------------------------------------------------------------------------|
-| `simplyblock_storagenode_images_out_of_date`                      | `cluster`, `node` | 1 while the node's `imagesCurrent` is `false`. Summed by `cluster`, the number of nodes a rollout has not reached |
+| `simplyblock_storagenode_images_out_of_date_state`                | `cluster`, `node` | 1 while the node's `imagesCurrent` is `false`. Summed by `cluster`, the number of nodes a rollout has not reached |
 | `simplyblock_storagecluster_rolling_restart_image_mismatch_total` | `cluster`         | Counter of restarts that came back on an unexpected image                                                         |
 | `simplyblock_storagecluster_rolling_restart_nodes_current_total`  | `cluster`         | Counter of nodes an `OutOfDate` walk passed over as current                                                       |
 
 The Jobs export no metrics: they are short-lived processes, and the operations
 they create are what a dashboard follows.
 
-`simplyblock_storagenode_images_out_of_date` is the load-bearing one. It is the
+`simplyblock_storagenode_images_out_of_date_state` is the load-bearing one. It is the
 alert for a fleet left half upgraded, which is the state a stopped rollout leaves
 behind and the one that otherwise goes unnoticed, since every node is `online`.
 `simplyblock_storagecluster_rolling_restart_image_mismatch_total` is the alert for a control plane
