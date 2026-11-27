@@ -139,6 +139,9 @@ type StorageSiteDeploymentSpec struct {
 	// Discover is the discovery the site runs first. Immutable: another
 	// discovery would not rewrite the draft already written, so a different
 	// discovery is a new deployment.
+	// The block defaults to empty, so a manifest without it and a typed
+	// write, which always carries it, store the same value.
+	// +kubebuilder:default={}
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 

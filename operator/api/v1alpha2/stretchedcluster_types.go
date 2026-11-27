@@ -98,6 +98,9 @@ type StretchedSite struct {
 	// Discover is the discovery this site runs: which workers are inspected.
 	// Immutable: another discovery would not rewrite the site's draft already
 	// written, so a different discovery is a new stretched cluster.
+	// The block defaults to empty, so a manifest without it and a typed
+	// write, which always carries it, store the same value.
+	// +kubebuilder:default={}
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 }

@@ -89,10 +89,13 @@ spec:
                     - message: cluster is immutable
                       rule: self == oldSelf
                 discover:
+                  default: {}
                   description: |-
                     Discover is the discovery the site runs first. Immutable: another
                     discovery would not rewrite the draft already written, so a different
                     discovery is a new deployment.
+                    The block defaults to empty, so a manifest without it and a typed
+                    write, which always carries it, store the same value.
                   properties:
                     enableControlPlaneNodes:
                       description: |-
