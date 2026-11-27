@@ -22,7 +22,7 @@ import (
 // the given statuses, with a switch that moves the streamed record to v2.
 func writeProtectionWorld(
 	t *testing.T, v2 *bool, statuses ...string,
-) (*StorageClusterOpsReconciler, *fakeControlPlane, *recorder, *fakeClusterCache) {
+) (*StorageClusterOpsReconciler, *fakeControlPlane) {
 	t.Helper()
 	cache := streamedCluster(func(dto *subscriptions.ClusterDTO) { dto.WriteProtectionV2 = v2 })
 	api := &fakeControlPlane{
@@ -41,15 +41,14 @@ func writeProtectionWorld(
 			return nil
 		},
 	}
-	rec := &recorder{}
-	r := newOpsReconciler(t, api, rec, newTestCluster(),
+	r := newOpsReconciler(t, api, &recorder{}, newTestCluster(),
 		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionSwitchWriteProtection))
 	r.Clusters = cache
-	return r, api, rec, cache
+	return r, api
 }
 
 func TestTheSwitchIsMadeOnceAndFinishesOnV2(t *testing.T) {
-	r, api, _, _ := writeProtectionWorld(t, ptr.To(false), utils.NodeStatusOnline, utils.NodeStatusOnline)
+	r, api := writeProtectionWorld(t, ptr.To(false), utils.NodeStatusOnline, utils.NodeStatusOnline)
 
 	ops, cluster := reconcileOps(t, r, 10)
 	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
@@ -65,7 +64,7 @@ func TestTheSwitchIsMadeOnceAndFinishesOnV2(t *testing.T) {
 }
 
 func TestAClusterAlreadyOnV2IsNotSwitchedAgain(t *testing.T) {
-	r, api, _, _ := writeProtectionWorld(t, ptr.To(true), utils.NodeStatusOnline)
+	r, api := writeProtectionWorld(t, ptr.To(true), utils.NodeStatusOnline)
 
 	ops, _ := reconcileOps(t, r, 10)
 	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseSucceeded {
@@ -80,7 +79,7 @@ func TestAClusterAlreadyOnV2IsNotSwitchedAgain(t *testing.T) {
 }
 
 func TestTheSwitchWaitsForEveryNodeToBeOnline(t *testing.T) {
-	r, api, _, _ := writeProtectionWorld(t, ptr.To(false), utils.NodeStatusOnline, utils.NodeStatusOffline)
+	r, api := writeProtectionWorld(t, ptr.To(false), utils.NodeStatusOnline, utils.NodeStatusOffline)
 
 	ops, _ := reconcileOps(t, r, 10)
 	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseRunning {
@@ -95,7 +94,7 @@ func TestTheSwitchWaitsForEveryNodeToBeOnline(t *testing.T) {
 }
 
 func TestAControlPlaneThatDoesNotReportWriteProtectionFailsTheSwitch(t *testing.T) {
-	r, api, _, _ := writeProtectionWorld(t, nil, utils.NodeStatusOnline)
+	r, api := writeProtectionWorld(t, nil, utils.NodeStatusOnline)
 
 	ops, _ := reconcileOps(t, r, 10)
 	if ops.Status.Phase != simplyblockv1alpha2.StorageClusterOpsPhaseFailed {
@@ -107,7 +106,7 @@ func TestAControlPlaneThatDoesNotReportWriteProtectionFailsTheSwitch(t *testing.
 }
 
 func TestARefusedSwitchIsNotRepeatedWithinItsClaim(t *testing.T) {
-	r, api, _, _ := writeProtectionWorld(t, ptr.To(false), utils.NodeStatusOnline)
+	r, api := writeProtectionWorld(t, ptr.To(false), utils.NodeStatusOnline)
 	api.switchWriteProtection = func(string) error {
 		return &atlascp.StatusError{Op: "switch", StatusCode: http.StatusConflict, Body: "stays on v1"}
 	}
