@@ -18,6 +18,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/testsupport"
@@ -197,5 +198,50 @@ func TestADeletedProfileIsNotAnError(t *testing.T) {
 	got.SetGroupVersionKind(StorageProfileGVK)
 	if err := r.Get(context.Background(), types.NamespacedName{Name: "gone"}, got); !apierrors.IsNotFound(err) {
 		t.Errorf("get = %v, want NotFound", err)
+	}
+}
+
+// Regression: #989 review (StorageProfile merge patch). The fill was a plain
+// merge patch, read at one resourceVersion and written at whatever version the
+// profile had by then, so a value CDI or an administrator set in between was
+// overwritten by the operator's, against the contract that only empty fields
+// are filled. The write has to conflict instead, and the next pass reads again.
+func TestAFieldSetWhileTheFillIsInFlightIsKept(t *testing.T) {
+	r := newReconciler(t, class("sb", "csi.simplyblock.io", nil), profileFor("sb", "csi.simplyblock.io"))
+	underlying := r.Client
+	written := false
+	r.Client = interceptor.NewClient(underlying.(client.WithWatch), interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if !written {
+				// Somebody else sets the field between the operator's read and its write.
+				written = true
+				current := &unstructured.Unstructured{}
+				current.SetGroupVersionKind(StorageProfileGVK)
+				if err := c.Get(ctx, client.ObjectKeyFromObject(obj), current); err != nil {
+					return err
+				}
+				_ = unstructured.SetNestedField(current.Object, "copy", "spec", "cloneStrategy")
+				if err := c.Update(ctx, current); err != nil {
+					return err
+				}
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	})
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "sb"}})
+	if err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(StorageProfileGVK)
+	if err := underlying.Get(context.Background(), types.NamespacedName{Name: "sb"}, got); err != nil {
+		t.Fatalf("get the profile: %v", err)
+	}
+	if cs := spec(t, got)["cloneStrategy"]; cs != "copy" {
+		t.Errorf("cloneStrategy = %v, want the value set during the fill, copy, kept", cs)
+	}
+	if res.RequeueAfter <= 0 {
+		t.Errorf("result = %+v, want a requeue so the next pass fills what is still empty", res)
 	}
 }

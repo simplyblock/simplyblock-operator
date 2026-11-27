@@ -19,6 +19,7 @@ package virtualization
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/simplyblock/atlas/kube"
 	corev1 "k8s.io/api/core/v1"
@@ -56,6 +57,10 @@ const (
 
 // StorageProfileFilled is the event reason for a profile this wrote.
 const StorageProfileFilled = "StorageProfileFilled"
+
+// conflictRetry is how soon a fill that lost a race with another writer reads
+// the profile again.
+const conflictRetry = time.Second
 
 // StorageProfileReconciler fills the empty fields of simplyblock's
 // StorageProfiles.
@@ -106,9 +111,12 @@ func (r *StorageProfileReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if len(filled) == 0 {
 		return ctrl.Result{}, nil
 	}
-	if err := r.Patch(ctx, profile, client.MergeFrom(before)); err != nil {
+	// The patch carries the resourceVersion it was computed from: a field set
+	// after the read makes it conflict rather than be overwritten, and the next
+	// pass reads the profile again.
+	if err := r.Patch(ctx, profile, client.MergeFromWithOptions(before, client.MergeFromWithOptimisticLock{})); err != nil {
 		if apierrors.IsConflict(err) {
-			return ctrl.Result{Requeue: true}, nil
+			return ctrl.Result{RequeueAfter: conflictRetry}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("fill StorageProfile %s: %w", profile.GetName(), err)
 	}
