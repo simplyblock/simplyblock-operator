@@ -215,6 +215,32 @@ check_delegation() {
       "and its Route 53 zone has to exist on the name servers the delegation names"
 }
 
+# Crash dumps on every worker, written into the install manifests so the
+# workers boot with them and no MachineConfig rollout is needed later. A kernel
+# panic on a storage node (kernel-panic-usercopy-2026-11-27.md in the report)
+# otherwise leaves nothing to analyze, and kdump also reboots the worker where a
+# panic would leave it hung.
+add_kdump_manifest() {
+  cat >"$INSTALL_DIR/openshift/99-worker-kdump.yaml" <<'EOF'
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-worker-kdump
+  labels:
+    machineconfiguration.openshift.io/role: worker
+spec:
+  config:
+    ignition:
+      version: 3.2.0
+    systemd:
+      units:
+      - name: kdump.service
+        enabled: true
+  kernelArguments:
+  - crashkernel=1G-4G:192M,4G-64G:256M,64G-:512M
+EOF
+}
+
 cmd_create() {
   [[ -e "$INSTALL_DIR/metadata.json" ]] &&
     die "$STATE_DIR already holds cluster $CLUSTER_NAME; destroy it first, or set CLUSTER_NAME"
@@ -223,6 +249,8 @@ cmd_create() {
   render_config
   echo "creating $CLUSTER_NAME.$BASE_DOMAIN: OpenShift $(cat "$STATE_DIR/ocp-version")," \
     "$CONTROL_PLANE_REPLICAS x $CONTROL_PLANE_TYPE control plane, $WORKER_REPLICAS x $WORKER_TYPE workers, $ZONE"
+  installer create manifests --dir "$INSTALL_DIR" --log-level=info
+  add_kdump_manifest
   installer create cluster --dir "$INSTALL_DIR" --log-level=info
   echo "kubeconfig: $KUBECONFIG_PATH"
 }
@@ -554,6 +582,30 @@ cmd_uninstall_simplyblock() {
   require_cluster
   KUBECONFIG="$KUBECONFIG_PATH" PATH="$(tools_dir):$PATH" \
     "$REPO_ROOT/helm-charts/scripts/cleanup-simplyblock.sh" --force simplyblock
+  # The cleanup script keeps a storage MachineConfigPool that still has nodes,
+  # since on a shared cluster the pool may outlive the namespace on purpose.
+  # Here it would hold the workers a new storage cluster's pool selects, and a
+  # node in two custom pools stops the Machine Config Operator. The workers go
+  # back to the worker pool, which reboots each of them once.
+  local pool id
+  for pool in $(oc_ get machineconfigpool -o name | grep '/storage-'); do
+    id="${pool#*/storage-}"
+    oc_ delete kubeletconfig "storage-kubelet-$id" --ignore-not-found --wait=false
+    oc_ delete machineconfig "storage-mc-$id" "99-storage-$id-generated-kubelet" --ignore-not-found --wait=false
+    oc_ delete "$pool" --wait=false
+  done
+  wait_for "the worker pool to take the workers back" 5400 worker_pool_updated
+}
+
+# Prints something once the worker pool holds every worker and has rolled its
+# configuration out to all of them. Right after a storage pool is deleted the
+# worker pool still reads updated, with the workers not yet counted in it.
+worker_pool_updated() {
+  local workers state
+  workers="$(oc_ get nodes -l node-role.kubernetes.io/worker -o name | wc -l | tr -d ' ')"
+  state="$(oc_ get machineconfigpool worker \
+    -o jsonpath='{.status.machineCount} {.status.updatedMachineCount} {.status.conditions[?(@.type=="Updated")].status}')"
+  [[ "$state" == "$workers $workers True" ]] && echo updated
 }
 
 cmd_status() {

@@ -201,7 +201,14 @@ instead.
 `uninstall-simplyblock` removes simplyblock, its storage cluster, and its
 volumes with the chart's cleanup script, so that `install-simplyblock` can build
 the storage cluster again with settings fixed at creation, such as
-`MAX_SUBSYSTEM_COUNT`.
+`MAX_SUBSYSTEM_COUNT`. It also removes the storage MachineConfigPool, which the
+cleanup script keeps while it has nodes, and waits while the workers reboot back
+into the worker pool: a new storage cluster's pool selects the same workers, and
+a node in two custom pools stops the Machine Config Operator.
+
+`create` adds a MachineConfig to the install manifests that enables kdump on
+every worker, so a kernel panic on a storage node leaves a crash dump in
+`/var/crash` and the worker reboots instead of hanging.
 
 Two operator defects are worked around in the step, so that it runs without a
 person: a discovery run that has not appeared within five minutes is applied
