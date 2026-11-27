@@ -254,6 +254,21 @@ Files: `operator/internal/controllers/controlplane/hostmaintenance_handoff_test.
 | U-112 | The `FoundationDBCluster` is applied with `processCounts.stateless` equal to the log count                                                                 | Positive   | `TestStatelessProcessesMatchTheLogCount`                                             |
 | U-113 | The delete guard refuses a delete in `ExcludingProcesses` and `IncludingProcesses`, and the refusal table agrees with the graph                            | Positive   | `TestTheControlPlaneRefusalTableAndTheGraphAgree`                                    |
 
+### Spreading the Processes Again (design §5.13)
+
+File: `operator/internal/controllers/controlplane/fdbrebalance_test.go`
+
+| #     | Scenario                                                                                                                                                                                                                                                                                                                                                                                                            | Type       | Test                                                   |
+|-------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|--------------------------------------------------------|
+| U-116 | Log and storage processes crowded on two of three workers, with the third back and empty, get exactly one process group of a crowded class written to `spec.processGroupsToRemove` and `FoundationDBRebalanceRequested` emitted. All ten pods on two workers left two coordinators on one and the FoundationDB operator retrying its coordinator change every ten seconds (2026-11-27-fdb-coordinators-two-workers) | Regression | `TestACrowdedClassGetsOneProcessMovedToTheEmptyWorker` |
+| U-117 | Every class on its own workers asks for nothing                                                                                                                                                                                                                                                                                                                                                                     | Negative   | `TestABalancedClusterIsLeftAlone`                      |
+| U-118 | The empty worker draws a process only when it is Ready, not cordoned, inside the node selector, and its taints are tolerated; with no third worker at all nothing is asked for                                                                                                                                                                                                                                      | Boundary   | `TestOnlyAnEligibleEmptyWorkerDrawsAProcess`           |
+| U-119 | A process group marked for removal, or a requested one not marked yet, holds the next request                                                                                                                                                                                                                                                                                                                       | Negative   | `TestARemovalInFlightHoldsTheNext`                     |
+| U-120 | A cluster not fully replicated, behind on its generation, or with a process group reporting a condition is not asked to move anything                                                                                                                                                                                                                                                                               | Negative   | `TestAnUnsettledDatabaseIsNotRebalanced`               |
+| U-121 | A held lock, an open window, or a window not started yet holds the request; a finished window does not                                                                                                                                                                                                                                                                                                              | Boundary   | `TestAnOperationInFlightHoldsTheRebalance`             |
+| U-122 | A second pass before the FoundationDB operator acts adds nothing, and the install's own apply of the cluster keeps the entry                                                                                                                                                                                                                                                                                        | Positive   | `TestTheRequestSurvivesASecondPassAndTheInstallsApply` |
+| U-123 | An entry for a process group already removed is not carried into the next request                                                                                                                                                                                                                                                                                                                                   | Positive   | `TestARequestDropsEntriesForRemovedProcessGroups`      |
+
 ---
 
 ## 2. Integration Tests
@@ -389,6 +404,29 @@ after the cordon are still holding when it does.
 3. Pause longer than the deadline after one drain, and assert the remaining
    windows fail and release only then.
 
+### M-06 — A worker returns from an outage
+
+Design reference: §5.13.
+
+**What to verify:** after a worker hosting FoundationDB processes reboots
+without a window and comes back, the processes it lost return to it one at a
+time, and the coordinators end on three workers.
+
+**Test concept:**
+
+1. On a three-worker cluster, note the worker of every log and storage process
+   (`status.processGroups[].faultDomain` of the `FoundationDBCluster`).
+2. Hard-reboot one worker that runs a log and a storage process, so that no
+   window is raised, and wait until its pods have been rescheduled onto the
+   other two.
+3. Wait for the worker to return `Ready`.
+4. Watch the `ControlPlane`'s events: one `FoundationDBRebalanceRequested` per
+   replacement, each after the previous removal finished.
+5. Verify that every worker runs one log and one storage process again, that the
+   cluster file names three coordinators on three workers, and that the
+   FoundationDB operator no longer logs that it could select only two
+   processes for three coordinators.
+
 ---
 
 ## 5. Axis Coverage
@@ -411,10 +449,10 @@ Struck rows are not counted.
 
 | Class       | Scenarios | Covered | Not covered |
 |-------------|-----------|---------|-------------|
-| Unit        | 109       | 107     | U-45, U-73  |
+| Unit        | 119       | 117     | U-45, U-73  |
 | Integration | 10        | 0       | I-01 … I-10 |
 | E2E         | 14        | 0       | E-01 … E-15 |
-| Manual      | 5         | 0       | M-01 … M-05 |
+| Manual      | 6         | 0       | M-01 … M-06 |
 
 ---
 
@@ -435,6 +473,7 @@ Struck rows are not counted.
 | §5.10 Converged worker   | U-27, I-06, E-07                                                    |
 | §5.11 Rolling update     | E-11, E-12, I-09                                                    |
 | §5.12 Hand-off           | U-102 … U-113, E-15, M-03                                           |
+| §5.13 Spreading again    | U-116 … U-123, M-06                                                 |
 | §6 State machine         | U-61, U-62, U-46, U-96, U-97, I-07                                  |
 | §7.3 Lock                | U-72, U-73, U-83, U-84, U-93, E-13                                  |
 
@@ -442,16 +481,16 @@ Struck rows are not counted.
 
 ## 8. What Is Not Yet Covered
 
-| #           | Gap                                                                                    | Reason                                                                                                                                             |
-|-------------|----------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------|
-| U-45        | A `SharedHost` set completing the step with `CoordinatorsMoved` naming the shared host | The placement is proven at the choice (U-08). The step's event text for it is not asserted                                                         |
-| U-73        | A `Restart` running during `AwaitingHost` and waiting during a move                    | The lock scope is proven on the window's own transitions (U-83, U-84). The other action's view of it is not asserted                               |
-| I-01 … I-10 | Every integration scenario                                                             | No `envtest` suite carries the FoundationDB CRDs yet                                                                                               |
-| E-01 … E-15 | Every end-to-end scenario                                                              | Needs the implementation. E-08 needs a lab with exactly three FoundationDB hosts, and E-14 a lab on cloud volumes whose drained node is replaced   |
-| M-01 … M-05 | The manual scenarios                                                                   | Failure injection in the FoundationDB operator, a powered-off host, a client harness, a worker with no unheld pod, and a multi-hour serial drain   |
-| —           | More than five FoundationDB hosts, and a `three_data_hall` cluster                     | The operator never applies either shape                                                                                                            |
-| —           | A worker with two FoundationDB pods of one class                                       | The anti-affinity is preferred, not required, so it can happen on a small cluster. The choice treats such pods as one host, and nothing asserts it |
-| —           | Nine coordinators                                                                      | Multi-region FoundationDB is not applied by the operator                                                                                           |
-| —           | A drain that bypasses the eviction API                                                 | No budget holds a direct delete, and a delete evicts no sentinel. The design names it a non-goal                                                   |
-| —           | Both drain signals arriving in the same reconcile                                      | The first write wins and the second is a no-op by U-77. Which one wins is not observable from outside, and nothing asserts it                      |
-| —           | The `ControlPlane` deleted mid-window                                                  | The missing-target path is the shared `Ops` behavior, tested on the existing actions                                                               |
+| #           | Gap                                                                                    | Reason                                                                                                                                                                               |
+|-------------|----------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| U-45        | A `SharedHost` set completing the step with `CoordinatorsMoved` naming the shared host | The placement is proven at the choice (U-08). The step's event text for it is not asserted                                                                                           |
+| U-73        | A `Restart` running during `AwaitingHost` and waiting during a move                    | The lock scope is proven on the window's own transitions (U-83, U-84). The other action's view of it is not asserted                                                                 |
+| I-01 … I-10 | Every integration scenario                                                             | No `envtest` suite carries the FoundationDB CRDs yet                                                                                                                                 |
+| E-01 … E-15 | Every end-to-end scenario                                                              | Needs the implementation. E-08 needs a lab with exactly three FoundationDB hosts, and E-14 a lab on cloud volumes whose drained node is replaced                                     |
+| M-01 … M-06 | The manual scenarios                                                                   | Failure injection in the FoundationDB operator, a powered-off host, a client harness, a worker with no unheld pod, a multi-hour serial drain, and a worker rebooted without a window |
+| —           | More than five FoundationDB hosts, and a `three_data_hall` cluster                     | The operator never applies either shape                                                                                                                                              |
+| —           | A worker with two FoundationDB pods of one class                                       | The anti-affinity is preferred, not required, so it can happen on a small cluster. The choice treats such pods as one host, and nothing asserts it                                   |
+| —           | Nine coordinators                                                                      | Multi-region FoundationDB is not applied by the operator                                                                                                                             |
+| —           | A drain that bypasses the eviction API                                                 | No budget holds a direct delete, and a delete evicts no sentinel. The design names it a non-goal                                                                                     |
+| —           | Both drain signals arriving in the same reconcile                                      | The first write wins and the second is a no-op by U-77. Which one wins is not observable from outside, and nothing asserts it                                                        |
+| —           | The `ControlPlane` deleted mid-window                                                  | The missing-target path is the shared `Ops` behavior, tested on the existing actions                                                                                                 |

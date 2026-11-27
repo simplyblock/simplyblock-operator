@@ -161,3 +161,15 @@ const (
 	// is explained by.
 	MaintenanceMarkersLeft = "MaintenanceMarkersLeft"
 )
+
+// Reasons the FoundationDB rebalance emits on the ControlPlane
+// (design-fdb-host-maintenance.md §5.13).
+const (
+	// FoundationDBRebalanceRequested is a process group of a class that shares
+	// a worker with another of its class handed to the FoundationDB operator to
+	// replace, so that the replacement lands on a worker that has none.
+	FoundationDBRebalanceRequested = "FoundationDBRebalanceRequested"
+	// FoundationDBRebalanceHeld is such a crowding seen and left as it is for
+	// now, and the message says what holds it.
+	FoundationDBRebalanceHeld = "FoundationDBRebalanceHeld"
+)
