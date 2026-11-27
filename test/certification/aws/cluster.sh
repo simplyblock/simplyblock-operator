@@ -48,6 +48,9 @@
 #   VIRT_CHANNEL            OpenShift Virtualization channel (default stable)
 #   OPERATOR_IMAGE          simplyblock operator image (default: the branch build of this checkout)
 #   SIMPLYBLOCK_IMAGE       simplyblock control plane image (default public.ecr.aws/simply-block/simplyblock:main)
+#   APPROVE_DRAFT           true approves the discovery draft and waits for an active
+#                           storage cluster; false stops at the draft for a review (default true)
+#   STORAGE_WAIT            seconds to wait for the storage cluster to go active (default 7200)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -65,6 +68,8 @@ WORKER_REPLICAS="${WORKER_REPLICAS:-3}"
 SSH_KEY_FILE="${SSH_KEY_FILE:-$HOME/.ssh/id_ed25519.pub}"
 OWNER="${OWNER:-${USER:-unknown}}"
 VIRT_CHANNEL="${VIRT_CHANNEL:-stable}"
+APPROVE_DRAFT="${APPROVE_DRAFT:-true}"
+STORAGE_WAIT="${STORAGE_WAIT:-7200}"
 
 STATE_DIR="$SCRIPT_DIR/clusters/$CLUSTER_NAME"
 INSTALL_DIR="$STATE_DIR/install"
@@ -417,6 +422,96 @@ cmd_install_simplyblock() {
     --set image.simplyblock.tag="${simplyblock_image##*:}" \
     --set snapshotcontroller.create=false \
     --set controlplane.observability.enabled=false
+  build_storage_cluster
+}
+
+# The storage cluster a standalone install builds: the chart's discovery run
+# writes a draft ClusterDeploymentConfig, approving it creates the cluster and
+# one storage node per worker, and the cluster is activated once every node is
+# online. On OpenShift every worker reboots into the storage MachineConfig on
+# the way, one at a time, so this takes most of an hour.
+build_storage_cluster() {
+  local draft cluster phase step
+  ensure_discovery_run
+  wait_for "the discovery draft" 1800 discovery_draft_ready
+  draft="$(oc_ get clusterdeploymentconfig -n simplyblock -o name | head -1)"
+  echo "draft: $(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.message}')"
+  if [[ "$APPROVE_DRAFT" != "true" ]]; then
+    echo "APPROVE_DRAFT=$APPROVE_DRAFT: review $draft in namespace simplyblock and set spec.approved"
+    return 0
+  fi
+  oc_ patch -n simplyblock "$draft" --type merge -p '{"spec":{"approved":true}}' >/dev/null
+  wait_for "the storage cluster of $draft" 600 oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}'
+  cluster="$(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}')"
+  echo "building storage cluster $cluster"
+
+  local deadline=$((SECONDS + STORAGE_WAIT))
+  until [[ "$(oc_ get storagecluster -n simplyblock "$cluster" -o jsonpath='{.status.status}' 2>/dev/null)" == active ]]; do
+    [[ $SECONDS -lt $deadline ]] || die "storage cluster $cluster is not active after ${STORAGE_WAIT}s"
+    phase="$(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.phase}')"
+    step="$(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.step.state}')"
+    if [[ "$phase" == Failed ]]; then
+      # The Activating step gives every node 60 minutes to come online, which
+      # three OpenShift workers rebooting one after another can exceed, and a
+      # failed document is never retried. What the step would have done next is
+      # ask for the activation, so that is done here once every node is online.
+      [[ "$step" == Activating ]] ||
+        die "$draft failed at $step: $(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.message}')"
+      if all_storage_nodes_online "$draft"; then
+        request_activation "$cluster"
+      fi
+    fi
+    oc_ get storagenodes -n simplyblock --no-headers \
+      -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,STEP:.status.step.state | sed 's/^/  /'
+    sleep 60
+  done
+  echo "storage cluster $cluster is active"
+  oc_ get storageclass
+}
+
+# The discovery run the chart's bootstrap ConfigMap carries. The operator
+# applies it once; after a first install whose operator never ran, a later
+# upgrade does not (the report's "Discovery after a failed first install"), so
+# a run that has not appeared within five minutes is applied from the
+# ConfigMap.
+ensure_discovery_run() {
+  local deadline=$((SECONDS + 300))
+  while [[ -z "$(oc_ get operatorops,clusterdeploymentconfig -n simplyblock -o name 2>/dev/null)" ]]; do
+    if [[ $SECONDS -ge $deadline ]]; then
+      echo "no discovery run after five minutes; applying the chart's from its bootstrap ConfigMap"
+      oc_ get configmap simplyblock-bootstrap-objects -n simplyblock \
+        -o jsonpath='{.data.initial-discovery\.yaml}' | oc_ apply -f -
+      return 0
+    fi
+    sleep "$POLL_SECONDS"
+  done
+}
+
+# Prints the draft's name once it is valid and waits for approval.
+discovery_draft_ready() {
+  oc_ get clusterdeploymentconfig -n simplyblock \
+    -o jsonpath='{range .items[?(@.status.phase=="Draft")]}{.status.message}{"\n"}{end}' |
+    grep 'waiting for spec.approved'
+}
+
+all_storage_nodes_online() {
+  local node
+  for node in $(oc_ get -n simplyblock "$1" -o jsonpath='{.status.nodeRefs[*]}'); do
+    [[ "$(oc_ get storagenode -n simplyblock "$node" -o jsonpath='{.status.phase}')" == Online ]] || return 1
+  done
+}
+
+request_activation() {
+  oc_ apply -f - <<EOF
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageClusterOps
+metadata:
+  name: $1-activate
+  namespace: simplyblock
+spec:
+  clusterRef: $1
+  action: Activate
+EOF
 }
 
 cmd_status() {

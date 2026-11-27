@@ -183,6 +183,15 @@ installer's node security group: the group allows only OpenShift's own ports,
 and simplyblock's control plane and NVMe-oF listeners use others. The rule
 admits the group itself and nothing outside it, and needs the AWS CLI. The step
 then installs this checkout's chart with the chart's snapshot controller turned
-off, since OpenShift runs its own. Where cert-manager is
+off, since OpenShift runs its own, approves the discovery draft, and waits until
+the storage cluster is active. On OpenShift every worker reboots into the
+storage MachineConfig on the way, one at a time, so the step takes most of an
+hour. `APPROVE_DRAFT=false` stops at the draft for a review instead.
+
+Two operator defects are worked around in the step, so that it runs without a
+person: a discovery run that has not appeared within five minutes is applied
+from the chart's bootstrap ConfigMap, and when the draft fails because its
+activation deadline ran out while the workers rebooted, the step asks for the
+activation itself once every node is online. Where cert-manager is
 missing, it installs Red Hat's cert-manager Operator first: the chart's default,
 mutual TLS, needs it.
