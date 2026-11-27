@@ -180,19 +180,19 @@ jobs:
           path: digests
 
       - name: Create the multi-arch ${{ matrix.name }} manifests
-        id: build
         env:
           TAGS: ${{ steps.tags.outputs.tags }}
         run: .github/scripts/merge-arch-manifests.sh digests
 
       # Red Hat certification runs these checks on every image the bundle lists.
-      # Running them on the pushed digest fails the build instead of the release.
+      # Each platform is checked by the digest its build job pushed, not one read
+      # back by tag, which a lagging registry can answer with the previous image.
       # preflight exits 0 either way, so the verdict is read from results.json.
       - name: Run Red Hat preflight container checks
         env:
           PREFLIGHT_VERSION: "1.22.0"
           PREFLIGHT_SHA256: "1451ed8763f209f4d4a63848d9d62d1d40653a247db43d7606feb28eadbbd99b"
-          IMAGE: docker.io/${{ matrix.image_name }}@${{ steps.build.outputs.digest }}
+          REPO: docker.io/${{ matrix.image_name }}
         run: |
           curl -fsSL -o preflight \
             "https://github.com/redhat-openshift-ecosystem/openshift-preflight/releases/download/${PREFLIGHT_VERSION}/preflight-linux-amd64"
@@ -200,10 +200,11 @@ jobs:
           chmod +x preflight
           failed=0
           for platform in amd64 arm64; do
-            ./preflight check container "$IMAGE" --platform "$platform" --artifacts preflight-artifacts > /dev/null
+            image="${REPO}@$(cat "digests/${platform}")"
+            ./preflight check container "$image" --platform "$platform" --artifacts preflight-artifacts > /dev/null
             result="preflight-artifacts/${platform}/results.json"
             if [ "$(jq -r .passed "$result")" != "true" ]; then
-              echo "::error::preflight failed for ${IMAGE} (${platform})"
+              echo "::error::preflight failed for ${image} (${platform})"
               jq -r '.results.failed[], .results.errors[] | "  \(.name): \(.suggestion // .help // "")"' "$result"
               failed=1
             fi
