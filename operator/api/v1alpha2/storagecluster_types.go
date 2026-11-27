@@ -154,8 +154,11 @@ type CapacityThresholdSpec struct {
 // VaultKMS configures the HashiCorp Vault key store.
 type VaultKMS struct {
 	// Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
-	// Rejected unless it resolves to an external address.
-	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
+	// It must use HTTPS, because the control plane talks to Vault over TLS only
+	// and refuses any other scheme. Rejected unless it resolves to an external
+	// address.
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z][a-zA-Z0-9+.-]*://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
+	// +kubebuilder:validation:XValidation:rule="self.startsWith('https://')",message="the Vault endpoint must use https://, for example https://vault.example.com:8200, because the control plane refuses any other scheme"
 	// +kubebuilder:validation:Required
 	Endpoint string `json:"endpoint"`
 }
