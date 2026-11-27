@@ -71,6 +71,10 @@ type ControlPlaneReconciler struct {
 	// phase branches can be exercised without an HTTP server.
 	Prober Prober
 
+	// rebalanceNotes keeps the announcement of a held FoundationDB rebalance
+	// from repeating on every pass (fdbrebalance.go).
+	rebalanceNotes fdbRebalanceNotes
+
 	// ImageMirrorRegistry is the registry every image this install deploys is
 	// pulled from on an air-gapped cluster. Empty keeps the upstream registries.
 	ImageMirrorRegistry string
@@ -373,6 +377,11 @@ func (r *ControlPlaneReconciler) steadyState(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane,
 ) (ctrl.Result, error) {
 	if err := r.applyEverything(ctx, cp); err != nil {
+		return ctrl.Result{}, err
+	}
+	// A worker that returned from an outage gets its share of the database
+	// back, one process at a time (fdbrebalance.go).
+	if err := r.rebalanceFoundationDB(ctx, cp); err != nil {
 		return ctrl.Result{}, err
 	}
 

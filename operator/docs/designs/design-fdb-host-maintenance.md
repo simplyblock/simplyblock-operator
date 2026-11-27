@@ -2,7 +2,7 @@
 
 **Status:** Partially Implemented  
 **Author:** geoffrey1330  
-**Date:** 2026-11-11 (last updated 2026-11-11)  
+**Date:** 2026-11-11 (last updated 2026-11-27)  
 **Test Plan:** [`tests/test-plan-fdb-host-maintenance.md`](../tests/test-plan-fdb-host-maintenance.md)  
 **Work Plan:** [`tasks/work-plan-fdb-host-maintenance.md`](../tasks/work-plan-fdb-host-maintenance.md)
 
@@ -837,6 +837,58 @@ process, and a drain of that host still costs one recovery after the kill: a
 shape the `CoordinatorsNotMoved` family of events does not report, and that
 §14 Q6 holds.
 
+### 5.13 Spreading the processes again
+
+A window moves a host's processes off it and lets them come back. A worker that
+goes away without one, through a reboot, an outage, or a replacement, has its
+FoundationDB pods rescheduled onto the other workers, which the anti-affinity
+between processes of one class allows because it is a preference (the
+`foundationDB.nodeSelector` field of the `ControlPlane` states why). Nothing in
+Kubernetes moves a running pod back when the worker returns, so the processes
+stay crowded on fewer workers than the database's fault domains assume. Two log
+processes on one worker are two coordinators on it, and the FoundationDB
+operator, which needs a coordinator per worker, retries its coordinator change
+every ten seconds for as long as the crowding lasts.
+
+The `ControlPlane` controller's steady state therefore looks, on every pass, for
+a class of `log` or `storage` processes with two or more on one worker while an
+eligible worker runs none of that class. Both classes carry the anti-affinity
+that places a replacement on a worker without its class, and both are
+coordinator candidates. Stateless processes are left as they are: their pods
+have no anti-affinity of their own, and they hold neither data nor a
+coordinator. A worker is eligible when it is `Ready`, not cordoned, matches the
+database's node selector, and tolerates its taints, which are the conditions a
+replacement pod is placed under. The worker of a process group is its
+`faultDomain` in `status.processGroups`, the hostname label (§5.5).
+
+The rebalance asks for one replacement: the lexically last process group of the
+class on its most crowded worker is written to the `FoundationDBCluster`'s
+`spec.processGroupsToRemove`. The FoundationDB operator marks the group for
+removal, adds its replacement, which the anti-affinity places on the worker
+without its class, excludes the old process, and removes it, so the data
+movement is the FoundationDB operator's, as for any other replacement. The entry
+is written by a server-side apply under the field manager
+`simplyblock-operator-fdb-rebalance`: the install's own apply of the cluster
+does not set the field and so leaves it alone. The FoundationDB operator never
+clears the list, and the next request writes only its own ID, which drops the
+IDs already removed, as `kubectl-fdb` does.
+
+The request is held, and announced as `FoundationDBRebalanceHeld`, in five
+cases:
+
+- The `ControlPlane` holds an operation's lock, or one of its `ControlPlaneOps`
+  has not ended. A window is one of them, and it moves processes itself.
+- The cluster's `status.generations.reconciled` is behind its generation.
+- The cluster's `status.health.fullReplication` is not true.
+- A process group is marked for removal, or a requested one is not marked yet,
+  which keeps the replacements to one at a time.
+- A process group reports a condition, which makes its replacement the
+  FoundationDB operator's own.
+
+A held rebalance is announced when what holds it changes and at most every ten
+minutes otherwise, because an event every pass is the repetition the crowding
+itself causes.
+
 ---
 
 ## 6. State Machine
@@ -1082,29 +1134,32 @@ surface, and the metrics are new series in the same registry.
 
 The window's events land on the `ControlPlaneOps`, which outlives the window as
 its audit record. The raise lands on the `ControlPlane`, because it is the
-object that exists before the window does.
+object that exists before the window does, and so does the rebalance of §5.13,
+which runs without a window.
 
-| Event                                                                                          | Type      | Reason                     | On                |
-|------------------------------------------------------------------------------------------------|-----------|----------------------------|-------------------|
-| A cordoned worker hosts FoundationDB pods and a window was raised for it                       | `Normal`  | `HostMaintenanceRaised`    | `ControlPlane`    |
-| The budget is up and the eviction of the worker's FoundationDB pods is held                    | `Normal`  | `EvictionHeld`             | `ControlPlaneOps` |
-| A drain of the worker was observed, and the message names the signal                           | `Normal`  | `DrainObserved`            | `ControlPlaneOps` |
-| The move is waiting for another window's move to finish                                        | `Normal`  | `MoveQueued`               | `ControlPlaneOps` |
-| Maintenance mode was set for the worker's zone until the recorded time                         | `Normal`  | `MaintenanceModeSet`       | `ControlPlaneOps` |
-| Maintenance mode could not be set and the window continues without it                          | `Warning` | `MaintenanceModeNotSet`    | `ControlPlaneOps` |
-| A later window set maintenance mode for its zone, which ended this window's                    | `Normal`  | `MaintenanceZoneTakenOver` | `ControlPlaneOps` |
-| The coordinators were moved, and the message names the set and whether two share a host        | `Normal`  | `CoordinatorsMoved`        | `ControlPlaneOps` |
-| The coordinators were not moved, and the message names the counts or the failed command        | `Warning` | `CoordinatorsNotMoved`     | `ControlPlaneOps` |
-| The cluster file still names the host after the move, so the set was reverted under the window | `Warning` | `CoordinatorsReverted`     | `ControlPlaneOps` |
-| The host's log and stateless processes were excluded and hold no role                          | `Normal`  | `ProcessesHandedOff`       | `ControlPlaneOps` |
-| The exclusion did not complete and the eviction proceeds with the roles in place               | `Warning` | `ProcessesNotHandedOff`    | `ControlPlaneOps` |
-| The returned processes were included again                                                     | `Normal`  | `ProcessesIncluded`        | `ControlPlaneOps` |
-| A process is left excluded, and the message carries the command to include it                  | `Warning` | `ProcessesLeftExcluded`    | `ControlPlaneOps` |
-| The budget is gone and the drain proceeds                                                      | `Normal`  | `EvictionReleased`         | `ControlPlaneOps` |
-| The window is waiting for the host's process groups to report back                             | `Normal`  | `AwaitingHostReturn`       | `ControlPlaneOps` |
-| Maintenance mode was cleared                                                                   | `Normal`  | `MaintenanceModeCleared`   | `ControlPlaneOps` |
-| Maintenance mode could not be cleared and expires on its own                                   | `Warning` | `MaintenanceModeLeft`      | `ControlPlaneOps` |
-| A terminal teardown left the budget or a label behind                                          | `Warning` | `MaintenanceMarkersLeft`   | `ControlPlaneOps` |
+| Event                                                                                          | Type      | Reason                           | On                |
+|------------------------------------------------------------------------------------------------|-----------|----------------------------------|-------------------|
+| A cordoned worker hosts FoundationDB pods and a window was raised for it                       | `Normal`  | `HostMaintenanceRaised`          | `ControlPlane`    |
+| The budget is up and the eviction of the worker's FoundationDB pods is held                    | `Normal`  | `EvictionHeld`                   | `ControlPlaneOps` |
+| A drain of the worker was observed, and the message names the signal                           | `Normal`  | `DrainObserved`                  | `ControlPlaneOps` |
+| The move is waiting for another window's move to finish                                        | `Normal`  | `MoveQueued`                     | `ControlPlaneOps` |
+| Maintenance mode was set for the worker's zone until the recorded time                         | `Normal`  | `MaintenanceModeSet`             | `ControlPlaneOps` |
+| Maintenance mode could not be set and the window continues without it                          | `Warning` | `MaintenanceModeNotSet`          | `ControlPlaneOps` |
+| A later window set maintenance mode for its zone, which ended this window's                    | `Normal`  | `MaintenanceZoneTakenOver`       | `ControlPlaneOps` |
+| The coordinators were moved, and the message names the set and whether two share a host        | `Normal`  | `CoordinatorsMoved`              | `ControlPlaneOps` |
+| The coordinators were not moved, and the message names the counts or the failed command        | `Warning` | `CoordinatorsNotMoved`           | `ControlPlaneOps` |
+| The cluster file still names the host after the move, so the set was reverted under the window | `Warning` | `CoordinatorsReverted`           | `ControlPlaneOps` |
+| The host's log and stateless processes were excluded and hold no role                          | `Normal`  | `ProcessesHandedOff`             | `ControlPlaneOps` |
+| The exclusion did not complete and the eviction proceeds with the roles in place               | `Warning` | `ProcessesNotHandedOff`          | `ControlPlaneOps` |
+| The returned processes were included again                                                     | `Normal`  | `ProcessesIncluded`              | `ControlPlaneOps` |
+| A process is left excluded, and the message carries the command to include it                  | `Warning` | `ProcessesLeftExcluded`          | `ControlPlaneOps` |
+| The budget is gone and the drain proceeds                                                      | `Normal`  | `EvictionReleased`               | `ControlPlaneOps` |
+| The window is waiting for the host's process groups to report back                             | `Normal`  | `AwaitingHostReturn`             | `ControlPlaneOps` |
+| Maintenance mode was cleared                                                                   | `Normal`  | `MaintenanceModeCleared`         | `ControlPlaneOps` |
+| Maintenance mode could not be cleared and expires on its own                                   | `Warning` | `MaintenanceModeLeft`            | `ControlPlaneOps` |
+| A terminal teardown left the budget or a label behind                                          | `Warning` | `MaintenanceMarkersLeft`         | `ControlPlaneOps` |
+| A crowded class had a process group handed to the FoundationDB operator to replace (§5.13)     | `Normal`  | `FoundationDBRebalanceRequested` | `ControlPlane`    |
+| A crowded class was left as it is, and the message says what holds it (§5.13)                  | `Normal`  | `FoundationDBRebalanceHeld`      | `ControlPlane`    |
 
 `DrainObserved` is the event that explains a rolling update after the fact: its
 timestamps across the windows are the order the pool was drained in, and its
