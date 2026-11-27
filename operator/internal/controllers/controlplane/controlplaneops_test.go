@@ -268,7 +268,7 @@ func TestARestartDrainsOnlyWhenItNamesSomethingEssential(t *testing.T) {
 		{"the database", []string{ComponentFDBCluster}, true},
 		{"the task runner", []string{ComponentTasks}, false},
 		{"the exporter", []string{ComponentFDBExporter}, false},
-		{"a non-essential set", []string{ComponentTasks, ComponentMinio}, false},
+		{"a non-essential set", []string{ComponentTasks, ComponentMonitoring}, false},
 		{"a set including an essential one", []string{ComponentTasks, ComponentWebAPI}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

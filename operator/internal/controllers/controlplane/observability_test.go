@@ -119,7 +119,7 @@ func TestEveryDatabaseProcessClassIsShippedToTheLogCollector(t *testing.T) {
 }
 
 // Every workload the install applies is marked for the log collector: the
-// database's operator and its exporter, the object store, the management API
+// database's operator and its exporter, the management API
 // and the service pools beside it, and the index Job.
 //
 // Regression: 2026-10-06-graylog-receives-nothing — the FoundationDB operator,
@@ -128,7 +128,7 @@ func TestEveryDatabaseProcessClassIsShippedToTheLogCollector(t *testing.T) {
 func TestEveryWorkloadTheInstallAppliesIsShippedToTheLogCollector(t *testing.T) {
 	cp := localControlPlane()
 	objects := append(foundationDBObjects(cp),
-		append(datastoreObjects(cp), managementAPIObjects(cp)...)...)
+		managementAPIObjects(cp)...)
 	objects = append(objects, indexJob(cp))
 
 	for _, obj := range objects {

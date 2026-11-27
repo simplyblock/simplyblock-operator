@@ -29,7 +29,6 @@ const (
 	stepApplyingFoundationDB = simplyblockv1alpha2.ControlPlaneStepApplyingFoundationDB
 	stepAwaitingFoundationDB = simplyblockv1alpha2.ControlPlaneStepAwaitingFoundationDB
 	stepBuildingIndices      = simplyblockv1alpha2.ControlPlaneStepBuildingIndices
-	stepApplyingDatastore    = simplyblockv1alpha2.ControlPlaneStepApplyingDatastore
 	stepApplyingAPI          = simplyblockv1alpha2.ControlPlaneStepApplyingAPI
 	stepAwaitingAPI          = simplyblockv1alpha2.ControlPlaneStepAwaitingAPI
 )
@@ -78,8 +77,7 @@ const (
 	// that cannot be scheduled and a backfill that cannot reach the database.
 	buildingIndicesDeadline = 15 * time.Minute
 
-	applyingDatastoreDeadline = 10 * time.Minute
-	applyingAPIDeadline       = 10 * time.Minute
+	applyingAPIDeadline = 10 * time.Minute
 
 	// awaitingAPIDeadline covers the management API starting and connecting to
 	// the database. It is shorter than FoundationDB's because everything it
@@ -140,12 +138,8 @@ func deadline[S comparable](d time.Duration) statemachine.TransitionFunc[S] {
 // makes the control plane Available.
 func installGraph() statemachine.Config[installStep] {
 	return statemachine.Config[installStep]{
-		Initial: stepApplyingDatastore,
+		Initial: stepApplyingFoundationDB,
 		States: map[installStep]statemachine.StateDef[installStep]{
-			stepApplyingDatastore: {
-				To:      []installStep{stepApplyingFoundationDB},
-				OnEnter: deadline[installStep](applyingDatastoreDeadline),
-			},
 			stepApplyingFoundationDB: {
 				To:      []installStep{stepAwaitingFoundationDB},
 				OnEnter: deadline[installStep](applyingFoundationDBDeadline),
@@ -175,7 +169,6 @@ var installStepBudgets = map[installStep]time.Duration{
 	stepApplyingFoundationDB: applyingFoundationDBDeadline,
 	stepAwaitingFoundationDB: awaitingFoundationDBDeadline,
 	stepBuildingIndices:      buildingIndicesDeadline,
-	stepApplyingDatastore:    applyingDatastoreDeadline,
 	stepApplyingAPI:          applyingAPIDeadline,
 	stepAwaitingAPI:          awaitingAPIDeadline,
 }

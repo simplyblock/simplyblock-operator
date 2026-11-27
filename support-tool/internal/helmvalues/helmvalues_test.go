@@ -181,18 +181,18 @@ func fieldAt(fields []Field, segments []string) *Field {
 }
 
 func TestAKeyHoldingDotsIsOneSegment(t *testing.T) {
-	segments := []string{"prometheus", "server", "extraArgs", "storage.tsdb.min-block-duration"}
+	segments := []string{"controlCenter", "ingress", "annotations", "nginx.ingress.kubernetes.io/proxy-body-size"}
 	f := fieldAt(Fields(), segments)
-	if f == nil || f.Key != "storage.tsdb.min-block-duration" {
+	if f == nil || f.Key != "nginx.ingress.kubernetes.io/proxy-body-size" {
 		t.Fatalf("no field at %v: %+v", segments, f)
 	}
 
 	overrides := map[string]any{}
-	if err := SetYAML(overrides, segments, `"4h"`); err != nil {
+	if err := SetYAML(overrides, segments, `"8m"`); err != nil {
 		t.Fatal(err)
 	}
-	args := overrides["prometheus"].(map[string]any)["server"].(map[string]any)["extraArgs"].(map[string]any)
-	if args["storage.tsdb.min-block-duration"] != "4h" {
+	args := overrides["controlCenter"].(map[string]any)["ingress"].(map[string]any)["annotations"].(map[string]any)
+	if args["nginx.ingress.kubernetes.io/proxy-body-size"] != "8m" {
 		t.Errorf("the value was set at %v", overrides)
 	}
 }

@@ -66,11 +66,11 @@ func TestTheInstallRunsPrometheusThroughThePrometheusOperator(t *testing.T) {
 	if sa, _, _ := unstructured.NestedString(prom.Object, "spec", "serviceAccountName"); sa != prometheusServiceAccount {
 		t.Errorf("Prometheus runs as %q, want %q", sa, prometheusServiceAccount)
 	}
-	if r, _, _ := unstructured.NestedString(prom.Object, "spec", "retention"); r != "15d" {
-		t.Errorf("retention = %q, want 15d, the retention Prometheus had before", r)
+	if r, _, _ := unstructured.NestedString(prom.Object, "spec", "retention"); r != "90d" {
+		t.Errorf("retention = %q, want 90d, the history the Thanos compactor kept", r)
 	}
-	if f, _, _ := unstructured.NestedString(prom.Object, "spec", "thanos", "objectStorageConfigFile"); f == "" {
-		t.Error("the Thanos sidecar names no object store configuration")
+	if _, found, _ := unstructured.NestedMap(prom.Object, "spec", "thanos"); found {
+		t.Error("Prometheus still runs a Thanos sidecar, which has no object store to upload to")
 	}
 	svc := findTyped[*corev1.Service](t, objects, prometheusHost)
 	podLabels, _, _ := unstructured.NestedStringMap(prom.Object, "spec", "podMetadata", "labels")
@@ -116,7 +116,7 @@ func TestPrometheusImagesAreListedForMirroring(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{prometheusImage, thanosImage} {
+	for _, ref := range []string{prometheusImage} {
 		if !strings.Contains(ref, "@sha256:") {
 			t.Errorf("%s is not pinned by digest", ref)
 		}
@@ -259,5 +259,30 @@ func TestAnUpgradeCopiesTheOldPrometheusBeforeReplacingIt(t *testing.T) {
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(oldClaim), &corev1.PersistentVolumeClaim{}); err != nil {
 		t.Errorf("the old claim was removed: %v", err)
+	}
+}
+
+// An upgrade removes the object store, its claim included: nothing reads it
+// once Prometheus keeps its own history.
+func TestAnUpgradeRemovesTheObjectStore(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	named := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name, Namespace: testNamespace} }
+	leftovers := []client.Object{
+		&appsv1.StatefulSet{ObjectMeta: named("simplyblock-minio")},
+		&corev1.Service{ObjectMeta: named("simplyblock-minio")},
+		&corev1.ConfigMap{ObjectMeta: named("simplyblock-objstore-config")},
+		&corev1.PersistentVolumeClaim{ObjectMeta: named("minio-data-simplyblock-minio-0")},
+	}
+	c := monitoringClient(t, append([]client.Object{cp}, leftovers...)...)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.applyEverything(ctx, cp); err != nil {
+		t.Fatalf("apply: %v", err)
+	}
+	for _, obj := range leftovers {
+		if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); !apierrors.IsNotFound(err) {
+			t.Errorf("%T %s is still there (%v)", obj, obj.GetName(), err)
+		}
 	}
 }

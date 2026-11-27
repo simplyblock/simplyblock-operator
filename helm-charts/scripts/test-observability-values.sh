@@ -4,7 +4,7 @@
 #
 # Helm renders an unread value as nothing, so a key in values.yaml that no
 # template reads looks like a working setting. These cases assert that the
-# Graylog retention period and the pull policies of Graylog, Grafana, and Thanos
+# Graylog retention period and the pull policies of Graylog and Grafana
 # reach the objects they configure, and so do Graylog's sizing and journal.
 set -euo pipefail
 
@@ -47,16 +47,11 @@ graylog_env() {
 # Each pull policy reaches its containers.
 out="$(render \
   --set controlplane.observability.graylog.pullPolicy=Never \
-  --set controlplane.observability.grafana.pullPolicy=Always \
-  --set controlplane.observability.thanos.pullPolicy=Never)"
+  --set controlplane.observability.grafana.pullPolicy=Always)"
 [[ "$(container "$out" graylog imagePullPolicy)" == "Never" ]] ||
   fail "graylog imagePullPolicy is $(container "$out" graylog imagePullPolicy), want Never"
 [[ "$(container "$out" grafana imagePullPolicy)" == "Always" ]] ||
   fail "grafana imagePullPolicy is $(container "$out" grafana imagePullPolicy), want Always"
-for c in thanos-store thanos-query thanos-compactor; do
-  [[ "$(container "$out" "$c" imagePullPolicy)" == "Never" ]] ||
-    fail "$c imagePullPolicy is $(container "$out" "$c" imagePullPolicy), want Never"
-done
 
 # The retention period is split across maxNumberIndex indices: 7d over 3 is 56h each.
 out="$(render \

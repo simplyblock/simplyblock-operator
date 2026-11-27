@@ -39,12 +39,11 @@ import (
 func TestTheInstallationGraphIsALine(t *testing.T) {
 	graph := installGraph()
 
-	if graph.Initial != stepApplyingDatastore {
-		t.Errorf("the install starts at %s, want %s", graph.Initial, stepApplyingDatastore)
+	if graph.Initial != stepApplyingFoundationDB {
+		t.Errorf("the install starts at %s, want %s", graph.Initial, stepApplyingFoundationDB)
 	}
 
 	want := map[installStep]installStep{
-		stepApplyingDatastore:    stepApplyingFoundationDB,
 		stepApplyingFoundationDB: stepAwaitingFoundationDB,
 		stepAwaitingFoundationDB: stepBuildingIndices,
 		stepBuildingIndices:      stepApplyingAPI,
@@ -94,7 +93,6 @@ func TestTheStepEnumAndTheGraphAgree(t *testing.T) {
 		simplyblockv1alpha2.ControlPlaneStepApplyingFoundationDB,
 		simplyblockv1alpha2.ControlPlaneStepAwaitingFoundationDB,
 		simplyblockv1alpha2.ControlPlaneStepBuildingIndices,
-		simplyblockv1alpha2.ControlPlaneStepApplyingDatastore,
 		simplyblockv1alpha2.ControlPlaneStepApplyingAPI,
 		simplyblockv1alpha2.ControlPlaneStepAwaitingAPI,
 	}
@@ -611,7 +609,7 @@ func TestSchedulingReachesEveryPodTheInstallCreates(t *testing.T) {
 		Key: "simplyblock.io/dedicated", Operator: corev1.TolerationOpExists,
 	}}
 
-	for _, obj := range append(foundationDBObjects(cp), append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
+	for _, obj := range append(foundationDBObjects(cp), managementAPIObjects(cp)...) {
 		var spec *corev1.PodSpec
 		switch typed := obj.(type) {
 		case *appsv1.Deployment:

@@ -261,7 +261,6 @@ checkLogCollector() {
   local -a exempt=(
     "Deployment/simplyblock-graylog"
     "Deployment/simplyblock-grafana"
-    "Deployment/simplyblock-thanos"
     "StatefulSet/simplyblock-opensearch"
     "Deployment/mongodb-kubernetes-operator"
     "DaemonSet/simplyblock-fluent-bit"

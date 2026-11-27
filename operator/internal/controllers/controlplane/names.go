@@ -39,14 +39,9 @@ const (
 	ComponentAdminControl = "simplyblock-admin-control"
 )
 
-// The store and the FoundationDB half.
+// Prometheus and the FoundationDB half.
 const (
-	// ComponentMinio is the object store the control plane keeps long-term data
-	// in.
-	ComponentMinio = "simplyblock-minio"
-
-	// ComponentPrometheus keeps the metrics the control plane pushes, and its
-	// Thanos sidecar uploads them to the object store.
+	// ComponentPrometheus keeps the metrics the control plane pushes.
 	ComponentPrometheus = "simplyblock-prometheus"
 
 	// ComponentFDBCluster is the FoundationDBCluster, whose readiness is that
@@ -98,10 +93,6 @@ const (
 	// configMapKeyRef, so changing it reaches all of them at once.
 	configMapName = "simplyblock-config"
 
-	// objectStoreConfigName is the bucket configuration the object store's
-	// consumers read.
-	objectStoreConfigName = "simplyblock-objstore-config"
-
 	// clusterFileConfigMapName is written by the FoundationDB operator rather
 	// than by this one, and mounted by every workload that talks to the
 	// database. The install neither creates nor reconciles it; it names it so
@@ -129,10 +120,6 @@ const (
 	// webAPIPort is where the management API listens, and the port
 	// status.endpoint resolves to.
 	webAPIPort = 5000
-
-	// minioAPIPort and minioConsolePort are the object store's two listeners.
-	minioAPIPort     = 9000
-	minioConsolePort = 9001
 
 	// fdbExporterPort is where the exporter serves /metrics.
 	fdbExporterPort = 9444

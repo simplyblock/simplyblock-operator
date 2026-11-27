@@ -892,13 +892,6 @@ controlplane:
           # Cap on the alerts in a single notification. 0 sends all of them.
           # -- Maximum number of alerts per notification. `0` sends all of them.
           maxAlerts: 0
-    thanos:
-      # -- Thanos image.
-      repository: quay.io/simplyblock-io/thanos
-      # -- Thanos image tag.
-      tag: v0.31.0
-      # -- Thanos image pull policy.
-      pullPolicy: IfNotPresent
     fluentbit:
       # -- Fluent Bit image.
       repository: quay.io/simplyblock-io/fluent-bit
@@ -1201,7 +1194,7 @@ opensearch:
     enabled: false
 
 prometheus:
-  # The operator runs Prometheus and its Thanos sidecar as a ControlPlane
+  # The operator runs Prometheus as a ControlPlane
   # component, so the subchart stays off; enabling it creates a second
   # simplyblock-prometheus that the operator and Helm fight over.
   # -- Installs the Prometheus subchart. Off: the ControlPlane installs Prometheus.
@@ -1256,17 +1249,6 @@ prometheus:
       servicePort: 9090
       # -- Service type.
       type: ClusterIP
-      gRPC:
-        # -- Exposes the Thanos sidecar gRPC port on the Service.
-        enabled: true
-        # -- gRPC service port.
-        servicePort: 10901
-      # -- Additional Service ports. The default exposes the Thanos sidecar HTTP port `10902`.
-      additionalPorts:
-        - name: http-thanos
-          port: 10902
-          targetPort: 10902
-          protocol: TCP
     securityContext:
       # -- File system group of the server pod.
       fsGroup: 65534
@@ -1277,38 +1259,6 @@ prometheus:
       size: 20Gi
       # -- StorageClass of the Prometheus volume. Empty uses the cluster default.
       storageClass:
-    # -- Additional Prometheus arguments. The default sets a 2-hour block duration for the Thanos
-    # sidecar.
-    extraArgs:
-      storage.tsdb.min-block-duration: 2h
-      storage.tsdb.max-block-duration: 2h
-    # -- Sidecar containers of the Prometheus pod. The default runs the Thanos sidecar, which uploads
-    # blocks to the object store.
-    sidecarContainers:
-      thanos-sidecar:
-        image: quay.io/simplyblock-io/thanos:v0.31.0
-        args:
-          - sidecar
-          - --tsdb.path=/prometheus
-          - --prometheus.url=http://localhost:9090
-          - --objstore.config-file=/etc/thanos/objstore.yml
-        ports:
-          - name: grpc
-            containerPort: 10901
-          - name: http
-            containerPort: 10902
-        volumeMounts:
-          - name: storage-volume
-            mountPath: /prometheus
-          - name: objstore-config
-            mountPath: /etc/thanos
-        resources:
-          requests:
-            cpu: "100m"
-            memory: "256Mi"
-          limits:
-            cpu: "250m"
-            memory: "1Gi"
     resources:
       requests:
         # -- Prometheus CPU request.
@@ -1322,15 +1272,11 @@ prometheus:
         memory: "1Gi"
     # -- Path of the simplyblock Prometheus configuration.
     configPath: /etc/simplyblock-config/prometheus.yml
-    # -- Additional volumes of the Prometheus pod: the scrape configuration, the object store
-    # configuration, and the TLS CA.
+    # -- Additional volumes of the Prometheus pod: the scrape configuration and the TLS CA.
     extraVolumes:
       - name: simplyblock-prometheus-config
         configMap:
           name: simplyblock-prometheus-config
-      - name: objstore-config
-        configMap:
-          name: simplyblock-objstore-config
       # The CA the control plane's certificate is verified against: a scrape
       # that encrypts without verifying is one an in-cluster impersonator answers.
       - name: prometheus-ca-tls

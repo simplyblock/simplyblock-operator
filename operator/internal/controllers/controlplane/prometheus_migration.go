@@ -134,6 +134,23 @@ func (r *ControlPlaneReconciler) prometheusDataCopied(
 	return false, nil
 }
 
+// removeObjectStore deletes the MinIO an earlier release ran for the Thanos
+// sidecar's uploads, its claim included. Prometheus keeps its own history now.
+func (r *ControlPlaneReconciler) removeObjectStore(ctx context.Context, ns string) error {
+	named := func(name string) metav1.ObjectMeta { return metav1.ObjectMeta{Name: name, Namespace: ns} }
+	for _, obj := range []client.Object{
+		&appsv1.StatefulSet{ObjectMeta: named("simplyblock-minio")},
+		&corev1.Service{ObjectMeta: named("simplyblock-minio")},
+		&corev1.ConfigMap{ObjectMeta: named("simplyblock-objstore-config")},
+		&corev1.PersistentVolumeClaim{ObjectMeta: named("minio-data-simplyblock-minio-0")},
+	} {
+		if err := client.IgnoreNotFound(r.Delete(ctx, obj)); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // stopLegacyPrometheus deletes the old StatefulSet, its configuration, and its
 // headless Service. The StatefulSet's claim stays.
 func (r *ControlPlaneReconciler) stopLegacyPrometheus(ctx context.Context, ns string) error {
