@@ -453,6 +453,14 @@ spec:
                                 StorageClass uses rancher.io/local-path. Its class is made the default
                                 only when the cluster has no default class. Unset is on.
                               type: boolean
+                            installPrometheusOperator:
+                              default: true
+                              description: |-
+                                InstallPrometheusOperator installs the prometheus-operator and its CRDs
+                                when monitoring.coreos.com/v1 is not served. The control plane's
+                                Prometheus runs through it. A missing one does not hold the install; the
+                                control plane then runs without Prometheus. Unset is on.
+                              type: boolean
                             installSnapshotController:
                               default: true
                               description: |-

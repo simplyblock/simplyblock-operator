@@ -545,7 +545,7 @@ func (r *ControlPlaneOpsReconciler) restart(
 func (r *ControlPlaneOpsReconciler) restartWorkload(
 	ctx context.Context, namespace string, component component, stamp string,
 ) error {
-	key := client.ObjectKey{Namespace: namespace, Name: component.name}
+	key := client.ObjectKey{Namespace: namespace, Name: component.objectName()}
 
 	switch component.kind {
 	case kindDeployment:
@@ -1139,7 +1139,7 @@ func (r *ControlPlaneOpsReconciler) restartedWorkloadsSettled(
 		if len(scope) > 0 && !slices.Contains(scope, comp.name) {
 			continue
 		}
-		key := client.ObjectKey{Namespace: namespace, Name: comp.name}
+		key := client.ObjectKey{Namespace: namespace, Name: comp.objectName()}
 
 		var generation, observed int64
 		var want, total, updated, ready int32

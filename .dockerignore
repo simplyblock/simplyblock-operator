@@ -26,6 +26,7 @@
 # Re-include the add-on manifests the operator embeds and installs as
 # prerequisites (internal/prerequisites).
 !operator/internal/prerequisites/manifests/*.yaml
+!operator/internal/prerequisites/manifests/*.yaml.gz
 
 # Re-include LICENSE file
 !LICENSE

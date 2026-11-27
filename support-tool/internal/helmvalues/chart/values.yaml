@@ -670,7 +670,8 @@ controlplane:
     # Cluster add-ons the operator installs from its embedded manifests when
     # the cluster lacks them. One set to false is only checked for: when it is
     # missing, the install holds and the ControlPlane status names it (the
-    # snapshot controller only raises a warning event). Installed add-ons are
+    # snapshot controller and the prometheus-operator only raise a warning
+    # event). Installed add-ons are
     # cluster-wide and outlive the ControlPlane.
     prerequisites:
       # -- Installs the FoundationDB CRDs when `apps.foundationdb.org/v1beta2` is not served.
@@ -683,6 +684,9 @@ controlplane:
       # -- Installs the CSI snapshot CRDs and snapshot-controller when `snapshot.storage.k8s.io/v1` is
       # not served.
       installSnapshotController: true
+      # -- Installs the prometheus-operator and its CRDs when `monitoring.coreos.com/v1` is not
+      # served. The control plane's Prometheus runs through it.
+      installPrometheusOperator: true
 
     # The IAM role this control plane's pods and every StorageCluster's
     # storage-node pods in this namespace assume, through a ServiceAccount

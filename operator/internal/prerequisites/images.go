@@ -41,7 +41,7 @@ var pinnedImage = regexp.MustCompile(`(?:image: "?|-image=)([^"\s]+@sha256:[0-9a
 func Images() []string {
 	var out []string
 	for _, p := range All() {
-		raw, err := manifests.ReadFile(p.file)
+		raw, err := readManifest(p.file)
 		if err != nil {
 			panic(err) // the embedded set is fixed at build time
 		}

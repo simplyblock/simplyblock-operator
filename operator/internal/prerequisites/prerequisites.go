@@ -1,7 +1,7 @@
 // Package prerequisites detects and installs the cluster add-ons a control plane
-// depends on: the FoundationDB CRDs, cert-manager, local-path-provisioner, and
-// the CSI snapshot controller. It lives apart from the controllers because it
-// is about the cluster, not about any one custom resource.
+// depends on: the FoundationDB CRDs, cert-manager, local-path-provisioner, the
+// CSI snapshot controller, and the prometheus-operator. It lives apart from the
+// controllers because it is about the cluster, not about any one custom resource.
 //
 // Each add-on is detected first and installed only when missing. What is
 // installed carries LabelInstalledBy and no owner reference, because other
@@ -10,12 +10,15 @@ package prerequisites
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"embed"
 	"errors"
 	"fmt"
 	"io"
 	"sort"
+	"strings"
+	"sync"
 
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -25,8 +28,34 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-//go:embed manifests/*.yaml
+//go:embed manifests/*.yaml manifests/*.yaml.gz
 var manifests embed.FS
+
+// manifestCache holds each manifest as read, decompressed once.
+var manifestCache sync.Map
+
+// readManifest returns an embedded manifest's YAML. A .gz file, kept for a
+// manifest too large to review as text, is decompressed.
+func readManifest(file string) ([]byte, error) {
+	if raw, ok := manifestCache.Load(file); ok {
+		return raw.([]byte), nil
+	}
+	raw, err := manifests.ReadFile(file)
+	if err != nil {
+		return nil, err
+	}
+	if strings.HasSuffix(file, ".gz") {
+		zr, err := gzip.NewReader(bytes.NewReader(raw))
+		if err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+		if raw, err = io.ReadAll(zr); err != nil {
+			return nil, fmt.Errorf("%s: %w", file, err)
+		}
+	}
+	manifestCache.Store(file, raw)
+	return raw, nil
+}
 
 const (
 	// LabelInstalledBy marks an object the operator installed as a
@@ -129,6 +158,16 @@ var (
 		marker:       objectRef{schema.GroupVersionKind{Group: "storage.k8s.io", Version: "v1", Kind: "StorageClass"}, "simplyblock-gp3", ""},
 		file:         "manifests/ebs-gp3-storageclass.yaml",
 	}
+	// PrometheusOperator runs the control plane's Prometheus. Detected through
+	// the Prometheus kind, so a customer's prometheus-operator is used as is.
+	PrometheusOperator = Prerequisite{
+		Name:        "prometheus-operator",
+		probe:       schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"},
+		marker:      crdRef("prometheuses.monitoring.coreos.com"),
+		workload:    deploymentRef("prometheus-operator", "prometheus-operator"),
+		AutoUpgrade: true,
+		file:        "manifests/prometheus-operator.yaml.gz",
+	}
 	LocalPathProvisioner = Prerequisite{
 		Name:         "local-path-provisioner",
 		present:      localPathPresent,
@@ -146,7 +185,7 @@ var (
 
 // All lists every prerequisite, in the order they are checked.
 func All() []Prerequisite {
-	return []Prerequisite{FoundationDBCRDs, CertManager, EBSCSIDriver, EBSStorageClass, LocalPathProvisioner, SnapshotController}
+	return []Prerequisite{FoundationDBCRDs, CertManager, EBSCSIDriver, EBSStorageClass, LocalPathProvisioner, SnapshotController, PrometheusOperator}
 }
 
 // Present reports whether the add-on is already on the cluster.
@@ -182,7 +221,7 @@ func (p Prerequisite) Objects() ([]*unstructured.Unstructured, error) {
 // objects is Objects with the images moved to the mirror registry and every
 // object annotated with the digest it was built from.
 func (p Prerequisite) objects(opts InstallOptions) ([]*unstructured.Unstructured, error) {
-	raw, err := manifests.ReadFile(p.file)
+	raw, err := readManifest(p.file)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", p.file, err)
 	}

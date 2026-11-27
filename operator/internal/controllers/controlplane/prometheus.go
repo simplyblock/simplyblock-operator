@@ -1,23 +1,30 @@
-// The Prometheus a managed control plane runs, applied with the management API.
-// Every control-plane container pushes to it, and its Thanos sidecar uploads
-// each two-hour block to the object store the datastore step created.
+// The Prometheus a managed control plane runs through the prometheus-operator,
+// applied with the management API: a Prometheus resource, one monitor per scrape
+// job, and the Thanos sidecar that uploads each two-hour block to the object
+// store the datastore step created.
 
 package controlplane
 
 import (
-	"strings"
+	"encoding/json"
 
-	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
-	"github.com/simplyblock/atlas/ptr"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
+)
+
+// The prometheus-operator kinds the install applies.
+var (
+	prometheusGVK     = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "Prometheus"}
+	serviceMonitorGVK = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	podMonitorGVK     = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor"}
+	scrapeConfigGVK   = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1alpha1", Kind: "ScrapeConfig"}
 )
 
 const (
@@ -27,18 +34,21 @@ const (
 	// prometheusServiceAccount is the account the management API trusts for
 	// scrapes, through SB_K8S_METRICS_SERVICE_ACCOUNTS.
 	prometheusServiceAccount = "simplyblock-prometheus"
-	prometheusConfigName     = "simplyblock-prometheus-config"
+	// prometheusTokenSecret holds the account's token, which the ScrapeConfig
+	// presents: the kind takes credentials from a Secret only.
+	prometheusTokenSecret = "simplyblock-prometheus-token"
 
-	// prometheusHeadlessService gives each replica the DNS name the chart's
-	// Thanos Query dials: simplyblock-prometheus-<i>.<this>.<namespace>.svc.
-	prometheusHeadlessService = "simplyblock-prometheus-headless"
+	// prometheusName is the Prometheus resource. The prometheus-operator derives
+	// its StatefulSet's name and its claim's name from it.
+	prometheusName           = "simplyblock"
+	prometheusStatefulSet    = "prometheus-" + prometheusName
+	prometheusClaim          = "prometheus-" + prometheusName + "-db-" + prometheusStatefulSet + "-0"
+	prometheusVolumeSize     = "20Gi"
+	prometheusRetention      = "15d"
+	prometheusObjstoreVolume = "objstore-config"
 
-	// prometheusDataVolume is the chart's claim template name, so a StatefulSet
-	// the chart created is replaced by this one on the same PVC.
-	prometheusDataVolume = "storage-volume"
-	prometheusVolumeSize = "20Gi"
-
-	prometheusTLSPath = "/etc/prometheus/tls"
+	// scrapedByLabel marks the monitors this Prometheus selects.
+	scrapedByLabel = "storage.simplyblock.io/scraped-by"
 
 	// prometheusClientCertificate and its Secret are the names the chart issued
 	// them under, so an install that came from the chart already has the Secret.
@@ -48,18 +58,29 @@ const (
 	thanosHTTPPort              = 10902
 )
 
-// prometheusObjects is the account and its pod discovery grant, the scrape
-// configuration, the server, and its Service.
+// The Prometheus a 26.3 install ran as a StatefulSet of its own, replaced on
+// upgrade (prometheus_migration.go).
+const (
+	legacyPrometheusClaim    = "storage-volume-" + ComponentPrometheus + "-0"
+	legacyPrometheusPod      = ComponentPrometheus + "-0"
+	legacyPrometheusConfig   = "simplyblock-prometheus-config"
+	legacyPrometheusHeadless = "simplyblock-prometheus-headless"
+)
+
+// prometheusObjects is the account, its token and discovery grant, the
+// monitors, the Prometheus resource, and its Service.
 func prometheusObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
 	objects := []client.Object{
 		serviceAccount(ns, prometheusServiceAccount, nil),
+		prometheusToken(ns),
 		prometheusRole(ns),
 		prometheusRoleBinding(ns),
-		prometheusConfig(cp),
-		prometheusStatefulSet(cp),
+		prometheusScrapeConfig(cp),
+		fdbExporterMonitor(ns),
+		rebalancerProbeMonitor(ns),
+		prometheusResource(cp),
 		prometheusService(ns),
-		prometheusHeadless(ns),
 	}
 	if prometheusHasOwnCertificate(cp.Spec.Source.Local) {
 		objects = append(objects, prometheusClientCertificateObject(ns))
@@ -94,31 +115,16 @@ func prometheusClientCertificateObject(namespace string) *unstructured.Unstructu
 	}}
 }
 
-// prometheusTLSVolume is Prometheus's own client Secret where it has one, which
-// carries the CA it verifies the management API against, and the shared
-// control-plane volume otherwise.
-func prometheusTLSVolume(local *simplyblockv1alpha2.LocalControlPlane) []corev1.Volume {
-	if !prometheusHasOwnCertificate(local) {
-		return tlsVolume(local)
-	}
-	return []corev1.Volume{{
-		Name: tlsVolumeName,
-		VolumeSource: corev1.VolumeSource{
-			Secret: &corev1.SecretVolumeSource{SecretName: prometheusClientSecret},
-		},
-	}}
-}
-
-// prometheusRole lets the server discover the rebalancer probe pods in its own
+// prometheusRole lets the server discover the monitors' targets in its own
 // namespace and nothing else.
 func prometheusRole(namespace string) *rbacv1.Role {
+	read := []string{"get", "list", "watch"}
 	return &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{Name: prometheusServiceAccount, Namespace: namespace},
-		Rules: []rbacv1.PolicyRule{{
-			APIGroups: []string{""},
-			Resources: []string{"pods"},
-			Verbs:     []string{"get", "list", "watch"},
-		}},
+		Rules: []rbacv1.PolicyRule{
+			{APIGroups: []string{""}, Resources: []string{"pods", "services", "endpoints"}, Verbs: read},
+			{APIGroups: []string{"discovery.k8s.io"}, Resources: []string{"endpointslices"}, Verbs: read},
+		},
 	}
 }
 
@@ -134,206 +140,184 @@ func prometheusRoleBinding(namespace string) *rbacv1.RoleBinding {
 	}
 }
 
-// prometheusConfig is the chart's scrape configuration: the management API,
-// authenticated with the account's token, the database exporter, and the
-// rebalancer probes found by their pod annotations.
-func prometheusConfig(cp *simplyblockv1alpha2.ControlPlane) *corev1.ConfigMap {
-	local := cp.Spec.Source.Local
-	var b strings.Builder
-	b.WriteString(`global:
-  scrape_interval: 30s
-  external_labels:
-    monitor: 'codelab-monitor'
-
-scrape_configs:
-  - job_name: 'simplyblock_metrics'
-    scrape_timeout: 30s
-    static_configs:
-      - targets: ['` + ComponentWebAPI + `:5000']
-    metrics_path: '/api/v2/metrics'
-`)
-	if local.ServesTLS() {
-		b.WriteString(`    scheme: https
-    tls_config:
-      ca_file: ` + prometheusTLSPath + `/ca.crt
-      server_name: ` + ComponentWebAPI + `
-`)
-		if local.RequiresClientCertificate() {
-			b.WriteString(`      cert_file: ` + prometheusTLSPath + `/tls.crt
-      key_file: ` + prometheusTLSPath + `/tls.key
-`)
-		}
-	}
-	b.WriteString(`    authorization:
-      credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token
-
-  - job_name: 'fdb_metrics'
-    static_configs:
-      - targets: ['` + ComponentFDBExporter + `:9444']
-        labels:
-          namespace: ` + cp.Namespace + `
-    honor_labels: true
-    metrics_path: '/metrics'
-
-  - job_name: 'simplyblock_rebalancer_probe'
-    kubernetes_sd_configs:
-      - role: pod
-        namespaces:
-          names: ['` + cp.Namespace + `']
-    relabel_configs:
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_simplyblock_io_scrape]
-        action: keep
-        regex: 'true'
-      - source_labels: [__meta_kubernetes_pod_container_port_name]
-        action: keep
-        regex: latency-metrics
-      - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_simplyblock_io_port]
-        action: replace
-        regex: '(.+);(.+)'
-        replacement: '$1:$2'
-        target_label: __address__
-      - source_labels: [__meta_kubernetes_pod_annotation_prometheus_simplyblock_io_path]
-        action: replace
-        regex: '(.+)'
-        target_label: __metrics_path__
-`)
-	return &corev1.ConfigMap{
+// prometheusToken is a long-lived token of the account the management API
+// trusts for scrapes. Kubernetes fills it in.
+func prometheusToken(namespace string) *corev1.Secret {
+	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: prometheusConfigName, Namespace: cp.Namespace,
-			Labels: map[string]string{appLabel: ComponentPrometheus},
+			Name: prometheusTokenSecret, Namespace: namespace,
+			Annotations: map[string]string{corev1.ServiceAccountNameKey: prometheusServiceAccount},
 		},
-		Data: map[string]string{"prometheus.yml": b.String()},
+		Type: corev1.SecretTypeServiceAccountToken,
 	}
 }
 
-// prometheusStatefulSet is one server with a volume, and the Thanos sidecar
-// reading the same volume. The block durations are fixed at two hours so the
-// sidecar uploads every block rather than waiting on a compaction.
-func prometheusStatefulSet(cp *simplyblockv1alpha2.ControlPlane) *appsv1.StatefulSet {
-	local := cp.Spec.Source.Local
-	labels := map[string]string{appLabel: ComponentPrometheus}
-	const configVolume, objstoreVolume = "config", "objstore-config"
+// monitoringObject is a prometheus-operator object this Prometheus selects.
+func monitoringObject(gvk schema.GroupVersionKind, namespace, name string, spec map[string]any) *unstructured.Unstructured {
+	u := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	u.SetGroupVersionKind(gvk)
+	u.SetNamespace(namespace)
+	u.SetName(name)
+	u.SetLabels(map[string]string{scrapedByLabel: prometheusName})
+	return u
+}
 
-	prometheusMounts := []corev1.VolumeMount{
-		{Name: prometheusDataVolume, MountPath: "/prometheus"},
-		{Name: configVolume, MountPath: "/etc/prometheus/config", ReadOnly: true},
-	}
-	volumes := []corev1.Volume{
-		{Name: configVolume, VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-			LocalObjectReference: corev1.LocalObjectReference{Name: prometheusConfigName},
-		}}},
-		{Name: objstoreVolume, VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-			LocalObjectReference: corev1.LocalObjectReference{Name: objectStoreConfigName},
-		}}},
+// prometheusScrapeConfig scrapes the management API through its Service, once.
+// A ServiceMonitor would scrape every replica, and each serves the same
+// cluster-wide series.
+func prometheusScrapeConfig(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Unstructured {
+	local := cp.Spec.Source.Local
+	spec := map[string]any{
+		"jobName":        "simplyblock_metrics",
+		"staticConfigs":  []any{map[string]any{"targets": []any{ComponentWebAPI + ":5000"}}},
+		"metricsPath":    "/api/v2/metrics",
+		"scrapeInterval": "30s",
+		"scrapeTimeout":  "30s",
+		"authorization": map[string]any{
+			"type":        "Bearer",
+			"credentials": map[string]any{"name": prometheusTokenSecret, "key": corev1.ServiceAccountTokenKey},
+		},
 	}
 	if local.ServesTLS() {
-		volumes = append(volumes, prometheusTLSVolume(local)...)
-		prometheusMounts = append(prometheusMounts,
-			corev1.VolumeMount{Name: tlsVolumeName, MountPath: prometheusTLSPath, ReadOnly: true})
+		spec["scheme"] = "HTTPS"
+		spec["tlsConfig"] = prometheusTLSConfig(local)
 	}
+	return monitoringObject(scrapeConfigGVK, cp.Namespace, "simplyblock-metrics", spec)
+}
 
-	spec := corev1.PodSpec{
-		ServiceAccountName: prometheusServiceAccount,
-		// The image runs as nobody; the group makes a fresh volume writable.
-		SecurityContext: &corev1.PodSecurityContext{FSGroup: ptr.To(int64(65534))},
-		Volumes:         volumes,
-		Containers: []corev1.Container{
-			{
-				Name:            "prometheus",
-				Image:           image(prometheusImage),
-				ImagePullPolicy: pullPolicyOf(local),
-				Args: []string{
-					"--config.file=/etc/prometheus/config/prometheus.yml",
-					"--storage.tsdb.path=/prometheus",
-					"--storage.tsdb.min-block-duration=2h",
-					"--storage.tsdb.max-block-duration=2h",
-					"--web.enable-lifecycle",
-				},
-				Ports:        []corev1.ContainerPort{{Name: "web", ContainerPort: 9090}},
-				VolumeMounts: prometheusMounts,
-				ReadinessProbe: &corev1.Probe{
-					ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{
-						Path: "/-/ready", Port: intstrFromInt(9090),
-					}},
-					InitialDelaySeconds: 10,
-					PeriodSeconds:       10,
-				},
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("512Mi"),
-					},
-					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("500m"),
-						corev1.ResourceMemory: resource.MustParse("1Gi"),
-					},
-				},
-			},
-			{
-				Name:            "thanos-sidecar",
-				Image:           image(thanosImage),
-				ImagePullPolicy: pullPolicyOf(local),
-				Args: []string{
-					"sidecar",
-					"--tsdb.path=/prometheus",
-					"--prometheus.url=http://localhost:9090",
-					"--objstore.config-file=/etc/thanos/objstore.yml",
-				},
-				Ports: []corev1.ContainerPort{
-					{Name: "grpc", ContainerPort: thanosGRPCPort},
-					{Name: "http", ContainerPort: thanosHTTPPort},
-				},
-				VolumeMounts: []corev1.VolumeMount{
-					{Name: prometheusDataVolume, MountPath: "/prometheus"},
-					{Name: objstoreVolume, MountPath: "/etc/thanos", ReadOnly: true},
-				},
-				Resources: corev1.ResourceRequirements{
-					Requests: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("100m"),
-						corev1.ResourceMemory: resource.MustParse("256Mi"),
-					},
-					Limits: corev1.ResourceList{
-						corev1.ResourceCPU:    resource.MustParse("250m"),
-						corev1.ResourceMemory: resource.MustParse("1Gi"),
-					},
-				},
-			},
-		},
+// prometheusTLSConfig verifies the management API against its CA and, under
+// mutual TLS, presents Prometheus's own certificate where it has one and the
+// serving certificate on OpenShift (#863).
+func prometheusTLSConfig(local *simplyblockv1alpha2.LocalControlPlane) map[string]any {
+	secretKey := func(secret, key string) map[string]any {
+		return map[string]any{"secret": map[string]any{"name": secret, "key": key}}
 	}
-	scheduling(local, &spec)
+	certSecret := ServingCertSecret
+	if prometheusHasOwnCertificate(local) {
+		certSecret = prometheusClientSecret
+	}
+	tls := map[string]any{"serverName": ComponentWebAPI, "ca": secretKey(certSecret, "ca.crt")}
+	if local.TLSProvider() == simplyblockv1alpha2.ControlPlaneTLSOpenShift {
+		tls["ca"] = map[string]any{"configMap": map[string]any{"name": openShiftCAConfigMap, "key": openShiftCAKey}}
+	}
+	if local.RequiresClientCertificate() {
+		tls["cert"] = secretKey(certSecret, corev1.TLSCertKey)
+		tls["keySecret"] = map[string]any{"name": certSecret, "key": corev1.TLSPrivateKeyKey}
+	}
+	return tls
+}
 
-	claim := corev1.PersistentVolumeClaim{
-		ObjectMeta: metav1.ObjectMeta{Name: prometheusDataVolume},
-		Spec: corev1.PersistentVolumeClaimSpec{
-			AccessModes: []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-			Resources: corev1.VolumeResourceRequirements{
-				Requests: corev1.ResourceList{
-					corev1.ResourceStorage: resource.MustParse(prometheusVolumeSize),
+// fdbExporterMonitor scrapes the database exporter, keeping the labels it sets.
+func fdbExporterMonitor(namespace string) *unstructured.Unstructured {
+	return monitoringObject(serviceMonitorGVK, namespace, ComponentFDBExporter, map[string]any{
+		"selector": map[string]any{"matchLabels": map[string]any{appLabel: ComponentFDBExporter}},
+		"endpoints": []any{map[string]any{
+			"port": "metrics", "path": "/metrics", "honorLabels": true,
+		}},
+	})
+}
+
+// rebalancerProbeMonitor scrapes the rebalancer probes, found by the
+// annotations the webhook sets on them.
+func rebalancerProbeMonitor(namespace string) *unstructured.Unstructured {
+	return monitoringObject(podMonitorGVK, namespace, "simplyblock-rebalancer-probe", map[string]any{
+		"selector": map[string]any{},
+		"podMetricsEndpoints": []any{map[string]any{
+			"port": "latency-metrics",
+			"relabelings": []any{
+				map[string]any{
+					"sourceLabels": []any{"__meta_kubernetes_pod_annotation_prometheus_simplyblock_io_scrape"},
+					"action":       "keep", "regex": "true",
+				},
+				map[string]any{
+					"sourceLabels": []any{"__meta_kubernetes_pod_annotation_prometheus_simplyblock_io_path"},
+					"regex":        "(.+)", "targetLabel": "__metrics_path__",
 				},
 			},
-		},
+		}},
+	})
+}
+
+// prometheusResource is one server with a volume and the Thanos sidecar. It runs
+// the image and user the StatefulSet it replaces ran, so a copied volume is
+// readable, and carries the label the Service selects.
+func prometheusResource(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Unstructured {
+	local := cp.Spec.Source.Local
+	selector := map[string]any{"matchLabels": map[string]any{scrapedByLabel: prometheusName}}
+	claim := map[string]any{
+		"accessModes": []any{"ReadWriteOnce"},
+		"resources":   map[string]any{"requests": map[string]any{"storage": prometheusVolumeSize}},
 	}
-	// The same class as the database and the object store, for the same reason.
 	if class := storageClassOf(cp); class != "" {
-		claim.Spec.StorageClassName = ptr.To(class)
+		claim["storageClassName"] = class
 	}
-
-	return &appsv1.StatefulSet{
-		ObjectMeta: metav1.ObjectMeta{Name: ComponentPrometheus, Namespace: cp.Namespace, Labels: labels},
-		Spec: appsv1.StatefulSetSpec{
-			ServiceName: prometheusHeadlessService,
-			Replicas:    ptr.To(int32(1)),
-			Selector:    &metav1.LabelSelector{MatchLabels: labels},
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels:      labels,
-					Annotations: map[string]string{utils.AnnotationLogCollector: "true"},
-				},
-				Spec: spec,
-			},
-			VolumeClaimTemplates: []corev1.PersistentVolumeClaim{claim},
+	spec := map[string]any{
+		"replicas":           int64(1),
+		"image":              image(prometheusImage),
+		"version":            "v2.51.0",
+		"imagePullPolicy":    string(pullPolicyOf(local)),
+		"serviceAccountName": prometheusServiceAccount,
+		"securityContext": map[string]any{
+			"runAsUser": int64(65534), "runAsGroup": int64(65534), "fsGroup": int64(65534), "runAsNonRoot": true,
+		},
+		"podMetadata": map[string]any{
+			"labels":      map[string]any{appLabel: ComponentPrometheus},
+			"annotations": map[string]any{utils.AnnotationLogCollector: "true"},
+		},
+		"scrapeInterval":         "30s",
+		"externalLabels":         map[string]any{"monitor": "codelab-monitor"},
+		"retention":              prometheusRetention,
+		"scrapeConfigSelector":   selector,
+		"serviceMonitorSelector": selector,
+		"podMonitorSelector":     selector,
+		"resources":              resources("100m", "512Mi", "500m", "1Gi"),
+		"storage":                map[string]any{"volumeClaimTemplate": map[string]any{"spec": claim}},
+		"volumes": []any{map[string]any{
+			"name":      prometheusObjstoreVolume,
+			"configMap": map[string]any{"name": objectStoreConfigName},
+		}},
+		"thanos": map[string]any{
+			"image":                   image(thanosImage),
+			"version":                 "v0.31.0",
+			"objectStorageConfigFile": "/etc/thanos/objstore.yml",
+			"volumeMounts": []any{map[string]any{
+				"name": prometheusObjstoreVolume, "mountPath": "/etc/thanos", "readOnly": true,
+			}},
+			"resources": resources("100m", "256Mi", "250m", "1Gi"),
 		},
 	}
+	if len(local.NodeSelector) > 0 {
+		spec["nodeSelector"] = toUnstructured(local.NodeSelector)
+	}
+	if len(local.Tolerations) > 0 {
+		spec["tolerations"] = toUnstructured(local.Tolerations)
+	}
+	u := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	u.SetGroupVersionKind(prometheusGVK)
+	u.SetNamespace(cp.Namespace)
+	u.SetName(prometheusName)
+	return u
+}
+
+func resources(cpu, memory, cpuLimit, memoryLimit string) map[string]any {
+	return map[string]any{
+		"requests": map[string]any{"cpu": cpu, "memory": memory},
+		"limits":   map[string]any{"cpu": cpuLimit, "memory": memoryLimit},
+	}
+}
+
+// toUnstructured turns a typed value into the plain form an unstructured
+// object holds.
+func toUnstructured(v any) any {
+	raw, err := json.Marshal(v)
+	if err != nil {
+		panic(err)
+	}
+	var out any
+	if err := json.Unmarshal(raw, &out); err != nil {
+		panic(err)
+	}
+	return out
 }
 
 // prometheusService publishes the server and the sidecar's two ports, which is
@@ -348,22 +332,6 @@ func prometheusService(namespace string) *corev1.Service {
 				{Name: "http", Port: 9090, TargetPort: intstrFromInt(9090)},
 				{Name: "grpc", Port: thanosGRPCPort, TargetPort: intstrFromInt(thanosGRPCPort)},
 				{Name: "http-thanos", Port: thanosHTTPPort, TargetPort: intstrFromInt(thanosHTTPPort)},
-			},
-		},
-	}
-}
-
-// prometheusHeadless governs the StatefulSet, so each replica's sidecar has a
-// stable address for Thanos Query.
-func prometheusHeadless(namespace string) *corev1.Service {
-	labels := map[string]string{appLabel: ComponentPrometheus}
-	return &corev1.Service{
-		ObjectMeta: metav1.ObjectMeta{Name: prometheusHeadlessService, Namespace: namespace, Labels: labels},
-		Spec: corev1.ServiceSpec{
-			ClusterIP: corev1.ClusterIPNone,
-			Selector:  labels,
-			Ports: []corev1.ServicePort{
-				{Name: "grpc", Port: thanosGRPCPort, TargetPort: intstrFromInt(thanosGRPCPort)},
 			},
 		},
 	}

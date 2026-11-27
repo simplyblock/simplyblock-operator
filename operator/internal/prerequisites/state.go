@@ -51,7 +51,7 @@ func crdRef(name string) objectRef {
 // Digest identifies the manifest and the mirror registry it is installed with,
 // so a new operator release or a changed registry both read as Outdated.
 func (p Prerequisite) Digest(opts InstallOptions) string {
-	raw, err := manifests.ReadFile(p.file)
+	raw, err := readManifest(p.file)
 	if err != nil {
 		panic(err) // the embedded set is fixed at build time
 	}

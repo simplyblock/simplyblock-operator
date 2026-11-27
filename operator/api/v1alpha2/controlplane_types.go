@@ -358,6 +358,14 @@ type ControlPlanePrerequisites struct {
 	// +kubebuilder:default=true
 	// +optional
 	InstallEBSStorageClass *bool `json:"installEBSStorageClass,omitempty"`
+
+	// InstallPrometheusOperator installs the prometheus-operator and its CRDs
+	// when monitoring.coreos.com/v1 is not served. The control plane's
+	// Prometheus runs through it. A missing one does not hold the install; the
+	// control plane then runs without Prometheus. Unset is on.
+	// +kubebuilder:default=true
+	// +optional
+	InstallPrometheusOperator *bool `json:"installPrometheusOperator,omitempty"`
 }
 
 // on reads a defaulted-true flag, treating unset as true.
@@ -387,6 +395,11 @@ func (p ControlPlanePrerequisites) InstallsEBSCSIDriver() bool { return on(p.Ins
 // InstallsEBSStorageClass reports whether a missing gp3 StorageClass is created on EKS.
 func (p ControlPlanePrerequisites) InstallsEBSStorageClass() bool {
 	return on(p.InstallEBSStorageClass)
+}
+
+// InstallsPrometheusOperator reports whether a missing prometheus-operator is installed.
+func (p ControlPlanePrerequisites) InstallsPrometheusOperator() bool {
+	return on(p.InstallPrometheusOperator)
 }
 
 // NeedsCertManager reports whether this control plane's TLS is issued by cert-manager.
