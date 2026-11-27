@@ -172,8 +172,8 @@ stays until somebody runs `destroy`.
 Every step except `status` logs to `aws/logs/<CLUSTER_NAME>/<step>-<UTC time>.log`.
 `create`, `wait`, and `destroy` also keep the installer's own debug log there as
 `openshift-install-<UTC time>.log`, which holds far more than the installer
-prints. The logs outlive `destroy`, and the kubeadmin password is redacted in
-them; it stays in the installer's `auth/kubeadmin-password`.
+prints. The logs outlive `destroy`. The kubeadmin password is redacted in them
+and stays only in the installer's `auth/kubeadmin-password`.
 
 `install-simplyblock` installs this checkout's chart with the chart's snapshot
 controller turned off, since OpenShift runs its own.
