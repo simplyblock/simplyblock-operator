@@ -43,6 +43,9 @@ type NodeDTO struct {
 	FailureDomain int    `json:"failure_domain"`
 	// Site is the node's sync-replication site, empty off a sync cluster.
 	Site string `json:"site"`
+	// Socket is the NUMA socket the node runs on, nil from a control plane that
+	// does not report it. It is what tells a multi-socket worker's nodes apart.
+	Socket *int32 `json:"socket,omitempty"`
 
 	// SecondaryNodeID and TertiaryNodeID are the nodes holding this node's
 	// lvstore replicas, empty when it has none.

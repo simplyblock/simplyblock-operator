@@ -819,13 +819,6 @@ func (r *StorageNodeReconciler) postNode(
 	})
 }
 
-// resolveUUID matches this node's slot against the cluster's node list and writes
-// the UUID when it appears.
-//
-// The match is positional rather than by identity: the control plane's nodes for
-// one worker are sorted by RPC port ascending, and position in that list is the
-// socket ordinal, because the ports are assigned in socket order at node-add time
-// (§4.3).
 // nodeAddTask is the control plane's own name for the job Posting starts. It is
 // the shared spelling because utils.ClusterRebalancing reads the same task type
 // off the cluster's mirrored list.
@@ -956,8 +949,16 @@ func (r *StorageNodeReconciler) resolveUUID(
 	return true, nil
 }
 
-// matchBackendNode finds the backend node filling this object's slot, by the
-// worker's internal IP and the slot's position in the port-sorted list.
+// matchBackendNode finds the backend node filling this object's slot among the
+// worker's nodes.
+//
+// A slot is socketPosition × nodesPerSocket + the node's position on its socket,
+// where socketPosition indexes the cluster's socketsToUse. The worker's nodes are
+// narrowed to the slot's socket by the socket the control plane reports, and
+// sorted by RPC port within it, so a node missing on one socket or re-added on a
+// lower port never shifts another socket's slots. A control plane that does not
+// report the socket leaves the port order of all the worker's nodes as the only
+// identity there is.
 func (r *StorageNodeReconciler) matchBackendNode(
 	ctx context.Context,
 	node *simplyblockv1alpha2.StorageNode,
@@ -982,20 +983,59 @@ func (r *StorageNodeReconciler) matchBackendNode(
 	if len(onWorker) == 0 {
 		return NodeReading{}, false, nil
 	}
-	slices.SortFunc(onWorker, func(a, b NodeReading) int {
-		return int(a.RPCPort) - int(b.RPCPort)
-	})
 
 	slot := 0
 	if node.Spec.Slot != nil {
 		slot = int(*node.Spec.Slot)
 	}
+	if socket, index, ok := slotSocket(cluster, slot); ok && reportsSockets(onWorker) {
+		onWorker = slices.DeleteFunc(onWorker, func(reading NodeReading) bool {
+			return *reading.Socket != socket
+		})
+		slot = index
+	}
+	slices.SortFunc(onWorker, func(a, b NodeReading) int {
+		return int(a.RPCPort) - int(b.RPCPort)
+	})
+
 	if slot >= len(onWorker) {
-		// The socket is not online yet. The other sockets of the worker may be,
+		// The slot's node is not online yet. The worker's other nodes may be,
 		// which is why this is "not found" rather than an error.
 		return NodeReading{}, false, nil
 	}
 	return onWorker[slot], true, nil
+}
+
+// slotSocket renders a slot as the NUMA socket it runs on and its position among
+// that socket's nodes. It reports false when the socket list names something
+// that is not a socket number, which leaves the match to port order.
+func slotSocket(cluster *simplyblockv1alpha2.StorageCluster, slot int) (int32, int, bool) {
+	sockets := []string{"0"}
+	perSocket := 1
+	if workload := cluster.Spec.StorageNodes; workload != nil {
+		if len(workload.SocketsToUse) > 0 {
+			sockets = workload.SocketsToUse
+		}
+		if workload.NodesPerSocket != nil && *workload.NodesPerSocket > 0 {
+			perSocket = int(*workload.NodesPerSocket)
+		}
+	}
+	position := slot / perSocket
+	if position >= len(sockets) {
+		return 0, 0, false
+	}
+	socket, err := strconv.ParseInt(strings.TrimSpace(sockets[position]), 10, 32)
+	if err != nil {
+		return 0, 0, false
+	}
+	return int32(socket), slot % perSocket, true
+}
+
+// reportsSockets reports whether every reading carries its socket.
+func reportsSockets(readings []NodeReading) bool {
+	return !slices.ContainsFunc(readings, func(reading NodeReading) bool {
+		return reading.Socket == nil
+	})
 }
 
 // syncStatus writes what the control plane reports, and returns without patching
