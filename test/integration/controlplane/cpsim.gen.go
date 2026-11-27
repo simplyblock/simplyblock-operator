@@ -1561,6 +1561,8 @@ type ClusterDTO struct {
 	BackupEnabled               bool               `json:"backup_enabled"`
 	BlockSize                   int                `json:"block_size"`
 	Capacity                    CapacityStatDTO    `json:"capacity"`
+	DefaultSpdkImage            *string            `json:"default_spdk_image,omitempty"`
+	DefaultSpdkProxyImage       *string            `json:"default_spdk_proxy_image,omitempty"`
 	DeviceMode                  string             `json:"device_mode"`
 	DistrNdcs                   int                `json:"distr_ndcs"`
 	DistrNpcs                   int                `json:"distr_npcs"`
@@ -1599,6 +1601,7 @@ type ClusterDTO struct {
 	TlsEnabled                  bool               `json:"tls_enabled"`
 	UtilizationCritical         int                `json:"utilization_critical"`
 	UtilizationWarning          int                `json:"utilization_warning"`
+	WriteProtectionV2           *bool              `json:"write_protection_v2,omitempty"`
 }
 
 // ClusterDTOStatus defines model for ClusterDTO.Status.
@@ -2783,7 +2786,9 @@ type StorageNodeDTO struct {
 	SecondaryNodeId   *openapi_types.UUID     `json:"secondary_node_id"`
 	Site              *string                 `json:"site,omitempty"`
 	SnapshotsMax      int                     `json:"snapshots_max"`
+	SpdkImage         *string                 `json:"spdk_image,omitempty"`
 	SpdkMem           int                     `json:"spdk_mem"`
+	SpdkProxyImage    *string                 `json:"spdk_proxy_image,omitempty"`
 	Status            StorageNodeDTOStatus    `json:"status"`
 	TertiaryNodeId    *openapi_types.UUID     `json:"tertiary_node_id,omitempty"`
 	Uptime            *openapi_types.Duration `json:"uptime"`
@@ -3271,6 +3276,8 @@ type UnderscoreRestartParams struct {
 	NewSsdPcie     *[]string `json:"new_ssd_pcie,omitempty"`
 	NodeAddress    *string   `json:"node_address,omitempty"`
 	ReattachVolume *bool     `json:"reattach_volume,omitempty"`
+	SpdkImage      *string   `json:"spdk_image,omitempty"`
+	SpdkProxyImage *string   `json:"spdk_proxy_image,omitempty"`
 }
 
 // UnderscoreRestoreParams defines model for _RestoreParams.
@@ -4909,6 +4916,9 @@ type ServerInterface interface {
 	// ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost Clusters:Subsystems:Migrations:Continue
 	// (POST /api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue)
 	ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, nqn string, migrationId openapi_types.UUID)
+	// ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost Clusters:Switch-Write-Protection
+	// (POST /api/v2/clusters/{cluster_id}/switch-write-protection)
+	ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID)
 	// ClustersTasksListApiV2ClustersClusterIdTasksGet Clusters:Tasks:List
 	// (GET /api/v2/clusters/{cluster_id}/tasks/)
 	ClustersTasksListApiV2ClustersClusterIdTasksGet(w http.ResponseWriter, r *http.Request, clusterId openapi_types.UUID, params ClustersTasksListApiV2ClustersClusterIdTasksGetParams)
@@ -12641,6 +12651,32 @@ func (siw *ServerInterfaceWrapper) ClustersSubsystemsMigrationsContinueApiV2Clus
 	handler.ServeHTTP(w, r)
 }
 
+// ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost operation middleware
+func (siw *ServerInterfaceWrapper) ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// ------------- Path parameter "cluster_id" -------------
+	var clusterId openapi_types.UUID
+
+	err = runtime.BindStyledParameterWithOptions("simple", "cluster_id", r.PathValue("cluster_id"), &clusterId, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationPath, Explode: false, Required: true, Type: "string", Format: "uuid", ValueIsUnescaped: true})
+	if err != nil {
+		siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "cluster_id", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost(w, r, clusterId)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
 // ClustersTasksListApiV2ClustersClusterIdTasksGet operation middleware
 func (siw *ServerInterfaceWrapper) ClustersTasksListApiV2ClustersClusterIdTasksGet(w http.ResponseWriter, r *http.Request) {
 
@@ -13190,6 +13226,7 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/{$}", wrapper.ClustersSubsystemsMigrationsDetailApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/cleanup-target", wrapper.ClustersSubsystemsMigrationsCleanupTargetApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdCleanupTargetPost)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/subsystems/{nqn}/migrations/{migration_id}/continue", wrapper.ClustersSubsystemsMigrationsContinueApiV2ClustersClusterIdSubsystemsNqnMigrationsMigrationIdContinuePost)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/switch-write-protection", wrapper.ClustersSwitchWriteProtectionApiV2ClustersClusterIdSwitchWriteProtectionPost)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/tasks/{$}", wrapper.ClustersTasksListApiV2ClustersClusterIdTasksGet)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/tasks/{task_id}/{$}", wrapper.ClustersTasksDetailApiV2ClustersClusterIdTasksTaskIdGet)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/api/v2/clusters/{cluster_id}/update", wrapper.ClustersUpgradeApiV2ClustersClusterIdUpdatePost)
