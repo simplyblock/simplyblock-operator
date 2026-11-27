@@ -587,14 +587,26 @@ cmd_uninstall_simplyblock() {
   # Here it would hold the workers a new storage cluster's pool selects, and a
   # node in two custom pools stops the Machine Config Operator. The workers go
   # back to the worker pool, which reboots each of them once.
-  local pool id
-  for pool in $(oc_ get machineconfigpool -o name | grep '/storage-'); do
-    id="${pool#*/storage-}"
-    oc_ delete kubeletconfig "storage-kubelet-$id" --ignore-not-found --wait=false
-    oc_ delete machineconfig "storage-mc-$id" "99-storage-$id-generated-kubelet" --ignore-not-found --wait=false
-    oc_ delete "$pool" --wait=false
+  #
+  # The pool is emptied before it is deleted. Deleting it first also deletes
+  # its rendered configuration, which the workers still report as their
+  # current one, and the Machine Config Daemon then cannot compute the update
+  # to the worker configuration: every worker goes Degraded, reporting that
+  # the rendered configuration does not exist.
+  local pools pool id
+  pools="$(oc_ get machineconfigpool -o name | grep '/storage-' || true)"
+  [[ -n "$pools" ]] || return 0
+  for pool in $pools; do
+    oc_ patch "$pool" --type=json \
+      -p '[{"op":"replace","path":"/spec/nodeSelector","value":{"matchLabels":{"simplyblock.io/released-pool":"none"}}}]'
   done
   wait_for "the worker pool to take the workers back" 5400 worker_pool_updated
+  for pool in $pools; do
+    id="${pool#*/storage-}"
+    oc_ delete kubeletconfig "storage-kubelet-$id" --ignore-not-found
+    oc_ delete machineconfig "storage-mc-$id" "99-storage-$id-generated-kubelet" --ignore-not-found
+    oc_ delete "$pool"
+  done
 }
 
 # Prints something once the worker pool holds every worker and has rolled its
