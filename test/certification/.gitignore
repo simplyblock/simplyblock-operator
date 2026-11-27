@@ -1,0 +1,11 @@
+# Run directories of the level runners: logs, JUnit files, reports, and tool
+# output of a certification run, kept locally or archived elsewhere, never
+# committed.
+level1/results/
+level2/results/
+level3/results/
+# AWS clusters: the installer's state (kubeconfig, credentials, the metadata
+# destroy needs), the downloaded tools, and the logs of every step.
+aws/clusters/
+aws/bin/
+aws/logs/

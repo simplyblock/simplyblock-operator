@@ -1,0 +1,45 @@
+# The openshift-install configuration of a certification cluster on AWS.
+# cluster.sh fills in every __PLACEHOLDER__ and writes the result into the
+# cluster's state directory, where openshift-install consumes it.
+#
+# One availability zone for the whole cluster. The installer builds a subnet and
+# a NAT gateway, each with an Elastic IP, in every zone a machine pool names, and
+# a pool that names none takes all six us-east-1 zones: the account's limit of 10
+# Elastic IPs ran out at the fourth (AddressLimitExceeded). One zone also keeps
+# the storage nodes and their clients on one network without cross-zone traffic.
+#
+# Workers are metal instances: OpenShift Virtualization runs VMs only on bare
+# metal on AWS, and the instance-store NVMe drives are simplyblock's storage.
+apiVersion: v1
+kind: InstallConfig
+metadata:
+  name: __CLUSTER_NAME__
+baseDomain: __BASE_DOMAIN__
+platform:
+  aws:
+    region: __REGION__
+    userTags:
+      simplyblock.io/purpose: openshift-certification
+      simplyblock.io/owner: '__OWNER__'
+      simplyblock.io/expires: '__EXPIRES__'
+compute:
+  - name: worker
+    replicas: __WORKER_REPLICAS__
+    platform:
+      aws:
+        type: __WORKER_TYPE__
+        zones:
+          - __ZONE__
+controlPlane:
+  name: master
+  replicas: __CONTROL_PLANE_REPLICAS__
+  platform:
+    aws:
+      type: __CONTROL_PLANE_TYPE__
+      zones:
+        - __ZONE__
+# A Red Hat pull secret (console.redhat.com/openshift/install/pull-secret). It
+# has to carry registry.redhat.io and quay.io: the release images and the
+# OpenShift Virtualization operator pull from there.
+pullSecret: '__PULL_SECRET__'
+sshKey: '__SSH_KEY__'

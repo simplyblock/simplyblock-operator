@@ -42,6 +42,8 @@ func init() {
 	flag.StringVar(&conf.NodeID, "nodeid", "", "node id")
 	flag.BoolVar(&conf.IsControllerServer, "controller", false, "Start controller server")
 	flag.BoolVar(&conf.IsNodeServer, "node", false, "Start node server")
+	flag.Int64Var(&conf.MaxAttachedVolumesPerWorker, "max-attached-volumes-per-worker", 0,
+		"How many simplyblock volumes one worker may have attached at a time (0: no limit)")
 
 	flag.BoolVar(&conf.LinkEnabled, "link", false,
 		"Dial the operator and hold the connection open, so it can query this pod's storage state")

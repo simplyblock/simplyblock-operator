@@ -1,0 +1,11 @@
+# The OpenShift-specific manifest of the openshift/csi suite
+# (TEST_OCP_CSI_DRIVER_FILES; format in openshift/origin
+# test/extended/storage/csi/README.md). LUNStressTest puts PodsTotal pods, each
+# with its own dynamically provisioned volume, on one node with nothing else
+# running, and expects the driver to cope with the load and with more volumes
+# than run at once. Red Hat recommends 257 or more pods, finishing within an
+# hour; 260 is the suite's default.
+Driver: csi.simplyblock.io
+LUNStressTest:
+  PodsTotal: 260
+  Timeout: "1h"

@@ -159,7 +159,7 @@ func nodePluginContainer(d *simplyblockv1alpha2.SimplyblockDriver, image string)
 			"--endpoint=" + nodeSocketPath,
 			"--nodeid=$(NODE_ID)",
 			"--node",
-		}, linkArgs(d)...),
+		}, slices.Concat(linkArgs(d), attachedVolumeLimitArgs(d))...),
 		Env: slices.Concat([]corev1.EnvVar{
 			fieldRefEnv("NODE_ID", "spec.nodeName"),
 			{Name: "GUARDIAN_MIN_BROKEN_FOR", Value: "30s"},
@@ -447,6 +447,16 @@ func serviceAccountAuthEnv(d *simplyblockv1alpha2.SimplyblockDriver) []corev1.En
 		Name:  "SPDKCSI_API_TOKEN_PATH",
 		Value: "/var/run/secrets/kubernetes.io/serviceaccount/token",
 	}}
+}
+
+// attachedVolumeLimitArgs hands the node plugin the number of volumes its
+// worker may have attached, which it reports to the scheduler. No limit renders
+// no flag, so a driver that sets none keeps the node plugin's template as it was.
+func attachedVolumeLimitArgs(d *simplyblockv1alpha2.SimplyblockDriver) []string {
+	if d.Spec.MaxAttachedVolumesPerWorker <= 0 {
+		return nil
+	}
+	return []string{"--max-attached-volumes-per-worker=" + strconv.Itoa(int(d.Spec.MaxAttachedVolumesPerWorker))}
 }
 
 // dmIndirectionEnv turns the node plugin's device-mapper indirection off. The

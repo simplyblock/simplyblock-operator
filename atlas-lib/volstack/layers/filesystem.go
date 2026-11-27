@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/simplyblock/atlas/blockdev"
@@ -248,7 +249,8 @@ func (f *Filesystem) observe(
 }
 
 // Ensure formats a blank device, mounts one already carrying this volume's
-// filesystem, and does nothing at all to one already mounted.
+// filesystem and grows it onto the device, and does nothing at all to one
+// already mounted.
 func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
 	dev, ok := below.Device()
 	if !ok {
@@ -285,7 +287,41 @@ func (f *Filesystem) Ensure(ctx context.Context, below volstack.Artifact) (volst
 		return volstack.Artifact{}, fmt.Errorf("filesystem: mount %s at %s as %s: %w",
 			dev.Path, f.cfg.StagingPath, fsType, err)
 	}
+	if state == volstack.StateInactive {
+		if err := f.fillDevice(ctx, dev.Path); err != nil {
+			return volstack.Artifact{}, err
+		}
+	}
 	return volstack.Artifact{Devices: below.Devices, Path: f.cfg.StagingPath}, nil
+}
+
+// fillDevice grows a filesystem that was just mounted onto the whole of its
+// device. A filesystem can be smaller than the device it sits on without any
+// expand to come: a volume restored or cloned into a larger claim carries its
+// source's filesystem, and a volume expanded while it was not staged has
+// missed the expand that would have grown it. Both tools succeed without
+// changing anything when the filesystem fills the device already.
+//
+// A read-only mount is left as it is, since neither tool grows one, and so is a
+// filesystem without a grow tool. A failed grow takes the mount down again:
+// left mounted, the volume would read as staged and the retry would skip the
+// grow.
+func (f *Filesystem) fillDevice(ctx context.Context, device string) error {
+	if slices.Contains(f.mountFlags(), "ro") {
+		return nil
+	}
+	command := f.strategy().GrowCommand(device, f.cfg.StagingPath)
+	if len(command) == 0 {
+		return nil
+	}
+	if err := f.cfg.Ops.Grow(ctx, command); err != nil {
+		if cerr := f.clear(ctx); cerr != nil {
+			return fmt.Errorf("filesystem: grow %s onto its device: %w; unmount also failed: %v",
+				device, err, cerr)
+		}
+		return fmt.Errorf("filesystem: grow %s onto its device: %w (unmounted)", device, err)
+	}
+	return nil
 }
 
 // Release unmounts and keeps the filesystem. It is the only verb an unstage

@@ -85,6 +85,9 @@ atlas/
 │   ├── dm.go               RemoveOrphanedDMNodes, HasOrphanedDMNodes
 │   ├── devices.go          ForgetDevice: prune the node's LVM devices file
 │   └── vdo.go              The VDO VolumeProvisioning handler, registered by this package's init
+├── devmapper/              Single-segment dm-linear mappings: the indirection a volume's consumer holds
+│   ├── devmapper.go        Mapper: Create, Table, Swap, Suspend/Resume, ReloadResume, Remove, List
+│   └── readonly.go         CreateReadOnly, ReadOnly, MakeReadOnly; every reload keeps the mapping's mode
 ├── volstack/               A volume's node-side stack, as ordered layers
 │   ├── layer.go            Layer, State, Artifact, Geometry + the optional interfaces (Composite, Healer, Yielder, Grower, NodeRequirements, Recorder), Plan
 │   ├── runner.go           Runner: Up / Down / Heal / Grow, and the order they walk the plan in
@@ -118,6 +121,7 @@ atlas/
 │   ├── storageclass.go     Properties: typed StorageClass provisioning params
 │   ├── params.go           String/Int/Float/BoolParam map helpers
 │   ├── stripe.go           ParseStripe: stripe_width / stripe_size, read the same by the driver and the operator
+│   ├── claimshapes.go      ClaimShapesFor / HostBound / CanBeCloneTarget: the access and volume modes a class allows
 │   ├── index.go            shared index names + pure key funcs
 │   ├── informer.go         InformerResolver: client-go informer-backed Resolver
 │   ├── live.go             LiveResolver: uncached clientset-backed Resolver

@@ -90,6 +90,11 @@ type Volume struct {
 	// plaintext. The filesystem layer needs it to know that an unrecognized
 	// reading is no evidence of anything.
 	Encrypted bool
+
+	// ReadOnly says every consumer of the volume only reads it (ReadOnlyMany):
+	// the dm-linear indirection is then loaded read-only, so the device handed
+	// up refuses writes. Only a plan with that layer can carry it.
+	ReadOnly bool
 }
 
 // VolumeGroup is the name of the group this volume's LVM layers use.

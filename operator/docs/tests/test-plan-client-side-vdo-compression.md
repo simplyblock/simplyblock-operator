@@ -144,6 +144,13 @@ run 36219557238).
 | U-60 | Either client-side flag set contributes the `vdo-capable` topology segment | Positive | `TestVDOCapableSegment` |
 | U-61 | Neither flag set: no segment contributed                                   | Negative | `TestVDOCapableSegment` |
 
+`### Access modes` (`csi-driver/internal/csi/controller/vdo_test.go`)
+
+| #    | Scenario                                                                                                                                                                                                                                                                 | Type       | Test                                   |
+|------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|----------------------------------------|
+| U-62 | Either client-side flag set with a multi-node access mode (many writers, one writer of many, many readers) is refused with `InvalidArgument`, and nothing is created (2026-11-25-vdo-multi-node: an RWX raw-block claim bound, and two hosts activated one volume group) | Regression | `TestAVDOVolumeRefusesMultiNodeAccess` |
+| U-63 | Either client-side flag set with a single-node raw-block claim is created                                                                                                                                                                                                | Positive   | `TestAVDOVolumeOnOneNodeIsCreated`     |
+
 ---
 
 ## 5. On-Node Integration (`test/integration/onnode/vdo_test.go`)

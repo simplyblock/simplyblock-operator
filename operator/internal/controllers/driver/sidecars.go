@@ -25,9 +25,16 @@ import (
 // The pinned set. Moving one of these is a driver rollout for every deployment
 // that has not overridden it, so it is a deliberate edit rather than a bump.
 const (
-	defaultProvisionerImage         = "quay.io/simplyblock-io/csi-provisioner:v5.1.0"
-	defaultAttacherImage            = "quay.io/simplyblock-io/csi-attacher:v4.7.0"
-	defaultResizerImage             = "quay.io/simplyblock-io/csi-resizer:v1.12.0"
+	defaultProvisionerImage = "quay.io/simplyblock-io/csi-provisioner:v5.1.0"
+	defaultAttacherImage    = "quay.io/simplyblock-io/csi-attacher:v4.7.0"
+	// defaultResizerImage is upstream's v1.14.0, which sets a claim's
+	// status.allocatedResources (RecoverVolumeExpansionFailure, on by default
+	// in this release). Kubernetes 1.34 made the recovery GA, and from there the
+	// storage e2e suite checks the field after every expansion, which v1.12.0
+	// left at zero. The upstream image rather than a quay.io/simplyblock-io
+	// mirror, for the reason defaultCSIAddonsImage gives: no mirror of this
+	// version exists yet.
+	defaultResizerImage             = "registry.k8s.io/sig-storage/csi-resizer:v1.14.0"
 	defaultSnapshotterImage         = "quay.io/simplyblock-io/csi-snapshotter:v8.2.0"
 	defaultHealthMonitorImage       = "quay.io/simplyblock-io/csi-external-health-monitor-controller:v0.14.0"
 	defaultNodeDriverRegistrarImage = "quay.io/simplyblock-io/csi-node-driver-registrar:v2.12.0"

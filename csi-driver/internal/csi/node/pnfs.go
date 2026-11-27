@@ -427,5 +427,10 @@ func (ns *Server) publishPNFSVolume(
 		return nil
 	}
 	flags := append(req.GetVolumeCapability().GetMount().GetMountFlags(), "bind")
+	if req.GetReadonly() {
+		// As for a block volume's filesystem (publish.go): mount-utils binds
+		// first and then remounts ro, because a bind ignores ro.
+		flags = append(flags, "ro")
+	}
 	return ns.mounter.Mount(stagingPath, target, "", flags)
 }

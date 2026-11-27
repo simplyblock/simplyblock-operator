@@ -86,6 +86,9 @@ func (ns *Server) NodeStageVolume(
 		}
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
+	if err := refuseReadOnlyManyFilesystem(req.GetVolumeCapability()); err != nil {
+		return nil, err
+	}
 
 	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {
@@ -367,8 +370,12 @@ func (ns *Server) attachPlan(
 ) (volstack.Plan, error) {
 	// A striped volume attaches a namespace per member (striped.go). It never
 	// takes the dm indirection, which attachShape decides only for the two
-	// shapes that have one.
+	// shapes that have one, so a read-only claim of one is refused here: a
+	// striped volume CreateVolume did not create can still be claimed so.
 	if shape := shapeFor(vc, volCap); isStripedShape(shape) {
+		if err := refuseUnenforcedReadOnly(stackVolume(stagingTargetPath, vc, volCap), shape); err != nil {
+			return nil, err
+		}
 		return ns.stripedAttachPlan(ctx, volumeID, stagingTargetPath, vc, volCap, shape)
 	}
 	connection, hostNQN, err := ns.publishedConnection(ctx, volumeID, vc)
@@ -378,6 +385,9 @@ func (ns *Server) attachPlan(
 	node := ns.stack.node(hostNQN, ns.priorFormat(volumeID, vc))
 	volume := stackVolume(stagingTargetPath, vc, volCap)
 	shape := ns.attachShape(volumeID, shapeFor(vc, volCap))
+	if err := refuseUnenforcedReadOnly(volume, shape); err != nil {
+		return nil, err
+	}
 	return planFor(node, connection, volume, vdoOptions(vc), shape), nil
 }
 

@@ -62,6 +62,12 @@ func (cs *Server) ValidateVolumeCapabilities(
 			return &csi.ValidateVolumeCapabilitiesResponse{Message: ""}, nil
 		}
 	}
+	// The advertised modes are the driver's, not every volume's: a ReadOnlyMany
+	// filesystem is refused here as CreateVolume refuses it, because a static
+	// or pre-existing volume reaches a node without passing CreateVolume.
+	if err := refuseReadOnlyMany(req.GetVolumeCapabilities()); err != nil {
+		return &csi.ValidateVolumeCapabilitiesResponse{Message: status.Convert(err).Message()}, nil
+	}
 	return &csi.ValidateVolumeCapabilitiesResponse{
 		Confirmed: &csi.ValidateVolumeCapabilitiesResponse_Confirmed{
 			VolumeCapabilities: req.GetVolumeCapabilities(),

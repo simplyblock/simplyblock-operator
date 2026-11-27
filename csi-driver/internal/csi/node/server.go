@@ -62,9 +62,16 @@ type Server struct {
 	exports  dynamic.Interface
 	manager  *sbkube.Manager
 	guardian *guardian.Guardian
+	// maxAttachedVolumes is how many volumes this worker may have attached at a
+	// time, reported to the scheduler by NodeGetInfo. Zero is no limit.
+	maxAttachedVolumes int64
 	// deviceMapper is whether this host can run the dmLinear indirection, as
 	// the probe at start found it. Set before the service serves.
 	deviceMapper bool
+	// publishMapper makes the read-only device a raw-block volume is published
+	// through when a pod asks for it read-only (publish_readonly.go). Nil is
+	// the host's dmsetup.
+	publishMapper publishMapper
 
 	// The stretched cluster's stage gate (syncgate.go): this node's site and
 	// whether a cluster is sync, and where a volume is led from. Seams, so the

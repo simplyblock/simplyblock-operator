@@ -390,6 +390,21 @@ two run on different hosts, since the node plugin runs on every worker that
 mounts a volume and the job only on storage nodes, which is why
 `StorageCluster.spec.storageNodes.ubuntuHost` does not decide this field.
 
+**The node plugin can cap how many volumes a worker takes.**
+`spec.maxAttachedVolumesPerWorker` reaches the node plugin as
+`--max-attached-volumes-per-worker`, and the plugin reports it as
+`NodeGetInfo.max_volumes_per_node`. Kubernetes records it in the worker's
+`CSINode` as the driver's allocatable count, and the scheduler places no pod that
+would take a worker's attached simplyblock volumes past it. The count is the
+consumer's: it covers the volumes a worker has attached, whichever storage nodes
+serve them, and is a different limit from `StorageCluster.spec.maxSubsystemCount`,
+which bounds what one storage node serves. Without a limit a worker is sent every
+pod that fits otherwise, and the one past what it can connect waits in
+`ContainerCreating` instead of going to a worker with room. Zero, the default, is
+no limit and renders no flag, so a driver that sets none keeps the node plugin's
+template unchanged across an operator upgrade. The controller plugin does not
+receive it, since it attaches nothing.
+
 An install that fails holds the node plugin in `Init`, and a rolling update of
 the DaemonSet stalls on that worker. The field is off by default, so the pod spec
 of a deployment that never set it is the one the chart rendered, and adoption
@@ -1246,6 +1261,19 @@ type SimplyblockDriverSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	EnableNVMeTCPModuleInstall *bool `json:"enableNVMeTCPModuleInstall,omitempty"`
+
+	// MaxAttachedVolumesPerWorker is how many simplyblock volumes one Kubernetes
+	// worker may have attached at a time. The node plugin reports it to the
+	// scheduler, which places no pod on a worker whose attached volumes would go
+	// past it, so such a pod goes to a worker with room or stays Pending rather
+	// than waiting on an attach the worker cannot take. It counts what a worker
+	// consumes, from any storage node, and is unrelated to how many volumes one
+	// storage node serves, which is StorageCluster spec.maxSubsystemCount. 0 is
+	// no limit. Changing it restarts every node plugin, and a worker already
+	// past a lowered limit keeps its volumes and takes no new ones.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxAttachedVolumesPerWorker int32 `json:"maxAttachedVolumesPerWorker,omitempty"`
 
 	// TLS configures whether both plugins reach the control plane over TLS.
 	// Unset is plaintext, the shape every deployment ran before this field

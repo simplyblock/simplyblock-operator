@@ -132,7 +132,7 @@ func (m *Mapper) Swap(ctx context.Context, name, device string, sectors uint64) 
 	if err := m.SuspendWithoutFreeze(ctx, name); err != nil {
 		return err
 	}
-	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
+	if err := m.reload(ctx, name, table(sectors, device)); err != nil {
 		if rerr := m.Resume(ctx, name); rerr != nil {
 			return fmt.Errorf("dmsetup reload %s: %w; resume on the old table also failed: %v", name, err, rerr)
 		}
@@ -205,7 +205,7 @@ func (m *Mapper) SuspendWithoutFreeze(ctx context.Context, name string) error {
 // Swap, the old table may name a namespace that has already gone, and the
 // caller decides between retrying and resuming elsewhere.
 func (m *Mapper) ReloadResume(ctx context.Context, name, device string, sectors uint64) error {
-	if _, err := m.run(ctx, "dmsetup", "reload", name, "--table", table(sectors, device)); err != nil {
+	if err := m.reload(ctx, name, table(sectors, device)); err != nil {
 		return fmt.Errorf("dmsetup reload %s: %w (still suspended)", name, err)
 	}
 	return m.Resume(ctx, name)
@@ -255,9 +255,14 @@ func parseInfo(out string) []Mapping {
 	return found
 }
 
+// notFound reports whether a failed dmsetup call failed because the mapping is
+// not there. dmsetup words that differently by command and by build. An ioctl
+// answers `No such device or address`, other commands answer
+// `Device <name> not found`, and info -c on RHCOS answers `Device does not exist.`
 func notFound(out string, err error) bool {
 	for _, s := range []string{out, err.Error()} {
-		if strings.Contains(s, "No such device") || strings.Contains(s, "not found") {
+		if strings.Contains(s, "No such device") || strings.Contains(s, "not found") ||
+			strings.Contains(s, "does not exist") {
 			return true
 		}
 	}

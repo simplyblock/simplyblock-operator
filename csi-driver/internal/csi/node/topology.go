@@ -19,7 +19,8 @@ func (ns *Server) NodeGetInfo(ctx context.Context, req *csi.NodeGetInfoRequest) 
 	topology := ns.buildAccessibleTopology(ctx)
 
 	response := &csi.NodeGetInfoResponse{
-		NodeId: ns.Driver.GetNodeID(),
+		NodeId:            ns.Driver.GetNodeID(),
+		MaxVolumesPerNode: ns.maxAttachedVolumes,
 	}
 
 	if len(topology) > 0 {
@@ -103,4 +104,11 @@ func (ns *Server) buildAccessibleTopology(ctx context.Context) map[string]string
 	}
 
 	return segments
+}
+
+// LimitAttachedVolumes sets how many simplyblock volumes this worker may have
+// attached at a time, which NodeGetInfo reports to the scheduler. Zero or less
+// is no limit, the default.
+func (ns *Server) LimitAttachedVolumes(n int64) {
+	ns.maxAttachedVolumes = max(n, 0)
 }

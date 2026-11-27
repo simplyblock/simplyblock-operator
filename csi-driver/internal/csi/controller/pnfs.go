@@ -13,6 +13,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -275,7 +276,7 @@ func (cs *Server) createPNFSVolume(
 		ExportPath: exportPathFor(namespace, pvcName, handle.VolumeID),
 		// The host needs it to tell an empty encrypted volume, which reads as
 		// pseudo-random plaintext, from one carrying somebody else's data.
-		Encrypted: csiVolume.GetVolumeContext()[csicommon.ParamEncryption] == "true",
+		Encrypted: csiVolume.GetVolumeContext()[csicommon.ParamEncryption] == strconv.FormatBool(true),
 	}, name)
 	if err != nil {
 		return nil, err

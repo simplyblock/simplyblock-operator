@@ -262,6 +262,7 @@ func stackVolume(
 		FormatOptions:         formatOptions(volCap, vc),
 		ReservedBlocksPercent: vc["tune2fs_reserved_blocks"],
 		Encrypted:             boolFromContext(vc[csicommon.ParamEncryption]),
+		ReadOnly:              readOnlyBlock(volCap),
 	}
 }
 

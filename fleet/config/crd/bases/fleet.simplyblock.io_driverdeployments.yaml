@@ -179,6 +179,15 @@ spec:
                           type: string
                       type: object
                     type: array
+                  disableDeviceMapperIndirection:
+                    description: |-
+                      DisableDeviceMapperIndirection stages new volumes directly on their NVMe
+                      device instead of behind a device-mapper linear device. Without that
+                      layer a volume cannot move to another NVMe subsystem while a pod uses
+                      it, so it cannot join a consistency group live. The layer costs a little
+                      CPU per I/O. A change applies to volumes staged after it; a volume keeps
+                      the layout it was staged with until its pods stop and it is staged again.
+                    type: boolean
                   driverName:
                     default: csi.simplyblock.io
                     description: |-
@@ -198,6 +207,22 @@ spec:
                       CSIAddonsNode object, so it only works on a cluster that serves the
                       csiaddons.openshift.io CRDs. Without them it restarts in a loop, so leave
                       it false unless those CRDs are installed.
+                    type: boolean
+                  enableNVMeTCPModuleInstall:
+                    default: false
+                    description: |-
+                      EnableNVMeTCPModuleInstall loads the nvme-tcp kernel module on every
+                      worker that runs the node plugin, before the plugin starts. A privileged
+                      init container mounts the host's root and reads its /etc/os-release. On an
+                      Ubuntu host it loads nvme-tcp, installs linux-modules-extra for the
+                      running kernel with apt when the module is missing, and adds nvme-tcp to
+                      /etc/modules-load.d so it loads again after a reboot. Any other host is
+                      left unchanged with a warning in the init container's log. An Ubuntu
+                      worker needs its apt mirror when the package is missing, which is again
+                      the case after a kernel upgrade, and an install that fails holds the node
+                      plugin in Init and stalls a rolling update of the DaemonSet. Turning it
+                      off leaves /etc/modules-load.d/nvme-tcp.conf on the hosts. Changing it
+                      restarts every node plugin.
                     type: boolean
                   enableServiceAccountAuth:
                     default: false
@@ -237,6 +262,20 @@ spec:
                     - Never
                     - IfNotPresent
                     type: string
+                  maxAttachedVolumesPerWorker:
+                    description: |-
+                      MaxAttachedVolumesPerWorker is how many simplyblock volumes one Kubernetes
+                      worker may have attached at a time. The node plugin reports it to the
+                      scheduler, which places no pod on a worker whose attached volumes would go
+                      past it, so such a pod goes to a worker with room or stays Pending rather
+                      than waiting on an attach the worker cannot take. It counts what a worker
+                      consumes, from any storage node, and is unrelated to how many volumes one
+                      storage node serves, which is StorageCluster spec.maxSubsystemCount. 0 is
+                      no limit. Changing it restarts every node plugin, and a worker already
+                      past a lowered limit keeps its volumes and takes no new ones.
+                    format: int32
+                    minimum: 0
+                    type: integer
                   nodeResources:
                     description: ResourceRequirements describes the compute resource
                       requirements.
@@ -507,8 +546,65 @@ spec:
                                   type: string
                               type: object
                             type: array
+                          unhealthyDeadline:
+                            description: |-
+                              UnhealthyDeadline is how long a booted guest may stay unhealthy before
+                              the pod restarts. The metadata server is a singleton in the data path of
+                              every pNFS volume, so a restart pauses all of them. 0s never restarts it.
+                              Unset keeps the runner's default of 90s.
+                            type: string
                         type: object
                     type: object
+                  remoteClusters:
+                    description: |-
+                      RemoteClusters are storage clusters served by a management API outside
+                      this Kubernetes cluster. The operator writes one entry per item into the
+                      Secret the CSI driver reads its clusters from.
+                    items:
+                      description: |-
+                        RemoteStorageCluster is a storage cluster whose control plane runs outside
+                        this Kubernetes cluster, and which the CSI driver provisions volumes on.
+                      properties:
+                        clusterID:
+                          description: ClusterID is the storage cluster's UUID.
+                          pattern: ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$
+                          type: string
+                        credentialsSecretRef:
+                          description: |-
+                            CredentialsSecretRef names a Secret in this namespace that holds the
+                            cluster secret under the key cluster_secret.
+                          properties:
+                            name:
+                              default: ""
+                              description: |-
+                                Name of the referent.
+                                This field is effectively required, but due to backwards compatibility is
+                                allowed to be empty. Instances of this type with an empty value here are
+                                almost certainly wrong.
+                                More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
+                              type: string
+                          type: object
+                          x-kubernetes-map-type: atomic
+                        endpoint:
+                          description: |-
+                            Endpoint is the base URL of the management API serving the cluster. An
+                            HTTPS endpoint must present a certificate from a publicly trusted CA.
+                          maxLength: 2048
+                          type: string
+                          x-kubernetes-validations:
+                          - message: endpoint must be an http or https URL
+                            rule: isURL(self) && url(self).getScheme() in ['https',
+                              'http']
+                      required:
+                      - clusterID
+                      - credentialsSecretRef
+                      - endpoint
+                      type: object
+                    maxItems: 64
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - clusterID
+                    x-kubernetes-list-type: map
                   sidecarImages:
                     description: |-
                       SidecarImages overrides the seven CSI sidecars, one field each. Unset
@@ -568,25 +664,25 @@ spec:
                       off the running objects.
                     properties:
                       enableMutualTLS:
-                        default: false
                         description: |-
                           EnableMutualTLS additionally requires each plugin to present a client
                           certificate, rather than dialing the control plane anonymously over
                           the encrypted connection EnableTLS alone provides. Ignored when
-                          EnableTLS is false, the same as the Helm value it replaces.
+                          EnableTLS is false, the same as the Helm value it replaces. Unset follows
+                          the ControlPlane's spec.source.local.tls.enableMutualTLS.
                         type: boolean
                       enableTLS:
-                        default: false
-                        description: EnableTLS turns on TLS between both plugins and
-                          the control plane.
+                        description: |-
+                          EnableTLS turns on TLS between both plugins and the control plane.
+                          Unset follows the ControlPlane's spec.source.local.tls.enableTLS.
                         type: boolean
                       provider:
-                        default: cert-manager
                         description: |-
                           Provider selects where the CA bundle (and, with EnableMutualTLS, the
                           client certificate) comes from. Required reading whenever EnableTLS is
                           true: the two providers mount a differently shaped volume, and neither
-                          shape can be inferred from anything else on this object.
+                          shape can be inferred from anything else on this object. Unset follows
+                          the ControlPlane's provider, and is cert-manager without one.
                         enum:
                         - OpenShift
                         - cert-manager

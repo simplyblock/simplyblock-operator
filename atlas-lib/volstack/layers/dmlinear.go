@@ -30,6 +30,9 @@ type DMMapper interface {
 	Table(ctx context.Context, name string) (devmapper.Target, error)
 	Sectors(ctx context.Context, device string) (uint64, error)
 	Create(ctx context.Context, name, device string, sectors uint64) error
+	CreateReadOnly(ctx context.Context, name, device string, sectors uint64) error
+	ReadOnly(ctx context.Context, name string) (bool, error)
+	MakeReadOnly(ctx context.Context, name string) error
 	Swap(ctx context.Context, name, device string, sectors uint64) error
 	Remove(ctx context.Context, name string) error
 }
@@ -47,6 +50,10 @@ type DMLinearConfig struct {
 	// Gone reports whether the device a mapping points at, as major:minor, has
 	// been removed from the host; defaults to sysfsDeviceGone.
 	Gone func(device string) bool
+	// ReadOnly makes the mapping refuse writes, for a volume every consumer
+	// only reads. The device handed up is then the enforcement: the kernel
+	// fails a write to it whoever opened it.
+	ReadOnly bool
 }
 
 // DMLinear is the indirection layer.
@@ -135,7 +142,8 @@ func (d *DMLinear) own() (volstack.Artifact, error) {
 	return volstack.Artifact{Devices: []blockdev.Device{dev}}, nil
 }
 
-// Ensure creates the mapping over the device below, or re-points it there.
+// Ensure creates the mapping over the device below, or re-points it there,
+// and for a read-only layer makes sure the mapping refuses writes.
 func (d *DMLinear) Ensure(ctx context.Context, below volstack.Artifact) (volstack.Artifact, error) {
 	state, own, err := d.Observe(ctx, below)
 	if err != nil {
@@ -143,9 +151,15 @@ func (d *DMLinear) Ensure(ctx context.Context, below volstack.Artifact) (volstac
 	}
 	switch state {
 	case volstack.StateReady:
+		if err := d.enforceReadOnly(ctx); err != nil {
+			return volstack.Artifact{}, err
+		}
 		return own, nil
 	case volstack.StatePartial:
 		if err := d.swap(ctx, below); err != nil {
+			return volstack.Artifact{}, err
+		}
+		if err := d.enforceReadOnly(ctx); err != nil {
 			return volstack.Artifact{}, err
 		}
 		return d.own()
@@ -159,10 +173,35 @@ func (d *DMLinear) Ensure(ctx context.Context, below volstack.Artifact) (volstac
 	if err != nil {
 		return volstack.Artifact{}, fmt.Errorf("dmLinear: %w", err)
 	}
-	if err := d.cfg.Mapper.Create(ctx, d.cfg.Name, deviceNumber(dev), sectors); err != nil {
+	create := d.cfg.Mapper.Create
+	if d.cfg.ReadOnly {
+		create = d.cfg.Mapper.CreateReadOnly
+	}
+	if err := create(ctx, d.cfg.Name, deviceNumber(dev), sectors); err != nil {
 		return volstack.Artifact{}, fmt.Errorf("dmLinear: %w", err)
 	}
 	return d.own()
+}
+
+// enforceReadOnly makes an existing mapping of a read-only layer refuse writes:
+// one a driver from before read-only staging left writable. A writable layer
+// leaves the mode alone, and a read-only mapping is not reloaded again, since a
+// reload holds the consumer's I/O.
+func (d *DMLinear) enforceReadOnly(ctx context.Context) error {
+	if !d.cfg.ReadOnly {
+		return nil
+	}
+	readOnly, err := d.cfg.Mapper.ReadOnly(ctx, d.cfg.Name)
+	if err != nil {
+		return fmt.Errorf("dmLinear: read the mode of %s: %w", d.cfg.Name, err)
+	}
+	if readOnly {
+		return nil
+	}
+	if err := d.cfg.Mapper.MakeReadOnly(ctx, d.cfg.Name); err != nil {
+		return fmt.Errorf("dmLinear: %w", err)
+	}
+	return nil
 }
 
 func (d *DMLinear) swap(ctx context.Context, below volstack.Artifact) error {
@@ -190,17 +229,40 @@ func (d *DMLinear) Release(ctx context.Context, _ volstack.Artifact) error {
 func (d *DMLinear) Destroy(context.Context, volstack.Artifact) error { return nil }
 
 // Healthy reports whether the mapping points at the device below, as the last
-// Observe found it.
-func (d *DMLinear) Healthy(context.Context, volstack.Artifact) (bool, error) { return !d.stale, nil }
+// Observe found it, and for a read-only layer whether it refuses writes. A
+// publish heals the stack rather than ensuring it, so a mapping an earlier
+// driver left writable is found here or not at all.
+func (d *DMLinear) Healthy(ctx context.Context, _ volstack.Artifact) (bool, error) {
+	if d.stale {
+		return false, nil
+	}
+	if !d.cfg.ReadOnly {
+		return true, nil
+	}
+	readOnly, err := d.cfg.Mapper.ReadOnly(ctx, d.cfg.Name)
+	if err != nil {
+		return false, fmt.Errorf("dmLinear: read the mode of %s: %w", d.cfg.Name, err)
+	}
+	return readOnly, nil
+}
 
 // Heal re-points the mapping at the device below, which the fabric layer may
-// just have brought up on another subsystem.
+// just have brought up on another subsystem, and makes a read-only layer's
+// mapping refuse writes: a re-point keeps the mode the mapping had.
 func (d *DMLinear) Heal(ctx context.Context, below, _ volstack.Artifact) error {
 	if _, err := d.cfg.Mapper.Table(ctx, d.cfg.Name); errors.Is(err, devmapper.ErrNotFound) {
 		_, err := d.Ensure(ctx, below)
 		return err
 	}
-	return d.swap(ctx, below)
+	// A mapping already on the device below is not reloaded for a heal that is
+	// only about its mode, since a reload holds the consumer's I/O. Nothing
+	// below is still the swap's to refuse.
+	if _, ok := belowDevice(below); !ok || d.stale {
+		if err := d.swap(ctx, below); err != nil {
+			return err
+		}
+	}
+	return d.enforceReadOnly(ctx)
 }
 
 // Grow extends the mapping to the size of the device below, which the namespace
@@ -236,8 +298,9 @@ func (d *DMLinear) Grow(ctx context.Context, below volstack.Artifact) (volstack.
 
 // DMLinearParams is what the record keeps of this layer.
 type DMLinearParams struct {
-	Name string `json:"name"`
+	Name     string `json:"name"`
+	ReadOnly bool   `json:"readOnly,omitempty"`
 }
 
 // Params is the record's view of the layer.
-func (d *DMLinear) Params() any { return DMLinearParams{Name: d.cfg.Name} }
+func (d *DMLinear) Params() any { return DMLinearParams{Name: d.cfg.Name, ReadOnly: d.cfg.ReadOnly} }

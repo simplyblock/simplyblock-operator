@@ -26,11 +26,11 @@ func TestSuspendDrainsInFlightIOWithoutFreezingTheFilesystem(t *testing.T) {
 }
 
 func TestReloadResumeLoadsTheNewTableThenResumes(t *testing.T) {
-	r := &recorder{}
+	r := &recorder{out: map[string]string{attrQuery: "Ls-w\n"}}
 	if err := New(r.run).ReloadResume(context.Background(), "sb-v", "259:11", 2048); err != nil {
 		t.Fatal(err)
 	}
-	want := "dmsetup reload sb-v --table 0 2048 linear 259:11 0|dmsetup resume sb-v"
+	want := attrQuery + "|dmsetup reload sb-v --table 0 2048 linear 259:11 0|dmsetup resume sb-v"
 	if strings.Join(r.calls, "|") != want {
 		t.Fatalf("calls = %v, want %s", r.calls, want)
 	}
