@@ -19,7 +19,7 @@ func TestControlPlaneImagesAreListedForTheBundle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, ref := range []string{fdbOperatorImage, fdbMonitorImage, minioImage, minioClientImage} {
+	for _, ref := range []string{fdbOperatorImage, fdbMonitorImage} {
 		if !strings.Contains(ref, "@sha256:") {
 			t.Errorf("%s is not pinned by digest", ref)
 		}
@@ -29,8 +29,8 @@ func TestControlPlaneImagesAreListedForTheBundle(t *testing.T) {
 	}
 }
 
-// With a mirror registry set, the FoundationDB operator, the database's base
-// image, and the object store are all pulled from it.
+// With a mirror registry set, the FoundationDB operator and the database's base
+// image are pulled from it.
 func TestControlPlaneImagesFollowTheMirrorRegistry(t *testing.T) {
 	SetImageMirrorRegistry("mirror.example:5000")
 	t.Cleanup(func() { SetImageMirrorRegistry("") })
@@ -39,16 +39,6 @@ func TestControlPlaneImagesFollowTheMirrorRegistry(t *testing.T) {
 
 	if img := fdbOperatorDeployment(cp).Spec.Template.Spec.Containers[0].Image; !strings.HasPrefix(img, want) {
 		t.Errorf("FoundationDB operator image = %s", img)
-	}
-	for _, c := range minioStatefulSet(cp).Spec.Template.Spec.Containers {
-		if !strings.HasPrefix(c.Image, want) {
-			t.Errorf("object store container %s image = %s", c.Name, c.Image)
-		}
-	}
-	for _, c := range minioStatefulSet(cp).Spec.Template.Spec.InitContainers {
-		if !strings.HasPrefix(c.Image, want) {
-			t.Errorf("object store init container %s image = %s", c.Name, c.Image)
-		}
 	}
 	configs, _, _ := unstructured.NestedSlice(foundationDBCluster(cp).Object, "spec", "mainContainer", "imageConfigs")
 	if len(configs) == 0 || !strings.HasPrefix(configs[0].(map[string]any)["baseImage"].(string), want) {

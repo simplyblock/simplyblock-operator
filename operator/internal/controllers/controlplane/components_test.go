@@ -229,7 +229,7 @@ func TestObserveReadsAnAbsentWorkloadAsNothingAskedFor(t *testing.T) {
 func TestObserveReportsTheCountsAndTheClassification(t *testing.T) {
 	c := newClient(t,
 		deployment(ComponentWebAPI, 2, 1),
-		statefulSet(ComponentMinio, 1, 1),
+		statefulSet(prometheusStatefulSet, 1, 1),
 	)
 
 	components, err := observe(context.Background(), c, testNamespace)
@@ -250,12 +250,12 @@ func TestObserveReportsTheCountsAndTheClassification(t *testing.T) {
 		t.Errorf("%s is reported non-essential", ComponentWebAPI)
 	}
 
-	store := byName[ComponentMinio]
-	if store.Desired != 1 || store.Ready != 1 {
-		t.Errorf("%s = %d/%d ready, want 1/1", ComponentMinio, store.Ready, store.Desired)
+	prom := byName[ComponentPrometheus]
+	if prom.Desired != 1 || prom.Ready != 1 {
+		t.Errorf("%s = %d/%d ready, want 1/1", ComponentPrometheus, prom.Ready, prom.Desired)
 	}
-	if store.Essential {
-		t.Errorf("%s is reported essential, which would let the object store halt a fleet",
-			ComponentMinio)
+	if prom.Essential {
+		t.Errorf("%s is reported essential, which would let Prometheus halt a fleet",
+			ComponentPrometheus)
 	}
 }

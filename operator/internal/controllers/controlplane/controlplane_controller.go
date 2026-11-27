@@ -99,7 +99,7 @@ type ControlPlaneReconciler struct {
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;patch,resourceNames=foundationdbbackups.apps.foundationdb.org;foundationdbclusters.apps.foundationdb.org;foundationdbrestores.apps.foundationdb.org;certificaterequests.cert-manager.io;certificates.cert-manager.io;challenges.acme.cert-manager.io;clusterissuers.cert-manager.io;issuers.cert-manager.io;orders.acme.cert-manager.io;volumesnapshotclasses.snapshot.storage.k8s.io;volumesnapshotcontents.snapshot.storage.k8s.io;volumesnapshots.snapshot.storage.k8s.io;volumegroupsnapshotclasses.groupsnapshot.storage.k8s.io;volumegroupsnapshotcontents.groupsnapshot.storage.k8s.io;volumegroupsnapshots.groupsnapshot.storage.k8s.io;alertmanagerconfigs.monitoring.coreos.com;alertmanagers.monitoring.coreos.com;podmonitors.monitoring.coreos.com;probes.monitoring.coreos.com;prometheusagents.monitoring.coreos.com;prometheuses.monitoring.coreos.com;prometheusrules.monitoring.coreos.com;scrapeconfigs.monitoring.coreos.com;servicemonitors.monitoring.coreos.com;thanosrulers.monitoring.coreos.com
 // +kubebuilder:rbac:groups=cert-manager.io,resources=clusterissuers,verbs=get;create;patch
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheuses;servicemonitors;podmonitors;scrapeconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
 // +kubebuilder:rbac:groups=storage.k8s.io,resources=storageclasses,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups=admissionregistration.k8s.io,resources=mutatingwebhookconfigurations;validatingwebhookconfigurations,verbs=get;create;patch
@@ -256,7 +256,7 @@ func (r *ControlPlaneReconciler) install(
 		// reconciling again. Restarting the install is the safe answer here and
 		// not elsewhere in this group: every step is an apply, so re-entering
 		// the first one re-applies to the same result.
-		return r.enterStepAt(ctx, cp, stepApplyingDatastore)
+		return r.enterStepAt(ctx, cp, installGraph().Initial)
 	}
 	defer machine.Close()
 
@@ -338,9 +338,6 @@ func (r *ControlPlaneReconciler) performInstallStep(
 	case stepBuildingIndices:
 		return r.buildIndices(ctx, cp)
 
-	case stepApplyingDatastore:
-		return true, "", applyAll(ctx, r.Client, cp, r.Scheme, datastoreObjects(cp))
-
 	case stepApplyingAPI:
 		objects, err := r.managementAPIStamped(ctx, cp)
 		if err != nil {
@@ -417,13 +414,15 @@ func (r *ControlPlaneReconciler) applyEverything(
 		return err
 	}
 	for _, set := range [][]client.Object{
-		datastoreObjects(cp),
 		foundationDBObjects(cp),
 		api,
 	} {
 		if err := applyAll(ctx, r.Client, cp, r.Scheme, set); err != nil {
 			return err
 		}
+	}
+	if err := r.removeObjectStore(ctx, cp.Namespace); err != nil {
+		return err
 	}
 	return r.removeAnyUIDSCCBinding(ctx, cp.Namespace)
 }

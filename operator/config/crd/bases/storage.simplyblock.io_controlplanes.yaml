@@ -821,7 +821,7 @@ spec:
                   type: object
                   x-kubernetes-validations:
                     - message: unknown step
-                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingDatastore'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
+                      rule: '!has(self.state) || self.state in [''ApplyingFoundationDB'',''AwaitingFoundationDB'',''BuildingIndices'',''ApplyingAPI'',''AwaitingAPI'',''Installed'']'
                 storageClassName:
                   description: |-
                     StorageClassName is the StorageClass the operator chose for the control

@@ -378,18 +378,6 @@
                 }
               }
             },
-            "thanos": {
-              "type": "object",
-              "properties": {
-                "pullPolicy": {
-                  "enum": [
-                    "Always",
-                    "IfNotPresent",
-                    "Never"
-                  ]
-                }
-              }
-            },
             "fluentbit": {
               "type": "object",
               "properties": {

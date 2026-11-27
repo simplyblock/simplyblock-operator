@@ -11964,7 +11964,7 @@ data:
   # Upstream dashboard shipped with github.com/aikoven/foundationdb-exporter.
   # Loaded via .Files.Get (not inlined) because it contains Grafana legend
   # templates like {{ "{{" }}state{{ "}}" }} that Helm would otherwise try to render.
-  # Panels use the default datasource, which is the Thanos datasource.
+  # Panels use the default datasource, which is the Prometheus datasource.
   foundationdb.json: |
 {{ .Files.Get "dashboards/foundationdb.json" | indent 4 }}
 {{- end }}

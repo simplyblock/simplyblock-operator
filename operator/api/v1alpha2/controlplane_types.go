@@ -47,7 +47,7 @@ const (
 
 // ControlPlaneStep is one step of the installation path. There is one graph
 // rather than a MultiConfig, because an entity has no spec.action to key one on.
-// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingDatastore;ApplyingAPI;AwaitingAPI;Installed
+// +kubebuilder:validation:Enum=ApplyingFoundationDB;AwaitingFoundationDB;BuildingIndices;ApplyingAPI;AwaitingAPI;Installed
 type ControlPlaneStep string
 
 const (
@@ -66,9 +66,6 @@ const (
 	// still empty is the one point where every index is complete the moment it
 	// is declared ready.
 	ControlPlaneStepBuildingIndices ControlPlaneStep = "BuildingIndices"
-	// ControlPlaneStepApplyingDatastore applies the object store the control
-	// plane keeps its long-term data in.
-	ControlPlaneStepApplyingDatastore ControlPlaneStep = "ApplyingDatastore"
 	// ControlPlaneStepApplyingAPI applies the management API's workload, the
 	// services beside it, its account and configuration, and its Service.
 	ControlPlaneStepApplyingAPI ControlPlaneStep = "ApplyingAPI"
@@ -565,7 +562,7 @@ type ControlPlaneStatus struct {
 	// Step is the position of the installation machine, and Installed once the
 	// installation is complete. The rule repeats the ControlPlaneStep enum
 	// because a marker cannot reach a field of the shared snapshot type.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingDatastore','ApplyingAPI','AwaitingAPI','Installed']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['ApplyingFoundationDB','AwaitingFoundationDB','BuildingIndices','ApplyingAPI','AwaitingAPI','Installed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

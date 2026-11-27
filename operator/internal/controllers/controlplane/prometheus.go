@@ -1,7 +1,6 @@
 // The Prometheus a managed control plane runs through the prometheus-operator,
-// applied with the management API: a Prometheus resource, one monitor per scrape
-// job, and the Thanos sidecar that uploads each two-hour block to the object
-// store the datastore step created.
+// applied with the management API: a Prometheus resource that keeps its own
+// history, and one monitor per scrape job.
 
 package controlplane
 
@@ -29,7 +28,6 @@ var (
 
 const (
 	prometheusImage = "quay.io/simplyblock-io/prometheus:v2.51.0@sha256:5ccad477d0057e62a7cd1981ffcc43785ac10c5a35522dc207466ff7e7ec845f"
-	thanosImage     = "quay.io/simplyblock-io/thanos:v0.31.0@sha256:e7d337d6ac2aea3f0f9314ec9830291789e16e2b480b9d353be02d05ce7f2a7e"
 
 	// prometheusServiceAccount is the account the management API trusts for
 	// scrapes, through SB_K8S_METRICS_SERVICE_ACCOUNTS.
@@ -40,12 +38,14 @@ const (
 
 	// prometheusName is the Prometheus resource. The prometheus-operator derives
 	// its StatefulSet's name and its claim's name from it.
-	prometheusName           = "simplyblock"
-	prometheusStatefulSet    = "prometheus-" + prometheusName
-	prometheusClaim          = "prometheus-" + prometheusName + "-db-" + prometheusStatefulSet + "-0"
-	prometheusVolumeSize     = "20Gi"
-	prometheusRetention      = "15d"
-	prometheusObjstoreVolume = "objstore-config"
+	prometheusName        = "simplyblock"
+	prometheusStatefulSet = "prometheus-" + prometheusName
+	prometheusClaim       = "prometheus-" + prometheusName + "-db-" + prometheusStatefulSet + "-0"
+	prometheusVolumeSize  = "20Gi"
+	// prometheusRetention is the history the Thanos compactor kept, capped by
+	// prometheusRetentionSize so the volume never fills.
+	prometheusRetention     = "90d"
+	prometheusRetentionSize = "18GB"
 
 	// scrapedByLabel marks the monitors this Prometheus selects.
 	scrapedByLabel = "storage.simplyblock.io/scraped-by"
@@ -54,8 +54,6 @@ const (
 	// them under, so an install that came from the chart already has the Secret.
 	prometheusClientCertificate = "simplyblock-prometheus-client"
 	prometheusClientSecret      = "simplyblock-prometheus-client-tls"
-	thanosGRPCPort              = 10901
-	thanosHTTPPort              = 10902
 )
 
 // The Prometheus a 26.3 install ran as a StatefulSet of its own, replaced on
@@ -238,7 +236,7 @@ func rebalancerProbeMonitor(namespace string) *unstructured.Unstructured {
 	})
 }
 
-// prometheusResource is one server with a volume and the Thanos sidecar. It runs
+// prometheusResource is one server with a volume. It runs
 // the image and user the StatefulSet it replaces ran, so a copied volume is
 // readable, and carries the label the Service selects.
 func prometheusResource(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Unstructured {
@@ -267,24 +265,12 @@ func prometheusResource(cp *simplyblockv1alpha2.ControlPlane) *unstructured.Unst
 		"scrapeInterval":         "30s",
 		"externalLabels":         map[string]any{"monitor": "codelab-monitor"},
 		"retention":              prometheusRetention,
+		"retentionSize":          prometheusRetentionSize,
 		"scrapeConfigSelector":   selector,
 		"serviceMonitorSelector": selector,
 		"podMonitorSelector":     selector,
 		"resources":              resources("100m", "512Mi", "500m", "1Gi"),
 		"storage":                map[string]any{"volumeClaimTemplate": map[string]any{"spec": claim}},
-		"volumes": []any{map[string]any{
-			"name":      prometheusObjstoreVolume,
-			"configMap": map[string]any{"name": objectStoreConfigName},
-		}},
-		"thanos": map[string]any{
-			"image":                   image(thanosImage),
-			"version":                 "v0.31.0",
-			"objectStorageConfigFile": "/etc/thanos/objstore.yml",
-			"volumeMounts": []any{map[string]any{
-				"name": prometheusObjstoreVolume, "mountPath": "/etc/thanos", "readOnly": true,
-			}},
-			"resources": resources("100m", "256Mi", "250m", "1Gi"),
-		},
 	}
 	if len(local.NodeSelector) > 0 {
 		spec["nodeSelector"] = toUnstructured(local.NodeSelector)
@@ -320,8 +306,7 @@ func toUnstructured(v any) any {
 	return out
 }
 
-// prometheusService publishes the server and the sidecar's two ports, which is
-// what Grafana's Thanos datasource queries.
+// prometheusService publishes the server, which Grafana and the operator query.
 func prometheusService(namespace string) *corev1.Service {
 	labels := map[string]string{appLabel: ComponentPrometheus}
 	return &corev1.Service{
@@ -330,8 +315,6 @@ func prometheusService(namespace string) *corev1.Service {
 			Selector: labels,
 			Ports: []corev1.ServicePort{
 				{Name: "http", Port: 9090, TargetPort: intstrFromInt(9090)},
-				{Name: "grpc", Port: thanosGRPCPort, TargetPort: intstrFromInt(thanosGRPCPort)},
-				{Name: "http-thanos", Port: thanosHTTPPort, TargetPort: intstrFromInt(thanosHTTPPort)},
 			},
 		},
 	}

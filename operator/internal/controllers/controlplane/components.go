@@ -118,12 +118,6 @@ var componentTable = []component{
 		why: "it runs nothing; it exists to be exec'd into",
 	},
 	{
-		name: ComponentMinio, kind: kindStatefulSet, essential: false,
-		why: "design-controlplane.md §12 Q5 leaves this open, and non-essential " +
-			"is the default a component takes until somebody decides: nothing in " +
-			"the install path or the data path reads the store",
-	},
-	{
 		name: ComponentPrometheus, kind: kindStatefulSet, essential: false,
 		object: prometheusStatefulSet,
 		why:    "it keeps the record of what happened; the fleet serves without it",

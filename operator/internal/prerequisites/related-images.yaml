@@ -21,14 +21,8 @@
 # Mirror this one with its tag: the FoundationDB operator pulls it by tag, not digest.
 - name: fdb-kubernetes-monitor
   image: quay.io/simplyblock-io/fdb-kubernetes-monitor:7.3.63@sha256:348929437e4203dcf38f7788b85b86723c4250c2a5981213a73b8c6fe238fcd2
-- name: minio
-  image: quay.io/simplyblock-io/minio:RELEASE.2024-01-16T16-07-38Z@sha256:4c4a4876193f030c81f57aabb22bcb9a73462010eb61fcab66908e03e5484af8
-- name: minio-client
-  image: quay.io/simplyblock-io/minio-client:RELEASE.2024-01-16T16-06-34Z@sha256:591b097ea2d44edb157b86938d332c749291d01785b20457f31ffef9664b3fdb
 - name: prometheus
   image: quay.io/simplyblock-io/prometheus:v2.51.0@sha256:5ccad477d0057e62a7cd1981ffcc43785ac10c5a35522dc207466ff7e7ec845f
-- name: thanos
-  image: quay.io/simplyblock-io/thanos:v0.31.0@sha256:e7d337d6ac2aea3f0f9314ec9830291789e16e2b480b9d353be02d05ce7f2a7e
 # Amazon EKS only: the AWS EBS CSI driver the operator installs when the cluster has none.
 - name: ebs-csi-attacher
   image: public.ecr.aws/csi-components/csi-attacher:v4.13.0-eksbuild.2@sha256:cadd3f0523aa96f1eb829ca2ec50163e6c76df8957fa3b5461a5fa49ea1125d3

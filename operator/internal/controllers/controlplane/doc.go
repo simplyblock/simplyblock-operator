@@ -23,11 +23,10 @@
 //     The operator half is skipped where the Kubernetes cluster already serves
 //     apps.foundationdb.org, since a second one reconciling the same objects is
 //     worse than depending on the first.
-//   - The object store, which is MinIO and the bucket configuration beside it.
 //   - The management API, the services beside it, their shared account, the
 //     configuration they read, and the Service the endpoint resolves to.
 //
-// What it does not apply is the observability half: Graylog, Grafana, Thanos,
+// What it does not apply is the observability half: Graylog, Grafana,
 // the document store behind them, and the log collector. Those are gated behind
 // one chart value, none of them appears in a step of the installation machine,
 // and every one is non-essential in the phase table, so they stay where they
@@ -39,17 +38,6 @@
 // the first cluster is created to open the Graylog input the log collector ships
 // to and to create the Grafana user. Without them it records monitoring as
 // disabled for good, and Graylog receives nothing.
-//
-// # Why the datastore step applies an object store
-//
-// design-controlplane.md §4.2 names ApplyingDatastore "the document store the
-// management API needs," and §5.1 identifies that as a MongoDBCommunity. A base
-// deployment has none: the chart renders the MongoDBCommunity only with
-// observability enabled, because what stores documents in it is Graylog rather
-// than the management API. The step therefore applies the store a base
-// deployment does have, which is MinIO. §12 Q6 asks what supplies the MongoDB
-// operator where a cluster has none, and the answer this package reaches is that
-// a base control plane does not need one.
 //
 // # TLS
 //

@@ -31,7 +31,7 @@ func TestEveryWatchedComponentIsOneTheInstallApplies(t *testing.T) {
 	cp := localControlPlane()
 	applied := map[string]bool{}
 	for _, obj := range append(foundationDBObjects(cp),
-		append(datastoreObjects(cp), managementAPIObjects(cp)...)...) {
+		managementAPIObjects(cp)...) {
 		applied[obj.GetName()] = true
 	}
 
@@ -582,27 +582,6 @@ func TestTheControlPlanesAccountKeepsTheGrantsItCannotWorkWithout(t *testing.T) 
 	}
 }
 
-// The object store's volume comes from the same class as the database's. It
-// cannot be a class this operator provides, because the control plane has to
-// exist before any simplyblock volume can.
-func TestTheObjectStoreTakesTheSameStorageClassAsTheDatabase(t *testing.T) {
-	cp := localControlPlane()
-	cp.Spec.Source.Local.FoundationDB = &simplyblockv1alpha2.FoundationDBSpec{
-		StorageClassName: "fast-local",
-	}
-
-	store := minioStatefulSet(cp)
-	if len(store.Spec.VolumeClaimTemplates) != 1 {
-		t.Fatalf("the object store claims %d volumes, want 1",
-			len(store.Spec.VolumeClaimTemplates))
-	}
-	claim := store.Spec.VolumeClaimTemplates[0]
-	if claim.Spec.StorageClassName == nil || *claim.Spec.StorageClassName != "fast-local" {
-		t.Errorf("storageClassName = %v, want the database's fast-local",
-			claim.Spec.StorageClassName)
-	}
-}
-
 // Nothing the install applies names a Secret that the install does not also
 // create, because a workload waiting on a Secret nobody writes never starts and
 // reports the wait as a pod event rather than on the ControlPlane.
@@ -616,7 +595,7 @@ func TestNoWorkloadWaitsOnASecretTheInstallDoesNotCreate(t *testing.T) {
 	cp := localControlPlane()
 
 	objects := append(foundationDBObjects(cp),
-		append(datastoreObjects(cp), managementAPIObjects(cp)...)...)
+		managementAPIObjects(cp)...)
 	issued := secretsTheInstallIssues(objects)
 
 	for _, obj := range objects {
