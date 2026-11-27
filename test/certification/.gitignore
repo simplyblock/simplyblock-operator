@@ -4,3 +4,7 @@
 level1/results/
 level2/results/
 level3/results/
+# AWS clusters: the installer's state (kubeconfig, credentials, the metadata
+# destroy needs) and the downloaded tools.
+aws/clusters/
+aws/bin/

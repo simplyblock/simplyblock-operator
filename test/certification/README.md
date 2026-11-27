@@ -136,3 +136,38 @@ Results land in `results/level3/` in the harness's layout:
 `certification-results/<profile>/{work,report}`, `logs/`, and
 `certification-results-level3.tar.gz` from the package step. A step's earlier
 output is kept beside the new one with a timestamp.
+
+## A cluster on AWS
+
+`aws/cluster.sh` creates a cluster the three levels can run on: OpenShift
+installed by `openshift-install` into one availability zone, three
+`m6i.2xlarge` control-plane nodes, and three `c6id.metal` workers. Metal
+workers are needed because OpenShift Virtualization runs VMs only on bare metal
+on AWS. The instance-store NVMe drives hold simplyblock's storage. The instance
+sizes meet the Level 3 minimum, 64 physical cores and 256 GB per worker. Every
+size, the version, and the zone can be changed through the environment, as the
+script's header lists.
+
+```sh
+make aws-create PULL_SECRET_FILE=~/.secrets/redhat-pull-secret.json  # OCP_VERSION=stable-4.20 by default
+make aws-install-virt
+make aws-install-simplyblock
+make level1 KUBECONFIG="$(aws/cluster.sh kubeconfig)"
+make aws-destroy
+```
+
+The pull secret comes from console.redhat.com and has to carry
+`registry.redhat.io` and `quay.io`. It is written only into the installer's
+configuration, which `openshift-install` deletes once it has read it. AWS
+credentials come from the environment or `~/.aws`, and the public Route 53 zone
+of `BASE_DOMAIN` (`api.simplyblock.io` by default) has to exist in the account.
+
+The installer's state, including the kubeconfig and the metadata `destroy` reads,
+lives in `aws/clusters/<CLUSTER_NAME>/`. That directory is the only record of
+what to remove: deleting it before `destroy` strands the cluster's AWS
+resources. Every resource carries the tags `simplyblock.io/owner` and
+`simplyblock.io/expires`. Nothing acts on the expiry tag: a cluster past it
+stays until somebody runs `destroy`.
+
+`install-simplyblock` installs this checkout's chart with the chart's snapshot
+controller turned off, since OpenShift runs its own.
