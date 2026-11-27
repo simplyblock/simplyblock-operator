@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	k8smount "k8s.io/mount-utils"
@@ -173,5 +174,25 @@ func TestAReadOnlyBlockPublishWithoutDeviceMapperIsRefused(t *testing.T) {
 	_, err := ns.NodePublishVolume(context.Background(), publishRequest(t, blockPublishCapability(), true))
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Errorf("NodePublishVolume = %v, want FailedPrecondition", err)
+	}
+}
+
+// Regression: #989 review (pNFS readonly). A pNFS volume is bound from its
+// staging mount by publishPNFSVolume, which returned before the read-only
+// handling, so a pod that asked for a pNFS volume read-only was bound it
+// writable.
+func TestAReadOnlyPNFSPublishBindsTheExportReadOnly(t *testing.T) {
+	for _, readOnly := range []bool{true, false} {
+		ns, fake, _ := readOnlyPublishServer(t)
+		vc := stagedContext()
+		vc[csicommon.CtxAccessProtocol] = csicommon.AccessProtocolNFS
+		req := publishRequest(t, mountCapability(), readOnly)
+		req.StagingTargetPath = stashedAt(t, vc)
+		if _, err := ns.NodePublishVolume(context.Background(), req); err != nil {
+			t.Fatalf("readonly=%v: NodePublishVolume: %v", readOnly, err)
+		}
+		if opts := mountOf(t, fake, req.GetTargetPath()).Opts; slices.Contains(opts, "ro") != readOnly {
+			t.Errorf("readonly=%v: bind options %v", readOnly, opts)
+		}
 	}
 }
