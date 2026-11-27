@@ -182,13 +182,10 @@ and stays only in the installer's `auth/kubeadmin-password`.
 installer's node security group: the group allows only OpenShift's own ports,
 and simplyblock's control plane and NVMe-oF listeners use others. The rule
 admits the group itself and nothing outside it, and needs the AWS CLI. The step
-then installs the volume group snapshot CRDs where the cluster serves none, and
-this checkout's chart with the chart's snapshot controller turned off, since
-OpenShift runs its own. The driver's `csi-snapshotter` waits for the group
-snapshot API before it handles any snapshot, and OpenShift 4.x serves it only as
-a Tech Preview. OpenShift 5 serves it at v1, and the step leaves it alone there.
-No group snapshot controller runs, so group snapshots stay out of the runs. The
-step then approves the discovery draft, and waits until
+then installs this checkout's chart with the chart's snapshot controller turned
+off, since OpenShift runs its own. The operator turns the snapshotter's group
+snapshot support off where the cluster serves no group snapshot API, which is
+OpenShift 4.x without the Tech Preview. The step then approves the discovery draft, and waits until
 the storage cluster is active. On OpenShift every worker reboots into the
 storage MachineConfig on the way, one at a time, so the step takes most of an
 hour. `APPROVE_DRAFT=false` stops at the draft for a review instead.

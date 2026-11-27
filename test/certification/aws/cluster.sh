@@ -398,31 +398,6 @@ subjects:
 EOF
 }
 
-# The volume group snapshot CRDs, where the cluster serves none. The driver's
-# csi-snapshotter runs with CSIVolumeGroupSnapshot on and waits for its
-# group-snapshot informers before it handles any snapshot, so on a cluster
-# without the API no snapshot ever becomes ready. OpenShift 4.x ships the API
-# only as a Tech Preview, and OpenShift 5 ships it itself, at v1, which is why
-# this is keyed on the API being absent rather than on a version. The CRDs are
-# the chart's own, rendered without its snapshot controller, which OpenShift
-# replaces with its own; no group snapshot controller runs, so the API exists
-# for the sidecar and group snapshots stay out of the certification runs.
-install_group_snapshot_crds() {
-  if [[ -n "$(oc_ api-resources --api-group=groupsnapshot.storage.k8s.io -o name 2>/dev/null)" ]]; then
-    echo "the cluster serves groupsnapshot.storage.k8s.io"
-    return 0
-  fi
-  command -v helm >/dev/null || die "helm is not on PATH"
-  # --api-versions satisfies the chart's TLS check, which helm template cannot
-  # ask a cluster about.
-  helm template simplyblock-operator "$REPO_ROOT/helm-charts/charts/simplyblock-operator" \
-    --set snapshotcontroller.create=true --api-versions cert-manager.io/v1 \
-    --show-only templates/groupsnapshot.storage.k8s.io_volumegroupsnapshotclasses.yaml \
-    --show-only templates/groupsnapshot.storage.k8s.io_volumegroupsnapshotcontents.yaml \
-    --show-only templates/groupsnapshot.storage.k8s.io_volumegroupsnapshots.yaml |
-    oc_ apply -f -
-}
-
 # simplyblock from this checkout's chart. The chart's snapshot controller stays
 # off: OpenShift runs its own, and a second one is a finding of the Level 1
 # monitor tests.
@@ -431,7 +406,6 @@ cmd_install_simplyblock() {
   open_storage_traffic
   install_cert_manager
   grant_openshift_prerequisites
-  install_group_snapshot_crds
   command -v helm >/dev/null || die "helm is not on PATH"
   local branch operator_image simplyblock_image
   branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD | tr '/' '-')"
