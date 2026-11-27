@@ -229,17 +229,40 @@ func (d *DMLinear) Release(ctx context.Context, _ volstack.Artifact) error {
 func (d *DMLinear) Destroy(context.Context, volstack.Artifact) error { return nil }
 
 // Healthy reports whether the mapping points at the device below, as the last
-// Observe found it.
-func (d *DMLinear) Healthy(context.Context, volstack.Artifact) (bool, error) { return !d.stale, nil }
+// Observe found it, and for a read-only layer whether it refuses writes. A
+// publish heals the stack rather than ensuring it, so a mapping an earlier
+// driver left writable is found here or not at all.
+func (d *DMLinear) Healthy(ctx context.Context, _ volstack.Artifact) (bool, error) {
+	if d.stale {
+		return false, nil
+	}
+	if !d.cfg.ReadOnly {
+		return true, nil
+	}
+	readOnly, err := d.cfg.Mapper.ReadOnly(ctx, d.cfg.Name)
+	if err != nil {
+		return false, fmt.Errorf("dmLinear: read the mode of %s: %w", d.cfg.Name, err)
+	}
+	return readOnly, nil
+}
 
 // Heal re-points the mapping at the device below, which the fabric layer may
-// just have brought up on another subsystem.
+// just have brought up on another subsystem, and makes a read-only layer's
+// mapping refuse writes: a re-point keeps the mode the mapping had.
 func (d *DMLinear) Heal(ctx context.Context, below, _ volstack.Artifact) error {
 	if _, err := d.cfg.Mapper.Table(ctx, d.cfg.Name); errors.Is(err, devmapper.ErrNotFound) {
 		_, err := d.Ensure(ctx, below)
 		return err
 	}
-	return d.swap(ctx, below)
+	// A mapping already on the device below is not reloaded for a heal that is
+	// only about its mode, since a reload holds the consumer's I/O. Nothing
+	// below is still the swap's to refuse.
+	if _, ok := belowDevice(below); !ok || d.stale {
+		if err := d.swap(ctx, below); err != nil {
+			return err
+		}
+	}
+	return d.enforceReadOnly(ctx)
 }
 
 // Grow extends the mapping to the size of the device below, which the namespace

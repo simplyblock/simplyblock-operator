@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/simplyblock/atlas/blockdev"
+	"github.com/simplyblock/atlas/volstack"
 )
 
 func readOnlyLayer(m *fakeMapper) *DMLinear {
@@ -73,5 +74,49 @@ func TestAWritableLayerCreatesAWritableMapping(t *testing.T) {
 	}
 	if m.readOnly["sb-vol-1"] {
 		t.Fatal("a writable layer created a read-only mapping")
+	}
+}
+
+// healAsTheRunnerDoes is the runner's pass over one layer at publish: observe,
+// ask whether it is healthy, and heal it only if not.
+func healAsTheRunnerDoes(t *testing.T, layer *DMLinear, below volstack.Artifact) {
+	t.Helper()
+	ctx := context.Background()
+	_, own, err := layer.Observe(ctx, below)
+	if err != nil {
+		t.Fatal(err)
+	}
+	healthy, err := layer.Healthy(ctx, own)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !healthy {
+		if err := layer.Heal(ctx, below, own); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// Regression: #989 review (dm-linear heal). NodePublishVolume heals the stack
+// rather than ensuring it, and the heal never looked at the mapping's mode:
+// Healthy answered only whether the mapping points at the device below, and
+// Heal's re-point kept whatever mode the mapping had. A ReadOnlyMany volume
+// whose mapping an earlier driver left writable therefore stayed writable on
+// every republish, whether the mapping pointed at the right device or not.
+func TestAHealMakesAReadOnlyLayersWritableMappingReadOnly(t *testing.T) {
+	for name, writableOn := range map[string]volstack.Artifact{
+		"mapping on the device below":  nvmeBelow("/dev/nvme1n1", 259, 3),
+		"mapping on a replaced device": nvmeBelow("/dev/nvme2n1", 259, 9),
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := newFakeMapper()
+			if _, err := dmLayer(m).Ensure(context.Background(), writableOn); err != nil {
+				t.Fatal(err)
+			}
+			healAsTheRunnerDoes(t, readOnlyLayer(m), nvmeBelow("/dev/nvme1n1", 259, 3))
+			if !m.readOnly["sb-vol-1"] {
+				t.Fatalf("calls = %v, want the mapping read-only after the heal", m.calls)
+			}
+		})
 	}
 }
