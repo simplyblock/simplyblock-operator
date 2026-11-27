@@ -90,6 +90,8 @@ command -v oc >/dev/null || { echo "oc is not on PATH" >&2; exit 2; }
 
 # shellcheck source=../lib/classes.sh
 source "$SCRIPT_DIR/../lib/classes.sh"
+# shellcheck source=../lib/namespace.sh
+source "$SCRIPT_DIR/../lib/namespace.sh"
 # shellcheck source=../lib/results.sh
 source "$SCRIPT_DIR/../lib/results.sh"
 if [[ -z "${STORAGE_CLASS:-}" ]]; then
@@ -154,10 +156,7 @@ if [[ -n "${GROUP_SNAPSHOT_CLASS:-}" ]]; then
   oc get volumegroupsnapshotclass "$GROUP_SNAPSHOT_CLASS" >/dev/null
 fi
 # One run at a time: the LUN stress test expects nothing else beside it.
-if oc get namespace "$NAMESPACE" >/dev/null 2>&1; then
-  echo "namespace $NAMESPACE exists: another run is active or was not cleaned up" >&2
-  exit 2
-fi
+claim_run_namespace "$NAMESPACE" || exit 2
 
 TESTS_IMAGE="${TESTS_IMAGE:-$(oc adm release info --image-for=tests)}"
 VERSION="$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"

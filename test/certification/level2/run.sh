@@ -57,6 +57,8 @@ command -v oc >/dev/null || { echo "oc is not on PATH" >&2; exit 2; }
 
 # shellcheck source=../lib/classes.sh
 source "$SCRIPT_DIR/../lib/classes.sh"
+# shellcheck source=../lib/namespace.sh
+source "$SCRIPT_DIR/../lib/namespace.sh"
 if [[ -z "${STORAGE_CLASS:-}" ]]; then
   STORAGE_CLASS="$(find_class storageclass provisioner)" || {
     echo "set STORAGE_CLASS" >&2
@@ -80,10 +82,7 @@ VMI_TIMEOUT="${VMI_TIMEOUT:-5m}"
 GOLDEN_IMAGE_WAIT="${GOLDEN_IMAGE_WAIT:-2400}"
 
 # One run at a time: the checkup boots VMs and would measure another run's load.
-if oc get namespace "$NAMESPACE" >/dev/null 2>&1; then
-  echo "namespace $NAMESPACE exists: another run is active or was not cleaned up" >&2
-  exit 2
-fi
+claim_run_namespace "$NAMESPACE" || exit 2
 
 # The default virtualization class decides where golden images go and what the
 # checkup tests, so it has to be the class under test.

@@ -103,6 +103,8 @@ done
 
 # shellcheck source=../lib/classes.sh
 source "$SCRIPT_DIR/../lib/classes.sh"
+# shellcheck source=../lib/namespace.sh
+source "$SCRIPT_DIR/../lib/namespace.sh"
 # shellcheck source=../lib/results.sh
 source "$SCRIPT_DIR/../lib/results.sh"
 if [[ -z "${STORAGE_CLASS:-}" ]]; then
@@ -114,10 +116,7 @@ fi
 oc get storageclass "$STORAGE_CLASS" >/dev/null
 oc get volumesnapshotclass "$SNAPSHOT_CLASS" >/dev/null
 
-if oc get namespace "$NAMESPACE" >/dev/null 2>&1; then
-  echo "namespace $NAMESPACE exists: another run is active or was not cleaned up" >&2
-  exit 2
-fi
+claim_run_namespace "$NAMESPACE" || exit 2
 
 # The harness at the pinned commit: catalog, thresholds, and the two plans.
 HARNESS_DIR="$LEVEL3_DIR/.harness-$HARNESS_REF"
