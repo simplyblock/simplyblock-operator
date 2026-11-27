@@ -79,7 +79,24 @@ type ClusterDeploymentConfigValidator struct {
 	Decoder admission.Decoder
 }
 
+// Handle admits a document the checks below accept, and warns about the fields
+// an admitted document carries to its cluster to no effect.
 func (v *ClusterDeploymentConfigValidator) Handle(
+	ctx context.Context, req admission.Request,
+) admission.Response {
+	response := v.admit(ctx, req)
+	if !response.Allowed || (req.Operation != admissionv1.Create && req.Operation != admissionv1.Update) {
+		return response
+	}
+	config := &simplyblockv1alpha2.ClusterDeploymentConfig{}
+	if err := v.Decoder.Decode(req, config); err != nil || config.Spec.Cluster == nil {
+		return response
+	}
+	return response.WithWarnings(twoNodeTimingWarnings("spec.cluster.arbitration", config.Spec.Cluster.Arbitration)...)
+}
+
+// admit is the decision Handle reports, with the warnings left to Handle.
+func (v *ClusterDeploymentConfigValidator) admit(
 	ctx context.Context, req admission.Request,
 ) admission.Response {
 	if req.Operation != admissionv1.Create && req.Operation != admissionv1.Update {

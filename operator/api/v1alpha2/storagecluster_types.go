@@ -1169,8 +1169,7 @@ type StorageClusterSpec struct {
 	EnableArbitration *bool `json:"enableArbitration,omitempty"`
 
 	// Arbitration tunes the two-node arbitration that enableArbitration turns
-	// on. Omitted values take the arbiter's defaults. Only valid when
-	// clusterMode is Dual.
+	// on. Only valid when clusterMode is Dual.
 	// +optional
 	Arbitration *ArbitrationSpec `json:"arbitration,omitempty"`
 

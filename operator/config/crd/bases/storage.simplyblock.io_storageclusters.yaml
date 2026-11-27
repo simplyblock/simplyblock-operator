@@ -672,14 +672,15 @@ spec:
                 arbitration:
                   description: |-
                     Arbitration tunes the two-node arbitration that enableArbitration turns
-                    on. Omitted values take the arbiter's defaults. Only valid when
-                    clusterMode is Dual.
+                    on. Only valid when clusterMode is Dual.
                   properties:
                     holdMs:
                       description: |-
-                        HoldMs is how long a node holds writes after losing its peer before it
-                        acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                        (5000 ms), or clients fail I/O before the verdict arrives.
+                        HoldMs has no effect. The control plane holds writes for a fixed 2500 ms
+                        after a node loses its peer, and does not take this value.
+
+                        Deprecated: the field is kept so that manifests setting it still apply,
+                        and admission warns when it is set. Remove it.
                       format: int32
                       maximum: 4500
                       minimum: 500
@@ -697,9 +698,11 @@ spec:
                       type: boolean
                     leaseTtlMs:
                       description: |-
-                        LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                        matters while a node is holding; a healthy pair is never fenced by a
-                        late renewal.
+                        LeaseTtlMs has no effect. The control plane grants arbiter leases of a
+                        fixed 1500 ms, and does not take this value.
+
+                        Deprecated: the field is kept so that manifests setting it still apply,
+                        and admission warns when it is set. Remove it.
                       format: int32
                       maximum: 10000
                       minimum: 500

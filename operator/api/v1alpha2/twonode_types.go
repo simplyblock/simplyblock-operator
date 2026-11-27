@@ -50,21 +50,24 @@ const (
 )
 
 // ArbitrationSpec tunes the control plane's arbitration for a cluster of
-// exactly two storage nodes. All fields are optional; omitted values take the
-// arbiter's defaults.
+// exactly two storage nodes. All fields are optional.
 // +kubebuilder:validation:XValidation:rule="!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs < self.holdMs",message="leaseTtlMs must be shorter than holdMs"
 type ArbitrationSpec struct {
-	// HoldMs is how long a node holds writes after losing its peer before it
-	// acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-	// (5000 ms), or clients fail I/O before the verdict arrives.
+	// HoldMs has no effect. The control plane holds writes for a fixed 2500 ms
+	// after a node loses its peer, and does not take this value.
+	//
+	// Deprecated: the field is kept so that manifests setting it still apply,
+	// and admission warns when it is set. Remove it.
 	// +optional
 	// +kubebuilder:validation:Minimum=500
 	// +kubebuilder:validation:Maximum=4500
 	HoldMs *int32 `json:"holdMs,omitempty"`
 
-	// LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-	// matters while a node is holding; a healthy pair is never fenced by a
-	// late renewal.
+	// LeaseTtlMs has no effect. The control plane grants arbiter leases of a
+	// fixed 1500 ms, and does not take this value.
+	//
+	// Deprecated: the field is kept so that manifests setting it still apply,
+	// and admission warns when it is set. Remove it.
 	// +optional
 	// +kubebuilder:validation:Minimum=500
 	// +kubebuilder:validation:Maximum=10000

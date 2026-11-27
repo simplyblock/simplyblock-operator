@@ -9,12 +9,14 @@ package webhook
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	admissionv1 "k8s.io/api/admission/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -172,5 +174,48 @@ func TestUpdatingTheOnlyClusterIsAdmitted(t *testing.T) {
 	if !response.Allowed {
 		t.Fatalf("an update to the only cluster of a namespace was refused: %s",
 			response.Result.Message)
+	}
+}
+
+// holdMs and leaseTtlMs are admitted, so manifests that set them still apply,
+// and the admission says they have no effect. An arbitration block without them
+// draws no warning.
+//
+// Regression: 2026-11-26-two-node-timings-never-sent — the operator accepted
+// and validated both fields and sent neither, and the control plane holds for
+// a fixed 2500 ms and grants 1500 ms leases, so an administrator tuning them
+// believed the cluster ran at timings it never did.
+func TestTwoNodeTimingsAreAdmittedWithAWarning(t *testing.T) {
+	scheme := newClusterScheme(t)
+	validator := &StorageClusterValidator{
+		Client:  fake.NewClientBuilder().WithScheme(scheme).Build(),
+		Decoder: admission.NewDecoder(scheme),
+	}
+	dual := func(arbitration *simplyblockv1alpha2.ArbitrationSpec) *simplyblockv1alpha2.StorageCluster {
+		cluster := clusterAt("edge", "pair")
+		cluster.Spec.ClusterMode = simplyblockv1alpha2.ClusterModeDual
+		cluster.Spec.EnableArbitration = ptr.To(true)
+		cluster.Spec.Arbitration = arbitration
+		return cluster
+	}
+
+	for _, op := range []admissionv1.Operation{admissionv1.Create, admissionv1.Update} {
+		response := validator.Handle(context.Background(), clusterRequest(t, op, dual(
+			&simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(3000)), LeaseTtlMs: ptr.To(int32(2000))})))
+		if !response.Allowed {
+			t.Fatalf("%s: a cluster setting holdMs was refused: %s", op, response.Result.Message)
+		}
+		warnings := strings.Join(response.Warnings, "\n")
+		for _, field := range []string{"holdMs", "leaseTtlMs", "2500", "1500"} {
+			if !strings.Contains(warnings, field) {
+				t.Errorf("%s: the warnings do not mention %s: %q", op, field, response.Warnings)
+			}
+		}
+	}
+
+	response := validator.Handle(context.Background(), clusterRequest(t, admissionv1.Create,
+		dual(&simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)})))
+	if len(response.Warnings) != 0 {
+		t.Errorf("an arbitration block without timings drew warnings: %q", response.Warnings)
 	}
 }
