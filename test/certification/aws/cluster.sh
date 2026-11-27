@@ -415,7 +415,15 @@ cmd_install_simplyblock() {
   branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD | tr '/' '-')"
   operator_image="${OPERATOR_IMAGE:-registry.simplyblock.ai/simplyblock/simplyblock-operator:$branch}"
   simplyblock_image="${SIMPLYBLOCK_IMAGE:-public.ecr.aws/simply-block/simplyblock:main}"
-  echo "simplyblock: operator $operator_image, control plane $simplyblock_image"
+  # The control plane's own volumes go to the cluster's default class (gp3-csi
+  # on AWS). Left unnamed, the operator installs local-path for them, which
+  # then stands unused beside the default and fails CDI's StorageProfile
+  # check, the KubeVirt storage checkup included.
+  local control_plane_class
+  control_plane_class="$(oc_ get storageclass \
+    -o jsonpath='{range .items[?(@.metadata.annotations.storageclass\.kubernetes\.io/is-default-class=="true")]}{.metadata.name}{"\n"}{end}' | head -1)"
+  [[ -n "$control_plane_class" ]] || die "the cluster has no default StorageClass for the control plane's volumes"
+  echo "simplyblock: operator $operator_image, control plane $simplyblock_image, its volumes on $control_plane_class"
   KUBECONFIG="$KUBECONFIG_PATH" helm upgrade --install simplyblock-operator \
     "$REPO_ROOT/helm-charts/charts/simplyblock-operator" \
     --namespace simplyblock --create-namespace \
@@ -425,6 +433,7 @@ cmd_install_simplyblock() {
     --set image.simplyblock.repository="${simplyblock_image%:*}" \
     --set image.simplyblock.tag="${simplyblock_image##*:}" \
     --set snapshotcontroller.create=false \
+    --set controlplane.storageclass.name="$control_plane_class" \
     --set controlplane.observability.enabled=false
   build_storage_cluster
 }

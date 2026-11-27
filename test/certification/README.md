@@ -183,7 +183,10 @@ installer's node security group: the group allows only OpenShift's own ports,
 and simplyblock's control plane and NVMe-oF listeners use others. The rule
 admits the group itself and nothing outside it, and needs the AWS CLI. The step
 then installs this checkout's chart with the chart's snapshot controller turned
-off, since OpenShift runs its own. The operator turns the snapshotter's group
+off, since OpenShift runs its own, and with the control plane's volumes on the
+cluster's default StorageClass (`gp3-csi`). Left unnamed, the operator would
+install `local-path` for them, which fails CDI's StorageProfile check and with it
+the Level 2 checkup. The operator turns the snapshotter's group
 snapshot support off where the cluster serves no group snapshot API, which is
 OpenShift 4.x without the Tech Preview. The step then approves the discovery draft, and waits until
 the storage cluster is active. On OpenShift every worker reboots into the
