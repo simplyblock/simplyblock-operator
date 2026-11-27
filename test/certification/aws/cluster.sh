@@ -15,6 +15,11 @@
 #   ./cluster.sh kubeconfig           print the path of the cluster's kubeconfig
 #   ./cluster.sh destroy              remove the cluster and everything the installer created
 #
+# Every step logs to logs/<CLUSTER_NAME>/<step>-<UTC time>.log next to this
+# script, and the steps that run openshift-install also keep its debug log there
+# (openshift-install-<UTC time>.log). The logs outlive destroy, and the
+# kubeadmin password the installer prints is redacted in them.
+#
 # State lives in clusters/<CLUSTER_NAME>/ next to this script: the installer's
 # directory (with auth/kubeconfig and the metadata destroy needs) and a copy of
 # the configuration without the pull secret. Losing that directory strands the
@@ -61,6 +66,7 @@ VIRT_CHANNEL="${VIRT_CHANNEL:-stable}"
 STATE_DIR="$SCRIPT_DIR/clusters/$CLUSTER_NAME"
 INSTALL_DIR="$STATE_DIR/install"
 KUBECONFIG_PATH="$INSTALL_DIR/auth/kubeconfig"
+LOG_DIR="$SCRIPT_DIR/logs/$CLUSTER_NAME"
 POLL_SECONDS=20
 
 die() {
@@ -110,6 +116,30 @@ download_tools() {
   mkdir -p "$STATE_DIR"
   echo "$release" >"$STATE_DIR/ocp-version"
   echo "OpenShift $release"
+}
+
+# The installer prints the kubeadmin password at the end of an install; the
+# password stays in auth/kubeadmin-password and out of the logs.
+redact() {
+  perl -pe 'BEGIN { $| = 1 } s/(password:?\s*\\?"?)[^\s"\\]+/$1(redacted)/gi'
+}
+
+# Sends the rest of the step's output to a log file as well as the terminal.
+start_log() {
+  local log
+  mkdir -p "$LOG_DIR"
+  log="$LOG_DIR/$1-$(date -u +%Y%m%dT%H%M%SZ).log"
+  exec > >(redact | tee -a "$log") 2>&1
+  echo "log: $log"
+}
+
+# Copies openshift-install's own log, which is at debug level and far more
+# detailed than its terminal output, next to the step logs.
+keep_installer_log() {
+  local src="$INSTALL_DIR/.openshift_install.log"
+  [[ -r "$src" ]] || return 0
+  mkdir -p "$LOG_DIR"
+  redact <"$src" >"$LOG_DIR/openshift-install-$(date -u +%Y%m%dT%H%M%SZ).log"
 }
 
 installer() { "$(tools_dir)/openshift-install" "$@"; }
@@ -270,11 +300,22 @@ cmd_status() {
 cmd_destroy() {
   [[ -e "$INSTALL_DIR/metadata.json" ]] || die "no cluster $CLUSTER_NAME in $STATE_DIR"
   installer destroy cluster --dir "$INSTALL_DIR" --log-level=info
+  keep_installer_log
+  trap - EXIT
   rm -rf "$STATE_DIR"
   echo "cluster $CLUSTER_NAME removed"
 }
 
-case "${1:-}" in
+step="${1:-}"
+case "$step" in
+  create | wait | destroy)
+    start_log "$step"
+    trap keep_installer_log EXIT
+    ;;
+  install-virt | install-simplyblock) start_log "$step" ;;
+esac
+
+case "$step" in
   create) cmd_create ;;
   wait) cmd_wait ;;
   install-virt) cmd_install_virt ;;
