@@ -376,8 +376,9 @@ type NodeSet struct {
 // place of the document's cluster template. A field left unset takes the
 // template's value.
 type NodeSetClusterOverrides struct {
-	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
-	// this member.
+	// VCPUCount is the number of vCPUs allocated to SPDK on each worker of this
+	// member, divided between the worker's sockets and the storage nodes on
+	// each socket as the template's vcpuCount is.
 	// +kubebuilder:validation:Minimum=4
 	// +optional
 	VCPUCount *int32 `json:"vcpuCount,omitempty"`
@@ -444,13 +445,19 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:Maximum=500
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
-	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
-	// this cluster. It is stated here and nowhere below, because the control
-	// plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
-	// into every StorageNode.spec.config.sizing it writes. Required, because the
-	// StorageCluster's own field is.
+	// VCPUCount is the number of vCPUs allocated to SPDK on each worker of this
+	// cluster. It is stated here and nowhere below, because the control plane
+	// assumes it uniform across a cluster's workers. Every StorageNode the
+	// document creates carries a copy in spec.config.sizing. Required, because
+	// the StorageCluster's own field is.
+	//
+	// The budget is per worker, not per storage node. The control plane
+	// divides it evenly across the CPU sockets the worker's storage nodes use,
+	// the remainder going to the lower-numbered sockets, and then between the
+	// storage nodes on each socket. A worker running two storage nodes on one
+	// socket with a vcpuCount of 8 gives each of them 4.
 	// +kubebuilder:validation:Required
-	// The floor is 4 rather than a hardware limit: a node must carry one core
+	// The floor is 4 rather than a hardware limit: a worker must carry one core
 	// beyond this budget for the system, and the control plane's core layout
 	// assigns no NVMe-oF poller core at all for a 2-vCPU budget.
 	// +kubebuilder:validation:Minimum=4

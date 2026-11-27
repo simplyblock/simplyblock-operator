@@ -218,7 +218,8 @@ and the expansion stamps what those lists say onto the cluster it creates
 // +kubebuilder:validation:Maximum=75
 MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
-// VCPUCount is the number of vCPUs allocated to SPDK on each storage node.
+// VCPUCount is the number of vCPUs allocated to SPDK on each worker, divided
+// across its sockets and then between the storage nodes on each socket.
 // This is an explicit core count, not a percentage. Required: the core layout
 // it produces must match across the cluster, so it is stated rather than left
 // to a per-node heuristic.
@@ -1996,7 +1997,8 @@ type StorageClusterSpec struct {
 	// +kubebuilder:validation:Maximum=75
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
-	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node, as
+	// VCPUCount is the number of vCPUs allocated to SPDK on each worker, divided
+	// across its sockets and then between the storage nodes on each socket, as
 	// an explicit core count rather than a percentage. Unlike MaxSubsystemCount
 	// it is stamped onto a node at creation, into StorageNode.spec.config.sizing,
 	// because it describes the host that node runs on. Required: the core layout

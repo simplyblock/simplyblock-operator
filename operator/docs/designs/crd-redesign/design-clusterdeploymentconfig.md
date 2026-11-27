@@ -1578,8 +1578,9 @@ type ClusterTemplate struct {
 	// +kubebuilder:validation:Maximum=75
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount"`
 
-	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
-	// this cluster. It is stated here and nowhere below, because the control
+	// VCPUCount is the number of vCPUs allocated to SPDK on each worker of this
+	// cluster, divided across its sockets and then between the storage nodes on
+	// each socket. It is stated here and nowhere below, because the control
 	// plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
 	// into every StorageNode.spec.config.sizing it writes. Required, because the
 	// StorageCluster's own field is, and with the same floor.

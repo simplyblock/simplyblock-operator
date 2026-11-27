@@ -964,12 +964,18 @@ spec:
                     type: array
                   vcpuCount:
                     description: |-
-                      VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
-                      this cluster. It is stated here and nowhere below, because the control
-                      plane assumes it uniform across a cluster's nodes; CreatingNodes copies it
-                      into every StorageNode.spec.config.sizing it writes. Required, because the
-                      StorageCluster's own field is.
-                      The floor is 4 rather than a hardware limit: a node must carry one core
+                      VCPUCount is the number of vCPUs allocated to SPDK on each worker of this
+                      cluster. It is stated here and nowhere below, because the control plane
+                      assumes it uniform across a cluster's workers. Every StorageNode the
+                      document creates carries a copy in spec.config.sizing. Required, because
+                      the StorageCluster's own field is.
+
+                      The budget is per worker, not per storage node. The control plane
+                      divides it evenly across the CPU sockets the worker's storage nodes use,
+                      the remainder going to the lower-numbered sockets, and then between the
+                      storage nodes on each socket. A worker running two storage nodes on one
+                      socket with a vcpuCount of 8 gives each of them 4.
+                      The floor is 4 rather than a hardware limit: a worker must carry one core
                       beyond this budget for the system, and the control plane's core layout
                       assigns no NVMe-oF poller core at all for a 2-vCPU budget.
                     format: int32
@@ -1249,8 +1255,9 @@ spec:
                               [4, 1], [1, 2], [2, 2], [4, 2]]'
                         vcpuCount:
                           description: |-
-                            VCPUCount is the number of vCPUs allocated to SPDK on each storage node of
-                            this member.
+                            VCPUCount is the number of vCPUs allocated to SPDK on each worker of this
+                            member, divided between the worker's sockets and the storage nodes on
+                            each socket as the template's vcpuCount is.
                           format: int32
                           minimum: 4
                           type: integer

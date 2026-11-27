@@ -142,8 +142,12 @@ type JournalManagerSpec struct {
 // it is the same for every node of a cluster and is read from the cluster when the
 // node's configuration is generated.
 type StorageNodeSizing struct {
-	// VCPUCount is the number of vCPUs allocated to SPDK on this node, as an
-	// explicit core count rather than a percentage.
+	// VCPUCount is the number of vCPUs allocated to SPDK on this node's worker,
+	// as an explicit core count rather than a percentage. It is the cluster's
+	// vcpuCount: a budget for the whole worker, which the control plane divides
+	// evenly across the sockets in use and then between the storage nodes on
+	// each socket. A worker running two storage nodes on one socket with a
+	// vcpuCount of 8 gives each of them 4.
 	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Required
 	VCPUCount *int32 `json:"vcpuCount"`
