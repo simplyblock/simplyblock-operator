@@ -439,15 +439,24 @@ build_storage_cluster() {
     echo "storage cluster $active is active"
     return 0
   fi
-  ensure_discovery_run
-  wait_for "the discovery draft" 1800 discovery_draft_ready
-  draft="$(oc_ get clusterdeploymentconfig -n simplyblock -o name | head -1)"
-  echo "draft: $(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.message}')"
-  if [[ "$APPROVE_DRAFT" != "true" ]]; then
-    echo "APPROVE_DRAFT=$APPROVE_DRAFT: review $draft in namespace simplyblock and set spec.approved"
-    return 0
+  # A rerun after the approval, before the cluster is active, finds the
+  # approved document and goes on waiting for it; there is no draft to wait for.
+  draft="$(oc_ get clusterdeploymentconfig -n simplyblock \
+    -o jsonpath='{range .items[?(@.spec.approved==true)]}{.metadata.name}{"\n"}{end}' 2>/dev/null | head -1)"
+  if [[ -n "$draft" ]]; then
+    draft="clusterdeploymentconfig/$draft"
+    echo "$draft is approved already"
+  else
+    ensure_discovery_run
+    wait_for "the discovery draft" 1800 discovery_draft_ready
+    draft="$(oc_ get clusterdeploymentconfig -n simplyblock -o name | head -1)"
+    echo "draft: $(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.message}')"
+    if [[ "$APPROVE_DRAFT" != "true" ]]; then
+      echo "APPROVE_DRAFT=$APPROVE_DRAFT: review $draft in namespace simplyblock and set spec.approved"
+      return 0
+    fi
+    oc_ patch -n simplyblock "$draft" --type merge -p '{"spec":{"approved":true}}' >/dev/null
   fi
-  oc_ patch -n simplyblock "$draft" --type merge -p '{"spec":{"approved":true}}' >/dev/null
   wait_for "the storage cluster of $draft" 600 oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}'
   cluster="$(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}')"
   echo "building storage cluster $cluster"
