@@ -51,6 +51,8 @@
 #   APPROVE_DRAFT           true approves the discovery draft and waits for an active
 #                           storage cluster; false stops at the draft for a review (default true)
 #   STORAGE_WAIT            seconds to wait for the storage cluster to go active (default 7200)
+#   MAX_SUBSYSTEM_COUNT     NVMe-oF subsystems, so volumes, per storage node, set in the draft
+#                           (default 128: the 260 volumes of the LUN stress test on three nodes)
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -70,6 +72,7 @@ OWNER="${OWNER:-${USER:-unknown}}"
 VIRT_CHANNEL="${VIRT_CHANNEL:-stable}"
 APPROVE_DRAFT="${APPROVE_DRAFT:-true}"
 STORAGE_WAIT="${STORAGE_WAIT:-7200}"
+MAX_SUBSYSTEM_COUNT="${MAX_SUBSYSTEM_COUNT:-128}"
 
 STATE_DIR="$SCRIPT_DIR/clusters/$CLUSTER_NAME"
 INSTALL_DIR="$STATE_DIR/install"
@@ -455,7 +458,11 @@ build_storage_cluster() {
       echo "APPROVE_DRAFT=$APPROVE_DRAFT: review $draft in namespace simplyblock and set spec.approved"
       return 0
     fi
-    oc_ patch -n simplyblock "$draft" --type merge -p '{"spec":{"approved":true}}' >/dev/null
+    # The draft proposes 30 subsystems per storage node, one per volume, and the
+    # Level 1 LUN stress test alone puts 260 volumes on the cluster. The count
+    # is fixed when the cluster is created, so it is set in the draft.
+    oc_ patch -n simplyblock "$draft" --type merge \
+      -p "{\"spec\":{\"approved\":true,\"cluster\":{\"maxSubsystemCount\":$MAX_SUBSYSTEM_COUNT}}}" >/dev/null
   fi
   wait_for "the storage cluster of $draft" 600 oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}'
   cluster="$(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}')"

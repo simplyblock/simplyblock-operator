@@ -188,7 +188,12 @@ snapshot support off where the cluster serves no group snapshot API, which is
 OpenShift 4.x without the Tech Preview. The step then approves the discovery draft, and waits until
 the storage cluster is active. On OpenShift every worker reboots into the
 storage MachineConfig on the way, one at a time, so the step takes most of an
-hour. `APPROVE_DRAFT=false` stops at the draft for a review instead.
+hour. Before approving, it sets the draft's `maxSubsystemCount` to
+`MAX_SUBSYSTEM_COUNT` (default 128): every volume takes one NVMe-oF subsystem on
+its storage node, the Level 1 LUN stress test creates 260 volumes, and the
+draft's 30 per node stopped it at 90 on three nodes. The count is fixed when the
+cluster is created. `APPROVE_DRAFT=false` stops at the draft for a review
+instead.
 
 Two operator defects are worked around in the step, so that it runs without a
 person: a discovery run that has not appeared within five minutes is applied
