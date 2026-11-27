@@ -34,6 +34,7 @@ import (
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 	"github.com/simplyblock/simplyblock-operator/internal/controllers/stepclaim"
 	"github.com/simplyblock/simplyblock-operator/internal/cpinformer"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -397,7 +398,7 @@ func (r *StorageClusterOpsReconciler) failureDomainsReady(
 	if err != nil {
 		return false, fmt.Errorf("read the cluster's failure domains: %w", err)
 	}
-	reason := ActivationDomainCountViolation(StripeParityChunks(cluster.Spec.Stripe), hosts)
+	reason := ActivationDomainCountViolation(erasurecoding.SchemeOf(cluster.Spec.Stripe), hosts)
 	if reason == "" {
 		return true, nil
 	}

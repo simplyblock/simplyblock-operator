@@ -253,7 +253,7 @@ func zonedDocument(zones ...string) *simplyblockv1alpha2.ClusterDeploymentConfig
 }
 
 // The control plane refuses to activate a cluster in failure-domain mode with
-// fewer than parity+2 domains, after every node has been added: four workers
+// too few domains, after every node has been added: four workers
 // sharing zone default, as discovery on a single-zone lab drafted them, is the
 // case. The draft says so before approval.
 func TestFailureDomainsTheControlPlaneRefusesToActivateAreReported(t *testing.T) {

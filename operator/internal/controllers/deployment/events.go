@@ -42,7 +42,8 @@ const (
 	SiteMismatch = "SiteMismatch"
 	// FailureDomainLayout is a document creating a cluster in failure-domain
 	// mode whose domains the control plane refuses to activate: fewer than the
-	// stripe's parity plus two, or holding unequal numbers of workers.
+	// higher of the stripe's parity plus two and its data plus parity, or
+	// holding unequal numbers of workers.
 	FailureDomainLayout = "FailureDomainLayout"
 
 	// What the document says about erasure coding, which is the one part of a

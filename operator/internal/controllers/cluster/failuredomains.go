@@ -22,6 +22,7 @@ import (
 
 	simplyblockv1alpha1 "github.com/simplyblock/simplyblock-operator/api/v1alpha1"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/erasurecoding"
 	"github.com/simplyblock/simplyblock-operator/internal/utils"
 )
 
@@ -137,19 +138,16 @@ func RemovalBalanceViolation(counts map[int32]int) string {
 
 // ActivationDomainCountViolation validates the number of distinct failure
 // domains and the per-domain host balance for a fresh activation, mirroring
-// simplyblock_core's fd_activation_domain_count_violation so the two stay in
-// lockstep.
+// simplyblock_core's fd_activation_domain_count_violation and the equal-hosts
+// rule of cluster_activate so the two stay in lockstep.
 //
-// A two-domain layout can never absorb a second independent failure once one
-// domain is fully down, so a fresh activation requires npcs+2 distinct domains
-// — three for npcs=1, four for npcs=2 — with an equal host count in each. Below
-// npcs+1 domains even the initial static role-placement rotation is
-// structurally wrong; at exactly npcs+1 it is correct but has no spare capacity
-// for a later add or remove.
+// The domain floor is erasurecoding.Scheme.MinimumFailureDomains: the higher of
+// npcs+2, so a later add or remove has a spare domain to relocate a role onto,
+// and ndcs+npcs, so each chunk of a stripe has a domain of its own.
 //
 // It returns a human-readable reason when the cluster is not ready and the
 // empty string when it is.
-func ActivationDomainCountViolation(npcs int, hostDomains map[string]int32) string {
+func ActivationDomainCountViolation(scheme erasurecoding.Scheme, hostDomains map[string]int32) string {
 	if len(hostDomains) == 0 {
 		return "no storage nodes with a failure-domain assignment reported yet"
 	}
@@ -157,13 +155,8 @@ func ActivationDomainCountViolation(npcs int, hostDomains map[string]int32) stri
 	for _, domain := range hostDomains {
 		counts[domain]++
 	}
-	minDomains := npcs + 2
-	if len(counts) < minDomains {
-		return fmt.Sprintf(
-			"failure domains are enabled with npcs=%d, which requires at least "+
-				"%d distinct failure domains (2 domains is not supported at any "+
-				"npcs level); currently have %d",
-			npcs, minDomains, len(counts))
+	if refused := erasurecoding.DomainCountViolation(scheme, len(counts)); refused != "" {
+		return fmt.Sprintf("%s; currently have %d", refused, len(counts))
 	}
 	first := -1
 	for _, count := range counts {

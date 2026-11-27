@@ -15,10 +15,13 @@
 package cluster
 
 import (
+	"fmt"
+	"strconv"
 	"testing"
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	atlascp "github.com/simplyblock/atlas/controlplane"
 	"github.com/simplyblock/atlas/ptr"
@@ -248,5 +251,38 @@ func TestAnActivationAlreadyRunningIsNotRequestedFromRequesting(t *testing.T) {
 	}
 	if got := ops.Status.Step.State; got != string(stepAwaiting) {
 		t.Errorf("step = %q, want Awaiting", got)
+	}
+}
+
+// A 4+1 cluster whose eight nodes sit in four domains is held at the gate: the
+// control plane activates it only over five (data plus parity), so the call
+// would be refused with every node already added.
+//
+// Regression: 2026-11-26-fd-floor-ignores-data-chunks — the gate checked
+// parity plus two alone and requested the activation, which the control plane
+// refused.
+func TestAWideStripeIsNotActivatedOverTooFewDomains(t *testing.T) {
+	api := clusterReadingAt(utils.ClusterStatusUnready)
+	rec := &recorder{}
+	objects := []client.Object{
+		newTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
+			withFailureDomains(c)
+			c.Spec.Stripe.DataChunks = ptr.To(int32(4))
+		}, lockedBy(testOpsName)),
+		newTestOps(simplyblockv1alpha2.StorageClusterOpsActionActivate),
+	}
+	for i := 0; i < 8; i++ {
+		objects = append(objects, reportingDomain(
+			fmt.Sprintf("node-%d", i+1), fmt.Sprintf("worker-%d", i+1), strconv.Itoa(i%4)))
+	}
+	r := newOpsReconciler(t, api, rec, objects...)
+
+	reconcileOps(t, r, 6)
+	if api.activateCalls != 0 {
+		t.Errorf("the control plane was asked to activate %d times, want 0 over four domains",
+			api.activateCalls)
+	}
+	if !rec.has(FailureDomainNotReady) {
+		t.Errorf("the hold emitted no %s; events: %+v", FailureDomainNotReady, rec.events)
 	}
 }

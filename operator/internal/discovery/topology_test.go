@@ -391,7 +391,7 @@ func enablesFailureDomains(t *testing.T, zones ...string) (bool, string) {
 	return ptr.BoolFromOrFalse(template.Template.EnableFailureDomains), ""
 }
 
-// A fleet labeled into fewer domains than the stripe's parity plus two, or into
+// A fleet labeled into fewer domains than the stripe needs, or into
 // domains of unequal size, is one the control plane refuses to activate in
 // failure-domain mode, so the draft leaves the mode off and says why: four
 // workers sharing zone default, as a single-zone lab labels them, is the case.
