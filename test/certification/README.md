@@ -163,7 +163,7 @@ credentials come from the environment or `~/.aws`. The public Route 53 zone of
 `BASE_DOMAIN` (`api.ocp.cert.simplyblock.ai` by default) has to exist in the
 account, and the parent domain has to delegate to it with NS records. The
 installer reaches the new cluster's API by its public name, so without the
-delegation the install stops at "no such host".
+delegation the install stops at `no such host`.
 
 The installer's state, including the kubeconfig and the metadata `destroy` reads,
 lives in `aws/clusters/<CLUSTER_NAME>/`. That directory is the only record of
