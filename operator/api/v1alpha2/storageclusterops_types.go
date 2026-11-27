@@ -53,7 +53,7 @@ const (
 // StorageClusterOpsAction is the operation a StorageClusterOps performs. The
 // values are PascalCase, as every enum in the group is; v1alpha1 spelled them
 // lowercase and hyphenated, and the conversion maps between the two.
-// +kubebuilder:validation:Enum=Activate;Expand;Shutdown;Start;Restart;RollingRestart;CancelTask;GrowDevices
+// +kubebuilder:validation:Enum=Activate;Expand;Shutdown;Start;Restart;RollingRestart;CancelTask;GrowDevices;SwitchWriteProtection
 type StorageClusterOpsAction string
 
 const (
@@ -78,12 +78,17 @@ const (
 	// or a device that is not online, fails the operation without growing
 	// anything; a shrink also raises the control plane's device_shrunk alert.
 	StorageClusterOpsActionGrowDevices StorageClusterOpsAction = "GrowDevices"
+
+	// StorageClusterOpsActionSwitchWriteProtection moves the cluster's
+	// distribs from v1 to v2 write protection. The control plane switches every
+	// online node at runtime and stores v2 for the others, so nothing restarts.
+	StorageClusterOpsActionSwitchWriteProtection StorageClusterOpsAction = "SwitchWriteProtection"
 )
 
 // StorageClusterOpsStep is one step of a running cluster operation. The enum is
 // the union of every action's steps; which steps belong to which action is
 // declared by the graph rather than by this type.
-// +kubebuilder:validation:Enum=Requesting;Awaiting;ShuttingDown;Starting;CheckingPeers;ShuttingDownNode;RefreshingPod;AwaitingPod;RestartingNode;Rebalancing;Completed
+// +kubebuilder:validation:Enum=Requesting;Awaiting;ShuttingDown;Starting;CheckingPeers;ShuttingDownNode;RefreshingPod;AwaitingPod;RestartingNode;Rebalancing;Switching;Completed
 type StorageClusterOpsStep string
 
 const (
@@ -102,6 +107,10 @@ const (
 	StorageClusterOpsStepAwaitingPod      StorageClusterOpsStep = "AwaitingPod"
 	StorageClusterOpsStepRestartingNode   StorageClusterOpsStep = "RestartingNode"
 	StorageClusterOpsStepRebalancing      StorageClusterOpsStep = "Rebalancing"
+
+	// SwitchWriteProtection: the switch call, and the wait for the cluster to
+	// report V2. It follows CheckingPeers.
+	StorageClusterOpsStepSwitching StorageClusterOpsStep = "Switching"
 	// StorageClusterOpsStepCompleted is the terminal step of an operation that succeeded.
 	StorageClusterOpsStepCompleted StorageClusterOpsStep = "Completed"
 )
@@ -113,7 +122,29 @@ type RollingRestartSpec struct {
 	// node returns.
 	// +optional
 	RefreshSNodeAPI bool `json:"refreshSNodeAPI,omitempty"`
+
+	// Selection decides which nodes the walk restarts. All restarts every node
+	// that is not leaving the cluster. OutOfDate restarts only the nodes whose
+	// running images differ from their desired images, so a rerun continues
+	// where a stopped walk ended. Every restart carries the node's desired
+	// images whatever the selection.
+	// +kubebuilder:validation:Enum=All;OutOfDate
+	// +kubebuilder:default=All
+	// +optional
+	Selection RollingRestartSelection `json:"selection,omitempty"`
 }
+
+// RollingRestartSelection decides which nodes a rolling restart walks.
+// +kubebuilder:validation:Enum=All;OutOfDate
+type RollingRestartSelection string
+
+const (
+	// RollingRestartSelectionAll restarts every node not leaving the cluster.
+	RollingRestartSelectionAll RollingRestartSelection = "All"
+	// RollingRestartSelectionOutOfDate restarts only the nodes whose running
+	// images differ from their desired images.
+	RollingRestartSelectionOutOfDate RollingRestartSelection = "OutOfDate"
+)
 
 // CancelTaskSpec parameterizes the CancelTask action.
 type CancelTaskSpec struct {
@@ -234,6 +265,11 @@ type RollingRestartStatus struct {
 	// cluster belongs to its removal, and the walk sends it nothing.
 	// +optional
 	Skipped []string `json:"skipped,omitempty"`
+
+	// Current are the nodes an OutOfDate walk passed over because they already
+	// ran their desired images when the walk reached them, in walk order.
+	// +optional
+	Current []string `json:"current,omitempty"`
 }
 
 // StorageClusterOpsStatus is the observed state of one cluster operation.
@@ -244,7 +280,7 @@ type StorageClusterOpsStatus struct {
 
 	// Step is the position of the running action's state machine. The value is
 	// one of the steps the running action declares.
-	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','ShuttingDown','Starting','CheckingPeers','ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing','Completed']",message="unknown step"
+	// +kubebuilder:validation:XValidation:rule="!has(self.state) || self.state in ['Requesting','Awaiting','ShuttingDown','Starting','CheckingPeers','ShuttingDownNode','RefreshingPod','AwaitingPod','RestartingNode','Rebalancing','Switching','Completed']",message="unknown step"
 	// +optional
 	Step statemachine.KubeSnapshot `json:"step,omitempty"`
 

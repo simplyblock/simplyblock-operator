@@ -118,6 +118,14 @@ var (
 		[]string{"cluster"},
 	)
 
+	imagesOutOfDate = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "simplyblock_storagenode_images_out_of_date_state",
+			Help: "1 while the node runs images other than its desired ones, so a fleet left half upgraded is alertable.",
+		},
+		[]string{"cluster", "node"},
+	)
+
 	nodePhaseState = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "simplyblock_storagenode_phase_state",
@@ -171,6 +179,7 @@ var (
 
 func init() {
 	ctrlmetrics.Registry.MustRegister(
+		imagesOutOfDate,
 		operationDurationSeconds,
 		operationsTotal,
 		operationStepDurationSeconds,

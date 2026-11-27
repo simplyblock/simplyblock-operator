@@ -971,6 +971,9 @@ func readingFromDTO(dto subscriptions.NodeDTO) NodeReading {
 
 		SecondaryNodeID: dto.SecondaryNodeID,
 		TertiaryNodeID:  dto.TertiaryNodeID,
+
+		SpdkImage:      dto.SpdkImage,
+		SpdkProxyImage: dto.SpdkProxyImage,
 	}
 }
 

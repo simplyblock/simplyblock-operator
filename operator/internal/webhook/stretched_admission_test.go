@@ -68,6 +68,8 @@ var clusterWideActions = []simplyblockv1alpha2.StorageClusterOpsAction{
 	simplyblockv1alpha2.StorageClusterOpsActionStart,
 	simplyblockv1alpha2.StorageClusterOpsActionRestart,
 	simplyblockv1alpha2.StorageClusterOpsActionRollingRestart,
+	// The write-protection switch changes every distrib of the backend cluster.
+	simplyblockv1alpha2.StorageClusterOpsActionSwitchWriteProtection,
 }
 
 // U-14: a follower's cluster-wide actions run on its leader, which owns them.

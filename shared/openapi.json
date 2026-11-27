@@ -12625,7 +12625,14 @@
             "title": "Region"
           },
           "endpoint": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "title": "Endpoint"
           },
           "secondary_target": {
@@ -12919,7 +12926,14 @@
             "title": "Region"
           },
           "endpoint": {
-            "type": "string",
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "string"
+              }
+            ],
             "title": "Endpoint"
           },
           "secondary_target": {

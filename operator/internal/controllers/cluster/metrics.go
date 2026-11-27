@@ -106,6 +106,22 @@ var (
 		[]string{"cluster"},
 	)
 
+	rollingRestartNodesCurrentTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_storagecluster_rolling_restart_nodes_current_total",
+			Help: "Nodes an OutOfDate rolling restart passed over because they already ran their desired images.",
+		},
+		[]string{"cluster"},
+	)
+
+	rollingRestartImageMismatchTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "simplyblock_storagecluster_rolling_restart_image_mismatch_total",
+			Help: "Restarts after which a node came back on images other than its desired ones.",
+		},
+		[]string{"cluster"},
+	)
+
 	rollingRestartNodeCount = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
 			Name: "simplyblock_storagecluster_rolling_restart_node_count",
@@ -153,6 +169,8 @@ func init() {
 		rollingRestartPeerHoldSeconds,
 		rollingRestartNodeIndex,
 		rollingRestartNodeCount,
+		rollingRestartNodesCurrentTotal,
+		rollingRestartImageMismatchTotal,
 		clusterPhaseState,
 		superclusterMembers,
 		superclusterCapacityBytes,

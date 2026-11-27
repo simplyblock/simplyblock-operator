@@ -1031,8 +1031,10 @@ func (r *StorageNodeReconciler) syncStatus(
 	wasOnline := node.Status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline
 	sample, sampled := r.capacitySample(ctx, cluster.Status.UUID, node.Status.UUID)
 
+	outOfDate := false
 	err = r.writeStatus(ctx, node, func(status *simplyblockv1alpha2.StorageNodeStatus) {
 		applyReading(status, reading)
+		outOfDate = applyImages(status, node, cluster, reading)
 		status.Phase = phaseOf(reading)
 		// A node on a network is not online until the CSI node plugins reach its
 		// listener: a volume cannot attach to one they cannot reach.
@@ -1055,6 +1057,13 @@ func (r *StorageNodeReconciler) syncStatus(
 		return ctrl.Result{RequeueAfter: nodeRetry}, err
 	}
 
+	observeImages(node)
+	if outOfDate {
+		r.emit(node, corev1.EventTypeNormal, ImageOutOfDate,
+			fmt.Sprintf("Node %s runs %s and %s, and its desired images are %s and %s; its next restart moves it",
+				node.Status.UUID, node.Status.SpdkImage, node.Status.SpdkProxyImage,
+				node.Status.DesiredSpdkImage, node.Status.DesiredSpdkProxyImage))
+	}
 	if !wasOnline && node.Status.Phase == simplyblockv1alpha2.StorageNodePhaseOnline {
 		r.emit(node, corev1.EventTypeNormal, NodeOnline,
 			fmt.Sprintf("Node %s is online and carrying its share", node.Status.UUID))

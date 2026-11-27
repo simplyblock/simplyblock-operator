@@ -75,6 +75,12 @@ type NodeReading struct {
 	// there as well.
 	SecondaryNodeID string `json:"secondary_node_id"`
 	TertiaryNodeID  string `json:"tertiary_node_id"`
+
+	// SpdkImage and SpdkProxyImage are the images the control plane starts the
+	// node with: those of its last add or restart. Empty from a control plane
+	// that does not report them, which says nothing about what the node runs.
+	SpdkImage      string `json:"spdk_image"`
+	SpdkProxyImage string `json:"spdk_proxy_image"`
 }
 
 // The lifecycle values the control plane reports, in its own spelling. They are
@@ -138,6 +144,12 @@ type RestartParams struct {
 	Force          bool     `json:"force,omitempty"`
 	ReattachVolume bool     `json:"reattach_volume,omitempty"`
 	NewSsdPcie     []string `json:"new_ssd_pcie,omitempty"`
+
+	// SpdkImage and SpdkProxyImage are the images to start the node on, the
+	// node's desired ones (design-release-upgrade.md §5.2). Empty keeps the
+	// images the control plane last started it with.
+	SpdkImage      string `json:"spdk_image,omitempty"`
+	SpdkProxyImage string `json:"spdk_proxy_image,omitempty"`
 }
 
 // TaskReading is a control-plane task as far as a node reads it.

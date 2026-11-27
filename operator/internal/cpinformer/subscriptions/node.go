@@ -48,6 +48,10 @@ type NodeDTO struct {
 	// lvstore replicas, empty when it has none.
 	SecondaryNodeID string `json:"secondary_node_id"`
 	TertiaryNodeID  string `json:"tertiary_node_id"`
+	// SpdkImage and SpdkProxyImage are the images the control plane starts the
+	// node with, empty from a control plane that does not report them.
+	SpdkImage      string `json:"spdk_image"`
+	SpdkProxyImage string `json:"spdk_proxy_image"`
 }
 
 // NodeSubscription streams a cluster's storage nodes, decodes them into an

@@ -164,6 +164,10 @@ func (r *StorageNodeOpsReconciler) migrateRelocate(
 		Force:          force,
 		ReattachVolume: boolValue(ops.Spec.ReattachVolume),
 		NewSsdPcie:     ops.Spec.MigrateParams().NewSsdPcie,
+		// The node comes up on the target on its desired images, which is the
+		// restart that puts it there.
+		SpdkImage:      node.Status.DesiredSpdkImage,
+		SpdkProxyImage: node.Status.DesiredSpdkProxyImage,
 	}
 	_, err = r.once(ctx, ops, func() error {
 		if err := r.API.RestartNode(ctx, clusterID, nodeID, params); err != nil {

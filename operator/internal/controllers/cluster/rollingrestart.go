@@ -60,6 +60,22 @@ const (
 // rather than a restart.
 var errNodeSkipped = errors.New("the node left the cluster after the walk was planned")
 
+// walkOutcome is how the walk left a node.
+type walkOutcome int
+
+const (
+	nodeRestarted walkOutcome = iota
+	nodeSkipped
+	nodeCurrent
+)
+
+// errNodeCurrent is a planned node an OutOfDate walk passes over because it
+// already runs its desired images when the walk reaches it: another operation,
+// or the control plane itself, restarted it in the meantime. It advances the
+// walk at once and is recorded as current rather than skipped, because a node
+// that needed nothing and a node that left the cluster are different outcomes.
+var errNodeCurrent = errors.New("the node already runs its desired images")
+
 // performNodeStep runs one step of the rolling restart against the node the
 // walk is currently on.
 //
@@ -99,6 +115,18 @@ func (r *StorageClusterOpsReconciler) performNodeStep(
 		return false, errNodeSkipped
 	}
 
+	// An OutOfDate walk checks each node again when it reaches it, before
+	// touching it: a node that became current since the plan is passed over.
+	if current == stepCheckingPeers && selectionOf(ops) == simplyblockv1alpha2.RollingRestartSelectionOutOfDate {
+		objects, err := r.nodeObjects(ctx, ops)
+		if err != nil {
+			return false, err
+		}
+		if object, ok := objects[nodeID]; ok && imagesCurrent(object) {
+			return false, errNodeCurrent
+		}
+	}
+
 	switch current {
 	case stepCheckingPeers:
 		return r.checkPeers(ops, nodes, nodeID)
@@ -131,12 +159,38 @@ func (r *StorageClusterOpsReconciler) planWalk(
 	if err != nil {
 		return err
 	}
+	outOfDate := selectionOf(ops) == simplyblockv1alpha2.RollingRestartSelectionOutOfDate
+	var objects map[string]*simplyblockv1alpha2.StorageNode
+	if outOfDate {
+		if objects, err = r.nodeObjects(ctx, ops); err != nil {
+			return err
+		}
+	}
+
 	planned := make([]string, 0, len(nodes))
+	reported := false
 	for _, node := range nodes {
 		if utils.NodeIsLeaving(lower(node.Status)) {
 			continue
 		}
+		if outOfDate {
+			object, ok := objects[node.UUID]
+			if !ok || object.Status.ImagesCurrent == nil {
+				continue
+			}
+			reported = true
+			if *object.Status.ImagesCurrent {
+				continue
+			}
+		}
 		planned = append(planned, node.UUID)
+	}
+	// Without the images the control plane reports, no node can be told to be
+	// out of date, and an empty walk would claim a fleet that may be anything
+	// but current. The selection that works without them is the one to use.
+	if outOfDate && !reported && len(nodes) > 0 {
+		return fatalf("the control plane does not report node images, so no node can be " +
+			"found out of date; use selection All")
 	}
 	rollingRestartNodeCount.WithLabelValues(ops.Spec.ClusterRef).Set(float64(len(planned)))
 	rollingRestartNodeIndex.WithLabelValues(ops.Spec.ClusterRef).Set(0)
@@ -172,6 +226,7 @@ func (r *StorageClusterOpsReconciler) storageNodes(
 		for _, dto := range cached {
 			nodes = append(nodes, utils.NodeStatusResponse{
 				UUID: dto.ID, Status: dto.Status, IP: dto.ManagementIP,
+				SpdkImage: dto.SpdkImage, SpdkProxyImage: dto.SpdkProxyImage,
 			})
 		}
 		return nodes, nil
@@ -365,14 +420,20 @@ func (r *StorageClusterOpsReconciler) restartNode(
 	if !listed {
 		return true, nil
 	}
+	objects, err := r.nodeObjects(ctx, ops)
+	if err != nil {
+		return false, err
+	}
+	desired := desiredImagesOf(objects[nodeID])
+
 	switch status {
 	case utils.NodeStatusOnline:
-		return true, nil
+		return true, r.verifyImages(ops, nodes, nodeID, desired)
 	case utils.NodeStatusInRestart:
 		return false, nil
 	}
 	claimed, err := r.once(ctx, ops, func() error {
-		if err := r.API.RestartNode(ctx, clusterID, nodeID); err != nil {
+		if err := r.API.RestartNode(ctx, clusterID, nodeID, desired); err != nil {
 			return fmt.Errorf("restart node %s: %w", nodeID, err)
 		}
 		return nil
@@ -406,33 +467,44 @@ func (r *StorageClusterOpsReconciler) awaitRebalance(
 // IsTerminal useless. Reset also clears the deadline, which is what gives each
 // node its own budget per step rather than one deadline covering the fleet.
 //
-// skipped says the node was passed over rather than restarted. It is recorded
-// in status.rollingRestart.skipped in the same write that moves the index, and
-// announced as a skip, so neither the events nor the success message count it
-// among the restarted nodes.
+// The outcome says how the walk left the node. A skipped node and a current one
+// were passed over rather than restarted, and each is recorded in its own list
+// of status.rollingRestart in the same write that moves the index and announced
+// as what it is, so neither the events nor the success message count it among
+// the restarted nodes.
 func (r *StorageClusterOpsReconciler) advanceWalk(
 	ctx context.Context,
 	ops *simplyblockv1alpha2.StorageClusterOps,
 	machine *statemachine.Machine[step],
-	skipped bool,
+	outcome walkOutcome,
 ) (ctrl.Result, error) {
 	walk := walkOf(ops)
 	next := walk.NodeIndex + 1
 	finished := walk.Nodes[walk.NodeIndex]
 
-	if skipped {
+	switch outcome {
+	case nodeSkipped:
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 			NodeSkipped, NodeSkipped,
 			"Node %d/%d (%s) was skipped: it left the cluster after the walk was planned",
 			next, len(walk.Nodes), finished)
-	} else {
+	case nodeCurrent:
+		rollingRestartNodesCurrentTotal.WithLabelValues(ops.Spec.ClusterRef).Inc()
+		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
+			NodeCurrent, NodeCurrent,
+			"Node %d/%d (%s) was passed over: it already runs its desired images",
+			next, len(walk.Nodes), finished)
+	default:
 		r.Recorder.Eventf(ops, nil, corev1.EventTypeNormal,
 			NodeRestarted, NodeRestarted,
 			"Node %d/%d (%s) was restarted", next, len(walk.Nodes), finished)
 	}
 	recordSkip := func(status *simplyblockv1alpha2.StorageClusterOpsStatus) {
-		if skipped && !slices.Contains(status.RollingRestart.Skipped, finished) {
+		switch {
+		case outcome == nodeSkipped && !slices.Contains(status.RollingRestart.Skipped, finished):
 			status.RollingRestart.Skipped = append(status.RollingRestart.Skipped, finished)
+		case outcome == nodeCurrent && !slices.Contains(status.RollingRestart.Current, finished):
+			status.RollingRestart.Current = append(status.RollingRestart.Current, finished)
 		}
 	}
 
@@ -603,3 +675,84 @@ func walkMessage(ops *simplyblockv1alpha2.StorageClusterOps, current string) str
 // need rather than for what it does, because every comparison against them has
 // to make the same allowance.
 func lower(status string) string { return strings.ToLower(status) }
+
+// selectionOf is the walk's selection, All when the operation names none.
+func selectionOf(ops *simplyblockv1alpha2.StorageClusterOps) simplyblockv1alpha2.RollingRestartSelection {
+	if ops.Spec.RollingRestart == nil || ops.Spec.RollingRestart.Selection == "" {
+		return simplyblockv1alpha2.RollingRestartSelectionAll
+	}
+	return ops.Spec.RollingRestart.Selection
+}
+
+// nodeObjects are the operation's cluster's StorageNode objects by the
+// control-plane UUID they back. It is where a node's desired images are read:
+// its own reconciler resolves them, and the walk carries them into each restart.
+func (r *StorageClusterOpsReconciler) nodeObjects(
+	ctx context.Context, ops *simplyblockv1alpha2.StorageClusterOps,
+) (map[string]*simplyblockv1alpha2.StorageNode, error) {
+	var list simplyblockv1alpha2.StorageNodeList
+	if err := r.List(ctx, &list, client.InNamespace(ops.Namespace)); err != nil {
+		return nil, fmt.Errorf("list the storage nodes of cluster %s: %w", ops.Spec.ClusterRef, err)
+	}
+	out := make(map[string]*simplyblockv1alpha2.StorageNode, len(list.Items))
+	for i := range list.Items {
+		node := &list.Items[i]
+		if node.Spec.ClusterRef == ops.Spec.ClusterRef && node.Status.UUID != "" {
+			out[node.Status.UUID] = node
+		}
+	}
+	return out, nil
+}
+
+// imagesCurrent is whether the node's reconciler found it on its desired
+// images. Unknown is not current.
+func imagesCurrent(node *simplyblockv1alpha2.StorageNode) bool {
+	return node.Status.ImagesCurrent != nil && *node.Status.ImagesCurrent
+}
+
+// desiredImagesOf are the images a restart of the node asks for. A node with no
+// object, or one whose reconciler resolved nothing, asks for none, and the
+// control plane keeps what the node ran.
+func desiredImagesOf(node *simplyblockv1alpha2.StorageNode) NodeImages {
+	if node == nil {
+		return NodeImages{}
+	}
+	return NodeImages{
+		SpdkImage:      node.Status.DesiredSpdkImage,
+		SpdkProxyImage: node.Status.DesiredSpdkProxyImage,
+	}
+}
+
+// verifyImages fails the walk when a node came back on images other than the
+// ones its restart asked for. A node the control plane silently started on
+// something else is not one the walk may count as moved, and the next node is
+// better left where it is until somebody has looked. A control plane that
+// reports no images cannot be checked, and the walk carries on.
+func (r *StorageClusterOpsReconciler) verifyImages(
+	ops *simplyblockv1alpha2.StorageClusterOps,
+	nodes []utils.NodeStatusResponse,
+	nodeID string,
+	desired NodeImages,
+) error {
+	var running NodeImages
+	for _, node := range nodes {
+		if node.UUID == nodeID {
+			running = NodeImages{SpdkImage: node.SpdkImage, SpdkProxyImage: node.SpdkProxyImage}
+		}
+	}
+	if running == (NodeImages{}) {
+		return nil
+	}
+	for _, pair := range [][2]string{
+		{desired.SpdkImage, running.SpdkImage},
+		{desired.SpdkProxyImage, running.SpdkProxyImage},
+	} {
+		if pair[0] != "" && pair[0] != pair[1] {
+			rollingRestartImageMismatchTotal.WithLabelValues(ops.Spec.ClusterRef).Inc()
+			r.Recorder.Eventf(ops, nil, corev1.EventTypeWarning, ImageMismatch, ImageMismatch,
+				"Node %s came back on %s, expected %s", nodeID, pair[1], pair[0])
+			return fatalf("node %s came back on %s, expected %s", nodeID, pair[1], pair[0])
+		}
+	}
+	return nil
+}

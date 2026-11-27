@@ -46,6 +46,7 @@ const (
 	stepAwaitingPod      = simplyblockv1alpha2.StorageClusterOpsStepAwaitingPod
 	stepRestartingNode   = simplyblockv1alpha2.StorageClusterOpsStepRestartingNode
 	stepRebalancing      = simplyblockv1alpha2.StorageClusterOpsStepRebalancing
+	stepSwitching        = simplyblockv1alpha2.StorageClusterOpsStepSwitching
 )
 
 // How long each step may take before it is reported as stuck.
@@ -115,6 +116,23 @@ func graphs() statemachine.MultiConfig[step] {
 		// GrowDevices is one synchronous call, so its wait is for the cluster
 		// to be active again, which it never stopped being.
 		action(simplyblockv1alpha2.StorageClusterOpsActionGrowDevices): requestAndWait(),
+
+		// SwitchWriteProtection waits for every node to be online, then makes
+		// the switch and waits for the cluster to report v2. It restarts
+		// nothing: the control plane switches online nodes at runtime and
+		// stores v2 for the others. Only the peer check is abortable, because
+		// a switch once made is the cluster's whatever this object says.
+		action(simplyblockv1alpha2.StorageClusterOpsActionSwitchWriteProtection): {
+			Initial: stepCheckingPeers,
+			States: map[step]statemachine.StateDef[step]{
+				stepCheckingPeers: {
+					To:        []step{stepSwitching},
+					Abortable: true,
+					OnEnter:   deadline(checkingPeersDeadline),
+				},
+				stepSwitching: {OnEnter: deadline(awaitingDeadline)},
+			},
+		},
 
 		// Restart sequences a shutdown and a start, because the control plane
 		// offers no restart of its own (§9). A server-side one would collapse
@@ -187,6 +205,8 @@ var initialDeadlines = map[statemachine.Action]time.Duration{
 	action(simplyblockv1alpha2.StorageClusterOpsActionGrowDevices):    growDevicesDeadline,
 	action(simplyblockv1alpha2.StorageClusterOpsActionRestart):        awaitingDeadline,
 	action(simplyblockv1alpha2.StorageClusterOpsActionRollingRestart): checkingPeersDeadline,
+
+	action(simplyblockv1alpha2.StorageClusterOpsActionSwitchWriteProtection): checkingPeersDeadline,
 }
 
 // Which steps an abort stops cleanly is declared on the states above, because

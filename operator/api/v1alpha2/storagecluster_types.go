@@ -630,6 +630,21 @@ type StorageNodesSpec struct {
 	// +optional
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
+	// SpdkImage is the SPDK image every storage node of this cluster runs,
+	// unless the node's own spec.config.spdkImage overrides it. Unset follows
+	// the control plane's default SPDK image (status.defaultSpdkImage), so a
+	// cluster that states no image moves with its control plane. A change takes
+	// effect at each node's next restart, and nothing restarts a node because
+	// it changed.
+	// +optional
+	SpdkImage crdtypes.ImageReference `json:"spdkImage,omitempty"`
+
+	// SpdkProxyImage is the SPDK proxy image every storage node of this cluster
+	// runs, unless the node's own spec.config.spdkProxyImage overrides it. It
+	// resolves like SpdkImage, against status.defaultSpdkProxyImage.
+	// +optional
+	SpdkProxyImage crdtypes.ImageReference `json:"spdkProxyImage,omitempty"`
+
 	// MgmtInterface is the management network interface storage nodes bind.
 	// +optional
 	// +k8s:immutable
@@ -1293,6 +1308,17 @@ type ProvisioningSlot struct {
 	TakenAt metav1.Time `json:"takenAt,omitempty"`
 }
 
+// WriteProtectionVersion is the distrib write-protection scheme a cluster runs.
+// +kubebuilder:validation:Enum=V1;V2
+type WriteProtectionVersion string
+
+const (
+	// WriteProtectionV1 is the scheme of clusters created before v2 existed.
+	WriteProtectionV1 WriteProtectionVersion = "V1"
+	// WriteProtectionV2 is the scheme every current cluster is created with.
+	WriteProtectionV2 WriteProtectionVersion = "V2"
+)
+
 type StorageClusterStatus struct {
 	// Phase is the operator's own view of this cluster.
 	// +optional
@@ -1473,6 +1499,22 @@ type StorageClusterStatus struct {
 	// from, so a stale status can be told from a current one.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
+	// WriteProtection is the distrib write-protection scheme the control plane
+	// reports for the cluster. A StorageClusterOps SwitchWriteProtection moves
+	// it from V1 to V2. Empty until the control plane has reported it.
+	// +optional
+	WriteProtection WriteProtectionVersion `json:"writeProtection,omitempty"`
+
+	// DefaultSpdkImage is the SPDK image the control plane starts a node with
+	// when nothing names one, which a node's desired image falls back to.
+	// +optional
+	DefaultSpdkImage string `json:"defaultSpdkImage,omitempty"`
+
+	// DefaultSpdkProxyImage is the SPDK proxy image the control plane starts a
+	// node with when nothing names one.
+	// +optional
+	DefaultSpdkProxyImage string `json:"defaultSpdkProxyImage,omitempty"`
 }
 
 // PlacementStrategy is how the operator ranks the members of a supercluster

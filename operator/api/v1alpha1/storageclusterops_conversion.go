@@ -53,6 +53,12 @@ const (
 	annoOpsAbort     = "storage.simplyblock.io/conversion-spec.abort"
 	annoOpsCancelTsk = "storage.simplyblock.io/conversion-spec.cancelTask"
 	annoOpsSkipped   = "storage.simplyblock.io/conversion-status.rollingRestart.skipped"
+
+	// The walk's selection and the nodes an OutOfDate walk found current have
+	// no v1alpha1 field. Losing the selection would turn a write back into a
+	// walk that restarts every node.
+	annoOpsSelection = "storage.simplyblock.io/conversion-spec.rollingRestart.selection"
+	annoOpsCurrent   = "storage.simplyblock.io/conversion-status.rollingRestart.current"
 )
 
 // storageClusterOpsActionToHub maps this version's lowercase, hyphenated
@@ -200,6 +206,8 @@ func stashOpsHubOnly(meta *metav1.ObjectMeta, src *v1alpha2.StorageClusterOps) e
 		{annoOpsObserved, src.Status.ObservedGeneration},
 		{annoOpsCancelTsk, src.Spec.CancelTask},
 		{annoOpsSkipped, skippedOf(src.Status.RollingRestart)},
+		{annoOpsSelection, selectionOf(src.Spec.RollingRestart)},
+		{annoOpsCurrent, currentOf(src.Status.RollingRestart)},
 	} {
 		if err := stash(meta, field.key, field.value); err != nil {
 			return err
@@ -279,6 +287,21 @@ func restoreOpsHubOnly(meta *metav1.ObjectMeta, dst *v1alpha2.StorageClusterOps)
 		dst.Status.RollingRestart.Skipped = skipped
 	}
 
+	var selection v1alpha2.RollingRestartSelection
+	if err := unstash(meta, annoOpsSelection, &selection); err != nil {
+		return err
+	}
+	if selection != "" && dst.Spec.RollingRestart != nil {
+		dst.Spec.RollingRestart.Selection = selection
+	}
+	var current []string
+	if err := unstash(meta, annoOpsCurrent, &current); err != nil {
+		return err
+	}
+	if len(current) > 0 && dst.Status.RollingRestart != nil {
+		dst.Status.RollingRestart.Current = current
+	}
+
 	if phase := unstashRemoved(meta, annoOpsPhase); phase != "" {
 		dst.Status.Phase = v1alpha2.StorageClusterOpsPhase(phase)
 	}
@@ -317,4 +340,23 @@ func stashOpsFlag(meta *metav1.ObjectMeta, key string, value bool) {
 		return
 	}
 	stashRemoved(meta, key, stashedTrue)
+}
+
+// selectionOf is the walk's selection, which this version cannot state. Empty
+// when the operation names none, so an operation that never chose one is given
+// no annotation.
+func selectionOf(spec *v1alpha2.RollingRestartSpec) v1alpha2.RollingRestartSelection {
+	if spec == nil {
+		return ""
+	}
+	return spec.Selection
+}
+
+// currentOf is the walk's record of the nodes it passed over as current, which
+// this version's two lists cannot carry any more than they carry a skip.
+func currentOf(walk *v1alpha2.RollingRestartStatus) []string {
+	if walk == nil {
+		return nil
+	}
+	return walk.Current
 }

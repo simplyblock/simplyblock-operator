@@ -80,6 +80,8 @@ var undeletableClusterSteps = map[simplyblockv1alpha2.StorageClusterOpsStep]stri
 		"replacement pod is still coming up",
 	simplyblockv1alpha2.StorageClusterOpsStepRestartingNode: "the node is offline and is being " +
 		"brought back from the shutdown this walk performed",
+	simplyblockv1alpha2.StorageClusterOpsStepSwitching: "the write-protection switch may already " +
+		"have reached the nodes, and this operation is what waits for the cluster to report it",
 }
 
 func (v *StorageClusterOpsValidator) Handle(

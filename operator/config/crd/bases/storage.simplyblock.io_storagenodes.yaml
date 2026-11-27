@@ -404,6 +404,9 @@ spec:
         - jsonPath: .status.health
           name: Health
           type: boolean
+        - jsonPath: .status.imagesCurrent
+          name: Images
+          type: boolean
         - jsonPath: .status.uuid
           name: UUID
           priority: 1
@@ -812,6 +815,18 @@ spec:
                     ActiveOpsRef names the StorageNodeOps currently allowed to touch this node.
                     Empty when none is running.
                   type: string
+                desiredSpdkImage:
+                  description: |-
+                    DesiredSpdkImage is the SPDK image this node should run: its own
+                    spec.config.spdkImage, else its cluster's spec.storageNodes.spdkImage,
+                    else the control plane's default. Every restart the operator requests
+                    carries it.
+                  type: string
+                desiredSpdkProxyImage:
+                  description: |-
+                    DesiredSpdkProxyImage is the SPDK proxy image this node should run,
+                    resolved like DesiredSpdkImage.
+                  type: string
                 failureDomain:
                   description: |-
                     FailureDomain is the failure-domain label the control plane actually
@@ -824,6 +839,12 @@ spec:
                 hostname:
                   description: Hostname is the node hostname as the control plane reports it.
                   type: string
+                imagesCurrent:
+                  description: |-
+                    ImagesCurrent is true when the node runs its desired images and false
+                    when it does not, so a restart is due. Unset when the control plane
+                    reports no images and the answer is unknown.
+                  type: boolean
                 latencyMetrics:
                   description: |-
                     LatencyMetrics holds the fio-measured NVMe-oF baseline the volume
@@ -1065,6 +1086,16 @@ spec:
                       format: int32
                       type: integer
                   type: object
+                spdkImage:
+                  description: |-
+                    SpdkImage is the SPDK image the control plane reports it starts this node
+                    with. Empty when the control plane does not report one.
+                  type: string
+                spdkProxyImage:
+                  description: |-
+                    SpdkProxyImage is the SPDK proxy image the control plane reports for this
+                    node.
+                  type: string
                 status:
                   description: |-
                     Status is the lifecycle the control plane reports: online, suspended,

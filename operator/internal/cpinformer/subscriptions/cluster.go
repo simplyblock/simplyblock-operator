@@ -58,6 +58,15 @@ type ClusterDTO struct {
 	LostSiteState   string `json:"lost_site_state"`
 	// LeaderSite is the site the record names as a stretched cluster's leader.
 	LeaderSite string `json:"leader_site"`
+
+	// WriteProtectionV2 is whether every distrib runs v2 write protection. Nil
+	// from a control plane that predates the field, which is not the same
+	// answer as false.
+	WriteProtectionV2 *bool `json:"write_protection_v2"`
+	// DefaultSpdkImage and DefaultSpdkProxyImage are the images the control
+	// plane starts a node with when nothing names one.
+	DefaultSpdkImage      string `json:"default_spdk_image"`
+	DefaultSpdkProxyImage string `json:"default_spdk_proxy_image"`
 }
 
 // ClusterSubscription streams every cluster, decodes them into an in-memory

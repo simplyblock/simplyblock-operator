@@ -30,6 +30,10 @@ type NodeStatusResponse struct {
 	IP     string `json:"mgmt_ip"`
 	// Site is the node's sync-replication site, empty off a sync cluster.
 	Site string `json:"site"`
+	// SpdkImage and SpdkProxyImage are the images the control plane starts the
+	// node with, empty from a control plane that does not report them.
+	SpdkImage      string `json:"spdk_image"`
+	SpdkProxyImage string `json:"spdk_proxy_image"`
 }
 
 type Lvol struct {

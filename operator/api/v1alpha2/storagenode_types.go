@@ -598,6 +598,34 @@ type StorageNodeStatus struct {
 	// +optional
 	ActiveOpsRef string `json:"activeOpsRef,omitempty"`
 
+	// SpdkImage is the SPDK image the control plane reports it starts this node
+	// with. Empty when the control plane does not report one.
+	// +optional
+	SpdkImage string `json:"spdkImage,omitempty"`
+
+	// SpdkProxyImage is the SPDK proxy image the control plane reports for this
+	// node.
+	// +optional
+	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
+
+	// DesiredSpdkImage is the SPDK image this node should run: its own
+	// spec.config.spdkImage, else its cluster's spec.storageNodes.spdkImage,
+	// else the control plane's default. Every restart the operator requests
+	// carries it.
+	// +optional
+	DesiredSpdkImage string `json:"desiredSpdkImage,omitempty"`
+
+	// DesiredSpdkProxyImage is the SPDK proxy image this node should run,
+	// resolved like DesiredSpdkImage.
+	// +optional
+	DesiredSpdkProxyImage string `json:"desiredSpdkProxyImage,omitempty"`
+
+	// ImagesCurrent is true when the node runs its desired images and false
+	// when it does not, so a restart is due. Unset when the control plane
+	// reports no images and the answer is unknown.
+	// +optional
+	ImagesCurrent *bool `json:"imagesCurrent,omitempty"`
+
 	// LatencyMetrics holds the fio-measured NVMe-oF baseline the volume
 	// rebalancer reads.
 	// +optional
@@ -650,6 +678,7 @@ type StorageNodeStatus struct {
 // +kubebuilder:printcolumn:name="Step",type=string,JSONPath=".status.step.state"
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=".status.status"
 // +kubebuilder:printcolumn:name="Health",type=boolean,JSONPath=".status.health"
+// +kubebuilder:printcolumn:name="Images",type=boolean,JSONPath=".status.imagesCurrent"
 // +kubebuilder:printcolumn:name="UUID",type=string,JSONPath=".status.uuid",priority=1
 // +kubebuilder:printcolumn:name="FD",type=string,JSONPath=".status.failureDomain",priority=1
 // +kubebuilder:printcolumn:name="Site",type=string,JSONPath=".spec.config.site",priority=1
