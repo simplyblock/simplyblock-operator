@@ -112,7 +112,6 @@ http://simplyblock-operator:8080
 {{- if .Values.controlCenter.prometheusUrl -}}
 {{- .Values.controlCenter.prometheusUrl -}}
 {{- else -}}
-{{- $p := ((.Values.prometheus).simplyblock) | default dict -}}
-{{- printf "http://%s:%v" ($p.prometheusURL | default "simplyblock-prometheus") ($p.prometheusPORT | default 9090) -}}
+http://simplyblock-prometheus:9090
 {{- end -}}
 {{- end -}}
