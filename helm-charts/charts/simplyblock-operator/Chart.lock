@@ -5,8 +5,5 @@ dependencies:
 - name: opensearch
   repository: https://opensearch-project.github.io/helm-charts
   version: 2.9.0
-- name: prometheus
-  repository: https://prometheus-community.github.io/helm-charts
-  version: 25.18.0
-digest: sha256:08f07d95d3307a3c80cd3124209b4a00cd91d8ba9c079270dced96886b24678b
-generated: "2026-10-29T14:03:15.334278+01:00"
+digest: sha256:5fab2b9e2f836b040013e670ac2e2b23a668a4766a34326b41154da766c4b1c6
+generated: "2026-11-27T13:52:17.955277+05:30"

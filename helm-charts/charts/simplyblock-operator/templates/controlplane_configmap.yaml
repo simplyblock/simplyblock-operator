@@ -101,7 +101,6 @@ data:
     end
 {{- end }}
 
-{{- /* simplyblock-prometheus-config is the operator's: the ControlPlane installs Prometheus. */}}
 {{- if .Values.controlplane.observability.enabled }}
 ---
 apiVersion: v1
