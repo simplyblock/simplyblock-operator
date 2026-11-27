@@ -1,0 +1,1562 @@
+<!--
+  A self-contained quiz on the operator's custom resources: what each kind is
+  for, how the entity and Ops halves fit together, and what individual spec and
+  status fields mean. Open the file in a browser. It needs no server, except
+  for sending results in and the statistics, which need the results API that
+  crd-quiz-host.sh sets up beside the page and stay hidden without it.
+
+  It lives under docs because it is training material derived from the API
+  types in operator/api and from docs/designs/crd-redesign/design-crd-model.md,
+  not part of any build. Each run draws fifteen questions at random from the
+  bank at the bottom of the file. Every question has five answers, of which any
+  number from none to all five may be correct. The bank is a plain array, so a
+  changed field or a new kind is added by editing it, and a question that
+  disagrees with the types is a bug in this file, not in the types.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator CRD Quiz</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: one centered column, a progress rail on top, the question card as the only elevated surface. */
+:root {
+  --bg: #f5f7f9;
+  --surface: #ffffff;
+  --fg: #1a2430;
+  --muted: #5d6b7a;
+  --line: #d6dde4;
+  --accent: #0f6e8c;      /* entity teal, from the CRD diagram */
+  --accent-ink: #ffffff;
+  --action: #2f5bb7;      /* action blue, from the CRD diagram */
+  --good: #1e7f4f;
+  --good-bg: #e3f3ea;
+  --bad: #b23a3a;
+  --bad-bg: #f9e5e5;
+  --code-bg: #eceff3;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #121a21; --surface: #1b252e; --fg: #e6ecf1; --muted: #9aaab8; --line: #31404d;
+    --accent: #3fb2d1; --accent-ink: #0b1216; --action: #7ea2ea;
+    --good: #5fcf8f; --good-bg: #173426; --bad: #f08a8a; --bad-bg: #3d1f1f; --code-bg: #243039;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #121a21; --surface: #1b252e; --fg: #e6ecf1; --muted: #9aaab8; --line: #31404d;
+  --accent: #3fb2d1; --accent-ink: #0b1216; --action: #7ea2ea;
+  --good: #5fcf8f; --good-bg: #173426; --bad: #f08a8a; --bad-bg: #3d1f1f; --code-bg: #243039;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 16px; line-height: 1.5; margin: 0; }
+.wrap { max-width: 760px; margin: 0 auto; padding-block: 24px 48px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+h1, h2, h3 { text-wrap: balance; line-height: 1.2; margin: 0; }
+h1 { font-size: 1.9rem; font-weight: 600; }
+h2 { font-size: 1.25rem; font-weight: 600; }
+p { margin: 0; }
+code { font-family: var(--font-mono); font-size: 0.92em; background: var(--code-bg); padding: 0.05em 0.35em; border-radius: 3px; overflow-wrap: anywhere; }
+.eyebrow { font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+.stack { display: flex; flex-direction: column; gap: 16px; }
+.row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 24px; }
+@media (max-width: 480px) { .card { padding: 16px; } }
+button { font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--line); background: var(--surface); color: var(--fg); padding: 10px 18px; font-weight: 500; }
+button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button:focus-visible, .opt:focus-within { outline: 2px solid var(--action); outline-offset: 2px; }
+.muted { color: var(--muted); }
+.small { font-size: 0.9rem; }
+
+/* Start screen */
+.rules { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.rule { border: 1px solid var(--line); border-radius: 6px; padding: 12px 14px; }
+.rule strong { display: block; font-weight: 600; margin-bottom: 2px; }
+.kinds { display: flex; flex-wrap: wrap; gap: 6px; }
+.kind { font-family: var(--font-mono); font-size: 0.78rem; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line); color: var(--muted); }
+
+/* Progress */
+.progress { display: flex; align-items: center; gap: 12px; }
+.bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+.bar > i { display: block; height: 100%; background: var(--accent); width: 0; transition: width 0.3s; }
+@media (prefers-reduced-motion: reduce) { .bar > i { transition: none; } }
+.counter { font-variant-numeric: tabular-nums; font-size: 0.9rem; color: var(--muted); white-space: nowrap; }
+
+/* Question */
+.chip { display: inline-block; font-family: var(--font-mono); font-size: 0.78rem; padding: 2px 8px; border-radius: 4px; color: var(--accent-ink); background: var(--accent); }
+.chip.action { background: var(--action); color: #fff; }
+.chip.concept { background: var(--muted); color: #fff; }
+.qtext { font-size: 1.15rem; font-weight: 500; }
+.opts { display: flex; flex-direction: column; gap: 8px; list-style: none; margin: 0; padding: 0; }
+.opt { display: flex; gap: 12px; align-items: flex-start; padding: 12px 14px; border: 1px solid var(--line); border-radius: 6px; cursor: pointer; background: var(--surface); }
+.opt input { margin-top: 4px; flex: none; width: 18px; height: 18px; accent-color: var(--accent); }
+.opt span { min-width: 0; }
+.opt.checked { border-color: var(--accent); }
+.opt.right { background: var(--good-bg); border-color: var(--good); }
+.opt.wrong { background: var(--bad-bg); border-color: var(--bad); }
+.opt .mark { font-size: 0.78rem; font-weight: 600; margin-left: auto; white-space: nowrap; flex: none; padding-top: 3px; }
+.opt.right .mark { color: var(--good); }
+.opt.wrong .mark { color: var(--bad); }
+@media (max-width: 560px) { .opt { flex-wrap: wrap; } .opt .mark { margin-left: 30px; } }
+.verdict { padding: 12px 14px; border-radius: 6px; border-left: 4px solid var(--line); background: var(--code-bg); }
+.verdict.ok { border-left-color: var(--good); }
+.verdict.miss { border-left-color: var(--bad); }
+.verdict strong { font-weight: 600; }
+.hint { font-size: 0.9rem; color: var(--muted); }
+
+/* Results and statistics */
+.score { display: flex; gap: 24px; flex-wrap: wrap; }
+.score .n { font-size: 2.6rem; font-weight: 600; line-height: 1; font-variant-numeric: tabular-nums; }
+.score .l { font-size: 0.85rem; color: var(--muted); max-width: 200px; }
+.review { display: flex; flex-direction: column; gap: 10px; }
+.review details { border: 1px solid var(--line); border-radius: 6px; padding: 10px 14px; background: var(--surface); }
+.review summary { cursor: pointer; font-weight: 500; display: flex; gap: 10px; align-items: baseline; }
+.review summary .tag { font-size: 0.75rem; font-weight: 600; flex: none; }
+.review .tag.ok { color: var(--good); } .review .tag.miss { color: var(--bad); }
+.review ul { margin: 8px 0 0; padding-left: 20px; }
+.review li.c { color: var(--good); } .review li.w { color: var(--muted); }
+.scores { display: flex; flex-wrap: wrap; gap: 6px; }
+.scores span { font-family: var(--font-mono); font-size: 0.85rem; font-variant-numeric: tabular-nums; padding: 2px 8px; border-radius: 4px; border: 1px solid var(--line); background: var(--code-bg); }
+.scores span.mine { border-color: var(--accent); color: var(--accent); font-weight: 500; }
+.note { font-size: 0.9rem; color: var(--muted); max-width: 60ch; }
+</style>
+</head>
+<body>
+
+<div class="wrap stack" id="app"></div>
+
+<script>
+// Question bank, part A: the CRD model, bootstrap kinds, cluster spine, tenancy, volume ops.
+// Shape: { kind, cat: 'concept' | 'field' | 'action', text, options: [5 strings], correct: [indices], explain }
+const QUESTIONS_A = [
+  // ---------- CRD model ----------
+  { kind: 'CRD model', cat: 'concept',
+    text: 'What separates an entity kind (such as `StorageNode`) from an action kind (such as `StorageNodeOps`)?',
+    options: [
+      'Entity kinds describe steady state that controllers converge toward, and are safe to keep in Git.',
+      'An Ops kind names exactly one target, runs to a terminal phase, and stays afterward as an audit record.',
+      'An Ops kind owns its target through an owner reference, so deleting the operation deletes the target.',
+      'Every entity kind has an Ops companion.',
+      'A kind whose name ends in `Ops` is one-shot by convention; the suffix alone tells you which half of the model it is in.'],
+    correct: [0, 1, 4],
+    explain: 'An Ops never owns its target: deleting the record of an operation must never delete the thing it operated on. Of the ten entity kinds in the target model, four have no Ops companion (for example `ClusterDeploymentConfig`, which is applied rather than operated).' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which values can `status.phase` take on a typical Ops kind such as `StorageNodeOps` or `StorageClusterOps`?',
+    options: ['`Pending`', '`Running`', '`Succeeded`', '`Completed`', '`Aborted`'],
+    correct: [0, 1, 2, 4],
+    explain: 'The phase set is `Pending`, `Running`, `Succeeded`, `Failed`, and `Aborted`. `Completed` is the terminal step name in `status.step.state`, not a phase. `VolumeGroupSnapshotOps` is the one Ops kind without `Aborted`.' },
+  { kind: 'CRD model', cat: 'field',
+    text: 'What is true of `status.activeOpsRef` on an entity such as `StorageCluster` or `StoragePool`?',
+    options: [
+      'It names the Ops object currently allowed to act on the entity, and is empty when none is.',
+      'It is acquired with an optimistic-lock patch, so of two operations racing for it exactly one wins.',
+      'A second operation targeting the same entity is rejected at admission.',
+      'A finalizer on the Ops object releases it, so `kubectl delete` of a running operation does not leave the entity locked.',
+      'A cluster-level operation holding the cluster lock also blocks node-level operations on that cluster\'s nodes.'],
+    correct: [0, 1, 3],
+    explain: 'A second operation is admitted and waits at `Pending` until the lock frees; queueing is the default. The lock is per entity: a cluster-wide operation and a node operation take different locks and can both run.' },
+  { kind: 'CRD model', cat: 'field',
+    text: 'What is true of `spec.abort` on an Ops kind?',
+    options: [
+      'It is the only mutable field of an otherwise immutable spec.',
+      'Whether an abort is honored depends on the action\'s state graph, not on the field itself.',
+      'An aborted operation ends in phase `Failed`.',
+      'Deleting the Ops object is the recommended way to stop a running operation.',
+      'An abort arriving after the point of no return is reported as an illegal transition while the operation runs on.'],
+    correct: [0, 1, 4],
+    explain: 'An aborted operation ends in `Aborted`, which is terminal but distinct from `Failed` because it did not go wrong. Deletion withdraws the record and a validating webhook refuses it while a step without an abort edge is running.' },
+  { kind: 'CRD model', cat: 'field',
+    text: 'What is `status.step` on an Ops kind?',
+    options: [
+      'The serialized state-machine snapshot: a `state` plus the `deadline` that state expires at.',
+      'What was called `subPhase` on kinds that shipped before the rule.',
+      'A subdivision of `status.phase`.',
+      'Something entities can carry too, when their reconcile is multi-step (for example `StorageCluster` creation).',
+      'A field whose `state` values are constrained by a CEL rule rather than an enum marker.'],
+    correct: [0, 1, 3, 4],
+    explain: 'The step machine is per action and the phase machine is not, so a step is not contained in a phase. The shared `statemachine.KubeSnapshot` type lives in another module, so the closed set is a CEL rule at the use site.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which of these are real controller-reference ownership edges in v1alpha2?',
+    options: [
+      '`StorageCluster` owns its `StorageNode` objects.',
+      '`StorageNode` owns its `StorageDevice` objects.',
+      '`StorageCluster` owns its `StoragePool` objects.',
+      '`StoragePool` owns the `StorageClass` it writes.',
+      '`StorageNodeOps` owns the `StorageNode` it targets.'],
+    correct: [0, 1, 2],
+    explain: 'A `StorageClass` is cluster-scoped and a pool is namespaced, so the relationship is built by hand from `storage.simplyblock.io/{namespace,cluster,pool}` labels and the pool\'s finalizer. Ops kinds never own their targets.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which short name and kind pairs are correct?',
+    options: ['`stc` is `StorageCluster`', '`sc` is `StorageCluster`', '`oops` is `OperatorOps`', '`sbd` is `SimplyblockDriver`', '`pvops` is `PersistentVolumeOps`'],
+    correct: [0, 2, 3, 4],
+    explain: '`sc` belongs to core `StorageClass`, and the RESTMapper resolves a duplicate short name by discovery order, so `kubectl get sc` would never reach the cluster kind. Hence `stc`.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'What does the boolean toggle naming rule (`enableXyz` / `disableXyz`) say?',
+    options: [
+      'A toggle is `enableXyz` when the thing is off by default and `disableXyz` when it is on by default.',
+      '`skipXyz` and `xyzEnabled` are accepted alternatives.',
+      'Booleans under an Ops spec, such as `force` or `reattachVolume`, are action modifiers and outside the rule.',
+      'The form follows the default so that the Go zero value and the default mean the same thing.',
+      'A status boolean such as `health` is a toggle and must be renamed `enableHealth`.'],
+    correct: [0, 2, 3],
+    explain: 'Only the two prefix spellings are allowed. Status booleans are observations, not toggles, and never fall under the rule.' },
+  { kind: 'CRD model', cat: 'field',
+    text: 'What is true of `status.observedGeneration`?',
+    options: [
+      'Every reconcile that writes status sets it to the `metadata.generation` the status was computed from.',
+      'When it equals `metadata.generation`, a reader knows the status reflects the latest spec.',
+      'On an Ops kind it advances at most twice in the object\'s life.',
+      'Status is written with an optimistic-lock patch so a slow reconcile cannot land a stale generation on top of a newer one.',
+      'On an Ops kind, the second advance is the signal that `spec.abort` was observed.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Without the field, a stale status and a disagreeing one are the same observation.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which of these are custom resources stored in etcd under a simplyblock API group?',
+    options: ['`LogicalVolumeMetrics`', 'The `StorageClass` written per pool', '`VolumeGroupSnapshot`', '`NFSExport`', '`StorageDeviceMetrics`'],
+    correct: [3],
+    explain: 'The `metrics.simplyblock.io` kinds are served by an aggregated API server, not stored. `StorageClass` is core, and `VolumeGroupSnapshot` is the upstream `snapshot.storage.k8s.io` kind. `NFSExport` is an operator-owned CRD.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which event reasons does every Ops kind emit?',
+    options: ['`OperationQueued`', '`OperationStarted`', '`OperationSucceeded`', '`OperationAborted`', '`StepDeadlineExceeded`'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'Six reasons on every Ops kind: these five plus `OperationFailed`. `OperationQueued` is what separates a `Pending` object waiting on a lock from one nobody has reconciled yet.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which of these are action (Ops) kinds rather than entities?',
+    options: ['`ClusterDeploymentConfig`', '`StorageFenceRemediation`', '`VolumeGroupSnapshotOps`', '`PersistentVolumeOps`', '`StorageBackupPolicy`'],
+    correct: [2, 3],
+    explain: 'The `Ops` suffix is the signal. `ClusterDeploymentConfig` is applied, a policy is edited, and a remediation is an entity created by NodeHealthCheck.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which of these kinds are cluster-scoped?',
+    options: ['`StorageCluster`', '`ControlPlane`', '`StorageNode`', '`StoragePool`', '`SimplyblockDriver`'],
+    correct: [],
+    explain: 'All five are namespaced. `PersistentVolumeOps` is the one cluster-scoped kind, because its target, a `PersistentVolume`, is.' },
+  { kind: 'CRD model', cat: 'concept',
+    text: 'Which of these are terminal phases of a `StorageNodeOps`?',
+    options: ['`Completed`', '`Done`', '`Finished`', '`Cancelled`', '`Error`'],
+    correct: [],
+    explain: 'The terminal phases are `Succeeded`, `Failed`, and `Aborted`. `Completed` is a step, not a phase.' },
+
+  // ---------- ControlPlane ----------
+  { kind: 'ControlPlane', cat: 'concept',
+    text: 'What does a `ControlPlane` object represent?',
+    options: [
+      'The simplyblock control plane for one Kubernetes cluster: FoundationDB together with the management API.',
+      'A singleton named `simplyblock`.',
+      'The root of the ownership spine; nothing else reconciles meaningfully before it reports `Available`.',
+      'Either a control plane the operator installs or an existing one it only points at.',
+      'Its `status.phase` reports `Installing` until the control plane answers for the first time.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. The CSI driver, by contrast, is a separate kind, `SimplyblockDriver`.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What is true of `spec.source`?',
+    options: [
+      'Exactly one of `local` or `managed` must be set.',
+      'Which of the two is set is frozen at creation.',
+      '`spec.source.local.image` stays editable, and a `ControlPlaneOps` Upgrade writes it.',
+      '`spec.source.managed.endpoint` may be a loopback address for in-cluster tests.',
+      '`spec.source.managed.storageNodeImage` supplies the default storage-node image for StorageClusters on a managed deployment.'],
+    correct: [0, 1, 2, 4],
+    explain: 'A control plane the operator installed and one it did not are different deployments, so the mode is immutable while the member\'s contents stay editable. Loopback and link-local endpoints are rejected by the outbound-URL guard.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What does `spec.source.local.foundationDB.replicas` control?',
+    options: [
+      'The number of FoundationDB coordinators, default 3.',
+      'The number of management API instances.',
+      'A value with minimum 1.',
+      'Three is the smallest count that survives the loss of one.',
+      'The `storageClassName` beside it may name a class this operator provides.'],
+    correct: [0, 2, 3],
+    explain: 'Management API instances are `spec.source.local.replicas` (default 2). The FoundationDB storage class cannot be a simplyblock class, because the control plane has to exist before any simplyblock volume can.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What is true of `spec.source.local.tls`?',
+    options: [
+      '`enableTLS` and `enableMutualTLS` default to true.',
+      '`provider` is `cert-manager` or `OpenShift`, default `cert-manager`.',
+      'It is immutable once the control plane exists, because changing it means recreating FoundationDB.',
+      'Unset TLS fields on a `SimplyblockDriver` in the same namespace follow these values.',
+      '`enableMutualTLS` is ignored when `enableTLS` is false.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Note the asymmetry: `ControlPlaneTLS` defaults on, while `DriverTLS` only follows the control plane and is off without a local one.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What do the `status.phase` values of a `ControlPlane` mean?',
+    options: [
+      '`Degraded`: the readiness probe passes while a management API or FoundationDB pod restarts.',
+      '`Unavailable`: it worked and stopped answering; downstream controllers hold on it.',
+      '`Installing`: the control plane has never answered yet.',
+      'A managed (remote) control plane can reach `Degraded`.',
+      '`Ready` is one of the phases.'],
+    correct: [0, 1, 2],
+    explain: 'The phases are `Installing`, `Available`, `Degraded`, and `Unavailable`. A remote control plane has no pods the operator can see, so it never reaches `Degraded`.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What is true of `spec.source.local.prerequisites`?',
+    options: [
+      'Its flags (for example `installCertManager`) default to true, and an add-on is installed only when missing.',
+      'With a flag off and the add-on missing, the install holds.',
+      'Installed add-ons are deleted together with the `ControlPlane`.',
+      '`installEBSCSIDriver` applies on every cloud provider.',
+      '`installFoundationDBCRDs` is off by default.'],
+    correct: [0, 1],
+    explain: 'Installed add-ons are cluster-wide and outlive the `ControlPlane`. `installEBSCSIDriver` applies only on EKS, and every flag in the block defaults to true.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What is `spec.source.local.eksRoleARN` for?',
+    options: [
+      'The IAM role control-plane pods assume through the `eks.amazonaws.com/role-arn` service-account annotation.',
+      'It is also assumed by every `StorageCluster`\'s storage-node pods in the namespace.',
+      'It is required whenever `backup.credentials.source` is `Secret`.',
+      'It is validated by a pattern matching a Kubernetes service-account name.',
+      'It is required on every `ControlPlane`.'],
+    correct: [0, 1],
+    explain: 'The field is optional and only meaningful on EKS. It is what lets a `StorageCluster`\'s backup credentials use `ProviderChain`, and it is validated against an IAM role ARN pattern.' },
+  { kind: 'ControlPlane', cat: 'field',
+    text: 'What is `status.endpoint`?',
+    options: [
+      'The resolved management API base URL that the operator\'s clients resolve per call, so a change needs no Deployment rollout.',
+      'Derived for a local control plane and echoed from `spec.source.managed.endpoint` for a managed one.',
+      'The replacement for the old `SIMPLYBLOCK_WEBAPI_BASE_URL` environment variable.',
+      'A value the user sets in the spec.',
+      'The place the admin bearer token is published.'],
+    correct: [0, 1, 2],
+    explain: 'The token is projected into pods from the Secret named by `spec.source.local.adminTokenSecretRef`; the operator never reads the plaintext.' },
+
+  // ---------- ControlPlaneOps ----------
+  { kind: 'ControlPlaneOps', cat: 'action',
+    text: 'Which actions does `ControlPlaneOps.spec.action` accept?',
+    options: ['`Restart`', '`Upgrade`', '`Rollback`', '`HostMaintenance`', '`Shutdown`'],
+    correct: [0, 1, 3],
+    explain: 'The actions are `Restart`, `Upgrade`, `Backup`, and `HostMaintenance`. There is no Rollback or Shutdown for the control plane. Every action requires a control plane this cluster hosts.' },
+  { kind: 'ControlPlaneOps', cat: 'action',
+    text: 'What is true of the `HostMaintenance` action?',
+    options: [
+      'It holds eviction of a worker\'s FoundationDB pods from cordon on, enters FoundationDB maintenance mode for the zone, and moves coordinators off.',
+      'The operator raises it itself when it sees such a worker cordoned.',
+      '`spec.hostMaintenance.workerNode` is optional.',
+      'Abort is possible from every one of its steps.',
+      'It works against a managed (remote) control plane too.'],
+    correct: [0, 1],
+    explain: '`workerNode` is required, and abort is possible only from the `Holding` step. A hand-created one behaves identically to the operator-raised one; the zone maintained is the Node\'s `kubernetes.io/hostname` label.' },
+  { kind: 'ControlPlaneOps', cat: 'action',
+    text: 'What does the `Backup` action do?',
+    options: [
+      'Asks the FoundationDB operator for a backup by creating or triggering a `FoundationDBBackup`.',
+      'Takes a snapshot of every simplyblock volume.',
+      '`spec.backup.blobStore` is required and copied through in `FoundationDBBackup` form, not interpreted.',
+      '`status.backupRef` names the `FoundationDBBackup`, which the operation does not own.',
+      'It runs on a schedule declared in the spec.'],
+    correct: [0, 2, 3],
+    explain: 'It asks rather than implements: the snapshot is the FoundationDB operator\'s to take. Volume backups are `StorageBackup` objects.' },
+
+  // ---------- OperatorOps ----------
+  { kind: 'OperatorOps', cat: 'concept',
+    text: 'What is an `OperatorOps`?',
+    options: [
+      'A single operation against the operator process itself; today the only action is `Discover`.',
+      'The one Ops kind that carries no target reference.',
+      'A discovery run inspects the Kubernetes workers and writes a `ClusterDeploymentConfig` describing what they have.',
+      '`status.configRef` names the config it wrote.',
+      '`status.workers` records the workers it inspected, decided once in the `Inspecting` step.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. The config it writes is not approved automatically: that is an administrator\'s decision on `ClusterDeploymentConfig.spec.approved`.' },
+  { kind: 'OperatorOps', cat: 'field',
+    text: 'What is true of `spec.discover`?',
+    options: [
+      '`workers` and `nodeSelector` are mutually exclusive.',
+      'When `configName` is absent the name is generated from the run\'s timestamp, so a second run never overwrites a reviewed first.',
+      '`enableControlPlaneNodes` considers API-server and etcd machines and is off by default.',
+      '`enablePartitionedDevices` also reports mounted or busy devices.',
+      '`deviceFilter.pcieAllowList` can be combined with `enableLogicalBlockDevices`.'],
+    correct: [0, 1, 2],
+    explain: '`enablePartitionedDevices` waives only the partition-table condition; mounted or busy devices are never reported. PCI filters narrow NVMe only and are forbidden with the logical-block scan.' },
+  { kind: 'OperatorOps', cat: 'action',
+    text: 'Which are steps (`status.step.state`) of a discovery run?',
+    options: ['`Inspecting`', '`Probing`', '`Writing`', '`Approving`', '`Expanding`'],
+    correct: [0, 1, 2],
+    explain: 'Inspecting reads the workers and the distribution, Probing runs one probe Job per worker, Writing turns the reports into the document. Approval never happens inside the run.' },
+
+  // ---------- SimplyblockDriver ----------
+  { kind: 'SimplyblockDriver', cat: 'concept',
+    text: 'What does a `SimplyblockDriver` represent?',
+    options: [
+      'The deployment of simplyblock\'s CSI driver: node plugin, controller plugin, their RBAC, and the core `CSIDriver` registration they produce.',
+      'It is named for the brand because `CSIDriver` is already a core `storage.k8s.io/v1` kind.',
+      'A Kubernetes cluster can hold several, one per `StorageCluster`.',
+      'It exists mainly to hold the driver\'s StorageClasses.',
+      'It is the same object as the core `CSIDriver`.'],
+    correct: [0, 1],
+    explain: 'A Kubernetes cluster holds one; on clusters that ran simplyblock before, the first one adopts the Helm chart\'s deployment. It exists so that driver and control plane versions are fields on one object the operator can compare. StorageClasses belong to pools.' },
+  { kind: 'SimplyblockDriver', cat: 'field',
+    text: 'What is true of `spec.driverName`?',
+    options: [
+      'It defaults to `csi.simplyblock.io`.',
+      'It is immutable because changing it orphans every volume.',
+      'It is the CSI driver name StorageClasses provision with.',
+      'It can be changed with a rolling restart of the node plugins.',
+      'It must match the `ControlPlane`\'s name.'],
+    correct: [0, 1, 2],
+    explain: 'The driver name is the join between a StorageClass and the plugin that provisions it, so it is frozen.' },
+  { kind: 'SimplyblockDriver', cat: 'field',
+    text: 'Which defaults are correct for `SimplyblockDriver.spec`?',
+    options: [
+      '`imagePullPolicy` defaults to `Always`.',
+      '`enableVolumeSnapshots` defaults to false.',
+      '`enableCSIAddons` defaults to false.',
+      '`enableServiceAccountAuth` defaults to true.',
+      '`controllerReplicas` defaults to 2.'],
+    correct: [0, 2],
+    explain: '`enableVolumeSnapshots` defaults to true and `controllerReplicas` to 1. `enableServiceAccountAuth` is off by default; turning it on requires the control plane to list the plugins in `SB_K8S_ADMIN_SERVICE_ACCOUNTS`. Pull policy is `Always` because the default image is a moving tag.' },
+  { kind: 'SimplyblockDriver', cat: 'field',
+    text: 'What does `spec.disableDeviceMapperIndirection` do?',
+    options: [
+      'Stages volumes directly on the NVMe device instead of behind a device-mapper linear device.',
+      'Without the device-mapper layer a volume cannot join a consistency group live.',
+      'It applies only to volumes staged after the change.',
+      'It is a no-op kept for compatibility.',
+      'It also disables TLS between the plugins and the control plane.'],
+    correct: [0, 1, 2],
+    explain: 'The linear device is what lets the data path be swapped underneath a running consumer.' },
+  { kind: 'SimplyblockDriver', cat: 'field',
+    text: 'What do the `status` fields of a `SimplyblockDriver` report?',
+    options: [
+      '`phase: Unavailable` means the controller plugin is not running.',
+      '`phase: Degraded` means a node plugin is restarting while the controller still provisions.',
+      '`phase: Ready` means every plugin pod is serving.',
+      '`Available` is one of its phases.',
+      '`nodesReady` and `nodesTotal` are omitted when zero.'],
+    correct: [0, 1, 2],
+    explain: 'The phases are `Installing`, `Ready`, `Degraded`, and `Unavailable`. `nodesReady` and `nodesTotal` are written even at zero, because zero ready plugins is the condition worth seeing.' },
+  { kind: 'SimplyblockDriver', cat: 'field',
+    text: 'What is true of `spec.pnfs.mds`?',
+    options: [
+      'When unset, no pNFS volume can be exported and `NFSExport` objects wait in `Pending`.',
+      '`dataNetwork` needs Multus with whereabouts, and `rangeStart` and `rangeEnd` must lie inside `subnet`.',
+      'The metadata server guest\'s vCPUs are the whole cores of the CPU limit, and its memory is the limit minus 256Mi.',
+      '`stateStorageClassName` must name a pNFS class.',
+      '`unhealthyDeadline: 0s` restarts the metadata server at the first failed health check.'],
+    correct: [0, 1, 2],
+    explain: '`stateStorageClassName` must be one of this driver\'s classes, not a pNFS class, and is read only at first creation. `unhealthyDeadline: 0s` means never restart; unset means the runner default of 90s.' },
+
+  // ---------- PersistentVolumeOps ----------
+  { kind: 'PersistentVolumeOps', cat: 'concept',
+    text: 'What makes `PersistentVolumeOps` different from the other Ops kinds?',
+    options: [
+      'It operates on one `PersistentVolume`, a core Kubernetes type rather than a kind this group defines.',
+      'It is cluster-scoped because its target is.',
+      'It locks its target with the `storage.simplyblock.io/active-ops` annotation on the volume rather than a `status.activeOpsRef`.',
+      'It derives cluster, pool, and volume from the volume\'s CSI handle rather than being told.',
+      'Its creator edge is `spec.creatorRef` plus the creator\'s finalizer rather than an owner reference.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Kubernetes garbage-collects a cluster-scoped object with a namespaced owner, which is why an owner reference from a `StorageNodeOps` cannot be used.' },
+  { kind: 'PersistentVolumeOps', cat: 'action',
+    text: 'Which actions does `PersistentVolumeOps.spec.action` accept?',
+    options: ['`Migrate`', '`Relocate`', '`JoinConsistencyGroup`', '`Resize`', '`Snapshot`'],
+    correct: [0, 1, 2],
+    explain: 'Migrate moves the backing logical volume to another storage node. Relocate moves the volume to another member cluster of its supercluster, with every volume sharing its NVMe-oF subsystem. JoinConsistencyGroup moves it onto the group\'s node and subsystem live.' },
+  { kind: 'PersistentVolumeOps', cat: 'field',
+    text: 'What is `spec.creatorRef`?',
+    options: [
+      'A substitute for an owner reference, because a cluster-scoped object cannot be owned by a namespaced one.',
+      'It carries the creator\'s `kind`, `namespace`, `name`, and `uid`.',
+      'The garbage collector uses it to cascade deletion.',
+      'It is required on every `PersistentVolumeOps`.',
+      'The garbage collector fills it in automatically.'],
+    correct: [0, 1],
+    explain: 'The garbage collector knows nothing of it: the creator\'s finalizer performs the cascade. It is optional and immutable; a `StorageNodeOps` draining a node sets it on every `PersistentVolumeOps` it raises.' },
+  { kind: 'PersistentVolumeOps', cat: 'field',
+    text: 'What is true of `spec.persistentVolumeName`?',
+    options: [
+      'It names the `PersistentVolume`, not the claim.',
+      'That choice exists because a volume with a `Retain` reclaim policy outlives its claim and is still worth moving.',
+      'It is required and immutable.',
+      'A claim name is accepted for convenience.',
+      'A namespace must be given beside it.'],
+    correct: [0, 1, 2],
+    explain: 'A `PersistentVolume` is cluster-scoped, so there is no namespace to give.' },
+  { kind: 'PersistentVolumeOps', cat: 'action',
+    text: 'Which are steps of the `Migrate` action?',
+    options: ['`Validating`', '`Migrating`', '`Verifying`', '`Running`', '`Copying`'],
+    correct: [0, 1, 2],
+    explain: 'Validating creates the backend migration and one Job per consuming node, Migrating starts the copy, Verifying deletes the Jobs and confirms no path is left connected. The step is called `Migrating` rather than `Running` so it does not clash with the phase.' },
+  { kind: 'PersistentVolumeOps', cat: 'field',
+    text: 'What does `status.deferredSince` record?',
+    options: [
+      'The first time the operation was held behind another lock or a control plane not accepting migrations.',
+      'A timestamp the auto-rebalancer reads.',
+      'The deadline of the current step.',
+      'When the operation was created.',
+      'A field set only for the `Relocate` action.'],
+    correct: [0, 1],
+    explain: 'Step deadlines live in `status.step.deadline`; creation time is `metadata.creationTimestamp`.' },
+
+  // ---------- VolumeGroupSnapshotOps ----------
+  { kind: 'VolumeGroupSnapshotOps', cat: 'concept',
+    text: 'What is true of `VolumeGroupSnapshotOps`?',
+    options: [
+      'It is a one-shot operation on a `VolumeGroupSnapshot`, analogous to a Kubernetes Job.',
+      'Its `Restore` action creates one `PersistentVolumeClaim` per member snapshot and waits for every claim to bind.',
+      'It has an `Aborted` phase.',
+      'Its whole spec is immutable, and it carries no `abort` field.',
+      '`spec.restore.enablePartialRestore` lets an incomplete generation restore instead of failing.'],
+    correct: [0, 1, 3, 4],
+    explain: 'It is the one Ops kind with four phases (`Pending`, `Running`, `Succeeded`, `Failed`) and no abort.' },
+  { kind: 'VolumeGroupSnapshotOps', cat: 'field',
+    text: 'What is true of the `spec.restore` block?',
+    options: [
+      'A restored claim is named `<namePrefix>-<source PVC name>`.',
+      '`namePrefix` defaults to the operation\'s own name.',
+      'An empty `storageClassName` inherits the class from each member snapshot\'s source claim.',
+      '`consistencyGroup` must name a group that already exists.',
+      'A `targetNamespace` field names where the claims are created.'],
+    correct: [0, 1, 2],
+    explain: '`consistencyGroup` labels the clones so they form a new group; empty leaves them independent. There is no target namespace field. Inheriting the storage class fails for a member whose source claim no longer exists.' },
+
+  // ---------- StorageCluster ----------
+  { kind: 'StorageCluster', cat: 'concept',
+    text: 'What does a `StorageCluster` represent?',
+    options: [
+      'One simplyblock backend cluster, or a supercluster that aggregates several of them.',
+      'The owner of its storage nodes, its pools, and the Kubernetes workload its nodes run as.',
+      'A supercluster carries nodes of its own in addition to its members\'.',
+      'Its short name is `sc`.',
+      'Its name may be up to 253 characters long.'],
+    correct: [0, 1],
+    explain: 'A supercluster has no nodes; its members do. The short name is `stc`, since `sc` is `StorageClass`. The name is limited to 63 characters by a CEL rule, because it is written into label values.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.stripe`?',
+    options: [
+      '`dataChunks` and `parityChunks` describe the erasure-coding layout every volume is written with.',
+      'It is immutable.',
+      'The allowed schemes are 1+0, 1+1, 2+1, 4+1, 1+2, 2+2, and 4+2.',
+      '8+2 is an allowed scheme.',
+      '`parityChunks` is the number of full data copies kept.'],
+    correct: [0, 1, 2],
+    explain: 'The minimum node count per scheme (for example 4 for 2+1 and 8 for 4+2) is enforced by deployment-config validation, the approval webhook, and the activation gate, not by this schema.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'Which `StorageCluster.spec` fields are immutable?',
+    options: ['`fabricType`', '`nvmfBasePort`', '`clientDataIfname`', '`enableChecksumValidation`', '`backup`'],
+    correct: [0, 1, 3],
+    explain: '`clientDataIfname` is mutable because the control plane reads it on every connect. `spec.backup` is mutable so a cluster created without a store can gain one later.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.maxSubsystemCount` and `spec.vcpuCount`?',
+    options: [
+      'Both are required on every cluster except a supercluster.',
+      '`vcpuCount` has a minimum of 2.',
+      '`maxSubsystemCount` must be between 1 and 1000.',
+      'A later change to `vcpuCount` on the cluster is applied to existing nodes automatically.',
+      '`maxSubsystemCount` is copied onto each node as well.'],
+    correct: [0],
+    explain: '`vcpuCount` has a minimum of 4 and `maxSubsystemCount` must be between 10 and 500. `vcpuCount` is stamped into each node\'s `spec.config.sizing` at creation and stays there. `maxSubsystemCount` is the cluster\'s own field; no node carries a copy, and a change reaches existing nodes on their next restart.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.clusterMode`?',
+    options: [
+      'The enum is `Single`, `Dual`, `Standard`, with `Standard` as default.',
+      '`Dual` means exactly two nodes running a 1+1 scheme.',
+      'It cannot be changed to or from `Single` after creation.',
+      '`enableArbitration` and `arbitration` are valid only when the mode is `Dual`.',
+      '`Single` is one node, non-HA, with every erasure-coding scheme placed across that node\'s devices.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. `Standard` is three or more nodes.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.enableAtomicity4K`?',
+    options: [
+      'It requires `enableChecksumValidation` to be true.',
+      'The doc comment calls it the setting that loses data when it is wrong.',
+      'It defaults to true.',
+      'It is immutable.',
+      'It applies only to devices that already report a 4K logical block size.'],
+    correct: [0, 1, 3],
+    explain: 'It enforces 4K write atomicity on devices that report a smaller logical block size. Both checksum validation and 4K atomicity default to false and are baked into the devices at cluster creation.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.backup` on a `StorageCluster`?',
+    options: [
+      'It is the S3 location backups live in: both the write target and the inventory the operator walks to produce `StorageBackup` objects.',
+      'The whole block is immutable.',
+      '`credentials.source` is `Secret` or `ProviderChain`, default `Secret`.',
+      '`credentialsSecretRef` is the recommended way to name the Secret.',
+      '`source: ProviderChain` requires a `secretRef`.'],
+    correct: [0, 2],
+    explain: 'The block is mutable so a cluster created without a store can gain one later. `credentialsSecretRef` is deprecated in favor of `credentials`. `ProviderChain` forbids a `secretRef`; on EKS it means the role in `ControlPlane.spec.source.local.eksRoleARN`.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'How do superclusters work in the `StorageCluster` spec?',
+    options: [
+      'A supercluster is a `StorageCluster` with `spec.supercluster` set; members name it in `spec.superclusterRef`.',
+      'A supercluster cannot be a member of another.',
+      '`spec.disablePlacement` is valid only on a member.',
+      'The placement strategy defaults to `LeastVolumes`.',
+      'An existing cluster can become a supercluster later by setting the field.'],
+    correct: [0, 1, 2],
+    explain: 'The strategy defaults to `MostAvailableCapacity`. A cluster cannot become a supercluster, or stop being one, after creation, and `superclusterRef` is set at creation and never changed.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What do these `StorageCluster.status.phase` values mean?',
+    options: [
+      '`Suspended`: shut down deliberately, where a `Shutdown` operation leaves it.',
+      '`Shrinking`: serving while a node is being removed.',
+      '`Rebalancing` can replace `Unavailable` while data moves.',
+      '`Activating`: the control plane is activating the cluster.',
+      '`Deleting` is one of the phases.'],
+    correct: [0, 1, 3],
+    explain: '`Shrinking` and `Rebalancing` replace only serving phases (`Online`, `Degraded`), never a non-serving one. There is no `Deleting` phase.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is `status.tasks` on a `StorageCluster`?',
+    options: [
+      'The control plane\'s running and pending jobs for this cluster.',
+      'A list capped at 20 entries.',
+      'Its `id` is how a `StorageClusterOps` `CancelTask` names a task.',
+      'It is sorted newest first.',
+      'Completed tasks stay in the list for history.'],
+    correct: [0, 1, 2],
+    explain: 'The list is in the control plane\'s order, and completed or canceled tasks leave it and become events.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.storageNodes.network`?',
+    options: [
+      '`podNetwork` and `spdkOnHostNetwork` are exclusive and one of them must be set.',
+      '`data` networks (at most 8) require `podNetwork: true`.',
+      'A data network attached through a NetworkAttachmentDefinition can serve RDMA fabrics.',
+      'It can be added to a running cluster later.',
+      '`spec.storageNodes.dataInterfaces` may be combined with `podNetwork`.'],
+    correct: [0, 1],
+    explain: 'A NAD-attached data network serves NVMe/TCP only, the block is set at creation and cannot be added or removed afterward, and `dataInterfaces` are host NICs allowed only with `spdkOnHostNetwork`.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is `spec.maxConcurrentWorkerRestarts`?',
+    options: [
+      'A cap on how many workers may be drained or restarted at once, default 1.',
+      'The effective value is the smaller of it and `status.maxFaultTolerance`.',
+      'The effective value is published as `status.maxConcurrentWorkerRestarts`.',
+      'Its minimum is 0.',
+      'It is immutable.'],
+    correct: [0, 1, 2],
+    explain: 'The minimum is 1, and the field is mutable.' },
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of `spec.serviceClasses`?',
+    options: [
+      'At most 5 classes can be declared.',
+      '`Default` cannot be used as a class name.',
+      'A class weight is between 1 and 1000.',
+      '`replicationShare` is a hard cap on replication bandwidth.',
+      'A class a volume still uses can be removed.'],
+    correct: [0, 1, 2],
+    explain: '`replicationShare` defaults to 10, ranges 0 to 74, and is a weight rather than a cap. The block is mutable except that a class a volume still uses cannot be removed.' },
+
+  // ---------- StorageClusterOps ----------
+  { kind: 'StorageClusterOps', cat: 'action',
+    text: 'Which actions does `StorageClusterOps.spec.action` accept?',
+    options: ['`Activate`', '`Suspend`', '`RollingRestart`', '`CancelTask`', '`Drain`'],
+    correct: [0, 2, 3],
+    explain: 'The full set is `Activate`, `Expand`, `Shutdown`, `Start`, `Restart`, `RollingRestart`, and `CancelTask`. Suspend and Drain are node operations.' },
+  { kind: 'StorageClusterOps', cat: 'action',
+    text: 'What is true of the `RollingRestart` action?',
+    options: [
+      '`status.rollingRestart.nodes` is written once when the walk starts and never modified.',
+      'A node added to the cluster mid-walk is not restarted.',
+      '`spec.rollingRestart.refreshSNodeAPI` restarts each node\'s storage-node DaemonSet pod between its shutdown and restart.',
+      '`status.rollingRestart.nodeIndex` is omitted when zero.',
+      '`Rebalancing` is not one of its steps.'],
+    correct: [0, 1, 2],
+    explain: '`nodeIndex` is written even at zero, because zero is a valid position. The steps are `CheckingPeers`, `ShuttingDownNode`, `RefreshingPod`, `AwaitingPod`, `RestartingNode`, and `Rebalancing`, one machine lifetime per node.' },
+  { kind: 'StorageClusterOps', cat: 'concept',
+    text: 'What is true of `StorageClusterOps`?',
+    options: [
+      'A `Shutdown` leaves the cluster in phase `Suspended`.',
+      '`CancelTask` names the task through `spec.cancelTask.taskID`, by control plane identifier rather than list position.',
+      'A `status.triggered` field records whether the side effect fired.',
+      '`spec.clusterRef` is bounded at 63 characters to match the cluster name limit.',
+      'The operation owns the cluster through a controller reference.'],
+    correct: [0, 1, 3],
+    explain: '`status.triggered` was deliberately removed: every step\'s completion condition is a predicate over current state, so a step recorded without its side effect is indistinguishable from one whose did, and safe.' },
+
+  // ---------- ClusterDeploymentConfig ----------
+  { kind: 'ClusterDeploymentConfig', cat: 'concept',
+    text: 'What is a `ClusterDeploymentConfig`?',
+    options: [
+      'A whole simplyblock deployment written down as one reviewable document: environment, cluster template, and node sets.',
+      'An ephemeral document that can be edited or deleted once expanded; nothing reads it afterward.',
+      'A document the operator expands only once `spec.approved` is set.',
+      'A document whose edits after expansion are reconciled into the existing nodes.',
+      'What an `OperatorOps` discovery run writes.'],
+    correct: [0, 1, 2, 4],
+    explain: 'The expansion is a copy, not a projection. Every kind it expands into is self-describing, so editing it reaches only objects created after the edit.' },
+  { kind: 'ClusterDeploymentConfig', cat: 'field',
+    text: 'What is true of `spec.approved`?',
+    options: [
+      'It defaults to false.',
+      'Approval cannot be withdrawn.',
+      'It is omitted from the stored object when false.',
+      'A Draft document is validated only once, on creation.',
+      'Approving it creates the `ControlPlane` too.'],
+    correct: [0, 1],
+    explain: 'It is serialized even when false, so the CEL rule reading it does not fail, and a Draft is validated on every reconcile with the findings in `status.message`. The document never creates the `ControlPlane`.' },
+  { kind: 'ClusterDeploymentConfig', cat: 'field',
+    text: 'What is `spec.environment`?',
+    options: [
+      'An enum including `Vanilla`, `OpenShift`, `Rancher`, `K3s`, `Talos`, `EKS`, `GKE`, `AKS`, and `OKE`.',
+      'A shorthand the expansion spends on the cluster\'s `enableKubeletConfiguration`, `enableCpuTopology`, and OpenShift settings.',
+      '`spec.cluster.openshift` requires it to be `OpenShift`.',
+      'After the expansion has set those cluster fields, nothing reads it again.',
+      '`spec.cluster.talosMachineConfig` requires it to be `Talos`.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. The environment is a shorthand the expansion spends once.' },
+  { kind: 'ClusterDeploymentConfig', cat: 'field',
+    text: 'What is true of `spec.cluster.enableDriveFormat` and `spec.cluster.ports`?',
+    options: [
+      '`enableDriveFormat` says what is wanted: NVMe devices get `enableFormat4K`, logical block devices get `enableBlockFormat` on the cluster.',
+      'It sits on the document because formatting is destructive and immutable on the cluster.',
+      '`enableDriveFormat` defaults to true.',
+      '`ports` is one block here but maps to three flat immutable port fields on the cluster.',
+      '`ports.nodeAgent` defaults to 4420.'],
+    correct: [0, 1, 3],
+    explain: 'The `ports` block is the one place the document deliberately does not mirror the cluster\'s shape: `nvmf` 4420, `rpc` 8080, and `nodeAgent` 50001.' },
+  { kind: 'ClusterDeploymentConfig', cat: 'field',
+    text: 'What is true of `spec.nodeSets[]`?',
+    options: [
+      'A node set is an organizational grouping, usually a rack, and carries no sizing.',
+      'Its name is copied to each `StorageNode.spec.nodeSet`.',
+      'A group\'s `devices` must name `nvme` or `block` devices, not both.',
+      'The groups of one node set may mix device classes.',
+      'Per-node-set `cluster` overrides are allowed only when the document has more than one node set or names a `clusterRef`.'],
+    correct: [0, 1, 2, 4],
+    explain: 'Every group of a node set must name the same device class and the same networking; the expansion reads the class off the groups and stamps it onto the cluster, since the document has no device-class field.' },
+  { kind: 'ClusterDeploymentConfig', cat: 'field',
+    text: 'What do the `status` fields of a `ClusterDeploymentConfig` tell you?',
+    options: [
+      '`phase: Draft` means unapproved.',
+      '`Expanded` can mean a cluster that exists but does not serve yet.',
+      '`status.clusterRef` is resolved on every reconcile after expansion.',
+      '`status.message` on a Draft stays empty until approval.',
+      '`Approved` is one of the phases.'],
+    correct: [0],
+    explain: 'The phases are `Draft`, `Expanding`, `Expanded`, and `Failed`. `Expanded` never means a cluster that serves nothing, because the `Activating` step asks for activation first; `status.clusterRef` is a record nothing resolves afterward; and `status.message` on a Draft is what a reviewer reads before approving.' },
+
+  // ---------- StorageNode ----------
+  { kind: 'StorageNode', cat: 'concept',
+    text: 'What does a `StorageNode` represent?',
+    options: [
+      'One SPDK process bound to one NUMA socket of one Kubernetes worker.',
+      'One object exists per `(workerNode, slot)` pair.',
+      'It is owned by its `StorageCluster` through a controller reference.',
+      'It owns its `StorageDevice` objects.',
+      'Its name is limited to 63 characters because it is written into a label on every one of its devices.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Nodes are created by expanding a `ClusterDeploymentConfig` or by hand; the discovered, never user-written kind is `StorageDevice`.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What is `spec.slot`?',
+    options: [
+      'Which storage-node slot on the worker the object occupies, counted from zero.',
+      'The identity the operator keys on; the slot outlives the node filling it.',
+      'A field that changes when the node is relocated to another socket.',
+      'Part of the CSI topology label together with the worker name.',
+      'The same thing as `spec.socketId`.'],
+    correct: [0, 1],
+    explain: '`slot` is immutable; `socketId` is the NUMA socket and can change on relocation. The topology label is `storage.simplyblock.io/storage-node-uuid.<clusterUUID>.<slot>`, with no worker name in it.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What is true of `spec.config.sizing`?',
+    options: [
+      '`vcpuCount` is required, with a minimum of 4.',
+      'It is re-read from the `ClusterDeploymentConfig` on every reconcile.',
+      'Anyone with edit rights on the node may change it.',
+      '`minHugePagesSize` is a hard upper limit.',
+      'It also carries the cluster\'s `maxSubsystemCount`.'],
+    correct: [0],
+    explain: 'It is stamped from `StorageCluster.spec` at creation (the config document is ephemeral), only the operator may change it, and `minHugePagesSize` is a floor. `maxSubsystemCount` is deliberately not copied to the node.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What is true of `spec.config.deviceNames`?',
+    options: [
+      'Entries are PCI addresses or device paths; a bare name is read as under `/dev`.',
+      'It is immutable.',
+      'Every entry must match the class in `StorageCluster.spec.deviceClass`.',
+      'Filters such as `pcieModel` still apply on top of it.',
+      '`spec.config.pcieAllowList` is immutable too.'],
+    correct: [0, 1, 2],
+    explain: 'An explicit list overrides every filter. `pcieAllowList` is the one device field a migration writes (`spec.migrate.newSsdPcie` is merged in), so it carries no immutability marker and is guarded by the webhook instead.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What is true of `spec.config.failureDomain`?',
+    options: [
+      'It is a fault-group label such as `rack-b`.',
+      'It is required when the cluster has `enableFailureDomains`; provisioning holds with a `FailureDomainMissing` event until it is present.',
+      'It can be changed at any time.',
+      '`status.failureDomain` always equals the requested value.',
+      'It is an integer index.'],
+    correct: [0, 1],
+    explain: 'It can be filled in later and is then frozen, and `status.failureDomain` holds what the control plane actually assigned. The integer index is on the cluster: `StorageCluster.status.failureDomains[]` maps each label to the control plane\'s index.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What do these `StorageNode.status.phase` values mean?',
+    options: [
+      '`Offline`: out of service and reachable, where Shutdown, Suspend, and host maintenance leave it.',
+      '`Removed`: the last phase; nothing brings the node back.',
+      '`Degraded`: serving with fewer than its devices.',
+      '`Failed`: unreachable, timed out, or provisioning that will not complete.',
+      '`Removing`: removal accepted, until devices and volumes have been moved off.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. The phases are `Pending`, `Provisioning`, `Online`, `Removing`, `Removed`, `Offline`, `Degraded`, and `Failed`; a suspended node shows `Offline`.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What is true of `status.status` and `status.uuid` on a `StorageNode`?',
+    options: [
+      '`status.status` holds the control plane\'s lifecycle string, for example `online` or `in_creation`.',
+      '`status.status` carries no enum marker because it reflects an external vocabulary.',
+      '`status.status` values are PascalCase.',
+      'An empty `status.uuid` means the node is neither provisioned nor adopted.',
+      '`status.health` is omitted when false.'],
+    correct: [0, 1, 3],
+    explain: 'Reflecting a value is not defining one, so the control plane\'s spelling is kept. `health` has no omitempty.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'What does `spec.stretched.remote: true` mean?',
+    options: [
+      'The node belongs to the other site of a stretched cluster.',
+      'It runs no workload on this Kubernetes cluster.',
+      'It admits no `StorageNodeOps`.',
+      'Deleting it removes the node from the backend cluster.',
+      '`spec.stretched` can be added to an existing node later.'],
+    correct: [0, 1, 2],
+    explain: 'A remote node is recreated from the control plane if deleted, and `stretched` cannot be added to or removed from an existing node. The other site\'s operator manages it.' },
+  { kind: 'StorageNode', cat: 'field',
+    text: 'Which are steps of the node provisioning machine, and what do they do?',
+    options: [
+      '`Posting` is the optimistic-lock claim that makes node-add single-shot, followed by the POST.',
+      '`AwaitingSlot` holds until the node is under the parallel-add limit and no FoundationDB worker is in flight.',
+      '`Adopting` runs for every node right after `Posting`.',
+      '`CheckingNetwork` runs the probe pod on every node, host-network ones included.',
+      '`Draining` is one of the steps.'],
+    correct: [0, 1],
+    explain: '`Adopting` only takes over a backend node the operator did not add, host-network nodes never enter `CheckingNetwork`, and draining is a node operation. The steps are `CheckingHost`, `CheckingConfig`, `CheckingNetwork`, `AwaitingSlot`, `Posting`, `Resolving`, `Adopting`, and `AwaitingWorker`.' },
+
+  // ---------- StorageNodeOps ----------
+  { kind: 'StorageNodeOps', cat: 'action',
+    text: 'Which actions does `StorageNodeOps.spec.action` accept?',
+    options: ['`Remove`', '`Migrate`', '`HostMaintenance`', '`Drain`', '`Expand`'],
+    correct: [0, 1, 2],
+    explain: 'The full set is `Shutdown`, `Restart`, `Suspend`, `Resume`, `Remove`, `Migrate`, and `HostMaintenance`. The v1alpha1 `drain` became `Remove`; expansion is a cluster operation.' },
+  { kind: 'StorageNodeOps', cat: 'action',
+    text: 'What is true of the `Migrate` action?',
+    options: [
+      '`spec.migrate.targetWorkerNode` is required.',
+      'It assigns the node a new backend UUID.',
+      '`spec.force` defaults to true for it.',
+      'It creates one `PersistentVolumeOps` per volume.',
+      '`spec.migrate.newSsdPcie` replaces `spec.config.deviceNames`.'],
+    correct: [0, 2],
+    explain: 'A migration keeps the backend UUID, partitions, and logical-volume assignments; only the machine changes, and no `PersistentVolumeOps` is created. `newSsdPcie` is merged into the node\'s PCI allow list. `force` defaults to true because the control plane rejects a non-forced restart of a node that is not already offline.' },
+  { kind: 'StorageNodeOps', cat: 'action',
+    text: 'What is true of the `Remove` action?',
+    options: [
+      '`spec.remove.systemVolumeFilterRegex` defaults to `^sb-fio-baseline-.*`.',
+      '`status.drain.volumesTotal` is written once at the end of `Validating`.',
+      '`status.removal.devices` tracks each device\'s status during removal.',
+      'Running out of `status.removal.prepareAttempts` only logs a warning.',
+      'It skips the `ShuttingDown` step.'],
+    correct: [0, 1, 2],
+    explain: 'The operation fails once the prepare attempts run out. Remove runs `Validating`, `MigratingDevices`, `MigratingVolumes`, `Verifying`, `ShuttingDown`, `Removing`, and `AwaitingRemoval`.' },
+  { kind: 'StorageNodeOps', cat: 'field',
+    text: 'What is true of the booleans and timestamps on a `StorageNodeOps`?',
+    options: [
+      '`spec.reattachVolume` reattaches volumes as part of a restart and applies to `Restart`, `Migrate`, and `HostMaintenance`.',
+      '`spec.reattachVolume` applies to `Suspend`.',
+      '`spec.force` falls under the `enableXyz`/`disableXyz` toggle rule.',
+      '`spec.abort` is the only mutable spec field.',
+      '`status.startedAt` is when the operation acquired its target\'s lock.'],
+    correct: [0, 3, 4],
+    explain: 'Ops booleans are action modifiers, outside the toggle rule. `completedAt` is written at the terminal phase.' },
+
+  // ---------- StorageDevice ----------
+  { kind: 'StorageDevice', cat: 'concept',
+    text: 'What is a `StorageDevice`?',
+    options: [
+      'A discovered object: the operator creates it from what the control plane reports, and a user never writes one.',
+      'One storage backend device belonging to one storage node.',
+      'Owned by its `StorageNode` through a controller reference.',
+      'Named `<node name>-<first 8 characters of the device UUID>`.',
+      'Its spec carries only `nodeRef` and `deviceID`.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Capacity, hardware, role, and health are status.' },
+  { kind: 'StorageDevice', cat: 'field',
+    text: 'Which labels does every `StorageDevice` carry?',
+    options: ['`storage.simplyblock.io/cluster`', '`storage.simplyblock.io/node`', '`storage.simplyblock.io/worker`', '`storage.simplyblock.io/pool`', '`storage.simplyblock.io/site`'],
+    correct: [0, 1, 2],
+    explain: 'The worker label makes `kubectl get sd -l storage.simplyblock.io/worker=worker-3` work. The site is a status field, and the pool label belongs on StorageClasses.' },
+  { kind: 'StorageDevice', cat: 'field',
+    text: 'What do these `StorageDevice.status.phase` values mean?',
+    options: [
+      '`Migrated`: taken out of service with its data rebuilt onto peers.',
+      '`Unknown`: the node is unreachable so the state is not observable; it never overwrites a terminal phase.',
+      '`Failed` is recoverable once the node comes back.',
+      '`Degraded`: the node is unreachable.',
+      '`Online` is not one of the phases.'],
+    correct: [0, 1],
+    explain: '`Failed`, `Removed`, and `Migrated` are terminal; `Degraded` means serving and should not be. The phases are `Online`, `Degraded`, `Unknown`, `Removed`, `Failed`, and `Migrated`.' },
+  { kind: 'StorageDevice', cat: 'field',
+    text: 'What is true of the `status` of a `StorageDevice`?',
+    options: [
+      '`role` is `Storage` or `Journal`.',
+      'The role is decided at node creation by the cluster\'s `enableJournalDevice`.',
+      '`capacity` carries only `totalBytes`; used bytes are served as `StorageDeviceMetrics` from `metrics.simplyblock.io`.',
+      '`health.smart.verdict` is `Ok`, `Slow`, or `Unknown`.',
+      '`health.smart.percentageUsed` is capped at 100.'],
+    correct: [0, 1, 2],
+    explain: '`Ok`, `Slow`, `Unknown` is the performance verdict; the SMART verdict is `Ok`, `Warning`, `Failing`, `Unsupported`, or `Unknown`. Percentage used can exceed 100 on NVMe.' },
+
+  // ---------- StorageDeviceOps ----------
+  { kind: 'StorageDeviceOps', cat: 'action',
+    text: 'Which actions does `StorageDeviceOps.spec.action` accept today?',
+    options: ['`Restart`', '`Fail`', '`CheckHealth`', '`Replace`', '`Migrate`'],
+    correct: [0, 1, 2],
+    explain: '`SelfTest`, `Replace`, and `Migrate` exist as Go constants but are not in the enum: each is blocked on a control plane endpoint that does not exist yet. The enum admits only what the operator can perform.' },
+  { kind: 'StorageDeviceOps', cat: 'action',
+    text: 'What is true of the `Fail` and `CheckHealth` actions?',
+    options: [
+      '`Fail` is two calls, remove then fail, because the control plane refuses to fail a device still serving.',
+      'The abort edge of `Fail` is on `Failing`.',
+      '`CheckHealth` also triggers a SMART self-test.',
+      '`status.deviceStatusBefore` records the device status after the operation finished.',
+      'There is an `Add` action for new devices.'],
+    correct: [0],
+    explain: 'The abort edge is on `Removing` only, since removal is reversible and failure is not. `CheckHealth` reads the health log and changes nothing; a self-test needs an endpoint nothing implements. `deviceStatusBefore` is the status when the lock was taken. Devices are discovered, so there is no Add.' },
+
+  // ---------- StoragePool ----------
+  { kind: 'StoragePool', cat: 'concept',
+    text: 'What is a `StoragePool`?',
+    options: [
+      'One tenancy unit within a `StorageCluster`, with its own capacity limit and QoS ceilings.',
+      'The object a `StorageClass` is assigned to: the join between the storage administrator\'s and the application developer\'s worlds.',
+      'Deleting a pool deletes the volumes bound in it.',
+      '`spec.volumeDefaults` can be edited freely.',
+      'A pool never creates a `StorageClass` itself.'],
+    correct: [0, 1],
+    explain: 'Deletion is held behind the pool\'s finalizer while classes are assigned or volumes bound. `volumeDefaults` is immutable once set because `StorageClass.parameters` is immutable. The pool controller writes one `StorageClass` per pool and its finalizer deletes it.' },
+  { kind: 'StoragePool', cat: 'field',
+    text: 'What is true of `spec.limits`?',
+    options: [
+      '`capacity` takes a size such as `10T`; empty means unlimited.',
+      'The block is mutable, and raising capacity touches no `StorageClass`.',
+      '`iops` and `throughput` are rejected by a CEL rule as not yet supported.',
+      '`maxVolumeSize` is the minimum size a volume may have.',
+      '`capacity` is immutable.'],
+    correct: [0, 1, 2],
+    explain: 'For a supercluster pool, `capacity` is divided evenly among the members accepting new volumes.' },
+  { kind: 'StoragePool', cat: 'field',
+    text: 'What is true of `spec.allowedNodes`?',
+    options: [
+      'It lists Kubernetes Node names allowed to carry the pool\'s volumes; empty means every node.',
+      'A non-empty list requires `volumeDefaults.enableDHCHAP` to be true.',
+      'Narrowing it migrates existing volumes off the removed nodes.',
+      '`status.allowedNodes` is the list resolved against existing Nodes; empty after resolution means nothing can be placed.',
+      'It names `StorageNode` objects.'],
+    correct: [0, 1, 3],
+    explain: 'Narrowing the list leaves existing volumes where they are; moving them is what the `StoragePoolOps` `Rebalance` action is reserved for. The names are Kubernetes Nodes, not `StorageNode` objects.' },
+  { kind: 'StoragePool', cat: 'field',
+    text: 'What is true of `spec.volumeDefaults`?',
+    options: [
+      '`filesystem` is `ext4` or `xfs`, default `xfs`.',
+      '`stripeSize` can be set on an ordinary, unstriped volume.',
+      'A striped volume cannot use `enableClientCompression` or `enableClientDeduplication`.',
+      'An empty `tune2fsReservedBlocks` runs `tune2fs -m 0`.',
+      'An undefined `priorityClass` falls back to `Default`.'],
+    correct: [0, 2],
+    explain: '`stripeSize` requires `stripeWidth` of at least 2. An empty `tune2fsReservedBlocks` skips tune2fs; `0` runs `tune2fs -m 0`. A `priorityClass` not in the cluster\'s `spec.serviceClasses.classes` means the volume is not created; omitting the field selects `Default`.' },
+  { kind: 'StoragePool', cat: 'field',
+    text: 'How does a `StoragePool` behave when `spec.clusterRef` names a supercluster?',
+    options: [
+      'The pool is created in every member under this name.',
+      '`spec.limits.capacity` is divided evenly among the members accepting new volumes.',
+      '`status.uuid` stays empty, because each member has its own.',
+      '`status.members` lists each member\'s UUID, phase, and limits, keyed by cluster.',
+      'The pool is `Ready` once every member accepting new volumes holds it.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Pool phases are `Pending`, `Ready`, and `Deleting`.' },
+
+  // ---------- StoragePoolOps ----------
+  { kind: 'StoragePoolOps', cat: 'concept',
+    text: 'What is true of `StoragePoolOps`?',
+    options: [
+      '`Rebalance` is its only action, and nothing implements it yet; that is deliberate.',
+      'It replaces the unused `spec.action` the v1alpha1 pool carried.',
+      '`Rebalance` would be a fan-out of `PersistentVolumeOps`, not a backend call.',
+      'Its lock is `StorageCluster.status.activeOpsRef`.',
+      '`Expand` and `Shrink` are among its actions.'],
+    correct: [0, 1, 2],
+    explain: 'Its lock is the pool\'s own `status.activeOpsRef`. Most pool changes are desired-state edits on the pool itself, so the kind exists as the place an imperative pool operation would go.' },
+
+  // ---------- StorageFenceRemediation ----------
+  { kind: 'StorageFenceRemediation', cat: 'concept',
+    text: 'What is a `StorageFenceRemediation`?',
+    options: [
+      'The NodeHealthCheck (medik8s) external remediation of a storage-fenced node on a two-node cluster.',
+      'It applies the `node.kubernetes.io/out-of-service` taint so pods are force-deleted and VolumeAttachments force-detached.',
+      'It performs power fencing of the node.',
+      '`spec.allowForeignVolumes` lets it taint a node although a volume of another CSI driver is attached.',
+      'Its phases are `Pending`, `Blocked`, and `Tainted`.'],
+    correct: [0, 1, 3, 4],
+    explain: 'It skips power fencing because the control plane has already revoked the node\'s NVMe host identities on its peer. `Blocked` means fenced but a check refuses the taint.' },
+  { kind: 'StorageFenceRemediation', cat: 'concept',
+    text: 'What is a `StorageFenceRemediationTemplate`?',
+    options: [
+      'What a NodeHealthCheck names as its `remediationTemplate`.',
+      'A kind with no status.',
+      '`allowForeignVolumes` sits at the top level of its spec.',
+      'Its short name is `sfr`.',
+      'NodeHealthCheck creates one per unhealthy node.'],
+    correct: [0, 1],
+    explain: 'Its one setting is nested as `spec.template.spec.allowForeignVolumes`, and its short name is `sfrt` (`sfr` is the remediation). NodeHealthCheck creates a `StorageFenceRemediation` per node from the template; the template itself is written once by the administrator.' },
+];
+// Question bank, part B: data protection, object store, pNFS, DR and hub kinds, legacy v1alpha1 kinds.
+const QUESTIONS_B = [
+  // ---------- StorageBackup ----------
+  { kind: 'StorageBackup', cat: 'concept',
+    text: 'What is a `StorageBackup`?',
+    options: [
+      'One point-in-time copy of one volume that exists in a cluster\'s store.',
+      'Usually an observation: the operator mirrors what the S3 location holds, one object per backup it reports.',
+      'Deleting the object never deletes the copy in the store.',
+      'It can also be a request, when `spec.source.claimName` asks for a new backup of a claim.',
+      'Its terminal success phase is `Available`, not `Succeeded`, because a backup is not an operation.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. A record names `spec.clusterRef`; a request names `spec.source`; exactly one of the two is set.' },
+  { kind: 'StorageBackup', cat: 'field',
+    text: 'Which labels can a `StorageBackup` carry, and what do they mean?',
+    options: [
+      '`storage.simplyblock.io/cluster`: the `StorageCluster` whose store the backup was found in.',
+      '`storage.simplyblock.io/claim`: the PVC the copy was taken from, absent when the claim is gone.',
+      '`storage.simplyblock.io/backup-policy`: the `StorageBackupPolicy` that scheduled it.',
+      '`storage.simplyblock.io/group-backup-id`: the full `<cluster_id>/<uuid>` the control plane reports.',
+      '`storage.simplyblock.io/node`: the storage node that held the data.'],
+    correct: [0, 1, 2],
+    explain: 'The node is `status.source.nodeID`, not a label. The group-backup id label carries only the bare UUID: the `<cluster_id>/` prefix is stripped because a label value can hold neither the slash nor 73 characters.' },
+  { kind: 'StorageBackup', cat: 'field',
+    text: 'What is true of `StorageBackup.status`?',
+    options: [
+      '`status.backup.previousBackupID` names the backup this one is incremental against.',
+      '`status.source` is refreshed on every mirror pass.',
+      '`status.apiStatus` values are PascalCase.',
+      '`status.activeOpsRef` names the `StorageBackupOps` currently acting on it, as `namespace/name` when in another namespace.',
+      '`status.observedGeneration` advances on every reconcile.'],
+    correct: [0, 3],
+    explain: '`status.source` is written once and never updated, and `apiStatus` keeps the control plane\'s own spelling. Every spec field is fixed at creation, so `observedGeneration` moves at most once.' },
+
+  // ---------- StorageBackupOps ----------
+  { kind: 'StorageBackupOps', cat: 'concept',
+    text: 'What is true of `StorageBackupOps`?',
+    options: [
+      'Its only action today is `Restore`.',
+      'It absorbed the v1alpha1 `BackupRestore` kind, with no conversion between the two.',
+      'The claim a restore produces is owned by the operation and deleted with it.',
+      'Exactly one of `backupRef`, `groupBackupRef`, and `groupBackupID` must be set.',
+      'The `storage.simplyblock.io/historical-record` annotation makes the controller re-run the restore.'],
+    correct: [0, 1, 3],
+    explain: 'The claim is not owned and outlives the operation: deleting the audit record must never delete the recovered volume. The historical-record annotation marks work already done, and the controller never advances such an operation.' },
+  { kind: 'StorageBackupOps', cat: 'field',
+    text: 'What is true of `spec.restore`?',
+    options: [
+      '`claimName` is required and the claim must not already exist.',
+      '`targetPool` is required rather than defaulted, because pool choice is a tenancy and QoS decision.',
+      'It carries a size and an access mode like a PVC template.',
+      '`volumeMode` must always be set explicitly.',
+      '`claimLabels` and `claimAnnotations` can be edited while the operation runs.'],
+    correct: [0, 1],
+    explain: 'There is no size or access mode: the size comes from `status.backup.size`. `volumeMode` defaults to the mode in the backup\'s `status.source` and must be set only for a backup that recorded none. Labels and annotations are immutable so the audit record cannot disagree with what happened.' },
+  { kind: 'StorageBackupOps', cat: 'action',
+    text: 'Which are steps of a `StorageBackupOps` restore?',
+    options: ['`Validating`', '`Restoring`', '`AwaitingVolumes`', '`Promoting`', '`Snapshotting`'],
+    correct: [0, 1, 2],
+    explain: 'The steps are `Validating`, `Restoring`, `AwaitingVolume`, `AwaitingVolumes` (group restore), `Binding`, and `Completed`. `Restoring` is the last step from which an abort undoes nothing.' },
+
+  // ---------- StorageBackupPolicy ----------
+  { kind: 'StorageBackupPolicy', cat: 'concept',
+    text: 'What is a `StorageBackupPolicy`?',
+    options: [
+      'The only thing that decides a backup is taken; it schedules and retains the backups of the claims it selects.',
+      'The operator runs the schedule itself.',
+      'It is reconciled into the control plane, which runs the schedule and enforces retention.',
+      'It replaces the v1alpha1 `BackupPolicy`, which the upgrade copies into a new object.',
+      'A policy may select independent claims and a consistency group at the same time.'],
+    correct: [0, 2, 3],
+    explain: 'A schedule that stopped when the operator was down would be one nobody could rely on, so the control plane runs it. A policy backs up either independent claims (`claimSelector`) or one whole consistency group (`consistencyGroupName`), never both.' },
+  { kind: 'StorageBackupPolicy', cat: 'field',
+    text: 'What is true of the retention and schedule fields?',
+    options: [
+      '`schedule` is a space-separated list of `interval,keep_count` pairs such as `15m,4 60m,11 24h,7`.',
+      'Intervals must be strictly increasing, with units m, h, d, and w.',
+      '`schedule` is mutable; the control plane applies the change.',
+      '`maxVersions: 0` means keep nothing.',
+      'An absent `claimSelector` selects every claim in the namespace.'],
+    correct: [0, 1],
+    explain: '`maxVersions: 0` means no limit by count, and an absent selector selects nothing (reported with a `SelectorEmpty` event). `schedule`, `maxVersions`, `maxAge`, and `clusterRef` are immutable because the control plane offers no call that applies a changed schedule.' },
+
+  // ---------- StorageGroupBackup ----------
+  { kind: 'StorageGroupBackup', cat: 'concept',
+    text: 'What is a `StorageGroupBackup`?',
+    options: [
+      'One on-demand backup of a whole consistency group: one crash-consistent generation, every member backed up as one unit.',
+      'The member copies are recorded as `StorageBackup` objects beside it.',
+      'It becomes `Available` once every member copy has completed.',
+      '`spec.source.consistencyGroupName` names the group whose claims carry the `storage.simplyblock.io/consistency-group` label.',
+      'A restore names it through `StorageBackupOps.spec.groupBackupRef`.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five hold. Deleting it deletes no copy and no record.' },
+
+  // ---------- ObjectStore ----------
+  { kind: 'ObjectStore', cat: 'concept',
+    text: 'What is an `ObjectStore`?',
+    options: [
+      'The desired existence of one S3 gateway: its Deployment, its Service, and the Service\'s serving certificate.',
+      'Every gateway pod carries `storage.simplyblock.io/objectstore=<name>`, which is how the bucket reconciler finds them.',
+      '`spec.image` is required because the gateway is released separately and has no sensible default.',
+      '`spec.buckets` is optional.',
+      'TLS is optional and off by default.'],
+    correct: [0, 1, 2],
+    explain: '`spec.buckets` is required: its `storageClassName` and `capacityBytes` are what every bucket created through an S3 `CreateBucket` request is provisioned with. An S3 gateway is assumed to always serve over TLS.' },
+  { kind: 'ObjectStore', cat: 'field',
+    text: 'Which defaults does `ObjectStore.spec` carry?',
+    options: ['`region` defaults to `us-east-1`', '`replicas` defaults to 1', '`imagePullPolicy` defaults to `IfNotPresent`', '`tlsProvider` defaults to `cert-manager`', '`port` defaults to 9000'],
+    correct: [0, 1],
+    explain: '`imagePullPolicy` defaults to `Always` and `tlsProvider` to `OpenShift`; `port` is required with no default. Every client must sign for exactly the configured region or the gateway answers `AuthorizationHeaderMalformed`.' },
+
+  // ---------- S3Bucket ----------
+  { kind: 'S3Bucket', cat: 'concept',
+    text: 'What is true of `S3Bucket`?',
+    options: [
+      'It is the desired existence of one bucket: its backing volume, its pNFS export, and the per-node mount deliveries.',
+      '`spec.bucketName` is validated against the S3 bucket-naming grammar, not the Kubernetes object-name grammar.',
+      '`spec.capacityBytes` is immutable.',
+      '`spec.storageClassName` must select the pNFS fstype or the bucket never leaves `Pending`.',
+      'Its phases are the same as `ObjectStore`\'s.'],
+    correct: [0, 1, 3],
+    explain: '`capacityBytes` can be increased (a PVC expansion) but not decreased. `S3Bucket` adds a `Deleting` phase that `ObjectStore` does not have. The `storage.simplyblock.io/s3-owner` annotation records which access key created it.' },
+
+  // ---------- NFSExport ----------
+  { kind: 'NFSExport', cat: 'concept',
+    text: 'What is an `NFSExport`?',
+    options: [
+      'One pNFS export: the volume it serves, the host serving it, and the address clients mount.',
+      'The bound host lives in spec so an administrator can pin it.',
+      '`spec.volumeRef` is a CSI volume handle in `{clusterID}:{poolID}:{lvolID}` form and is the whole identity of the export.',
+      '`status.mdsNodeIP` is the address a client mounts.',
+      'Phase `Degraded` is retried automatically until the export assembles.'],
+    correct: [0, 2],
+    explain: 'The bound host is an observed binding the operator owns, so it lives in status. A client mounts `status.serviceAddress`, the ClusterIP of the fronting Service. `Degraded` is reached by the operator declining to act further, since a double-mounted export is not recoverable.' },
+  { kind: 'NFSExport', cat: 'field',
+    text: 'What is true of `NFSExport.spec.encrypted`?',
+    options: [
+      'It means the control plane stacks a crypto bdev under the volume, so unwritten blocks read as pseudo-random rather than zeros.',
+      'Assembly needs it, or an empty encrypted volume is mistaken for an occupied one and never formatted.',
+      'It is serialized even when false.',
+      'It is mutable.',
+      'It can be flipped on an existing export when the volume is re-encrypted.'],
+    correct: [0, 1, 2],
+    explain: 'The field is immutable and has no omitempty: the CRD requires it stay present once set, so a dropped false value would read as removal and every later write from the typed client would be refused.' },
+
+  // ---------- StretchedCluster ----------
+  { kind: 'StretchedCluster', cat: 'concept',
+    text: 'What is a `StretchedCluster`?',
+    options: [
+      'A hub request for one synchronously replicated storage cluster whose two sites are two OCM managed clusters.',
+      'It carries a discovery and a draft on each site, their sizing, and the approval that creates the cluster on the leader and joins it from the follower.',
+      '`spec.sites` has exactly two entries, exactly one with role `Leader`.',
+      'The managed clusters of a stretched cluster can be replaced after creation.',
+      'Deleting the request deletes both sites\' storage.'],
+    correct: [0, 1, 2],
+    explain: 'CEL forbids replacing the managed clusters, and deleting the request leaves both sites\' storage alone. Roles may be swapped once both sites are `Ready`.' },
+  { kind: 'StretchedCluster', cat: 'field',
+    text: 'What is true of `spec.approved` on a `StretchedCluster`?',
+    options: [
+      'It is one-way: an approved stretched cluster cannot be un-approved.',
+      'The leader\'s draft is approved as soon as it is set.',
+      'The follower\'s draft is approved only once the leader\'s cluster exists, so the follower never races the create.',
+      '`discover` can still be changed after approval to run another discovery.',
+      'It defaults to true.'],
+    correct: [0, 1, 2],
+    explain: 'It defaults to false, like every approval gate in this group, and `discover` is frozen once the stretched cluster is approved.' },
+
+  // ---------- StorageSiteDeployment ----------
+  { kind: 'StorageSiteDeployment', cat: 'concept',
+    text: 'What is a `StorageSiteDeployment`?',
+    options: [
+      'A hub request for a managed site\'s storage cluster: a discovery on the site, the sizing of the draft it writes, and the approval that expands the draft.',
+      'The hub carries it through OCM as a ManifestWork and projects the site\'s draft and cluster back into status.',
+      'Its site-side objects are an `OperatorOps` discovery, a `ClusterDeploymentConfig` draft, and the `StorageCluster` the approved draft expands into.',
+      '`spec.draftName` defaults to `site-draft`.',
+      'Its phases include `Deploying` and `Online`.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'The phases are `Pending`, `Discovering`, `Drafted`, `Deploying`, `Online`, and `Failed`. `spec.discover` is the hub-side form of `OperatorOps.spec.discover`.' },
+
+  // ---------- TestFailover ----------
+  { kind: 'TestFailover', cat: 'concept',
+    text: 'What is a `TestFailover`?',
+    options: [
+      'A one-way, non-disruptive drill that recovers a volume or a consistency group from a snapshot into an isolated namespace on a chosen cluster.',
+      'The recovery point is always a snapshot and the result is always a clone, so the source is never touched.',
+      '`spec.bubbleCluster` may equal `spec.sourceCluster` for an in-place drill.',
+      '`spec.ttlSeconds` is required.',
+      '`status.report.invariantsHeld: false` on a `Ready` drill is expected after a group restore.'],
+    correct: [0, 1],
+    explain: 'The bubble cluster must differ from the source cluster: test-failover never recovers in place. `ttlSeconds` is optional and tears the drill down even without a delete. `invariantsHeld` is true only when the source fingerprint before the drill matches the one at `Ready`; false on a `Ready` drill is a defect.' },
+  { kind: 'TestFailover', cat: 'field',
+    text: 'Which are steps of a `TestFailover`?',
+    options: ['`ResolvingSource`', '`ResolvingPoint`', '`Shipping`', '`Mounting`', '`Promoting`'],
+    correct: [0, 1, 2],
+    explain: 'The steps are `ResolvingSource`, `ResolvingPoint`, `Shipping`, `Cloning`, `Placing`, and `Releasing`. Nothing is promoted: the clone lands as a bound PVC in the bubble namespace.' },
+
+  // ---------- Two-node arbitration ----------
+  { kind: 'StorageCluster', cat: 'field',
+    text: 'What is true of two-node arbitration (`spec.arbitration`)?',
+    options: [
+      '`holdMs` is how long a node holds writes after losing its peer, and must stay below the hosts\' NVMe keep-alive timeout of 5000 ms.',
+      '`leaseTtlMs` must be shorter than `holdMs`.',
+      '`hostFencing` lets Kubernetes follow the arbiter\'s fence, which requires the NodeHealthCheck operator.',
+      'The `storage.simplyblock.io/fenced` taint has effect `NoSchedule`.',
+      'Arbitration is valid in `Standard` cluster mode.'],
+    correct: [0, 1, 2],
+    explain: 'The fenced taint carries the arbiter\'s epoch as its value with effect `NoExecute`, so workloads move to the surviving node. Arbitration is only valid when `clusterMode` is `Dual`.' },
+
+  // ---------- Legacy v1alpha1 kinds ----------
+  { kind: 'Legacy v1alpha1', cat: 'concept',
+    text: 'Which v1alpha1 kinds are retired, renamed, or absorbed by the CRD redesign?',
+    options: [
+      '`StorageNodeSet` is retired; the fleet template became `ClusterDeploymentConfig.nodeSets[]`.',
+      '`BackupPolicy` is renamed to `StorageBackupPolicy`.',
+      '`BackupRestore` is absorbed into `StorageBackupOps` as `action: Restore`.',
+      '`VolumeMigration` is absorbed into `PersistentVolumeOps`.',
+      '`BackupImport` is retired, because the store is the inventory and nothing needs importing.'],
+    correct: [0, 1, 2, 3, 4],
+    explain: 'All five are served at v1alpha1 and then gone. `Task` and the four replication kinds are out of scope of the redesign and stay at v1alpha1 for now.' },
+  { kind: 'Legacy v1alpha1', cat: 'concept',
+    text: 'What is true of the v1alpha1 `VolumeMigration` kind?',
+    options: [
+      'It moves a volume\'s backing logical volume to a different storage node named by `spec.targetNodeUUID`.',
+      'Its reconciler runs only when the operator is started with `--legacy-volume-migration`.',
+      'The migration is addressed by NVMe-oF subsystem, so every volume sharing the subsystem moves with it.',
+      'An in-flight migration is converted into a `PersistentVolumeOps` on upgrade.',
+      'Its phases are the five standard Ops phases.'],
+    correct: [0, 1, 2],
+    explain: 'The two kinds do not convert; an in-flight migration cannot be carried across, which is why the flag lets an upgrade turn the old kind back on while migrations drain. Its phases are `Pending`, `Validating`, `Running`, `Completed`, `Failed`, and `Aborted`, merging phase and step into one enum.' },
+  { kind: 'Legacy v1alpha1', cat: 'concept',
+    text: 'What is true of the v1alpha1 replication kinds?',
+    options: [
+      '`ReplicationPair` defines the source and target clusters; `targetCluster` is immutable.',
+      '`ReplicationPolicy.spec.mode` is `sync` or `async`.',
+      '`ReplicationSlot` is created automatically per PVC that references a policy by annotation, and is owned by the PVC.',
+      '`ReplicationOps` actions are `Failover`, `Failback`, and `Migrate`.',
+      'They were redesigned into v1alpha2 alongside the backup kinds.'],
+    correct: [0, 2],
+    explain: 'The policy mode is `failover` or `migration`, and the ops actions are lowercase `failover`, `failback`, `migration`, `trigger`, and `snapshot` (they predate the PascalCase rule). They are out of scope of the redesign and stay at v1alpha1.' },
+  { kind: 'Legacy v1alpha1', cat: 'field',
+    text: 'What is true of `ReplicationOps.spec`?',
+    options: [
+      '`scope` is `target`, `policy`, `volume`, or `cluster`.',
+      '`action: snapshot` cannot be combined with `scope: volume`.',
+      '`policyRef` is required for `scope: cluster`, to enroll claims that are not replicated yet.',
+      '`dryRun` is allowed for every action.',
+      'Its phases include `Aborted`.'],
+    correct: [0, 1, 2],
+    explain: '`dryRun` asks for the migration plan and forecast only and is allowed for `action: migration` alone. Its phases are `Pending`, `Running`, `Succeeded`, and `Failed`; it predates the `Aborted` convention.' },
+  { kind: 'Legacy v1alpha1', cat: 'concept',
+    text: 'What is the v1alpha1 `Task` kind?',
+    options: [
+      'A mirror of backend tasks for a cluster: one object can list many tasks in `status.tasks`.',
+      'Observation only; it is not part of the target model.',
+      'An action kind that starts a backend task.',
+      'Its short name is `task`.',
+      '`spec.taskID` is required.'],
+    correct: [0, 1],
+    explain: 'It observes rather than acts, has no short name by decision, and `spec.taskID` is an optional filter. In the redesign, a cluster\'s running tasks are `StorageCluster.status.tasks`, and a task is canceled through `StorageClusterOps` `CancelTask`.' },
+  { kind: 'Legacy v1alpha1', cat: 'field',
+    text: 'What is true of the v1alpha1 `BackupPolicy`?',
+    options: [
+      'A PVC opts in with the `simplyblock.io/backup-policy` annotation; the older `simplybk/backup-policy` is still honored.',
+      'The policy and the annotated PVC must share a namespace.',
+      'Exceeding `maxVersions` deletes the oldest backup.',
+      'Every spec field is immutable.',
+      'Its phases include `Done`.'],
+    correct: [0, 1, 3],
+    explain: 'Retention merges rather than deletes: the oldest backup is merged into the second-oldest. The phases are `Active`, `Pending`, and `Failed`.' },
+];
+const QUESTIONS = QUESTIONS_A.concat(QUESTIONS_B);
+</script>
+<script>
+(function () {
+  const PER_RUN = 15;
+  const PER_QUESTION = 5;
+  const MAX_POINTS = PER_RUN * PER_QUESTION;
+  // The results API is served beside the page by the host (see crd-quiz-host.sh). When it is not
+  // there, as for a copy opened from disk, the sharing and statistics views stay hidden.
+  const API = 'api/results';
+  const app = document.getElementById('app');
+  const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+  // Inline `code` spans in question and answer text are written with backticks.
+  const fmt = s => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
+  const shuffle = a => { a = a.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
+  const catClass = c => c === 'action' ? 'chip action' : c === 'concept' ? 'chip concept' : 'chip';
+  const signed = n => (n > 0 ? '+' : '') + n;
+  // Every answer is judged: ticked and correct, or unticked and not correct, is a right judgment.
+  // A right judgment is one point, a wrong one is minus one, so a question scores from -5 to +5.
+  const judge = (options, picked) => {
+    const hits = options.filter((o, idx) => picked.includes(idx) === o.correct).length;
+    return { hits, misses: options.length - hits, points: hits - (options.length - hits) };
+  };
+  const totalPoints = results => results.reduce((s, r) => s + judge(r.options, r.picked).points, 0);
+
+  let state = { screen: 'start', run: [], i: 0, picked: [], revealed: false, results: [], sent: false };
+  let stats = null;      // last statistics fetched from the API, or null when unavailable
+  let apiAvailable = false;
+
+  function bestGet() { try { return localStorage.getItem('crdquiz.bestPoints'); } catch (e) { return null; } }
+  function bestSet(v) { try { localStorage.setItem('crdquiz.bestPoints', v); } catch (e) {} }
+
+  async function fetchStats() {
+    try {
+      const r = await fetch(API, { cache: 'no-store' });
+      if (!r.ok) throw new Error(String(r.status));
+      stats = await r.json();
+      apiAvailable = Array.isArray(stats.scores);
+    } catch (e) {
+      apiAvailable = false;
+    }
+    return apiAvailable;
+  }
+
+  async function sendResult(points) {
+    const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ score: points }) });
+    if (!r.ok) throw new Error('The server answered ' + r.status + '.');
+    stats = await r.json();
+  }
+
+  function pickRun() {
+    // Spread the run across kinds: round-robin over shuffled kinds so no single CRD dominates.
+    const byKind = {};
+    shuffle(QUESTIONS).forEach(q => { (byKind[q.kind] = byKind[q.kind] || []).push(q); });
+    const kinds = shuffle(Object.keys(byKind));
+    const out = [];
+    let round = 0;
+    while (out.length < PER_RUN && round < 50) {
+      for (const k of kinds) {
+        if (out.length >= PER_RUN) break;
+        const q = byKind[k][round];
+        if (q) out.push(q);
+      }
+      round++;
+    }
+    return shuffle(out).map(q => ({ q, options: shuffle(q.options.map((text, idx) => ({ text, correct: q.correct.includes(idx) }))) }));
+  }
+
+  function start() {
+    state = { screen: 'question', run: pickRun(), i: 0, picked: [], revealed: false, results: [], sent: false };
+    render();
+    window.scrollTo({ top: 0 });
+  }
+
+  function statsBlock(mine) {
+    if (!stats || !Array.isArray(stats.scores)) return '<p class="note">Statistics could not be loaded.</p>';
+    const n = stats.scores.length;
+    if (n === 0) return '<p class="note">No result has been sent yet.</p>';
+    const avg = stats.scores.reduce((a, b) => a + b, 0) / n;
+    let mineLeft = mine === undefined ? -1 : 1;
+    const chips = stats.scores.map(s => {
+      // The sender's own score is highlighted once, on the last matching entry.
+      return `<span>${signed(s)}</span>`;
+    });
+    if (mine !== undefined) {
+      for (let i = chips.length - 1; i >= 0 && mineLeft > 0; i--) {
+        if (stats.scores[i] === mine) { chips[i] = `<span class="mine">${signed(mine)}</span>`; mineLeft--; }
+      }
+    }
+    return `
+      <div class="score">
+        <div><div class="n">${signed(Math.round(avg * 10) / 10)}</div><div class="l">average points over ${n} ${n === 1 ? 'quiz' : 'quizzes'} sent in (out of ${MAX_POINTS})</div></div>
+      </div>
+      <div class="stack" style="gap:8px">
+        <p class="eyebrow">Points of every quiz sent in</p>
+        <div class="scores">${chips.join('')}</div>
+        <p class="note">Each entry is one finished quiz whose taker chose to send it. No name, address, or time is stored with it.</p>
+      </div>`;
+  }
+
+  function renderStart() {
+    const kinds = [...new Set(QUESTIONS.map(q => q.kind))].sort();
+    const best = bestGet();
+    app.innerHTML = `
+      <div class="stack">
+        <p class="eyebrow">simplyblock operator · storage.simplyblock.io</p>
+        <h1>Operator CRD Quiz</h1>
+        <p class="muted">Fifteen questions, drawn at random from a bank of ${QUESTIONS.length}, about the operator's custom resources: what each kind is for, how the entity and action halves fit together, and what individual spec and status fields mean.</p>
+      </div>
+      <div class="card stack">
+        <h2>How it works</h2>
+        <div class="rules">
+          <div class="rule"><strong>15 random questions</strong><span class="small muted">A different set every run, spread across the kinds.</span></div>
+          <div class="rule"><strong>5 answers each</strong><span class="small muted">Any number can be correct, from none to all five.</span></div>
+          <div class="rule"><strong>Tick what applies</strong><span class="small muted">Leave everything unticked if you think no answer is right.</span></div>
+          <div class="rule"><strong>Scoring</strong><span class="small muted">Every answer is judged. A right judgment is +1, a wrong one is −1, so a question scores −5 to +5 and a quiz −${MAX_POINTS} to +${MAX_POINTS}.</span></div>
+        </div>
+        <div class="stack" style="gap:8px">
+          <p class="eyebrow">Kinds covered</p>
+          <div class="kinds">${kinds.map(k => `<span class="kind">${esc(k)}</span>`).join('')}</div>
+        </div>
+        <div class="row">
+          <button class="primary" id="startBtn">Start the quiz</button>
+          ${apiAvailable ? '<button id="statsBtn">Statistics</button>' : ''}
+          ${best ? `<span class="small muted">Best so far on this device: ${esc(signed(Number(best)))} points</span>` : ''}
+        </div>
+      </div>`;
+    document.getElementById('startBtn').addEventListener('click', start);
+    const sb = document.getElementById('statsBtn');
+    if (sb) sb.addEventListener('click', async () => { await fetchStats(); state.screen = 'stats'; render(); window.scrollTo({ top: 0 }); });
+  }
+
+  function renderStats() {
+    app.innerHTML = `
+      <div class="stack">
+        <p class="eyebrow">Operator CRD Quiz</p>
+        <h1>Statistics</h1>
+        <p class="muted">Every quiz that was taken to the end and sent in, anonymously.</p>
+      </div>
+      <div class="card stack">
+        ${statsBlock()}
+        <div class="row"><button class="primary" id="startBtn">Start the quiz</button><button id="homeBtn">Back to start</button></div>
+      </div>`;
+    document.getElementById('startBtn').addEventListener('click', start);
+    document.getElementById('homeBtn').addEventListener('click', () => { state.screen = 'start'; render(); window.scrollTo({ top: 0 }); });
+  }
+
+  function renderQuestion() {
+    const item = state.run[state.i];
+    const q = item.q;
+    const n = state.i + 1;
+    const pct = Math.round((state.i / PER_RUN) * 100);
+    const picked = state.picked;
+    const opts = item.options.map((o, idx) => {
+      const on = picked.includes(idx);
+      let cls = 'opt' + (on ? ' checked' : '');
+      let mark = '';
+      if (state.revealed) {
+        const judged = on === o.correct;
+        cls += judged ? ' right' : ' wrong';
+        mark = `<span class="mark">${o.correct ? 'correct' : 'not correct'}${judged ? ' · +1' : ' · you missed this · −1'}</span>`;
+      }
+      return `<li><label class="${cls}"><input type="checkbox" id="opt${state.i}_${idx}" data-idx="${idx}" ${on ? 'checked' : ''} ${state.revealed ? 'disabled' : ''}><span>${fmt(o.text)}</span>${mark}</label></li>`;
+    }).join('');
+
+    let verdict = '';
+    if (state.revealed) {
+      const j = judge(item.options, picked);
+      const fullyRight = j.misses === 0;
+      verdict = `<div class="verdict ${fullyRight ? 'ok' : 'miss'}"><strong>${fullyRight ? 'Correct: +5 points.' : `${j.hits} right, ${j.misses} wrong: ${signed(j.points)} points.`}</strong> ${fmt(q.explain)}</div>`;
+    }
+
+    app.innerHTML = `
+      <div class="progress"><div class="bar"><i style="width:${pct}%"></i></div><span class="counter">Question ${n} of ${PER_RUN}</span></div>
+      <div class="card stack">
+        <div class="row"><span class="${catClass(q.cat)}">${esc(q.kind)}</span><span class="hint">${q.cat === 'field' ? 'Field meaning' : q.cat === 'action' ? 'Operation kind' : 'Purpose and model'}</span></div>
+        <p class="qtext">${fmt(q.text)}</p>
+        <ul class="opts" id="opts">${opts}</ul>
+        ${verdict}
+        <div class="row">
+          ${state.revealed
+            ? `<button class="primary" id="nextBtn">${n === PER_RUN ? 'See results' : 'Next question'}</button>`
+            : `<button class="primary" id="checkBtn">Check answer</button><span class="hint">${picked.length === 0 ? 'Nothing ticked means "none of these is correct".' : `${picked.length} ticked`}</span>`}
+        </div>
+      </div>`;
+
+    if (!state.revealed) {
+      document.getElementById('opts').addEventListener('change', e => {
+        const idx = Number(e.target.dataset.idx);
+        if (e.target.checked) state.picked = [...state.picked, idx]; else state.picked = state.picked.filter(x => x !== idx);
+        renderQuestion();
+      });
+      document.getElementById('checkBtn').addEventListener('click', () => {
+        state.revealed = true;
+        const fullyRight = item.options.every((o, idx) => state.picked.includes(idx) === o.correct);
+        state.results.push({ q, options: item.options, picked: state.picked, fullyRight });
+        renderQuestion();
+      });
+    } else {
+      document.getElementById('nextBtn').addEventListener('click', () => {
+        if (state.i + 1 >= PER_RUN) { state.screen = 'results'; }
+        else { state.i++; state.picked = []; state.revealed = false; }
+        render();
+        window.scrollTo({ top: 0 });
+      });
+    }
+  }
+
+  function renderResults(sendError) {
+    const points = totalPoints(state.results);
+    const fully = state.results.filter(r => r.fullyRight).length;
+    const best = Number(bestGet());
+    if (bestGet() === null || points > best) bestSet(String(points));
+    const grade = points >= 65 ? 'You know these CRDs inside out.' : points >= 45 ? 'Solid. The misses below are worth a second look.' : points >= 15 ? 'A fair start. Read the explanations below and run it again.' : 'Plenty to learn. The explanations below say what each kind and field is for.';
+
+    let share;
+    if (!apiAvailable) {
+      share = '<p class="note">This copy of the quiz is not connected to a results server, so results cannot be sent in.</p>';
+    } else if (state.sent) {
+      share = `<div class="stack"><p><strong>Sent.</strong> Your ${signed(points)} points are counted in the statistics below.</p>${statsBlock(points)}</div>`;
+    } else {
+      share = `
+        <div class="stack" style="gap:8px">
+          <p>Count this quiz in the shared statistics? Only the point total (${signed(points)}) is sent. No name, address, or time goes with it, and everyone can see the statistics.</p>
+          <div class="row"><button class="primary" id="sendBtn">Send my result anonymously</button><button id="statsBtn">Show statistics without sending</button></div>
+          ${sendError ? `<p class="note" style="color:var(--bad)">Sending failed: ${esc(sendError)} You can try again.</p>` : ''}
+        </div>`;
+    }
+
+    app.innerHTML = `
+      <div class="stack">
+        <p class="eyebrow">Results</p>
+        <h1>${signed(points)} points out of ${MAX_POINTS}</h1>
+        <p class="muted">${esc(grade)}</p>
+      </div>
+      <div class="card stack">
+        <div class="score">
+          <div><div class="n">${signed(points)}</div><div class="l">points: right judgments minus wrong ones over ${PER_RUN * PER_QUESTION} answers</div></div>
+          <div><div class="n">${fully}<span class="muted" style="font-size:1.2rem">/${PER_RUN}</span></div><div class="l">questions with all five answers judged right</div></div>
+          ${best > points ? `<div><div class="n">${signed(best)}</div><div class="l">best run on this device</div></div>` : ''}
+        </div>
+        ${share}
+        <div class="row"><button class="primary" id="againBtn">Run it again with new questions</button><button id="homeBtn">Back to start</button></div>
+      </div>
+      <div class="stack">
+        <h2>Review</h2>
+        <div class="review">${state.results.map(r => {
+          const j = judge(r.options, r.picked);
+          return `
+          <details ${r.fullyRight ? '' : 'open'}>
+            <summary><span class="tag ${r.fullyRight ? 'ok' : 'miss'}">${signed(j.points)}</span><span>${fmt(r.q.text)}</span></summary>
+            <ul>${r.options.map((o, idx) => `<li class="${o.correct ? 'c' : 'w'}">${fmt(o.text)}${r.picked.includes(idx) !== o.correct ? ' <em>(you got this one wrong)</em>' : ''}</li>`).join('')}</ul>
+            <p class="small" style="margin-top:8px">${fmt(r.q.explain)}</p>
+          </details>`; }).join('')}</div>
+      </div>`;
+    document.getElementById('againBtn').addEventListener('click', start);
+    document.getElementById('homeBtn').addEventListener('click', () => { state.screen = 'start'; render(); window.scrollTo({ top: 0 }); });
+    const send = document.getElementById('sendBtn');
+    if (send) send.addEventListener('click', async () => {
+      send.disabled = true; send.textContent = 'Sending…';
+      try { await sendResult(points); state.sent = true; renderResults(); }
+      catch (e) { renderResults(e.message || 'network error.'); }
+    });
+    const sb = document.getElementById('statsBtn');
+    if (sb) sb.addEventListener('click', async () => { await fetchStats(); state.screen = 'stats'; render(); window.scrollTo({ top: 0 }); });
+  }
+
+  function render() {
+    if (state.screen === 'start') renderStart();
+    else if (state.screen === 'question') renderQuestion();
+    else if (state.screen === 'stats') renderStats();
+    else renderResults();
+  }
+
+  if (window.claude && window.claude.hot && window.claude.hot.snapshot) {
+    window.claude.hot.snapshot(() => state);
+  }
+  const boot = async saved => {
+    if (saved && saved.screen && Array.isArray(saved.run) && saved.run.length) state = Object.assign({ sent: false }, saved);
+    render();
+    // The first render goes out before the API answers, so the start screen gains its
+    // Statistics button, and the results screen its sharing block, once it has.
+    if (await fetchStats()) render();
+  };
+  if (window.claude && window.claude.hot && window.claude.hot.ready) window.claude.hot.ready(boot);
+  else boot(window.claude && window.claude.hot ? window.claude.hot.data : null);
+})();
+</script>
+</body>
+</html>
