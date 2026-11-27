@@ -325,12 +325,57 @@ EOF
   oc_ rollout status deployment/cert-manager-webhook -n cert-manager --timeout=10m
 }
 
+# The OpenShift prerequisites the operator's install notes list (the CSV
+# description in operator/config/manifests/bases): the privileged and anyuid
+# SCCs for every ServiceAccount in the namespace, and the privileged Pod
+# Security level on it. Without them OpenShift refuses the operator's pod,
+# which runs as a fixed user.
+grant_openshift_prerequisites() {
+  oc_ apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: simplyblock
+  labels:
+    pod-security.kubernetes.io/enforce: privileged
+    pod-security.kubernetes.io/audit: privileged
+    pod-security.kubernetes.io/warn: privileged
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-scc-privileged
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:privileged
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:serviceaccounts:simplyblock
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: simplyblock-scc-anyuid
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:openshift:scc:anyuid
+subjects:
+- apiGroup: rbac.authorization.k8s.io
+  kind: Group
+  name: system:serviceaccounts:simplyblock
+EOF
+}
+
 # simplyblock from this checkout's chart. The chart's snapshot controller stays
 # off: OpenShift runs its own, and a second one is a finding of the Level 1
 # monitor tests.
 cmd_install_simplyblock() {
   require_cluster
   install_cert_manager
+  grant_openshift_prerequisites
   command -v helm >/dev/null || die "helm is not on PATH"
   local branch operator_image simplyblock_image
   branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD | tr '/' '-')"
