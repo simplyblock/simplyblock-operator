@@ -310,6 +310,12 @@ spec:
         - matchExpressions:
           - {key: kubernetes.io/arch, operator: In, values: [amd64]}
           - {key: kubernetes.io/hostname, operator: NotIn, values: [$FAILURE_NODE, $DRAIN_NODE, $CEILING_NODE]}
+  # With three workers, all three are the ones the harness disrupts, and what
+  # is left are the control-plane nodes, which carry a NoSchedule taint. The
+  # harness is a client of the API server and runs there as well as anywhere.
+  tolerations:
+  - {key: node-role.kubernetes.io/master, operator: Exists, effect: NoSchedule}
+  - {key: node-role.kubernetes.io/control-plane, operator: Exists, effect: NoSchedule}
   containers:
   - name: harness
     image: $HARNESS_IMAGE
