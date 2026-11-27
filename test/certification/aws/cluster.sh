@@ -284,11 +284,53 @@ EOF
   echo "OpenShift Virtualization $(oc_ get -n openshift-cnv "csv/$(hco_csv | head -1)" -o jsonpath='{.spec.version}') is available"
 }
 
+# Red Hat's cert-manager Operator, for the chart's TLS. The chart's default,
+# mutual TLS, needs cert-manager; OpenShift's own service CA serves one-way TLS
+# only, a configuration the certification runs have not used.
+install_cert_manager() {
+  if oc_ get crd certificates.cert-manager.io >/dev/null 2>&1; then
+    echo "cert-manager is installed"
+    return 0
+  fi
+  oc_ apply -f - <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: cert-manager-operator
+---
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: cert-manager-operator
+spec:
+  targetNamespaces:
+  - cert-manager-operator
+---
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: openshift-cert-manager-operator
+  namespace: cert-manager-operator
+spec:
+  source: redhat-operators
+  sourceNamespace: openshift-marketplace
+  name: openshift-cert-manager-operator
+  channel: stable-v1
+  installPlanApproval: Automatic
+EOF
+  echo "waiting for cert-manager"
+  wait_for "the cert-manager CRDs" 900 oc_ get crd certificates.cert-manager.io -o name
+  wait_for "the cert-manager webhook" 900 oc_ get deployment cert-manager-webhook -n cert-manager -o name
+  oc_ rollout status deployment/cert-manager-webhook -n cert-manager --timeout=10m
+}
+
 # simplyblock from this checkout's chart. The chart's snapshot controller stays
 # off: OpenShift runs its own, and a second one is a finding of the Level 1
 # monitor tests.
 cmd_install_simplyblock() {
   require_cluster
+  install_cert_manager
   command -v helm >/dev/null || die "helm is not on PATH"
   local branch operator_image simplyblock_image
   branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD | tr '/' '-')"

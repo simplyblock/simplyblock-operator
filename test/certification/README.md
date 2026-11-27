@@ -179,4 +179,6 @@ prints. The logs outlive `destroy`. The kubeadmin password is redacted in them
 and stays only in the installer's `auth/kubeadmin-password`.
 
 `install-simplyblock` installs this checkout's chart with the chart's snapshot
-controller turned off, since OpenShift runs its own.
+controller turned off, since OpenShift runs its own. Where cert-manager is
+missing, it installs Red Hat's cert-manager Operator first: the chart's default,
+mutual TLS, needs it.
