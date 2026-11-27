@@ -112,6 +112,7 @@ func newRootCommand() *cobra.Command {
 		newUpgradeCommand(&global),
 		newMigrateCommand(&global),
 		newRulesCommand(&global),
+		newReleaseCommand(&global),
 	)
 	return root
 }

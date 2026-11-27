@@ -200,12 +200,14 @@ run: manifests generate fmt vet ## Run a controller from your host.
 UPGRADE_GOOS   ?= $(shell go env GOOS)
 UPGRADE_GOARCH ?= $(shell go env GOARCH)
 UPGRADE_BIN    ?= build/simplyblock-upgrade-$(UPGRADE_GOOS)-$(UPGRADE_GOARCH)
+# The release the tool upgrades to (design-release-upgrade.md §6.1), the chart version.
+UPGRADE_VERSION ?= dev
 
 .PHONY: build-upgrade
 build-upgrade: ## Build simplyblock-upgrade for UPGRADE_GOOS/UPGRADE_GOARCH.
 	mkdir -p $(dir $(UPGRADE_BIN))
 	CGO_ENABLED=0 GOOS=$(UPGRADE_GOOS) GOARCH=$(UPGRADE_GOARCH) \
-		go build -o $(UPGRADE_BIN) ./cmd/simplyblock-upgrade
+		go build -ldflags "-X main.version=$(UPGRADE_VERSION)" -o $(UPGRADE_BIN) ./cmd/simplyblock-upgrade
 	@echo "built $(UPGRADE_BIN)"
 
 # If you wish to build the manager image targeting other platforms you can use the --platform flag.

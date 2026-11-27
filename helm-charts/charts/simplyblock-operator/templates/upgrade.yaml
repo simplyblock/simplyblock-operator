@@ -1,0 +1,161 @@
+{{- /*
+The release upgrade (operator/docs/designs/design-release-upgrade.md §7.2, §7.3).
+
+On `helm upgrade`, a pre-upgrade hook Job runs `simplyblock-upgrade release
+prepare` with the target's binary: the checks, then the CRDs. A failed hook fails
+the upgrade before Helm has changed anything. A hook cannot use objects of the
+release it precedes, so its ServiceAccount and RBAC are hooks too, with a lower
+weight.
+
+Once Helm has upgraded the operator, a Job named for the target release runs
+`simplyblock-upgrade release rollout`: the control plane, then every storage
+cluster. It is an ordinary object of the release rather than a hook, because a
+rolling restart takes far longer than a hook is meant to hold, and its name
+carries the release so the next upgrade creates a new one.
+
+Nothing here renders on install, or with upgrade.enabled off.
+*/ -}}
+{{- if and .Values.upgrade.enabled .Release.IsUpgrade }}
+{{- $tag := .Values.upgrade.image.tag | default .Chart.AppVersion }}
+{{- $image := printf "%s:%s" .Values.upgrade.image.repository $tag }}
+{{- $release := .Chart.Version | replace "." "-" | replace "+" "-" | lower }}
+{{- $args := list "--namespace" .Release.Namespace "--plain" }}
+{{- range .Values.upgrade.skip }}
+{{- $args = append $args (printf "--skip=%s" .) }}
+{{- end }}
+{{- range $hook := list "prepare" "rollout" }}
+{{- if or (eq $hook "prepare") $.Values.upgrade.rollout.enabled }}
+{{- $name := ternary "simplyblock-upgrade-prepare" (printf "simplyblock-upgrade-%s" $release) (eq $hook "prepare") }}
+{{- $account := ternary "simplyblock-upgrade-prepare" "simplyblock-upgrade-rollout" (eq $hook "prepare") }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $account }}
+  namespace: {{ $.Release.Namespace }}
+  {{- if eq $hook "prepare" }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ $account }}-{{ $.Release.Namespace }}
+  {{- if eq $hook "prepare" }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+rules:
+  # Everything the checks read, and the operations the rollout creates.
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["storage.simplyblock.io"]
+    resources: ["controlplaneops", "storageclusterops"]
+    verbs: ["create"]
+  # The CRDs the prepare stage applies.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+  # The operator Deployment the rollout waits for, the Helm release it reads its
+  # source from, and what a release module removes.
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets"]
+    verbs: ["get", "list", "watch", "delete"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses"]
+    verbs: ["get", "list", "delete"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources: ["validatingadmissionpolicies", "validatingadmissionpolicybindings"]
+    verbs: ["get", "list", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ $account }}-{{ $.Release.Namespace }}
+  {{- if eq $hook "prepare" }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "-10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ $account }}-{{ $.Release.Namespace }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $account }}
+    namespace: {{ $.Release.Namespace }}
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ $name }}
+  namespace: {{ $.Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: simplyblock-upgrade
+    app.kubernetes.io/component: {{ $hook }}
+  {{- if eq $hook "prepare" }}
+  annotations:
+    helm.sh/hook: pre-upgrade
+    helm.sh/hook-weight: "0"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+  {{- end }}
+spec:
+  {{- if eq $hook "prepare" }}
+  backoffLimit: 0
+  {{- else }}
+  # A pod that dies is replaced, and the new one resumes from the operations the
+  # rollout created. A rolling restart's length depends on the fleet, so no
+  # deadline is set.
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 604800
+  {{- end }}
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: simplyblock-upgrade
+        app.kubernetes.io/component: {{ $hook }}
+    spec:
+      serviceAccountName: {{ $account }}
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: simplyblock-upgrade
+          image: {{ $image | quote }}
+          imagePullPolicy: {{ $.Values.upgrade.image.pullPolicy }}
+          args:
+            - release
+            - {{ $hook }}
+            {{- range $args }}
+            - {{ . | quote }}
+            {{- end }}
+            {{- if eq $hook "rollout" }}
+            - "--simplyblock-image={{ $.Values.image.simplyblock.repository }}:{{ $.Values.image.simplyblock.tag }}"
+            {{- with $.Values.upgrade.spdkImage }}
+            - "--spdk-image={{ . }}"
+            {{- end }}
+            {{- end }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+{{- end }}
+{{- end }}
+{{- end }}
