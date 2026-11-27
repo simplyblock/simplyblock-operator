@@ -5,6 +5,7 @@ package node
 import (
 	"context"
 
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/simplyblock/atlas/controlplane"
@@ -57,8 +58,10 @@ type Server struct {
 	// mapping it holds. Nil before the service is built, when nothing is held.
 	swapGate   swapGate
 	kubeClient kubernetes.Interface
-	manager    *sbkube.Manager
-	guardian   *guardian.Guardian
+	// exports reads NFSExports for a pNFS volume's health. Nil disables it.
+	exports  dynamic.Interface
+	manager  *sbkube.Manager
+	guardian *guardian.Guardian
 	// maxAttachedVolumes is how many volumes this worker may have attached at a
 	// time, reported to the scheduler by NodeGetInfo. Zero is no limit.
 	maxAttachedVolumes int64

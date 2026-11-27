@@ -123,6 +123,7 @@ spec:
         installCertManager: {{ ne .installCertManager false }}
         installLocalPathProvisioner: {{ ne .installLocalPathProvisioner false }}
         installSnapshotController: {{ ne .installSnapshotController false }}
+        installPrometheusOperator: {{ ne .installPrometheusOperator false }}
       {{- end }}
       {{- if .Values.controlplane.local.adminTokenSecretRef }}
       adminTokenSecretRef:

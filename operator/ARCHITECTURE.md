@@ -31,7 +31,6 @@
   - `BackupRestore`
   - `BackupImport`
   - `BackupPolicy`
-  - `SnapshotReplication`
   - `VolumeMigration`
 - `internal/controller/*`
   Reconciliation logic for each CRD plus the cluster-wide `NodeDrainCoordinator`.
@@ -89,8 +88,6 @@ Most controllers project an explicit `running/success/failed` action workflow in
   Imports a backup ID from a source cluster's backend into a target cluster, creating a corresponding `StorageBackup` CR on the target.
 - `BackupPolicy`
   Defines retention (`maxVersions`, `maxAge`) and an optional tiered `schedule` for a cluster; the controller merges aged/excess backups according to the policy and attaches it to PVCs via annotation. `clusterName`, `maxVersions`, `maxAge`, and `schedule` are immutable once set.
-- `SnapshotReplication`
-  Replicates snapshots from a source cluster/pool to a target cluster/pool, including failback support to a fresh source (`action: failback`), with per-volume phase tracking and status `Conditions`.
 - `VolumeMigration`
   Migrates a single PersistentVolume's backing logical volume to a target storage node. Resolves cluster/pool/volume UUIDs from the PV's CSI volume handle, launches a validation Job (running the rebalancer in `validate-migration` mode) on the target worker to establish NVMe-oF paths, then drives the backend migration (`create`/`continue`/`cancel`). Status advances through `Pending → Validating → Running → Completed` (or `Failed`/`Aborted`) and supports `spec.abort`.
 - `NodeDrainCoordinator` (no CRD)

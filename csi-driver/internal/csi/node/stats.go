@@ -43,6 +43,14 @@ func (ns *Server) NodeGetVolumeStats(
 		}
 	}
 
+	// A pNFS export the operator reports unserved is answered before the mount
+	// is touched: stat and statfs block on a hard mount whose server is down.
+	if isNFSPath(volumePath) {
+		if condition := ns.exportCondition(ctx, volID); condition.GetAbnormal() {
+			return &csi.NodeGetVolumeStatsResponse{VolumeCondition: condition}, nil
+		}
+	}
+
 	st, err := os.Stat(volumePath)
 	if err != nil {
 		if os.IsNotExist(err) {

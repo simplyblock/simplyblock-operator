@@ -1,6 +1,6 @@
 // The Jobs a HostMaintenance window creates: one per fdbcli command, and the
 // sentinel that makes a drain of the worker visible. Rows U-17 through U-22,
-// U-75, U-89, and U-90 in test-plan-fdb-host-maintenance.md.
+// U-75, U-89, U-90, U-114, and U-115 in test-plan-fdb-host-maintenance.md.
 
 package controlplane
 
@@ -287,5 +287,80 @@ func TestACommandJobOnTheOnlyNodeCarriesNoAffinity(t *testing.T) {
 		fdbCommandMaintenanceOn, "maintenance on vm11 14400", true)
 	if job.Spec.Template.Spec.Affinity != nil {
 		t.Errorf("affinity = %v, want none when there is nowhere else to run", job.Spec.Template.Spec.Affinity)
+	}
+}
+
+// fdbTLSWiring reports what a command Job's pod carries of FoundationDB's
+// client TLS: the three FDB_TLS_ variables, the mount at fdbTLSMountPath, and
+// the peer certificate's Secret as a volume.
+func fdbTLSWiring(job *batchv1.Job) (env []string, mounted, volume bool) {
+	pod := job.Spec.Template.Spec
+	for _, e := range pod.Containers[0].Env {
+		if strings.HasPrefix(e.Name, "FDB_TLS_") {
+			env = append(env, e.Name+"="+e.Value)
+		}
+	}
+	for _, m := range pod.Containers[0].VolumeMounts {
+		if m.MountPath == fdbTLSMountPath && m.Name == fdbTLSVolumeName {
+			mounted = true
+		}
+	}
+	for _, v := range pod.Volumes {
+		if v.Name == fdbTLSVolumeName && v.Secret != nil && v.Secret.SecretName == FDBPeerCertSecret {
+			volume = true
+		}
+	}
+	return env, mounted, volume
+}
+
+// U-114: under mutual TLS, the database's coordinators listen on TLS addresses
+// only, and fdbcli reaches them only with the client certificate.
+//
+// Regression: 2026-11-27-fdbcli-jobs-without-tls. Every command Job of a
+// HostMaintenance window mounted the cluster file alone, so with the chart's
+// default mutual TLS fdbcli exited with "fdbcli is not configured with TLS, but
+// all of the coordinators have TLS addresses." Each step failed open after four
+// attempts, and every worker reboot ran without maintenance mode, without moving
+// the coordinators, and without excluding the host's processes, about twenty
+// minutes late (OpenShift on AWS, the storage MachineConfig rollout).
+func TestACommandJobUnderMutualTLSCarriesTheFoundationDBClientCertificate(t *testing.T) {
+	job := fdbCommandJob(aWindow("vm11"), aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{}),
+		fdbCommandMaintenanceOn, "maintenance on vm11 14400", false)
+
+	env, mounted, volume := fdbTLSWiring(job)
+	want := []string{
+		"FDB_TLS_CERTIFICATE_FILE=" + fdbTLSMountPath + "/tls.crt",
+		"FDB_TLS_KEY_FILE=" + fdbTLSMountPath + "/tls.key",
+		"FDB_TLS_CA_FILE=" + fdbTLSMountPath + "/ca.crt",
+	}
+	for _, w := range want {
+		found := false
+		for _, e := range env {
+			found = found || e == w
+		}
+		if !found {
+			t.Errorf("the fdbcli container lacks %s (it has %v), so it cannot reach coordinators that listen on TLS", w, env)
+		}
+	}
+	if !mounted {
+		t.Errorf("the fdbcli container does not mount the client certificate at %s", fdbTLSMountPath)
+	}
+	if !volume {
+		t.Errorf("the pod has no volume from the Secret %s, so the certificate files do not exist", FDBPeerCertSecret)
+	}
+}
+
+// U-115: without mutual TLS the database listens in the clear, and the Job
+// carries no certificate: the Secret is not issued then, and a volume naming it
+// would keep the pod from starting.
+func TestACommandJobWithoutMutualTLSCarriesNoCertificate(t *testing.T) {
+	off := false
+	job := fdbCommandJob(aWindow("vm11"),
+		aLocalControlPlane(simplyblockv1alpha2.ControlPlaneTLS{EnableMutualTLS: &off}),
+		fdbCommandMaintenanceOn, "maintenance on vm11 14400", false)
+
+	env, mounted, volume := fdbTLSWiring(job)
+	if len(env) != 0 || mounted || volume {
+		t.Errorf("a plaintext database's command Job carries TLS material: env %v, mount %v, volume %v", env, mounted, volume)
 	}
 }

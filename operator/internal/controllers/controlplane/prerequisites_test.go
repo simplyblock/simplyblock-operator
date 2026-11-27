@@ -258,6 +258,7 @@ func (rejectingApply) Apply(context.Context, runtime.ApplyConfiguration, ...clie
 func TestAFailedUpgradeDoesNotStopTheReconcile(t *testing.T) {
 	cp := localControlPlane()
 	cp.Spec.Source.Local.TLS.EnableTLS = ptr.To(false)
+	cp.Spec.Source.Local.Prerequisites.InstallPrometheusOperator = ptr.To(false)
 	const crd = "volumesnapshots.snapshot.storage.k8s.io"
 	current := prerequisites.FoundationDBCRDs.Digest(prerequisites.InstallOptions{Namespace: cp.Namespace})
 	c := gateClient(t, servedExcept(), cp,

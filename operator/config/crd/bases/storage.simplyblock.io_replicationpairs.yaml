@@ -61,9 +61,13 @@ spec:
               for a replication relationship.
             properties:
               sourceCluster:
-                description: SourceCluster is the name of the local StorageCluster
-                  (the replication source).
+                description: |-
+                  SourceCluster is the name of the local StorageCluster (the replication source).
+                  It cannot change once set.
                 type: string
+                x-kubernetes-validations:
+                - message: field is immutable
+                  rule: self == oldSelf
               targetCluster:
                 description: |-
                   TargetCluster is the name or UUID of the remote cluster (the replication target).

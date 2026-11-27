@@ -62,7 +62,6 @@ webhook:
 | `BackupRestore`       | Restore a backup into a cluster/pool/node (superseded by the above)      |
 | `BackupImport`        | Import a backup from a source cluster's backend into a target cluster    |
 | `BackupPolicy`        | Define retention (`maxVersions`, `maxAge`) attached to PVCs (superseded) |
-| `SnapshotReplication` | Replicate snapshots between clusters/pools                               |
 | `VolumeMigration`     | Migrate volumes between clusters                                         |
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for a detailed component and reconciliation overview.

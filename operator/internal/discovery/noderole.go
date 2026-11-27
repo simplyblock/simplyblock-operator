@@ -30,6 +30,7 @@
 package discovery
 
 import (
+	"slices"
 	"sort"
 	"strings"
 
@@ -138,6 +139,28 @@ func RolesOf(node corev1.Node) []NodeRole {
 // catch three of them in it.
 func (r NodeRole) HoldsStorageNodes() bool {
 	return r == NodeRoleWorker || r == NodeRoleInfra
+}
+
+// IsCompactCluster reports whether the cluster's workers and control-plane nodes
+// are the same machines: every node is a control-plane node that also carries
+// the worker role. That is how OpenShift labels a three-node compact cluster and
+// a single-node one, and in such a cluster there is no other machine to put
+// storage on, so the control-plane exclusion has nothing left to protect.
+//
+// It is judged on every node of the cluster rather than on the ones a run
+// selected, because a selector naming only the masters does not make a cluster
+// with dedicated workers compact.
+func IsCompactCluster(nodes []corev1.Node) bool {
+	if len(nodes) == 0 {
+		return false
+	}
+	for _, node := range nodes {
+		roles := RolesOf(node)
+		if !slices.Contains(roles, NodeRoleControlPlane) || !slices.Contains(roles, NodeRoleWorker) {
+			return false
+		}
+	}
+	return true
 }
 
 // Preference orders the roles a draft proposes, lowest first. It is what puts the

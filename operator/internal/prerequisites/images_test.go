@@ -25,7 +25,7 @@ var imageLine = regexp.MustCompile(`(?:image: "?|-image=)([^"\s]+)`)
 // is what an IDMS mirror rule and oc-mirror both key on.
 func TestEveryImageIsPinnedByDigest(t *testing.T) {
 	for _, p := range All() {
-		raw, err := manifests.ReadFile(p.file)
+		raw, err := readManifest(p.file)
 		if err != nil {
 			t.Fatal(err)
 		}

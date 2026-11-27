@@ -60,6 +60,11 @@ type NodeReading struct {
 	LvolPort           int32  `json:"lvol_subsys_port"`
 	NVMeOFPort         int32  `json:"nvmf_port"`
 
+	// Socket is the NUMA socket the node runs on, nil from a control plane that
+	// does not report it. It is what says which of a multi-socket worker's nodes
+	// fills which slot.
+	Socket *int32 `json:"socket,omitempty"`
+
 	// FailureDomain is the group the control plane actually assigned. It is an
 	// integer on the wire and a label on the object, so the status write renders
 	// the digits: the control plane's own vocabulary is what it is, and the

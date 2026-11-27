@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# Rewrites the operator chart's simplyblock and operator image tags to a release
-# version, for the packaging step of the release pipeline.
+# Rewrites the operator chart's simplyblock, operator, and Control Center images
+# to a release version on quay.io, for the packaging step of the release pipeline.
 #
-# values.yaml commits the moving `main` tags, because the chart in the branch
-# installs the branch. A published release has to name the images that release
+# values.yaml commits the moving `main` tags in registry.simplyblock.ai, because
+# the chart in the branch installs the branch and only release builds are pushed
+# to quay.io. A published release has to name the images that release
 # built instead, and stamping them here rather than in the commit keeps the two
 # apart: the branch keeps following main, and no release leaves a pinned tag
 # behind for the next development install to pick up.
 #
-# Only these tags are rewritten. The rebalancer and the CSI plugin take the
+# Only these images are rewritten. The rebalancer and the CSI plugin take the
 # operator's tag when theirs is empty, and Chart.yaml is left alone because
 # `helm package` takes --version and --app-version. The Control Center image and
 # its mock are pushed under the release tag verbatim, so they cannot fall back to
@@ -24,7 +25,9 @@ CHART="$1"
 TAG="$2"
 # The operator image is pushed under the release tag verbatim, the simplyblock
 # image without the "v" and with a hotfix dash as a dot (26.3.2-1 is 26.3.2.1).
+# SIMPLYBLOCK_IMAGE_TAG (release-images.env) overrides the latter when set.
 VERSION="$(printf '%s' "${TAG#v}" | sed -E 's/-([0-9]+)$/.\1/')"
+VERSION="${SIMPLYBLOCK_IMAGE_TAG:-$VERSION}"
 VALUES="$CHART/values.yaml"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -45,11 +48,17 @@ awk -v operator_tag="$TAG" -v simplyblock_tag="$VERSION" '
     if (sub_key == "operator")    { print "    tag: \"" operator_tag "\"";    next }
     if (sub_key == "simplyblock") { print "    tag: \"" simplyblock_tag "\""; next }
   }
-  top == "controlCenter" && sub_key == "image" && /^    tag:/ {
-    print "    tag: \"" operator_tag "\""; next
+  top == "image" && /^    repository:/ {
+    if (sub_key == "operator")    { print "    repository: quay.io/simplyblock-io/simplyblock-operator"; next }
+    if (sub_key == "simplyblock") { print "    repository: quay.io/simplyblock-io/simplyblock";          next }
   }
-  top == "controlCenter" && sub_key == "mock" && /^      tag:/ {
-    print "      tag: \"" operator_tag "\""; next
+  top == "controlCenter" && sub_key == "image" {
+    if (/^    tag:/)        { print "    tag: \"" operator_tag "\"";                         next }
+    if (/^    repository:/) { print "    repository: quay.io/simplyblock-io/control-center"; next }
+  }
+  top == "controlCenter" && sub_key == "mock" {
+    if (/^      tag:/)        { print "      tag: \"" operator_tag "\"";                              next }
+    if (/^      repository:/) { print "      repository: quay.io/simplyblock-io/control-center-mock"; next }
   }
   { print }
 ' "$VALUES" > "$VALUES.stamped"
@@ -65,6 +74,12 @@ stamped_mock="$("$YQ" -r '.controlCenter.mock.image.tag' "$VALUES")"
 if [ "$stamped_operator" != "$TAG" ] || [ "$stamped_simplyblock" != "$VERSION" ] ||
   [ "$stamped_control_center" != "$TAG" ] || [ "$stamped_mock" != "$TAG" ]; then
   echo "$(basename "$0"): the image tags did not take: operator is '$stamped_operator' (want '$TAG'), simplyblock is '$stamped_simplyblock' (want '$VERSION'), controlCenter is '$stamped_control_center' (want '$TAG'), controlCenter.mock is '$stamped_mock' (want '$TAG')" >&2
+  exit 1
+fi
+
+if grep -q 'registry\.simplyblock\.ai' "$VALUES"; then
+  echo "$(basename "$0"): the stamped chart still names registry.simplyblock.ai, which carries development builds only:" >&2
+  grep -n 'registry\.simplyblock\.ai' "$VALUES" >&2
   exit 1
 fi
 

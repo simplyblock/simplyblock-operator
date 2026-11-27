@@ -161,6 +161,9 @@ func Run(conf *config.Config) {
 		if err != nil {
 			klog.Fatalf("failed to create node server: %s", err)
 		}
+		if dynClient != nil {
+			ns.SetExportReader(dynClient)
+		}
 		swapper = startSwapper(ns, cd.GetNodeID())
 	}
 

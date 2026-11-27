@@ -123,6 +123,35 @@ func TestNodeSubscriptionSnapshotCachesSyncsAndTriggers(t *testing.T) {
 	}
 }
 
+// The socket a node runs on is carried through the cache, and a payload without
+// one decodes as no socket rather than socket 0.
+//
+// Regression: simplyblock-operator#408, found live on a two-socket cluster — the
+// match of a slot to its backend node reads the socket, and once the stream had
+// synced it read the cache, which dropped the field. Every cached node then
+// looked like an older control plane's, the match fell back to port order, and
+// a slot whose socket had no node took the other socket's.
+func TestNodeSubscriptionCachesTheSocket(t *testing.T) {
+	sub := registeredNodes(t)
+	other := "0b4e6a1c-6c5b-4d0e-9d7a-2f1e8c3b5a40"
+	ingestNode(t, sub, cpinformer.EventSnapshot, `[
+		{"id":"`+snNode+`","status":"online","socket":1},
+		{"id":"`+other+`","status":"online"}
+	]`)
+	drainNodeTrigger(t, sub)
+
+	_, dto, ok := sub.Lookup(snNode)
+	if !ok {
+		t.Fatal("the node should be cached after a snapshot")
+	}
+	if dto.Socket == nil || *dto.Socket != 1 {
+		t.Errorf("socket = %v, want 1", dto.Socket)
+	}
+	if _, dto, _ := sub.Lookup(other); dto.Socket != nil {
+		t.Errorf("a node reported without a socket cached socket %d", *dto.Socket)
+	}
+}
+
 // An update replaces what the cache holds. This is the path the shutdown of a
 // real node exercised: the status moves and the mirror has to follow.
 func TestNodeSubscriptionUpdateMovesTheCachedStatus(t *testing.T) {

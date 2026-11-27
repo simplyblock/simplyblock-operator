@@ -5,6 +5,8 @@
 # The operator image is published under the release tag verbatim. The
 # simplyblock image is published without the leading "v" and with a hotfix
 # suffix as a fourth dotted component, so v26.3.2-1 ships simplyblock:26.3.2.1.
+# A release names quay.io for every image the branch pulls from the internal
+# registry, because only release builds are pushed there.
 #
 # Regression: 2026-10-21-stamp-simplyblock-dotted-hotfix-tag (release/26.3.2 #762)
 set -euo pipefail
@@ -14,6 +16,8 @@ CHART="$REPO/helm-charts/charts/simplyblock-operator"
 STAMP="$REPO/helm-charts/scripts/stamp-release-version.sh"
 YQ="${YQ:-$REPO/.bin/yq}"
 command -v "$YQ" >/dev/null 2>&1 || YQ=yq
+# A pin in the caller's environment would change every case below.
+unset SIMPLYBLOCK_IMAGE_TAG
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -50,6 +54,23 @@ check() {
   mock="$("$YQ" -r '.controlCenter.mock.image.tag' "$copy/values.yaml")"
   [[ "$mock" == "$want_operator" ]] ||
     fail "$tag: controlCenter.mock.image.tag is '$mock', want '$want_operator'"
+  # The branch pulls the main builds from registry.simplyblock.ai, and a release
+  # pulls what it published to quay.io.
+  local path want got
+  while read -r path want; do
+    got="$("$YQ" -r "$path" "$copy/values.yaml")"
+    [[ "$got" == "$want" ]] || fail "$tag: $path is '$got', want '$want'"
+  done <<'EOF_REPOS'
+.image.operator.repository quay.io/simplyblock-io/simplyblock-operator
+.image.simplyblock.repository quay.io/simplyblock-io/simplyblock
+.controlCenter.image.repository quay.io/simplyblock-io/control-center
+.controlCenter.mock.image.repository quay.io/simplyblock-io/control-center-mock
+.controlCenter.image.registry null
+.controlCenter.mock.image.registry null
+EOF_REPOS
+  if grep -q 'registry\.simplyblock\.ai' "$copy/values.yaml"; then
+    fail "$tag: the stamped values.yaml still names registry.simplyblock.ai"
+  fi
 }
 
 check v26.4.0 v26.4.0 26.4.0
@@ -57,6 +78,13 @@ check v26.4.0-1 v26.4.0-1 26.4.0.1
 check v26.4.0-12 v26.4.0-12 26.4.0.12
 # Only a numeric hotfix suffix is a fourth component; any other suffix is kept.
 check v0.0.0-lint v0.0.0-lint 0.0.0-lint
+
+# An operator-only release ships the simplyblock image of an earlier one, named
+# by the pin in release-images.env; the operator images keep the release tag.
+# Regression: 2026-11-26-operator-only-release-image-pins
+SIMPLYBLOCK_IMAGE_TAG=26.4.0-beta6.1 check v26.4.0-beta6.2 v26.4.0-beta6.2 26.4.0-beta6.1
+# An empty pin is no pin.
+SIMPLYBLOCK_IMAGE_TAG='' check v26.4.0-2 v26.4.0-2 26.4.0.2
 
 if [[ "$failures" -gt 0 ]]; then
   echo "$failures failure(s)"

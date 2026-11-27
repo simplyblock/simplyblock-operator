@@ -87,7 +87,7 @@ func SetupWebhookCertificate(mgr ctrl.Manager, namespace, tlsProvider string) (c
 		ExtraDNSNames:          []string{dnsName + "." + utils.ClusterDNSDomain()},
 		IsReady:                ready,
 		Webhooks:               webhooks,
-		RestartOnSecretRefresh: true,
+		RestartOnSecretRefresh: false,
 		RequireLeaderElection:  true,
 	}); err != nil {
 		return nil, fmt.Errorf("add webhook cert rotator: %w", err)

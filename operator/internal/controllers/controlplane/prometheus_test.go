@@ -1,20 +1,30 @@
-// Tests that a managed control plane runs its own Prometheus: the server and the
-// Thanos sidecar that ships its blocks to the object store, the account the
-// management API trusts for scrapes, and the scrape configuration.
+// Tests that a managed control plane runs its Prometheus through the
+// prometheus-operator, scraping what the install runs, and that an upgrade
+// copies the old Prometheus's data before replacing it.
 
 package controlplane
 
 import (
+	"context"
+	"fmt"
 	"os"
 	"slices"
 	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/simplyblock/atlas/ptr"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
 )
@@ -31,112 +41,59 @@ func findTyped[T client.Object](t *testing.T, objects []client.Object, name stri
 	return zero
 }
 
-// The install runs Prometheus under the Service name every control-plane
-// container is told to push to, with the Thanos sidecar beside it.
-func TestTheInstallRunsPrometheusWhereTheControlPlanePushes(t *testing.T) {
-	objects := managementAPIObjects(localControlPlane())
+func findUnstructured(t *testing.T, objects []client.Object, kind, name string) *unstructured.Unstructured {
+	t.Helper()
+	for _, obj := range objects {
+		if u, ok := obj.(*unstructured.Unstructured); ok && u.GetKind() == kind && u.GetName() == name {
+			return u
+		}
+	}
+	t.Fatalf("no %s %s in the install", kind, name)
+	return nil
+}
 
+// Prometheus runs through the prometheus-operator: a Prometheus resource under
+// the account the management API trusts, and one monitor per scrape job.
+func TestTheInstallRunsPrometheusThroughThePrometheusOperator(t *testing.T) {
+	objects := managementAPIObjects(localControlPlane())
+	for _, obj := range objects {
+		if _, ok := obj.(*appsv1.StatefulSet); ok && obj.GetName() == ComponentPrometheus {
+			t.Error("the install still carries its own Prometheus StatefulSet")
+		}
+	}
+
+	prom := findUnstructured(t, objects, "Prometheus", "simplyblock")
+	if sa, _, _ := unstructured.NestedString(prom.Object, "spec", "serviceAccountName"); sa != prometheusServiceAccount {
+		t.Errorf("Prometheus runs as %q, want %q", sa, prometheusServiceAccount)
+	}
+	if r, _, _ := unstructured.NestedString(prom.Object, "spec", "retention"); r != "15d" {
+		t.Errorf("retention = %q, want 15d, the retention Prometheus had before", r)
+	}
+	if f, _, _ := unstructured.NestedString(prom.Object, "spec", "thanos", "objectStorageConfigFile"); f == "" {
+		t.Error("the Thanos sidecar names no object store configuration")
+	}
 	svc := findTyped[*corev1.Service](t, objects, prometheusHost)
-	ports := map[int32]bool{}
-	for _, p := range svc.Spec.Ports {
-		ports[p.Port] = true
-	}
-	for _, want := range []int32{9090, 10901, 10902} {
-		if !ports[want] {
-			t.Errorf("Service %s does not publish port %d", prometheusHost, want)
+	podLabels, _, _ := unstructured.NestedStringMap(prom.Object, "spec", "podMetadata", "labels")
+	for k, v := range svc.Spec.Selector {
+		if podLabels[k] != v {
+			t.Errorf("Service %s selects %s=%s, which the Prometheus pods do not carry", prometheusHost, k, v)
 		}
 	}
 
-	sts := findTyped[*appsv1.StatefulSet](t, objects, ComponentPrometheus)
-	spec := sts.Spec.Template.Spec
-	if spec.ServiceAccountName != prometheusServiceAccount {
-		t.Errorf("Prometheus runs as %q, want %q, the account the management API trusts for scrapes",
-			spec.ServiceAccountName, prometheusServiceAccount)
+	scrape := findUnstructured(t, objects, "ScrapeConfig", "simplyblock-metrics")
+	targets, _, _ := unstructured.NestedSlice(scrape.Object, "spec", "staticConfigs")
+	if len(targets) != 1 || !strings.Contains(fmt.Sprint(targets), "simplyblock-webappapi:5000") {
+		t.Errorf("staticConfigs = %v, want the management API Service once", targets)
 	}
-	names := map[string]corev1.Container{}
-	for _, c := range spec.Containers {
-		names[c.Name] = c
+	token, _, _ := unstructured.NestedString(scrape.Object, "spec", "authorization", "credentials", "name")
+	secret := findTyped[*corev1.Secret](t, objects, token)
+	if secret.Type != corev1.SecretTypeServiceAccountToken ||
+		secret.Annotations[corev1.ServiceAccountNameKey] != prometheusServiceAccount {
+		t.Errorf("token Secret %s is %s for %q, want a token of %s",
+			token, secret.Type, secret.Annotations[corev1.ServiceAccountNameKey], prometheusServiceAccount)
 	}
-	if _, ok := names["prometheus"]; !ok {
-		t.Error("no prometheus container")
-	}
-	sidecar, ok := names["thanos-sidecar"]
-	if !ok {
-		t.Fatal("no thanos-sidecar container: the object store would never receive a block")
-	}
-	if !strings.Contains(strings.Join(sidecar.Args, " "), "--objstore.config-file=") {
-		t.Errorf("sidecar args %v name no object store configuration", sidecar.Args)
-	}
-	mountsObjstore := false
-	for _, v := range spec.Volumes {
-		if v.ConfigMap != nil && v.ConfigMap.Name == objectStoreConfigName {
-			mountsObjstore = true
-		}
-	}
-	if !mountsObjstore {
-		t.Errorf("Prometheus does not mount ConfigMap %s", objectStoreConfigName)
-	}
-	if len(sts.Spec.VolumeClaimTemplates) != 1 || sts.Spec.VolumeClaimTemplates[0].Name != prometheusDataVolume {
-		t.Errorf("claim templates = %v, want one named %s", sts.Spec.VolumeClaimTemplates, prometheusDataVolume)
-	}
-}
-
-// Prometheus scrapes the management API, the database exporter, and the
-// rebalancer probes, and its account can discover the probe pods.
-func TestPrometheusScrapesWhatTheInstallRuns(t *testing.T) {
-	objects := managementAPIObjects(localControlPlane())
-
-	cm := findTyped[*corev1.ConfigMap](t, objects, prometheusConfigName)
-	config := cm.Data["prometheus.yml"]
-	for _, want := range []string{
-		"simplyblock-webappapi:5000", "/api/v2/metrics",
-		"simplyblock-fdb-exporter:9444", "simplyblock_rebalancer_probe",
-		"credentials_file: /var/run/secrets/kubernetes.io/serviceaccount/token",
-	} {
-		if !strings.Contains(config, want) {
-			t.Errorf("prometheus.yml has no %q:\n%s", want, config)
-		}
-	}
-
-	role := findTyped[*rbacv1.Role](t, objects, prometheusServiceAccount)
-	listsPods := false
-	for _, rule := range role.Rules {
-		for _, r := range rule.Resources {
-			if r == "pods" && strings.Contains(strings.Join(rule.Verbs, ","), "list") {
-				listsPods = true
-			}
-		}
-	}
-	if !listsPods {
-		t.Error("Prometheus's Role cannot list pods, so pod discovery finds no rebalancer probe")
-	}
-	findTyped[*rbacv1.RoleBinding](t, objects, prometheusServiceAccount)
-	findTyped[*corev1.ServiceAccount](t, objects, prometheusServiceAccount)
-}
-
-// A management API that serves TLS is scraped over HTTPS against the CA, and
-// with a client certificate when it demands one.
-func TestPrometheusScrapesOverTLSWhenTheAPIServesIt(t *testing.T) {
-	cp := localControlPlane()
-	if !cp.Spec.Source.Local.ServesTLS() || !cp.Spec.Source.Local.RequiresClientCertificate() {
-		t.Fatal("the default control plane is expected to serve mutual TLS")
-	}
-	config := findTyped[*corev1.ConfigMap](t, managementAPIObjects(cp), prometheusConfigName).Data["prometheus.yml"]
-	for _, want := range []string{"scheme: https", "ca_file: ", "cert_file: ", "server_name: simplyblock-webappapi"} {
-		if !strings.Contains(config, want) {
-			t.Errorf("prometheus.yml has no %q with TLS on:\n%s", want, config)
-		}
-	}
-
-	off := false
-	cp.Spec.Source.Local.TLS = simplyblockv1alpha2.ControlPlaneTLS{EnableTLS: &off}
-	if cp.Spec.Source.Local.ServesTLS() {
-		t.Fatal("the plaintext fixture still serves TLS")
-	}
-	plain := findTyped[*corev1.ConfigMap](t, managementAPIObjects(cp), prometheusConfigName).Data["prometheus.yml"]
-	if strings.Contains(plain, "scheme: https") {
-		t.Errorf("a plaintext management API is scraped over https:\n%s", plain)
-	}
+	findUnstructured(t, objects, "ServiceMonitor", ComponentFDBExporter)
+	findUnstructured(t, objects, "PodMonitor", "simplyblock-rebalancer-probe")
 }
 
 // Prometheus is watched, and a Prometheus at zero degrades the control plane
@@ -169,19 +126,6 @@ func TestPrometheusImagesAreListedForMirroring(t *testing.T) {
 	}
 }
 
-// Thanos Query reaches each replica's sidecar by its stable DNS name, which
-// needs the StatefulSet governed by a headless Service of the chart's name.
-func TestPrometheusReplicasHaveTheNamesThanosQueryDials(t *testing.T) {
-	objects := managementAPIObjects(localControlPlane())
-	headless := findTyped[*corev1.Service](t, objects, prometheusHeadlessService)
-	if headless.Spec.ClusterIP != corev1.ClusterIPNone {
-		t.Errorf("%s has clusterIP %q, want None", prometheusHeadlessService, headless.Spec.ClusterIP)
-	}
-	if sts := findTyped[*appsv1.StatefulSet](t, objects, ComponentPrometheus); sts.Spec.ServiceName != prometheusHeadlessService {
-		t.Errorf("StatefulSet serviceName = %q, want %q", sts.Spec.ServiceName, prometheusHeadlessService)
-	}
-}
-
 // Regression: 2026-11-10-prometheus-borrowed-identity. Under mutual TLS every
 // client presents its own certificate, and Prometheus presented the management
 // API's serving certificate, so it held the server's key and the server could
@@ -193,18 +137,9 @@ func TestPrometheusPresentsItsOwnClientCertificate(t *testing.T) {
 	}
 	objects := managementAPIObjects(cp)
 
-	spec := findTyped[*appsv1.StatefulSet](t, objects, ComponentPrometheus).Spec.Template.Spec
-	mountsClient := false
-	for _, v := range spec.Volumes {
-		if v.Secret != nil && v.Secret.SecretName == ServingCertSecret {
-			t.Errorf("Prometheus mounts the serving Secret %s in volume %s", ServingCertSecret, v.Name)
-		}
-		if v.Secret != nil && v.Secret.SecretName == prometheusClientSecret {
-			mountsClient = true
-		}
-	}
-	if !mountsClient {
-		t.Errorf("Prometheus does not mount its client Secret %s", prometheusClientSecret)
+	scrape := findUnstructured(t, objects, "ScrapeConfig", "simplyblock-metrics")
+	if got, _, _ := unstructured.NestedString(scrape.Object, "spec", "tlsConfig", "cert", "secret", "name"); got != prometheusClientSecret {
+		t.Errorf("Prometheus presents the certificate of Secret %q, want its own %s", got, prometheusClientSecret)
 	}
 
 	var cert *unstructured.Unstructured
@@ -240,5 +175,89 @@ func TestPrometheusClientCertificateOnlyUnderCertManagerMutualTLS(t *testing.T) 
 				t.Errorf("%s: the install carries %T %s", name, obj, prometheusClientCertificate)
 			}
 		}
+	}
+}
+
+// monitoringClient serves the prometheus-operator kinds, as a cluster with the
+// prometheus-operator installed does.
+func monitoringClient(t *testing.T, objects ...client.Object) client.Client {
+	t.Helper()
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{prometheusGVK, scrapeConfigGVK, serviceMonitorGVK, podMonitorGVK} {
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	return fake.NewClientBuilder().WithScheme(testScheme(t)).WithRESTMapper(mapper).WithObjects(objects...).Build()
+}
+
+func prometheusApplied(t *testing.T, c client.Client) bool {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(prometheusGVK)
+	return c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: "simplyblock"}, u) == nil
+}
+
+// An upgrade stops the old Prometheus, copies its volume into the one the new
+// Prometheus claims, and starts the new one only once the copy succeeded.
+func TestAnUpgradeCopiesTheOldPrometheusBeforeReplacingIt(t *testing.T) {
+	ctx := context.Background()
+	cp := localControlPlane()
+	oldClaim := &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{Name: "storage-volume-simplyblock-prometheus-0", Namespace: testNamespace},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			StorageClassName: ptr.To("local-path"),
+			Resources: corev1.VolumeResourceRequirements{Requests: corev1.ResourceList{
+				corev1.ResourceStorage: resource.MustParse("20Gi"),
+			}},
+		},
+	}
+	oldPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "simplyblock-prometheus-0", Namespace: testNamespace}}
+	oldSet := &appsv1.StatefulSet{ObjectMeta: metav1.ObjectMeta{Name: ComponentPrometheus, Namespace: testNamespace}}
+	c := monitoringClient(t, cp, oldClaim, oldPod, oldSet)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+	apply := func() {
+		t.Helper()
+		if err := r.applyEverything(ctx, cp); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+	}
+
+	apply()
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldSet), &appsv1.StatefulSet{}); !apierrors.IsNotFound(err) {
+		t.Errorf("the old StatefulSet is still there (%v), so the old Prometheus keeps writing", err)
+	}
+	var newClaim corev1.PersistentVolumeClaim
+	if err := c.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "prometheus-simplyblock-db-prometheus-simplyblock-0"}, &newClaim); err != nil {
+		t.Fatalf("the new Prometheus's claim was not created: %v", err)
+	}
+	if newClaim.Spec.StorageClassName == nil || *newClaim.Spec.StorageClassName != "local-path" {
+		t.Errorf("the new claim's class is %v, want the old claim's", newClaim.Spec.StorageClassName)
+	}
+	job := &batchv1.Job{}
+	jobKey := client.ObjectKey{Namespace: testNamespace, Name: "simplyblock-prometheus-copy"}
+	if err := c.Get(ctx, jobKey, job); err == nil {
+		t.Error("the copy started while the old Prometheus pod still runs")
+	}
+
+	if err := c.Delete(ctx, oldPod); err != nil {
+		t.Fatal(err)
+	}
+	apply()
+	if err := c.Get(ctx, jobKey, job); err != nil {
+		t.Fatalf("no copy Job once the old pod is gone: %v", err)
+	}
+	if prometheusApplied(t, c) {
+		t.Error("the new Prometheus started before the copy finished")
+	}
+
+	job.Status.Succeeded = 1
+	if err := c.Status().Update(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	apply()
+	if !prometheusApplied(t, c) {
+		t.Error("the new Prometheus was not started after the copy succeeded")
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(oldClaim), &corev1.PersistentVolumeClaim{}); err != nil {
+		t.Errorf("the old claim was removed: %v", err)
 	}
 }

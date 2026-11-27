@@ -10,6 +10,7 @@
 # instead of the certified-operators PR.
 #
 # Usage: check-bundle-pinned.sh <bundle-dir> <release-tag>
+# SIMPLYBLOCK_IMAGE_TAG and ULTRA_IMAGE_TAG (release-images.env) override the tags.
 set -euo pipefail
 
 if [ "$#" -ne 2 ]; then
@@ -21,6 +22,8 @@ TAG="$2"
 # The simplyblock and ultra images drop the "v" and write a hotfix dash as a
 # dot, the same mapping helm-charts/scripts/stamp-release-version.sh applies.
 VERSION="$(printf '%s' "${TAG#v}" | sed -E 's/-([0-9]+)$/.\1/')"
+SIMPLYBLOCK_VERSION="${SIMPLYBLOCK_IMAGE_TAG:-$VERSION}"
+ULTRA_VERSION="${ULTRA_IMAGE_TAG:-$VERSION}"
 
 if [ ! -f "$CSV" ]; then
   echo "$(basename "$0"): no CSV at $CSV" >&2
@@ -48,7 +51,9 @@ while IFS= read -r ref; do
     */simplyblock-io/simplyblock:* | */simplyblock-io/ultra:*)
       tag="${ref#*:}"
       tag="${tag%%@*}"
-      [ "$tag" = "$VERSION" ] || fail "$ref: tag '$tag' is not the release's '$VERSION'"
+      want="$SIMPLYBLOCK_VERSION"
+      case "$ref" in */simplyblock-io/ultra:*) want="$ULTRA_VERSION" ;; esac
+      [ "$tag" = "$want" ] || fail "$ref: tag '$tag' is not the release's '$want'"
       ;;
   esac
 done <<<"$refs"
@@ -57,4 +62,4 @@ if [ "$failures" -gt 0 ]; then
   echo "$failures failure(s) in $CSV"
   exit 1
 fi
-echo "check-bundle-pinned: every image in $CSV is pinned, simplyblock and ultra at $VERSION"
+echo "check-bundle-pinned: every image in $CSV is pinned, simplyblock at $SIMPLYBLOCK_VERSION, ultra at $ULTRA_VERSION"

@@ -93,7 +93,7 @@ func SetupCertificate(mgr ctrl.Manager, namespace, certDir string) (chan struct{
 		ExtraDNSNames:          []string{dnsName + "." + utils.ClusterDNSDomain()},
 		IsReady:                ready,
 		Webhooks:               apiServiceRotationTargets(),
-		RestartOnSecretRefresh: true,
+		RestartOnSecretRefresh: false,
 		RequireLeaderElection:  false,
 	}); err != nil {
 		return nil, fmt.Errorf("add the metrics apiserver cert rotator: %w", err)

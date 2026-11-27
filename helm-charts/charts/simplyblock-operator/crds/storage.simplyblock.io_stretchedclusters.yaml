@@ -235,7 +235,8 @@ spec:
                           description: |-
                             EnableControlPlaneNodes lets the discovery consider the nodes that run the
                             API server. Every server of a small distribution is one, so a three-node
-                            site has no storage without it.
+                            site has no storage without it. Left unset, it is implied on a cluster
+                            whose every node is a control-plane node that also carries the worker role.
                           type: boolean
                         nodeSelector:
                           additionalProperties:
@@ -967,9 +968,17 @@ spec:
                                     endpoint:
                                       description: |-
                                         Endpoint is the Vault endpoint, for example, https://vault.example.com:8200.
-                                        Rejected unless it resolves to an external address.
-                                      pattern: ^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
+                                        It must use HTTPS, because the control plane talks to Vault over TLS only
+                                        and refuses any other scheme. Rejected unless it resolves to an external
+                                        address.
+                                      pattern: ^[a-zA-Z][a-zA-Z0-9+.-]*://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$
                                       type: string
+                                      x-kubernetes-validations:
+                                      - message: the Vault endpoint must use https://,
+                                          for example https://vault.example.com:8200,
+                                          because the control plane refuses any other
+                                          scheme
+                                        rule: self.startsWith('https://')
                                   required:
                                   - endpoint
                                   type: object

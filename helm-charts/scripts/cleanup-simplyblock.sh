@@ -532,6 +532,21 @@ print(' '.join(k + '-' for k in d if k.startswith('simplyblock.io/storage-node-u
 fi
 
 # ---------------------------------------------------------------------------
+# 2c. Remove the Prometheus resource and its monitors
+# ---------------------------------------------------------------------------
+# The prometheus-operator recreates the Prometheus StatefulSet that step 3
+# deletes, and step 5b keeps the prometheus-operator while these remain. The
+# StatefulSet and its Secrets are owned by the Prometheus resource and follow it.
+if $KUBECTL api-resources --api-group=monitoring.coreos.com -o name 2>/dev/null | grep -q '^prometheuses\.'; then
+    section "Removing the Prometheus resource and its monitors"
+    # One kind at a time: an older prometheus-operator serves no ScrapeConfig.
+    for kind in prometheuses scrapeconfigs servicemonitors podmonitors; do
+        $KUBECTL delete "$kind.monitoring.coreos.com" --all -n "$NAMESPACE" \
+            --ignore-not-found --timeout=60s >/dev/null 2>&1 || true
+    done
+fi
+
+# ---------------------------------------------------------------------------
 # 3. Remove remaining workloads
 # ---------------------------------------------------------------------------
 section "Removing remaining workloads in namespace '$NAMESPACE'"

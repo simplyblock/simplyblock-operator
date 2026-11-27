@@ -18,6 +18,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -41,6 +42,11 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 	switch err := r.Get(ctx, client.ObjectKey{Namespace: r.OperatorNamespace, Name: name}, &pod); {
 	case apierrors.IsNotFound(err):
 		// The StatefulSet brings it back, and its event wakes this export.
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonMDSUnreachable,
+			fmt.Sprintf("metadata server pod %s is gone", name)); err != nil {
+			return ctrl.Result{}, true, err
+		}
 		if err := r.withdrawAddress(ctx, export); err != nil {
 			return ctrl.Result{}, true, err
 		}
@@ -51,6 +57,11 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 	if !pod.DeletionTimestamp.IsZero() {
 		// Going away: its address stops taking connections now, not when the
 		// replacement has one.
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonMDSUnreachable,
+			fmt.Sprintf("metadata server pod %s is terminating", name)); err != nil {
+			return ctrl.Result{}, true, err
+		}
 		if err := r.withdrawAddress(ctx, export); err != nil {
 			return ctrl.Result{}, true, err
 		}
@@ -71,9 +82,19 @@ func (r *NFSExportReconciler) resyncAfterRestart(
 	host := mdsHost(export)
 	if r.Assembler == nil || !r.Assembler.HasSession(host) {
 		// The restarted guest has not linked yet, which it does once healthy.
+		if err := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonMDSUnreachable,
+			fmt.Sprintf("waiting for the restarted metadata server %s", host)); err != nil {
+			return ctrl.Result{}, true, err
+		}
 		return ctrl.Result{RequeueAfter: nfsExportNoSessionRequeue}, true, nil
 	}
 	if err := r.Assembler.CreateExport(ctx, r.exportHost(ctx, export, host), export); err != nil {
+		msg := fmt.Sprintf("reassembling the export on the restarted %s: %v", host, err)
+		if serr := r.setMDSReady(ctx, export, metav1.ConditionFalse,
+			simplyblockv1alpha2.NFSExportReasonHealthCheckFailed, msg); serr != nil {
+			return ctrl.Result{}, true, serr
+		}
 		return ctrl.Result{}, true, fmt.Errorf("reassembling export on %s: %w", host, err)
 	}
 	if err := r.writeStatus(ctx, export, func(s *simplyblockv1alpha2.NFSExportStatus) {

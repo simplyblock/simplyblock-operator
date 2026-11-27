@@ -42,3 +42,7 @@
   image: public.ecr.aws/csi-components/livenessprobe:v2.20.0-eksbuild.2@sha256:8e6b3565bfce2e20a7e0e19a16f174f3ff270a43cd70386febafac715cc4a703
 - name: ebs-aws-ebs-csi-driver
   image: public.ecr.aws/ebs-csi-driver/aws-ebs-csi-driver:v1.67.1@sha256:96f37d60fdd966c319e39ce41e2a13256d67b52ae3e6202b7de713d38ea1085f
+- name: prometheus-operator
+  image: quay.io/prometheus-operator/prometheus-operator:v0.95.2@sha256:7986c2afa118c9dea07d01c5e1a29555824582e92f6ee8607591d1a7178acf29
+- name: prometheus-config-reloader
+  image: quay.io/prometheus-operator/prometheus-config-reloader:v0.95.2@sha256:cc74ddedad4ab1c49446971f6d51302ad4303d8660a2018af925c7f62c114304

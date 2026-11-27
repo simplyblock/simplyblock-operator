@@ -34,14 +34,13 @@ helm.sh/chart: {{ printf "%s-%s" .Name .Version | replace "+" "_" | trunc 63 | t
 {{- end }}
 {{- end -}}
 
-{{/* Image reference. The registry falls back to the public one and the tag to
-     the chart's appVersion — pin controlCenter.image.tag for production, this
-     chart's appVersion is a floating tag. */}}
+{{/* Image reference. The tag falls back to the chart's appVersion — pin
+     controlCenter.image.tag for production, this chart's appVersion is a
+     floating tag. */}}
 {{- define "sbcc.image" -}}
 {{- $i := .Values.controlCenter.image -}}
-{{- $reg := $i.registry | default "quay.io" -}}
 {{- $tag := $i.tag | default (.Chart.AppVersion | default "latest") -}}
-{{- printf "%s/%s:%s" $reg $i.repository $tag -}}
+{{- printf "%s:%s" $i.repository $tag -}}
 {{- end -}}
 
 {{/* Default upstream URLs. This chart names its objects statically

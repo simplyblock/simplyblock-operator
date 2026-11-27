@@ -11,7 +11,6 @@ import (
 	"sort"
 	"time"
 
-	volumegroupsnapshotv1beta1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumegroupsnapshot/v1beta1"
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v8/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	kerrors "k8s.io/apimachinery/pkg/api/errors"
@@ -26,6 +25,7 @@ import (
 
 	"github.com/simplyblock/atlas/statemachine"
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/groupsnapshot"
 )
 
 const (
@@ -152,8 +152,8 @@ func (r *VolumeGroupSnapshotOpsReconciler) validate(
 	ops *simplyblockv1alpha2.VolumeGroupSnapshotOps,
 	machine *statemachine.Machine[restoreStep],
 ) (ctrl.Result, error) {
-	vgs := &volumegroupsnapshotv1beta1.VolumeGroupSnapshot{}
-	err := r.Get(ctx, types.NamespacedName{Name: ops.Spec.VolumeGroupSnapshotRef, Namespace: ops.Namespace}, vgs)
+	vgs, err := groupsnapshot.GetVolumeGroupSnapshot(ctx, r.Client,
+		types.NamespacedName{Name: ops.Spec.VolumeGroupSnapshotRef, Namespace: ops.Namespace})
 	if kerrors.IsNotFound(err) {
 		// Admission resolved the reference, so the target was deleted after it.
 		return ctrl.Result{}, r.fail(ctx, ops, fmt.Sprintf(
@@ -413,13 +413,12 @@ func (r *VolumeGroupSnapshotOpsReconciler) memberSnapshots(
 // A content that cannot be read leaves the found count as the expectation, so
 // an unreadable content never fails a complete restore.
 func (r *VolumeGroupSnapshotOpsReconciler) expectedMembers(
-	ctx context.Context, vgs *volumegroupsnapshotv1beta1.VolumeGroupSnapshot, found int,
+	ctx context.Context, vgs *groupsnapshot.VolumeGroupSnapshot, found int,
 ) int {
 	if vgs.Status == nil || vgs.Status.BoundVolumeGroupSnapshotContentName == nil {
 		return found
 	}
-	content := &volumegroupsnapshotv1beta1.VolumeGroupSnapshotContent{}
-	err := r.Get(ctx, types.NamespacedName{Name: *vgs.Status.BoundVolumeGroupSnapshotContentName}, content)
+	content, err := groupsnapshot.GetVolumeGroupSnapshotContent(ctx, r.Client, *vgs.Status.BoundVolumeGroupSnapshotContentName)
 	if err != nil || len(content.Spec.Source.VolumeHandles) == 0 {
 		return found
 	}
