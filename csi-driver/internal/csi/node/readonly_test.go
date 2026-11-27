@@ -3,9 +3,11 @@
 package node
 
 import (
+	"context"
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/atlas/volstack/plans"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -45,5 +47,20 @@ func TestReadOnlyNeedsTheIndirection(t *testing.T) {
 	}
 	if err := refuseUnenforcedReadOnly(plans.Volume{}, shapeRawBlock); err != nil {
 		t.Errorf("a writable volume without the indirection: %v, want it staged", err)
+	}
+}
+
+// Regression: #989 review (striped ReadOnlyMany). attachPlan returned a
+// striped volume's plan before the read-only guard, and a striped volume never
+// takes the dm-linear indirection, so a static or pre-existing striped volume
+// claimed ReadOnlyMany staged a writable device. CreateVolume's refusal does
+// not cover a volume it did not create.
+func TestAStripedReadOnlyManyBlockVolumeIsRefused(t *testing.T) {
+	ns := &Server{}
+	vc := map[string]string{csicommon.CtxStripeWidth: "3"}
+	_, err := ns.attachPlan(context.Background(), "vol", "/staging", vc,
+		blockCapabilityIn(csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY))
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("attachPlan = %v, want FailedPrecondition before anything attaches", err)
 	}
 }
