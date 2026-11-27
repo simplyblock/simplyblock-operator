@@ -149,7 +149,7 @@ size, the version, and the zone can be changed through the environment, as the
 script's header lists.
 
 ```sh
-make aws-create PULL_SECRET_FILE=~/.secrets/redhat-pull-secret.json  # OCP_VERSION=stable-4.20 by default
+make aws-create PULL_SECRET_FILE=~/.secrets/redhat-pull-secret.json  # OCP_VERSION=stable-4.22 by default
 make aws-install-virt
 make aws-install-simplyblock
 make level1 KUBECONFIG="$(aws/cluster.sh kubeconfig)"

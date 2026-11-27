@@ -27,7 +27,7 @@
 # Environment:
 #   PULL_SECRET_FILE        Red Hat pull secret, JSON (required by create)
 #   CLUSTER_NAME            default sb-cert
-#   OCP_VERSION             a release (4.20.26, 5.0.1) or a channel (stable-4.20); default stable-4.20
+#   OCP_VERSION             a release (4.20.26, 5.0.1) or a channel (stable-4.22); default stable-4.22
 #   BASE_DOMAIN             default api.simplyblock.io
 #   REGION, ZONE            default us-east-1, us-east-1a
 #   CONTROL_PLANE_TYPE      default m6i.2xlarge (Level 3 asks for 8 vCPU and 32 GB)
@@ -46,7 +46,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 
 CLUSTER_NAME="${CLUSTER_NAME:-sb-cert}"
-OCP_VERSION="${OCP_VERSION:-stable-4.20}"
+OCP_VERSION="${OCP_VERSION:-stable-4.22}"
 BASE_DOMAIN="${BASE_DOMAIN:-api.simplyblock.io}"
 REGION="${REGION:-us-east-1}"
 ZONE="${ZONE:-us-east-1a}"
@@ -98,8 +98,12 @@ download_tools() {
     echo "downloading $base/$archive"
     curl -fsSL "$base/$archive" | tar -xz -C "$tmp"
   done
-  release="$("$tmp/openshift-install" version | awk '/^openshift-install/ {print $2; exit}')"
-  [[ -n "$release" ]] || die "could not read the release of the downloaded openshift-install"
+  # The first line is "<path of the binary> <release>".
+  release="$("$tmp/openshift-install" version | awk 'NR == 1 {print $2}')"
+  if [[ -z "$release" ]]; then
+    rm -rf "$tmp"
+    die "could not read the release of the downloaded openshift-install"
+  fi
   mkdir -p "$SCRIPT_DIR/bin/$release"
   mv "$tmp/openshift-install" "$tmp/oc" "$SCRIPT_DIR/bin/$release/"
   rm -rf "$tmp"
