@@ -892,6 +892,48 @@
         }
       }
     },
+    "/api/v2/clusters/{cluster_id}/switch-write-protection": {
+      "post": {
+        "summary": "Clusters:Switch-Write-Protection",
+        "description": "Move the cluster's distribs from v1 to v2 write protection.\n\nThe runtime switch reaches every online node, and an offline node picks v2\nup from its stored parameters when it next restarts. A cluster already on v2\nsucceeds without acting.",
+        "operationId": "clusters_switch_write_protection_api_v2_clusters__cluster_id__switch_write_protection_post",
+        "security": [
+          {
+            "HTTPBearer": []
+          }
+        ],
+        "parameters": [
+          {
+            "name": "cluster_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Cluster Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "409": {
+            "description": "The switch did not complete: no node is online, or a node rejected it. The cluster stays on v1 write protection; call again once the nodes are online"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v2/clusters/{cluster_id}/rebalance": {
       "post": {
         "summary": "Clusters:Rebalance",
@@ -13368,6 +13410,21 @@
           "node_label_suffix": {
             "type": "string",
             "title": "Node Label Suffix"
+          },
+          "write_protection_v2": {
+            "type": "boolean",
+            "title": "Write Protection V2",
+            "default": false
+          },
+          "default_spdk_image": {
+            "type": "string",
+            "title": "Default Spdk Image",
+            "default": ""
+          },
+          "default_spdk_proxy_image": {
+            "type": "string",
+            "title": "Default Spdk Proxy Image",
+            "default": ""
           }
         },
         "type": "object",
@@ -18080,6 +18137,16 @@
             "title": "Site",
             "default": ""
           },
+          "spdk_image": {
+            "type": "string",
+            "title": "Spdk Image",
+            "default": ""
+          },
+          "spdk_proxy_image": {
+            "type": "string",
+            "title": "Spdk Proxy Image",
+            "default": ""
+          },
           "capacity": {
             "$ref": "#/components/schemas/CapacityStatDTO"
           }
@@ -20144,6 +20211,28 @@
             "type": "array",
             "title": "New Ssd Pcie",
             "default": []
+          },
+          "spdk_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spdk Image"
+          },
+          "spdk_proxy_image": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Spdk Proxy Image"
           }
         },
         "type": "object",
