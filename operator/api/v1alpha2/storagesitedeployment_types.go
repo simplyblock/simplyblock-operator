@@ -55,7 +55,8 @@ const (
 type StorageSiteDiscovery struct {
 	// EnableControlPlaneNodes lets the discovery consider the nodes that run the
 	// API server. Every server of a small distribution is one, so a three-node
-	// site has no storage without it.
+	// site has no storage without it. Left unset, it is implied on a cluster
+	// whose every node is a control-plane node that also carries the worker role.
 	// +optional
 	EnableControlPlaneNodes *bool `json:"enableControlPlaneNodes,omitempty"`
 

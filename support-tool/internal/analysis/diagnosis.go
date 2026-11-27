@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/internal/discovery"
 	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
 
@@ -125,6 +126,7 @@ func diagnoseSelection(b *supportbundle.Bundle, a Analysis, add func(Diagnosis))
 		return
 	}
 	selected := b.Run.Status.Workers
+	excludesControlPlane := runExcludesControlPlane(b)
 	for _, w := range a.Workers {
 		switch {
 		case slices.Contains(selected, w.Name) && !w.InReport:
@@ -133,12 +135,27 @@ func diagnoseSelection(b *supportbundle.Bundle, a Analysis, add func(Diagnosis))
 				Detail: "Its probe failed, or its report is one this tool cannot read. The probe pod's logs say which, within the hour the pod is kept."})
 		case !slices.Contains(selected, w.Name) && w.InCluster && len(w.StorageNodes) == 0:
 			add(Diagnosis{Severity: SeverityInfo, Code: "NotInspected", Worker: w.Name, Tab: "workers",
-				Title: w.Name + " was not inspected", Detail: notInspectedBecause(w)})
+				Title: w.Name + " was not inspected", Detail: notInspectedBecause(w, excludesControlPlane)})
 		}
 	}
 }
 
-func notInspectedBecause(w Worker) string {
+// runExcludesControlPlane reports whether the run left control-plane nodes out
+// by their role. An unset enableControlPlaneNodes follows the cluster the way
+// the operator does: a compact one, whose every node is also a worker, has its
+// control-plane nodes included.
+func runExcludesControlPlane(b *supportbundle.Bundle) bool {
+	var enable *bool
+	if b.Run.Spec.Discover != nil {
+		enable = b.Run.Spec.Discover.EnableControlPlaneNodes
+	}
+	if enable != nil {
+		return !*enable
+	}
+	return !discovery.IsCompactCluster(b.Nodes)
+}
+
+func notInspectedBecause(w Worker, excludesControlPlane bool) string {
 	var reasons []string
 	if w.Node.Cordoned {
 		reasons = append(reasons, "it is cordoned")
@@ -149,7 +166,7 @@ func notInspectedBecause(w Worker) string {
 		}
 	}
 	for _, role := range w.Node.Roles {
-		if role == "ControlPlane" {
+		if role == "ControlPlane" && excludesControlPlane {
 			reasons = append(reasons, "it is a control-plane node, which spec.discover.enableControlPlaneNodes includes")
 		}
 	}

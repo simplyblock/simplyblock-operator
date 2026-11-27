@@ -5,6 +5,12 @@ package analysis
 import (
 	"strings"
 	"testing"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	simplyblockv1alpha2 "github.com/simplyblock/simplyblock-operator/api/v1alpha2"
+	"github.com/simplyblock/simplyblock-operator/support-tool/internal/supportbundle"
 )
 
 func diagnosis(t *testing.T, a Analysis, code, worker string) Diagnosis {
@@ -143,4 +149,82 @@ func TestASelectedWorkerStaysWhenItsNodeAndReportAreMissing(t *testing.T) {
 		t.Errorf("worker-03 is %+v", w)
 	}
 	diagnosis(t, a, "ProbeMissing", "worker-03")
+}
+
+// selectionDiagnoses is what diagnoseSelection says about a run that selected
+// master-0 alone, in a cluster of the given nodes.
+func selectionDiagnoses(nodes []corev1.Node, enable *bool) map[string]Diagnosis {
+	b := &supportbundle.Bundle{
+		Run: &simplyblockv1alpha2.OperatorOps{
+			Spec: simplyblockv1alpha2.OperatorOpsSpec{
+				Discover: &simplyblockv1alpha2.DiscoverSpec{EnableControlPlaneNodes: enable},
+			},
+			Status: simplyblockv1alpha2.OperatorOpsStatus{Workers: []string{"master-0"}},
+		},
+		Nodes: nodes,
+	}
+	a := Analysis{}
+	for _, node := range nodes {
+		a.Workers = append(a.Workers, Worker{Name: node.Name, InCluster: true, InReport: true, Node: nodeOf(node)})
+	}
+	out := map[string]Diagnosis{}
+	diagnoseSelection(b, a, func(d Diagnosis) { out[d.Worker] = d })
+	return out
+}
+
+func roleNode(name string, roles ...string) corev1.Node {
+	node := corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{}}}
+	for _, role := range roles {
+		node.Labels["node-role.kubernetes.io/"+role] = ""
+	}
+	return node
+}
+
+// Regression: 2026-11-19-compact-cluster-masters-blamed-on-their-role. On a
+// compact cluster the control-plane role does not exclude a node when the field
+// is unset, so a master the run did not select was left out by the selection,
+// and naming its role sends a reader after a setting that changes nothing.
+func TestAMasterOfACompactClusterIsNotBlamedOnItsRole(t *testing.T) {
+	got := selectionDiagnoses([]corev1.Node{
+		roleNode("master-0", "master", "worker"),
+		roleNode("master-1", "master", "worker"),
+		roleNode("master-2", "master", "worker"),
+	}, nil)
+
+	d, found := got["master-1"]
+	if !found {
+		t.Fatalf("master-1 has no diagnosis among %+v", got)
+	}
+	if strings.Contains(d.Detail, "control-plane") {
+		t.Errorf("master-1 is blamed on its role on a compact cluster: %q", d.Detail)
+	}
+	if !strings.Contains(d.Detail, "nodeSelector") {
+		t.Errorf("master-1's diagnosis does not point at the selection: %q", d.Detail)
+	}
+}
+
+// Beside a dedicated worker, the role is what keeps a master out.
+func TestAMasterBesideADedicatedWorkerIsBlamedOnItsRole(t *testing.T) {
+	got := selectionDiagnoses([]corev1.Node{
+		roleNode("master-0", "worker"),
+		roleNode("master-1", "master", "worker"),
+	}, nil)
+
+	if d := got["master-1"]; !strings.Contains(d.Detail, "enableControlPlaneNodes") {
+		t.Errorf("master-1's diagnosis does not name the setting that keeps it out: %q", d.Detail)
+	}
+}
+
+// An explicit false keeps a compact cluster's masters out, and the diagnosis
+// says so.
+func TestAMasterOfACompactClusterTheRunExcludedIsBlamedOnItsRole(t *testing.T) {
+	excluded := false
+	got := selectionDiagnoses([]corev1.Node{
+		roleNode("master-0", "master", "worker"),
+		roleNode("master-1", "master", "worker"),
+	}, &excluded)
+
+	if d := got["master-1"]; !strings.Contains(d.Detail, "enableControlPlaneNodes") {
+		t.Errorf("master-1's diagnosis does not name the setting that keeps it out: %q", d.Detail)
+	}
 }

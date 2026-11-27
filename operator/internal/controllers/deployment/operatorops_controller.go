@@ -45,6 +45,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/discovery"
 	"k8s.io/client-go/tools/events"
@@ -368,13 +369,19 @@ func (r *OperatorOpsReconciler) inspect(
 		return false, err
 	}
 
+	// Every node is listed and the selector applied afterward, because whether
+	// the cluster is compact is decided on all of its machines, not on the ones
+	// the run selected.
 	var nodes corev1.NodeList
-	options := []client.ListOption{}
-	if len(spec.NodeSelector) > 0 {
-		options = append(options, client.MatchingLabels(spec.NodeSelector))
-	}
-	if err := r.List(ctx, &nodes, options...); err != nil {
+	if err := r.List(ctx, &nodes); err != nil {
 		return false, err
+	}
+	compact := discoverypkg.IsCompactCluster(nodes.Items)
+	if len(spec.NodeSelector) > 0 {
+		selector := labels.SelectorFromSet(spec.NodeSelector)
+		nodes.Items = slices.DeleteFunc(nodes.Items, func(node corev1.Node) bool {
+			return !selector.Matches(labels.Set(node.Labels))
+		})
 	}
 
 	// A named set is filtered here rather than fetched one node at a time, so
@@ -394,7 +401,14 @@ func (r *OperatorOpsReconciler) inspect(
 	// A worker that looked fine and was not used owes the run a reason. Both
 	// exclusions below are silent otherwise, and a draft missing three machines
 	// somebody expected is a draft they have no way to ask about.
-	useControlPlane := ptr.BoolFromOrFalse(spec.EnableControlPlaneNodes)
+	// An unset field follows the cluster: a compact cluster has no machine
+	// besides its control-plane nodes, so excluding them would leave nothing. An
+	// explicit false still wins.
+	useControlPlane := ptr.From(spec.EnableControlPlaneNodes, compact)
+	includedBecause := "spec.discover.enableControlPlaneNodes is set"
+	if spec.EnableControlPlaneNodes == nil {
+		includedBecause = "this is a compact cluster, whose workers are its control-plane nodes"
+	}
 	workers := make([]string, 0, len(nodes.Items))
 	for _, node := range nodes.Items {
 		if _, already := taken[node.Name]; already {
@@ -411,12 +425,12 @@ func (r *OperatorOpsReconciler) inspect(
 			continue
 		}
 		if !role.HoldsStorageNodes() {
-			// The reviewer asked for these and still has to see which machines
-			// they got, because the draft's control-plane node set is otherwise
-			// just another block of hostnames.
+			// The reviewer asked for these, or the cluster left no choice, and
+			// still has to see which machines they got, because the draft's
+			// control-plane node set is otherwise just another block of hostnames.
 			r.event(ops, corev1.EventTypeWarning, ControlPlaneNodeIncluded, fmt.Sprintf(
-				"%s is %s and is in the draft because spec.discover.enableControlPlaneNodes is set",
-				node.Name, role.Describe()))
+				"%s is %s and is in the draft because %s",
+				node.Name, role.Describe(), includedBecause))
 		}
 		workers = append(workers, node.Name)
 	}
