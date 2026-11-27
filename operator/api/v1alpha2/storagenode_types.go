@@ -146,6 +146,7 @@ type StorageNodeSizing struct {
 	// explicit core count rather than a percentage.
 	// +kubebuilder:validation:Minimum=4
 	// +kubebuilder:validation:Required
+	// +k8s:immutable
 	VCPUCount *int32 `json:"vcpuCount"`
 
 	// MinHugePagesSize is the smallest huge-page allocation this node makes, as a
@@ -153,6 +154,7 @@ type StorageNodeSizing struct {
 	// floor rather than a limit: the effective allocation is the larger of this
 	// value and the minimum the node's device and subsystem count requires.
 	// +optional
+	// +k8s:immutable
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 }
 
@@ -167,11 +169,13 @@ type StorageNodeConfig struct {
 	// Sizing is what this node's huge pages and core layout were sized from.
 	// Writable by the operator alone.
 	// +kubebuilder:validation:Required
+	// +simplyblock:invisible
 	Sizing StorageNodeSizing `json:"sizing"`
 
 	// SpdkImage overrides the SPDK image the control plane starts for this node,
 	// which is what makes a phased image rollout expressible per node.
 	// +optional
+	// +simplyblock:invisible
 	SpdkImage string `json:"spdkImage,omitempty"`
 
 	// SpdkImagePullPolicy controls when that image is pulled, and defaults to
@@ -185,10 +189,12 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=Always
 	// +optional
+	// +simplyblock:invisible
 	SpdkImagePullPolicy corev1.PullPolicy `json:"spdkImagePullPolicy,omitempty"`
 
 	// SpdkProxyImage overrides the SPDK proxy image for this node.
 	// +optional
+	// +simplyblock:invisible
 	SpdkProxyImage string `json:"spdkProxyImage,omitempty"`
 
 	// SpdkProxyImagePullPolicy controls when that image is pulled. It is stated
@@ -198,15 +204,8 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=Always
 	// +optional
+	// +simplyblock:invisible
 	SpdkProxyImagePullPolicy corev1.PullPolicy `json:"spdkProxyImagePullPolicy,omitempty"`
-
-	// SpdkSystemMemory is the memory the control plane starts this node's SPDK
-	// with, as a size string such as 4G or 512M. It can be raised, because a
-	// node whose device count grew legitimately needs more, and who may raise it
-	// is decided at admission.
-	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
-	// +optional
-	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
 
 	// ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
 	// core list such as 0,1 or 0-3.
@@ -229,6 +228,7 @@ type StorageNodeConfig struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^[0-9]+(-[0-9]+)?(,[0-9]+(-[0-9]+)?)*$`
 	// +optional
+	// +simplyblock:invisible
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
 	// JournalManager tunes the journal manager count and per-device capacity
@@ -236,6 +236,7 @@ type StorageNodeConfig struct {
 	// devices were partitioned.
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	JournalManager *JournalManagerSpec `json:"journalManager,omitempty"`
 
 	// DeviceNames names the devices to use. An entry is a PCI address
@@ -244,11 +245,14 @@ type StorageNodeConfig struct {
 	// as a path under /dev. One list carries both spellings, and every entry is of
 	// the class its cluster declares in StorageCluster.spec.deviceClass: a list
 	// mixing the two, or naming the class the cluster is not, is rejected by the
-	// StorageNode validating webhook. Set explicitly, it overrides every filter
-	// below. Immutable: it selects which physical devices the node owns.
+	// StorageNode validating webhook. It is the node's whole device selection,
+	// and only the operator changes it: a migration adds the drives it bound on
+	// the target host, so they survive a later rebuild of the node. The webhook
+	// refuses a change from anyone else; an immutability marker would refuse the
+	// migration too.
 	// +kubebuilder:validation:items:Pattern=`^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]|/dev/[a-zA-Z0-9._/-]+|[a-zA-Z0-9._-]+)$`
 	// +optional
-	// +k8s:immutable
+	// +simplyblock:operatorManaged
 	DeviceNames []string `json:"deviceNames,omitempty"`
 
 	// MgmtInterface is the management NIC this node binds. Unset, the cluster's
@@ -264,31 +268,6 @@ type StorageNodeConfig struct {
 	// +optional
 	// +k8s:immutable
 	DataInterfaces []string `json:"dataInterfaces,omitempty"`
-
-	// PcieAllowList selects devices by PCI address. It is the one device field a
-	// migration writes, merging spec.migrate.newSsdPcie into it so devices added
-	// on the target host survive a later rebuild, so it is guarded by the
-	// StorageNode validating webhook rather than by a marker. This and the two
-	// PCI filters below belong to an NVMe cluster: the webhook rejects them on a
-	// cluster whose deviceClass is LogicalBlock, because a logical block device
-	// has no PCI address to match.
-	// +optional
-	PcieAllowList []string `json:"pcieAllowList,omitempty"`
-
-	// PcieDenyList excludes devices by PCI address.
-	// +optional
-	// +k8s:immutable
-	PcieDenyList []string `json:"pcieDenyList,omitempty"`
-
-	// PcieModel filters devices by PCI model string.
-	// +optional
-	// +k8s:immutable
-	PcieModel string `json:"pcieModel,omitempty"`
-
-	// DriveSizeRange filters devices by size.
-	// +optional
-	// +k8s:immutable
-	DriveSizeRange string `json:"driveSizeRange,omitempty"`
 
 	// FailureDomain is the label of the fault group this node belongs to
 	// such as rack-b, naming the physical grouping it shares with its peers rather
@@ -354,6 +333,7 @@ type StorageNodeSpec struct {
 	// this site; a remote node (stretched.remote) runs on no worker of this
 	// cluster and leaves it empty.
 	// +optional
+	// +simplyblock:operatorManaged
 	WorkerNode string `json:"workerNode,omitempty"`
 
 	// SocketID is the NUMA socket this node is bound to, as declared in the node
@@ -366,12 +346,16 @@ type StorageNodeSpec struct {
 	// rejects a change made by an identity outside the operator's namespace,
 	// which is the same treatment WorkerNode takes and for the same reason.
 	// +optional
+	// +simplyblock:operatorManaged
+	// +simplyblock:advanced
 	SocketID string `json:"socketId,omitempty"`
 
 	// NodeIndex is the position among the nodes sharing this socket, in
 	// 0..nodesPerSocket-1. See SocketID, whose guard it shares.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
+	// +simplyblock:operatorManaged
+	// +simplyblock:advanced
 	NodeIndex *int32 `json:"nodeIndex,omitempty"`
 
 	// Slot is which storage-node slot on this worker the object occupies, counted
@@ -384,6 +368,7 @@ type StorageNodeSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	Slot *int32 `json:"slot,omitempty"`
 
 	// Config is this node's complete configuration, copied from the
@@ -398,6 +383,7 @@ type StorageNodeSpec struct {
 	// belongs to the other site. Unset on every node of this site and on a
 	// standalone cluster. Cannot be added or removed after creation.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedNodeSpec `json:"stretched,omitempty"`
 }
 
@@ -410,6 +396,7 @@ type StretchedNodeSpec struct {
 	// Immutable.
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	Remote bool `json:"remote,omitempty"`
 }
 
@@ -616,14 +603,14 @@ type StorageNodeStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 
-	// ObservedGeneration is the generation the rest of this status was computed
-	// from, so a stale status can be told from a current one.
-	// +optional
 	// Remediation is what Kubernetes knows about this node's host, reported
 	// for the two-node arbiter as positive fencing evidence.
 	// +optional
 	Remediation *NodeRemediationStatus `json:"remediation,omitempty"`
 
+	// ObservedGeneration is the generation the rest of this status was computed
+	// from, so a stale status can be told from a current one.
+	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 }
 

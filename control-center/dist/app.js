@@ -1,23 +1,87 @@
 // generated — do not edit; see build.md
+// ---- contexts.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// CONTEXTS: the Kubernetes clusters the console reads
+//
+// The console can manage storage across several Kubernetes clusters. Each
+// one is a named context: the browser reaches its API server through the
+// same-origin proxy at the context's `k8sBase` (`/k8s` for the local
+// cluster, `/k8s/<name>` for another one), rendered into config.js by the
+// console pod's entrypoint. A context carries free-form `labels` the
+// administrator chose when configuring the console (a lifecycle stage, a
+// tenant, a site); the fleet dashboard can group by any of them, and says
+// that the value came from the console's configuration rather than from an
+// object.
+//
+// This file loads first: every other module reads CONTEXTS.
+// ---------------------------------------------------------------------------
+const SBC = window.SB_CONFIG || {};
+const LOCAL_DEFAULT = {
+  name: "local",
+  local: true,
+  labels: {},
+  k8sBase: SBC.k8sBase || "/k8s",
+  namespaces: "all"
+};
+function normalizeContext(c, i) {
+  const o = Object.assign({}, c);
+  o.name = String(o.name || (i === 0 ? "local" : `ctx-${i}`));
+  o.local = i === 0;
+  o.labels = Object.assign({}, o.labels || {});
+  o.k8sBase = o.k8sBase || (o.local ? LOCAL_DEFAULT.k8sBase : `/k8s/${o.name}`);
+  if (o.namespaces !== "all" && !Array.isArray(o.namespaces)) o.namespaces = "all";
+  if (Array.isArray(o.namespaces) && o.namespaces.length === 0) o.namespaces = "all";
+  return o;
+}
+
+// The first context is always the local cluster, so a config.js written
+// before contexts existed still boots with exactly what it had.
+const CONTEXTS = (Array.isArray(SBC.contexts) && SBC.contexts.length ? SBC.contexts : [LOCAL_DEFAULT]).map(normalizeContext);
+const LOCAL_CTX = CONTEXTS[0].name;
+const MULTI_CTX = CONTEXTS.length > 1;
+const ctxByName = name => CONTEXTS.find(c => c.name === (name || LOCAL_CTX)) || null;
+const ctxLabels = name => (ctxByName(name) || LOCAL_DEFAULT).labels || {};
+const ctxNamespaces = name => (ctxByName(name) || LOCAL_DEFAULT).namespaces;
+// the context an object belongs to, read from the registry a normalizer fills
+const ctxOf = id => ((window.REG || {})[id] || {}).ctx || LOCAL_CTX;
+// every label key any context declares, for the dashboard's grouping switch
+const ctxLabelKeys = () => Array.from(new Set(CONTEXTS.flatMap(c => Object.keys(c.labels || {})))).sort();
+Object.assign(window, {
+  CONTEXTS,
+  LOCAL_CTX,
+  MULTI_CTX,
+  ctxByName,
+  ctxLabels,
+  ctxNamespaces,
+  ctxOf,
+  ctxLabelKeys
+});
+})();
 // ---- k8s-client.jsx ----
 (function(){
 // ---------------------------------------------------------------------------
 // KUBERNETES / OPERATOR / HELM TRANSPORT
 //
 // The console talks to exactly three things and nothing else:
-//   · the Kubernetes API   — CRDs in storage.simplyblock.io/v1alpha1, the DR
-//                            hub's dr.simplyblock.io/v1alpha1 (plus the Ramen
-//                            and OCM objects it derives), and core objects
-//                            (Node, Pod, PVC, StorageClass, Secret, Event)
+//   · the Kubernetes API   — the storage CRDs (storage.simplyblock.io/v1alpha2
+//                            for every kind that has that version, v1alpha1
+//                            only for the replication kinds that never moved),
+//                            the DR hub's dr.simplyblock.io/v1alpha1 (plus the
+//                            Ramen and OCM objects it derives), and core objects
+//                            (Node, Pod, PV, PVC, StorageClass, Secret, Event)
 //   · the operator API     — what the operator exposes beyond CRDs
 //   · Helm                 — release state for the chart
 //
-// It does NOT call the control plane REST API. Anything the control plane knows
-// reaches the UI through a CRD status written by a controller.
+// The control plane REST API is read, read-only, through cpapi.jsx; nothing
+// here writes to it. Every action is an Ops object on the Kubernetes API.
 // ---------------------------------------------------------------------------
 const SB = window.SB_CONFIG;
 const GROUP = "storage.simplyblock.io";
-const VERSION = "v1alpha1";
+// the storage version of the operator's kinds on main; a kind that only exists
+// in v1alpha1 says so in its registry entry
+const VERSION = "v1alpha2";
+const LEGACY_VERSION = "v1alpha1";
 const API_GROUP = `${GROUP}/${VERSION}`;
 const DR_GROUP = "dr.simplyblock.io";
 const DR_API_GROUP = `${DR_GROUP}/v1alpha1`;
@@ -35,9 +99,13 @@ class ApiError extends Error {
 
 // ---- resource registry -----------------------------------------------------
 // Every kind the console reads, with the plural the API server routes on and the
-// short name from the design (§7.11). `core: true` means it is not our group.
+// short name the CRD declares. A kind of our group is served at VERSION unless
+// its entry carries `version`; `core` names another group and version.
+// `ops` names the entity an Ops kind acts on and `ref` the spec field that
+// names it, as the CRD spells it; `params` lists the actions that take a
+// parameter block of the same name, lowercased.
 const RESOURCES = {
-  // entities
+  // entities (storage.simplyblock.io/v1alpha2)
   StorageCluster: {
     plural: "storageclusters",
     short: "sbc",
@@ -63,6 +131,17 @@ const RESOURCES = {
     short: "sbbk",
     namespaced: true
   },
+  StorageBackupPolicy: {
+    plural: "storagebackuppolicies",
+    short: "sbbp",
+    namespaced: true,
+    creatable: true
+  },
+  StorageGroupBackup: {
+    plural: "storagegroupbackups",
+    short: "sbgb",
+    namespaced: true
+  },
   ControlPlane: {
     plural: "controlplanes",
     short: "sbcp",
@@ -78,79 +157,114 @@ const RESOURCES = {
     short: "sbcdc",
     namespaced: true
   },
-  // replication: real kinds in v1alpha1. A slot is created by the operator from
-  // a PVC annotation, so it is read-only here; the other three are creatable.
+  StretchedCluster: {
+    plural: "stretchedclusters",
+    short: "sbsc",
+    namespaced: true
+  },
+  // replication: the four kinds that only exist in v1alpha1. A slot is created
+  // by the operator from a PVC annotation, so it is read-only here; the other
+  // three are creatable.
   ReplicationPair: {
     plural: "replicationpairs",
     short: "relpair",
     namespaced: true,
-    creatable: true
+    creatable: true,
+    version: LEGACY_VERSION
   },
   ReplicationPolicy: {
     plural: "replicationpolicies",
     short: "repl",
     namespaced: true,
-    creatable: true
+    creatable: true,
+    version: LEGACY_VERSION
   },
   ReplicationSlot: {
     plural: "replicationslots",
     short: "relslot",
-    namespaced: true
+    namespaced: true,
+    version: LEGACY_VERSION
   },
   ReplicationOps: {
     plural: "replicationops",
     short: "replops",
     namespaced: true,
-    creatable: true
+    creatable: true,
+    version: LEGACY_VERSION
   },
-  // one-shot operations
+  // one-shot operations; the action enums are the CRDs' (OPERATIONS.md)
   StorageClusterOps: {
     plural: "storageclusterops",
     short: "sbco",
     namespaced: true,
-    ops: "StorageCluster"
+    ops: "StorageCluster",
+    ref: "clusterRef",
+    actions: ["Activate", "Expand", "Shutdown", "Start", "Restart", "RollingRestart", "CancelTask"],
+    params: ["RollingRestart", "CancelTask"]
   },
   StorageNodeOps: {
     plural: "storagenodeops",
     short: "sbno",
     namespaced: true,
-    ops: "StorageNode"
+    ops: "StorageNode",
+    ref: "nodeRef",
+    actions: ["Shutdown", "Restart", "Suspend", "Resume", "Remove", "Migrate", "HostMaintenance"],
+    params: ["Migrate", "Remove"]
   },
   StorageDeviceOps: {
     plural: "storagedeviceops",
     short: "sbdo",
     namespaced: true,
-    ops: "StorageDevice"
+    ops: "StorageDevice",
+    ref: "deviceRef",
+    actions: ["Restart", "Fail", "CheckHealth"],
+    params: []
   },
   StoragePoolOps: {
     plural: "storagepoolops",
     short: "sbpo",
     namespaced: true,
-    ops: "StoragePool"
+    ops: "StoragePool",
+    ref: "poolRef",
+    actions: ["Rebalance"],
+    params: []
   },
   StorageBackupOps: {
     plural: "storagebackupops",
     short: "sbbo",
     namespaced: true,
-    ops: "StorageBackup"
+    ops: "StorageBackup",
+    ref: "backupRef",
+    refIsObject: true,
+    actions: ["Restore"],
+    params: ["Restore"]
   },
   ControlPlaneOps: {
     plural: "controlplaneops",
     short: "sbcpo",
     namespaced: true,
-    ops: "ControlPlane"
+    ops: "ControlPlane",
+    ref: "controlPlaneRef",
+    actions: ["Restart", "Upgrade", "Backup", "HostMaintenance"],
+    params: ["Restart", "Upgrade", "Backup", "HostMaintenance"]
   },
+  // cluster-scoped: a PersistentVolume has no namespace
   PersistentVolumeOps: {
     plural: "persistentvolumeops",
     short: "sbpvo",
-    namespaced: true,
-    ops: "PersistentVolume"
+    namespaced: false,
+    ops: "PersistentVolume",
+    ref: "persistentVolumeName",
+    actions: ["Migrate", "Relocate", "JoinConsistencyGroup"],
+    params: ["Migrate", "Relocate", "JoinConsistencyGroup"]
   },
   OperatorOps: {
     plural: "operatorops",
     short: "sbop",
     namespaced: true,
-    ops: null
+    ops: null,
+    actions: ["Discover"],
+    params: ["Discover"]
   },
   // ---- DR hub (dr-simplyblock) — dr.simplyblock.io/v1alpha1 ----------------
   // The hub has no REST API: every screen is a CR. Cluster-scoped kinds have
@@ -317,13 +431,19 @@ const RESOURCES = {
     core: OCM_CLUSTER_API_GROUP,
     namespaced: false
   },
-  // a managed site's storage deployment, requested from the hub (operator,
-  // storage.simplyblock.io/v1alpha2); the operator carries it to the site
+  // a managed site's storage deployment, requested from the hub; the operator
+  // carries it to the site
   StorageSiteDeployment: {
     plural: "storagesitedeployments",
     short: "sbsd",
-    core: "storage.simplyblock.io/v1alpha2",
     namespaced: true
+  },
+  // the CRDs themselves: field descriptions, enums, and immutability rules for
+  // the schema-driven views come from here, never from prose in the console
+  CustomResourceDefinition: {
+    plural: "customresourcedefinitions",
+    core: "apiextensions.k8s.io/v1",
+    namespaced: false
   },
   // access reviews: the API server answers what the caller may do
   SelfSubjectAccessReview: {
@@ -372,9 +492,34 @@ const RESOURCES = {
     core: "v1",
     namespaced: true
   },
+  Namespace: {
+    plural: "namespaces",
+    core: "v1",
+    namespaced: false
+  },
+  Job: {
+    plural: "jobs",
+    core: "batch/v1",
+    namespaced: true
+  },
   StorageClass: {
     plural: "storageclasses",
     core: "storage.k8s.io/v1",
+    namespaced: false
+  },
+  VolumeSnapshot: {
+    plural: "volumesnapshots",
+    core: "snapshot.storage.k8s.io/v1",
+    namespaced: true
+  },
+  VolumeSnapshotContent: {
+    plural: "volumesnapshotcontents",
+    core: "snapshot.storage.k8s.io/v1",
+    namespaced: false
+  },
+  VolumeSnapshotClass: {
+    plural: "volumesnapshotclasses",
+    core: "snapshot.storage.k8s.io/v1",
     namespaced: false
   },
   // application resources read for Ramen recipes
@@ -428,7 +573,7 @@ function pathFor(kind, opts) {
   const o = opts || {};
   const r = RESOURCES[kind];
   if (!r) throw new Error("unknown kind " + kind);
-  const prefix = !r.core ? `/apis/${API_GROUP}` : r.core === "v1" ? "/api/v1" : `/apis/${r.core}`;
+  const prefix = !r.core ? `/apis/${GROUP}/${r.version || VERSION}` : r.core === "v1" ? "/api/v1" : `/apis/${r.core}`;
   const ns = r.namespaced && !o.allNamespaces ? `/namespaces/${o.namespace || (r.dr ? DR_NS() : NS())}` : "";
   const name = o.name ? `/${o.name}` : "";
   const sub = o.subresource ? `/${o.subresource}` : "";
@@ -437,7 +582,7 @@ function pathFor(kind, opts) {
 // apiVersion string for a kind, for the objects the console authors
 const apiVersionOf = kind => {
   const r = RESOURCES[kind];
-  return !r.core ? API_GROUP : r.core;
+  return !r.core ? `${GROUP}/${r.version || VERSION}` : r.core;
 };
 
 // ---- transport -------------------------------------------------------------
@@ -468,13 +613,19 @@ async function call(base, path, init) {
   }
   return body;
 }
+
+// the proxy base of a context (contexts.jsx); no ctx is the local cluster
+const baseFor = ctx => {
+  const c = window.ctxByName ? ctxByName(ctx) : null;
+  return c ? c.k8sBase : SB.k8sBase;
+};
 const k8s = {
   // list: returns items[], never the List envelope
-  list: (kind, opts) => call(SB.k8sBase, pathFor(kind, opts) + qs(opts)).then(r => r && r.items || []),
-  get: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  list: (kind, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts)).then(r => r && r.items || []),
+  get: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
   }, opts))),
-  create: (kind, obj, opts) => call(SB.k8sBase, pathFor(kind, opts), {
+  create: (kind, obj, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, opts) + qs(opts), {
     method: "POST",
     headers: {
       "Content-Type": "application/json"
@@ -482,27 +633,29 @@ const k8s = {
     body: JSON.stringify(obj)
   }),
   // spec edits go through a merge patch, which is what kubectl edit does
-  patch: (kind, name, patch, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  patch: (kind, name, patch, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
-  }, opts)), {
+  }, opts)) + qs(opts), {
     method: "PATCH",
     headers: {
       "Content-Type": "application/merge-patch+json"
     },
     body: JSON.stringify(patch)
   }),
-  remove: (kind, name, opts) => call(SB.k8sBase, pathFor(kind, Object.assign({
+  remove: (kind, name, opts) => call(baseFor((opts || {}).ctx), pathFor(kind, Object.assign({
     name
   }, opts)), {
     method: "DELETE"
   }),
   // pod logs are the Kubernetes API, not a side channel
-  logs: (pod, opts) => call(SB.k8sBase, pathFor("Pod", {
+  logs: (pod, opts) => call(baseFor((opts || {}).ctx), pathFor("Pod", {
     name: pod,
-    subresource: "log"
+    subresource: "log",
+    namespace: (opts || {}).namespace
   }) + qs(Object.assign({
     tailLines: 200
-  }, opts)))
+  }, opts))),
+  version: ctx => call(baseFor(ctx), "/version")
 };
 function qs(opts) {
   const o = Object.assign({}, opts);
@@ -510,6 +663,7 @@ function qs(opts) {
   delete o.name;
   delete o.subresource;
   delete o.allNamespaces;
+  delete o.ctx;
   const parts = Object.entries(o).filter(([, v]) => v !== undefined && v !== null && v !== "").map(([k, v]) => `${k}=${encodeURIComponent(v)}`);
   return parts.length ? "?" + parts.join("&") : "";
 }
@@ -521,7 +675,7 @@ function qs(opts) {
 // namespace, including cluster-wide ones; a SelfSubjectReview says who the
 // caller is. All three are POSTs that create nothing.
 const review = {
-  can: (verb, group, resource, ns, name) => k8s.create("SelfSubjectAccessReview", {
+  can: (verb, group, resource, ns, name, ctx) => k8s.create("SelfSubjectAccessReview", {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SelfSubjectAccessReview",
     spec: {
@@ -535,34 +689,48 @@ const review = {
         name
       } : {})
     }
+  }, {
+    ctx
   }).then(r => !!(r.status && r.status.allowed)),
-  rules: ns => k8s.create("SelfSubjectRulesReview", {
+  rules: (ns, ctx) => k8s.create("SelfSubjectRulesReview", {
     apiVersion: "authorization.k8s.io/v1",
     kind: "SelfSubjectRulesReview",
     spec: {
       namespace: ns
     }
+  }, {
+    ctx
   }).then(r => r.status || {
     resourceRules: [],
     incomplete: true
   }),
-  whoami: () => k8s.create("SelfSubjectReview", {
+  whoami: ctx => k8s.create("SelfSubjectReview", {
     apiVersion: "authentication.k8s.io/v1",
     kind: "SelfSubjectReview"
+  }, {
+    ctx
   }).then(r => r.status && r.status.userInfo || {})
 };
 
-// label selector helpers — the ownership tree is expressed in labels
+// label selector helpers, with the labels the operator writes: a StorageNode
+// carries storage.simplyblock.io/cluster and /worker (deployment expansion), a
+// StorageDevice carries /cluster, /node, and /worker (its mirror). The spec
+// references (spec.clusterRef, spec.nodeRef) are the joins of record; the
+// labels only narrow a list.
 const sel = o => Object.entries(o).map(([k, v]) => `${k}=${v}`).join(",");
-const ownedBy = (kind, name) => ({
-  labelSelector: sel({
-    [`${GROUP}/owner-kind`]: kind,
-    [`${GROUP}/owner-name`]: name
-  })
-});
 const inCluster = name => ({
   labelSelector: sel({
     [`${GROUP}/cluster`]: name
+  })
+});
+const ofNode = name => ({
+  labelSelector: sel({
+    [`${GROUP}/node`]: name
+  })
+});
+const onWorker = name => ({
+  labelSelector: sel({
+    [`${GROUP}/worker`]: name
   })
 });
 
@@ -604,38 +772,65 @@ function opsKindFor(entityKind) {
   const hit = Object.entries(RESOURCES).find(([, r]) => r.ops === entityKind);
   return hit ? hit[0] : null;
 }
-function submitOps(entityKind, targetName, action, payload) {
+
+// The object is shaped the way the CRD validates it: the target in the spec
+// field the kind names (`clusterRef`, `nodeRef`, `deviceRef`, `poolRef`,
+// `persistentVolumeName`, `controlPlaneRef`; StorageBackupOps takes an object
+// `backupRef{name}` plus `clusterRef{name}`), `action` spelled as the enum
+// spells it, and the action's parameter block under the action's name
+// lowercased (`migrate`, `rollingRestart`, `cancelTask`, ...). An action the
+// CRD does not list is refused here rather than by the API server.
+function submitOps(entityKind, targetName, action, payload, opts) {
   const kind = opsKindFor(entityKind);
   if (!kind) throw new Error("no Ops kind for " + entityKind);
+  const r = RESOURCES[kind];
+  if (r.actions && !r.actions.includes(action)) {
+    throw new ApiError(422, `${kind} has no action ${action}; the CRD allows ${r.actions.join(", ")}`, kind, "Invalid");
+  }
+  const o = opts || {};
+  const ns = o.namespace || NS();
   const stamp = Date.now().toString(36);
+  const spec = {
+    action
+  };
+  const where = Object.assign({}, r.namespaced ? {
+    namespace: ns
+  } : {}, o.ctx ? {
+    ctx: o.ctx
+  } : {});
+  if (targetName && r.ref) {
+    spec[r.ref] = r.refIsObject ? {
+      name: targetName
+    } : targetName;
+  }
+  if (kind === "StorageBackupOps" && o.clusterRef) spec.clusterRef = {
+    name: o.clusterRef
+  };
+  if (payload && (r.params || []).includes(action)) spec[lowerFirst(action)] = payload;
   const body = {
-    apiVersion: API_GROUP,
+    apiVersion: apiVersionOf(kind),
     kind,
-    metadata: {
-      name: `${targetName}-${action.toLowerCase()}-${stamp}`.slice(0, 63),
-      namespace: NS(),
-      labels: {
-        [`${GROUP}/target`]: targetName,
-        [`${GROUP}/action`]: action
-      }
-    },
-    spec: Object.assign({
-      action
-    }, targetName ? {
-      targetRef: {
-        name: targetName
-      }
-    } : {}, payload ? {
-      [lowerFirst(action)]: payload
+    metadata: Object.assign({
+      name: `${targetName || "operator"}-${action.toLowerCase()}-${stamp}`.slice(0, 63)
+    }, r.namespaced ? {
+      namespace: ns
     } : {})
   };
-  return k8s.create(kind, body);
+  body.spec = spec;
+  return k8s.create(kind, body, where);
 }
-const abortOps = (opsKind, name) => k8s.patch(opsKind, name, {
-  spec: {
-    abort: true
+// Every Ops kind above has spec.abort; the replication kinds do not.
+const ABORTABLE_KINDS = Object.keys(RESOURCES).filter(k => RESOURCES[k].actions);
+const abortOps = (opsKind, name, opts) => {
+  if (!ABORTABLE_KINDS.includes(opsKind)) {
+    return Promise.reject(new ApiError(422, `${opsKind} has no abort field; it runs to a terminal phase`, opsKind, "Invalid"));
   }
-});
+  return k8s.patch(opsKind, name, {
+    spec: {
+      abort: true
+    }
+  }, opts);
+};
 const lowerFirst = s => s.charAt(0).toLowerCase() + s.slice(1);
 
 // Terminal phases, per the design's phase vocabulary (PascalCase).
@@ -651,21 +846,237 @@ Object.assign(window, {
   API_GROUP,
   GROUP,
   VERSION,
+  LEGACY_VERSION,
   DR_GROUP,
   DR_API_GROUP,
   pathFor,
   apiVersionOf,
-  ownedBy,
+  baseFor,
   inCluster,
+  ofNode,
+  onWorker,
   sel,
   submitOps,
   abortOps,
+  ABORTABLE_KINDS,
   opsKindFor,
   opsRunning,
   OPS_TERMINAL,
   NS,
   DR_NS,
   DR_HUB_NS
+});
+})();
+// ---- ops-model.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// OPERATIONS MODEL: the step graphs of every Ops kind, transcribed from the
+// operator's reconcilers on main (operator/internal/controllers/*/graphs.go)
+// and recorded in OPERATIONS.md. It lives here, before api.jsx, because the
+// normalizers, the monitor, and the action dialogs all read it: which steps an
+// action walks, in which order, and at which of them spec.abort is honored.
+// Nothing in this file is a guess; a step the operator does not declare is not
+// drawn.
+// ---------------------------------------------------------------------------
+
+// steps per kind and action, in graph order; `abortable` lists the steps whose
+// state declares Abortable in the graph. A step absent from `steps` can still
+// appear in status.step.state when an action's graph branches (RollingRestart
+// skips RefreshingPod and AwaitingPod unless spec.rollingRestart.refreshSNodeAPI
+// is set; a Relocate loops AwaitingCutover and Proceeding per volume).
+const OPS_GRAPHS = {
+  StorageClusterOps: {
+    Activate: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Expand: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Shutdown: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Start: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    CancelTask: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Restart: {
+      steps: ["ShuttingDown", "Starting"],
+      abortable: []
+    },
+    RollingRestart: {
+      steps: ["CheckingPeers", "ShuttingDownNode", "RefreshingPod", "AwaitingPod", "RestartingNode", "Rebalancing"],
+      abortable: ["CheckingPeers", "Rebalancing"],
+      perNode: true
+    }
+  },
+  StorageNodeOps: {
+    Shutdown: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Suspend: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Resume: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Restart: {
+      steps: ["Requesting", "Departing", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Remove: {
+      steps: ["Validating", "ShuttingDown", "MigratingDevices", "MigratingVolumes", "Verifying", "Removing", "AwaitingRemoval"],
+      abortable: ["Validating"]
+    },
+    Migrate: {
+      steps: ["Preparing", "Relocating", "AwaitingNode", "Promoting"],
+      abortable: ["Preparing"]
+    },
+    HostMaintenance: {
+      steps: ["Holding", "ShuttingDown", "Releasing", "AwaitingHost", "Restarting", "Cleanup"],
+      abortable: ["Holding"]
+    }
+  },
+  StorageDeviceOps: {
+    Restart: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    Fail: {
+      steps: ["Removing", "Failing", "Awaiting"],
+      abortable: ["Removing"]
+    },
+    CheckHealth: {
+      steps: ["Requesting"],
+      abortable: ["Requesting"]
+    }
+  },
+  StoragePoolOps: {
+    Rebalance: {
+      steps: ["Validating", "Migrating"],
+      abortable: []
+    }
+  },
+  PersistentVolumeOps: {
+    Migrate: {
+      steps: ["Validating", "Migrating", "Verifying"],
+      abortable: ["Validating", "Migrating"]
+    },
+    Relocate: {
+      steps: ["Validating", "Replicating", "Committing", "AwaitingCutover", "AttachingPaths", "Proceeding", "Verifying"],
+      abortable: ["Validating", "Replicating"]
+    },
+    JoinConsistencyGroup: {
+      steps: ["Planning", "Leaving", "Migrating", "Joining", "SelectingSubsystem", "PreparingTarget", "AttachingPaths", "Suspending", "MovingNamespaces", "Resuming", "Committing", "ReleasingPaths"],
+      abortable: ["Planning", "Migrating", "SelectingSubsystem", "PreparingTarget", "AttachingPaths"]
+    }
+  },
+  ControlPlaneOps: {
+    Restart: {
+      steps: ["Draining", "Restarting", "Awaiting"],
+      abortable: ["Draining"]
+    },
+    Upgrade: {
+      steps: ["Preflight", "Draining", "Applying", "Awaiting", "Verifying"],
+      abortable: ["Preflight", "Draining"]
+    },
+    Backup: {
+      steps: ["Requesting", "Awaiting"],
+      abortable: ["Requesting"]
+    },
+    HostMaintenance: {
+      steps: ["Holding", "EnteringMaintenance", "MovingCoordinators", "ExcludingProcesses", "Releasing", "AwaitingHost", "IncludingProcesses", "LeavingMaintenance", "Cleanup"],
+      abortable: ["Holding"]
+    }
+  },
+  OperatorOps: {
+    Discover: {
+      steps: ["Inspecting", "Probing", "Writing"],
+      abortable: []
+    }
+  },
+  StorageBackupOps: {
+    Restore: {
+      steps: ["Validating", "Restoring", "AwaitingVolume", "AwaitingVolumes", "Binding"],
+      abortable: []
+    }
+  }
+};
+
+// entity machines that are not Ops objects but walk the same step shape
+const ENTITY_GRAPHS = {
+  // StorageNode provisioning (a node add); Adopting is the exit a node takes
+  // when a backend node already exists for its worker
+  StorageNode: {
+    steps: ["CheckingHost", "CheckingConfig", "CheckingNetwork", "AwaitingSlot", "Posting", "Resolving", "AwaitingWorker", "Adopting"]
+  },
+  // ClusterDeploymentConfig expansion
+  ClusterDeploymentConfig: {
+    steps: ["Validating", "CreatingCluster", "AwaitingCluster", "CreatingNodes", "Activating"]
+  },
+  // StorageCluster creation
+  StorageCluster: {
+    steps: ["Claiming", "CheckingControlPlane", "ResolvingConfig", "Creating", "Adopting", "Persisting"]
+  },
+  // ControlPlane installation
+  ControlPlane: {
+    steps: ["ApplyingFoundationDB", "AwaitingFoundationDB", "BuildingIndices", "ApplyingDatastore", "ApplyingAPI", "AwaitingAPI", "Installed"]
+  }
+};
+const OPS_PHASES = ["Pending", "Running", "Succeeded", "Failed", "Aborted"];
+const OPS_TERMINAL_PHASES = ["Succeeded", "Failed", "Aborted"];
+
+// the control plane's task types (shared/openapi.json, TaskDTO.function_name)
+const TASK_TYPES = ["device_restart", "node_restart", "device_migration", "failed_device_migration", "new_device_migration", "node_add", "node_removal", "port_allow", "balancing_on_restart", "balancing_on_dev_rem", "balancing_on_dev_add", "jc_comp_resume", "snapshot_replication", "lvol_sync_del", "lvol_sync_op", "lvol_migration", "lvol_batch_migration", "s3_backup", "s3_backup_restore", "s3_backup_merge", "group_backup_commit", "group_backup_delete", "cluster_expand", "replication_final", "fdb_backup", "sync_promote", "sync_resync", "sync_site_fence"];
+const TASK_STATUSES = ["new", "running", "suspended", "done"];
+// the task types the operator itself reads as "the cluster is rebalancing"
+const REBALANCING_TASK_TYPES = ["node_add", "cluster_expand", "new_device_migration"];
+
+// The graph for one object: the Ops kind's action, or the entity's machine.
+function graphOf(kind, action) {
+  const g = OPS_GRAPHS[kind];
+  if (g) return action && g[action] || null;
+  return ENTITY_GRAPHS[kind] || null;
+}
+// Where a step stands in its graph: index, whether the operator honors an
+// abort there, and the ordered list with the current one marked. A step the
+// graph does not list (a branch the action took) is appended as observed.
+function stepPosition(kind, action, state) {
+  const g = graphOf(kind, action);
+  if (!g) return {
+    index: -1,
+    steps: state ? [state] : [],
+    abortable: false
+  };
+  const steps = g.steps.slice();
+  if (state && state !== "Completed" && !steps.includes(state)) steps.push(state);
+  const index = state === "Completed" ? steps.length : steps.indexOf(state);
+  return {
+    index,
+    steps,
+    abortable: !!(g.abortable || []).includes(state),
+    perNode: !!g.perNode
+  };
+}
+Object.assign(window, {
+  OPS_GRAPHS,
+  ENTITY_GRAPHS,
+  OPS_PHASES,
+  OPS_TERMINAL_PHASES,
+  TASK_TYPES,
+  TASK_STATUSES,
+  REBALANCING_TASK_TYPES,
+  graphOf,
+  stepPosition
 });
 })();
 // ---- cpapi.jsx ----
@@ -1177,7 +1588,6 @@ function mergeHost(h, sites) {
     set("mgmt_nic", g.mgmtInterface, from);
     if (!src.data_nics) set("data_nics", g.dataInterfaces, from);
     set("numa_sockets_used", (dg.cluster.socketsToUse || []).map(x => parseInt(x, 10)).filter(x => !isNaN(x)), from);
-    if (!src.memory_per_pod) set("memory_per_pod", qty(g.spdkSystemMemory), from);
     ((g.devices || {}).nvme || []).forEach(pcie => {
       if (!h.devices.some(d => d.pcie_address === pcie)) {
         h.devices.push({
@@ -1691,24 +2101,31 @@ const send = (method, path, payload) => req(path, {
 // whose spec.action names it. spec.abort is the only stop, so a cancel is a
 // patch, never a DELETE.
 const cap = s => s.charAt(0).toUpperCase() + s.slice(1).replace(/-(\w)/g, (_, c) => c.toUpperCase());
+// The verbs are the CRDs' action enums (k8s-client.jsx RESOURCES[kind].actions);
+// a verb the operator does not have is not offered.
 const OPS_VERBS = {
   clusters: {
     kind: "StorageCluster",
     verbs: {
-      suspend: "Suspend",
       activate: "Activate",
-      restart: "Activate",
-      rebalance: "Rebalance",
-      "storage-nodes": "Expand"
+      expand: "Expand",
+      shutdown: "Shutdown",
+      start: "Start",
+      restart: "Restart",
+      "rolling-restart": "RollingRestart",
+      "cancel-task": "CancelTask"
     }
   },
   "storage-nodes": {
     kind: "StorageNode",
     verbs: {
-      restart: "Restart",
       shutdown: "Shutdown",
+      restart: "Restart",
+      suspend: "Suspend",
+      resume: "Resume",
+      remove: "Remove",
       migrate: "Migrate",
-      devices: "AddDevice"
+      "host-maintenance": "HostMaintenance"
     }
   },
   devices: {
@@ -1716,49 +2133,44 @@ const OPS_VERBS = {
     verbs: {
       restart: "Restart",
       fail: "Fail",
-      "health-check": "HealthCheck",
-      remove: "Remove"
+      "check-health": "CheckHealth"
     }
   },
   pools: {
     kind: "StoragePool",
     verbs: {
-      enable: "Enable",
-      disable: "Disable"
+      rebalance: "Rebalance"
     }
   },
   lvols: {
     kind: "PersistentVolume",
     verbs: {
-      resize: "Resize",
-      snapshot: "Snapshot",
-      clone: "Clone",
       migrate: "Migrate",
-      backup: "Backup"
+      relocate: "Relocate",
+      "join-group": "JoinConsistencyGroup"
     }
   },
   backups: {
     kind: "StorageBackup",
     verbs: {
-      merge: "Merge",
-      restore: "Restore",
-      export: "Export"
+      restore: "Restore"
     }
   }
 };
-// DELETE on an entity is also an operation, not a raw delete
+// DELETE on a storage node is its Remove operation, never a raw delete
 const DELETE_VERB = {
-  "storage-nodes": ["StorageNode", "Remove"],
-  devices: ["StorageDevice", "Remove"],
-  backups: ["StorageBackup", "Delete"]
+  "storage-nodes": ["StorageNode", "Remove"]
 };
 
 // entities are addressed by uuid inside the console and by name on the API
 async function k8sNameOf(kind, id) {
-  const items = await k8s.list(kind);
+  const items = await k8s.list(kind, {
+    allNamespaces: true
+  });
   const hit = items.find(o => {
-    const s = o.status || {};
-    return [s.clusterId, s.nodeId, s.deviceId, s.poolId, s.backupId, s.simplyblock && s.simplyblock.volumeId, o.metadata.uid].includes(id);
+    const s = o.status || {},
+      sp = o.spec || {};
+    return [s.uuid, sp.deviceID, o.metadata.uid, o.metadata.name].includes(id);
   });
   // Read from the control plane but not a CRD here: the object belongs to a
   // site, and its operations are that site's Ops objects.
@@ -1797,6 +2209,148 @@ async function mutate(method, path, payload) {
 
 // ---- status vocabulary -----------------------------------------------------
 const STATUS_META = {
+  // the operator's status.phase values (storage.simplyblock.io/v1alpha2), spelled as the CRDs spell them
+  Online: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "Online"
+  },
+  Ready: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "Ready"
+  },
+  Available: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "Available"
+  },
+  Expanded: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "Expanded"
+  },
+  Succeeded: {
+    c: "var(--ok)",
+    rank: 0,
+    label: "Succeeded"
+  },
+  Pending: {
+    c: "var(--idle)",
+    rank: 2,
+    label: "Pending"
+  },
+  Draft: {
+    c: "var(--idle)",
+    rank: 2,
+    label: "Draft"
+  },
+  Unknown: {
+    c: "var(--idle)",
+    rank: 2,
+    label: "Unknown"
+  },
+  Creating: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Creating",
+    blink: true
+  },
+  Provisioning: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Provisioning",
+    blink: true
+  },
+  Activating: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Activating",
+    blink: true
+  },
+  Installing: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Installing",
+    blink: true
+  },
+  Expanding: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Expanding",
+    blink: true
+  },
+  Running: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Running",
+    blink: true
+  },
+  Rebalancing: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Rebalancing",
+    blink: true
+  },
+  Shrinking: {
+    c: "var(--info)",
+    rank: 1,
+    label: "Shrinking",
+    blink: true
+  },
+  Removing: {
+    c: "var(--alert)",
+    rank: 2,
+    label: "Removing",
+    blink: true
+  },
+  Deleting: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "Deleting",
+    blink: true
+  },
+  Degraded: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "Degraded"
+  },
+  Aborted: {
+    c: "var(--warn)",
+    rank: 3,
+    label: "Aborted"
+  },
+  Removed: {
+    c: "var(--dim2)",
+    rank: 2,
+    label: "Removed"
+  },
+  Migrated: {
+    c: "var(--dim2)",
+    rank: 2,
+    label: "Migrated"
+  },
+  Offline: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "Offline"
+  },
+  Unavailable: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "Unavailable"
+  },
+  Suspended: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "Suspended"
+  },
+  Failed: {
+    c: "var(--bad)",
+    rank: 4,
+    label: "Failed"
+  },
+  // the control plane's own status strings, as status.status and status.deviceStatus carry them
   online: {
     c: "var(--ok)",
     rank: 0,
@@ -2345,97 +2899,324 @@ const histOf = h => ({
   iops: (h || {}).iops || [],
   bw: (h || {}).bytes || []
 });
-const normCluster = c => reg({
-  kind: "cluster",
-  id: c.uuid,
-  name: c.name,
-  mode: c.device_class === "nvme" ? "nvme" : "blockdev",
-  siting: c.location_type === "edge" ? "edge" : "datacenter",
-  status: c.status,
-  rebalancing: !!c.rebalancing,
-  capacity: {
-    total: c.size_total,
-    used: c.size_util
-  },
-  iops: ioOf(c.io_stats),
-  bw: bwOf(c.io_stats),
-  hist: histOf(c.io_history),
-  counts: {
-    hosts: c.hosts_count,
-    hostsAvailable: c.hosts_available,
-    nodes: c.storage_nodes_count,
-    nodesOnline: c.storage_nodes_online,
-    devices: c.devices_count,
-    devicesOnline: c.devices_online,
-    pools: c.pools_count,
-    volumes: c.lvols_count,
-    snapshots: c.snapshots_count,
-    backups: c.backups_count,
-    policies: c.backup_policies_count,
-    cgroups: c.consistency_groups_count || 0,
-    encrypted: c.encrypted_lvols_count || 0,
-    migrations: c.migrations_count || 0,
-    migrationTargets: c.migration_targets_count || 0,
-    buckets: c.buckets_count || 0,
-    rwxPvcs: c.rwx_pvcs_count || 0,
-    k8sClusters: (c.k8s_cluster_ids || []).length,
-    pvcs: c.pvcs_count || 0,
-    reduced: c.reduced_lvols_count || 0,
-    rpolicies: c.replication_policies_count || 0,
-    pairsOut: c.pairs_out_count || 0,
-    pairsIn: c.pairs_in_count || 0,
-    replicated: c.replicated_lvols_count || 0,
-    zones: (c.zone_ids || []).length
-  },
-  zoneIds: c.zone_ids || [],
-  regions: c.regions || [],
-  stretched: !!c.stretched,
-  drEligible: !!c.dr_target_eligible,
-  k8sClusterIds: c.k8s_cluster_ids || [],
-  backupEnabled: !!c.backup_enabled,
-  s3: c.s3 || null,
-  syncReplication: !!c.sync_replication_enabled,
-  kms: c.kms || null,
-  logicalUsed: c.logical_used || 0,
-  fileStorage: c.file_storage || {
-    enabled: false
-  },
-  objectStorage: c.object_storage || {
-    enabled: false
-  },
-  multipathing: !!c.multipathing_enabled,
-  multipathNodes: c.multipath_nodes_count || 0,
-  autoRebalance: {
-    enabled: !!(c.auto_rebalance || {}).enabled,
-    moved1h: (c.auto_rebalance || {}).moved_1h || 0,
-    moved24h: (c.auto_rebalance || {}).moved_24h || 0
-  },
-  nodeAffinity: c.node_affinity || "none",
-  podAffinity: !!c.pod_affinity_enabled,
-  fd: {
-    enabled: !!c.failure_domain_enabled,
-    scope: c.failure_domain_scope || null,
-    domains: c.failure_domains || [],
-    unassigned: c.fd_unassigned || 0,
-    min: c.fd_min || 0,
-    max: c.fd_max || 0,
-    balanced: c.fd_balanced !== false,
-    thin: c.fd_thin || []
-  },
-  caps: c.capabilities || {},
-  faultBudget: c.fault_budget || {
-    kind: "nodes",
-    tolerated: c.distr_npcs || 1,
-    lost: (c.storage_nodes_count || 0) - (c.storage_nodes_online || 0)
-  },
-  haType: c.ha_type,
-  distrNpcs: c.distr_npcs,
-  distrNdcs: c.distr_ndcs,
-  version: c.cluster_version,
-  mgmt: c.mgmt_endpoint,
-  mgmtKind: c.mgmt_endpoint_kind || "control plane API",
-  createdAt: c.created_at
+
+// ---- the storage kinds, from their custom resources ------------------------
+// storage.simplyblock.io/v1alpha2 on main. A view model carries the object's
+// identity (k8s), the fields the pages read under the CRD's own names, and
+// the object itself (raw). Nothing here is a field the CRD does not have; a
+// derived value says what it was derived from.
+const k8sOf = o => ({
+  name: o.metadata.name,
+  namespace: o.metadata.namespace,
+  kind: o.kind,
+  uid: o.metadata.uid,
+  ctx: o.__ctx || LOCAL_CTX,
+  labels: o.metadata.labels || {},
+  annotations: o.metadata.annotations || {},
+  generation: o.metadata.generation,
+  observedGeneration: (o.status || {}).observedGeneration,
+  creationTimestamp: o.metadata.creationTimestamp
 });
+// the same namespace in the same context
+const sameNs = (a, b) => (a.metadata.namespace || "") === (b.metadata.namespace || "") && (a.__ctx || LOCAL_CTX) === (b.__ctx || LOCAL_CTX);
+// the worker Node an object's spec.workerNode names, in the object's context
+const workerOf = (w, o, name) => (w.workers || []).find(n => n.metadata.name === name && (n.__ctx || LOCAL_CTX) === (o.__ctx || LOCAL_CTX)) || null;
+const zoneOf = n => n ? (n.metadata.labels || {})["topology.kubernetes.io/zone"] || null : null;
+const regionOf = n => n ? (n.metadata.labels || {})["topology.kubernetes.io/region"] || null : null;
+const nodesOfCluster = (w, c) => w.nodes.filter(n => (n.spec || {}).clusterRef === c.metadata.name && sameNs(n, c));
+const devicesOfNode = (w, n) => w.devices.filter(d => (d.spec || {}).nodeRef === n.metadata.name && sameNs(d, n));
+const poolsOfCluster = (w, c) => w.pools.filter(x => (x.spec || {}).clusterRef === c.metadata.name && sameNs(x, c));
+const clusterOfRef = (w, o, ref) => w.clusters.find(c => c.metadata.name === ref && sameNs(c, o)) || null;
+const idOf = o => (o.status || {}).uuid || o.metadata.uid;
+const normCluster = (o, w) => {
+  const s = o.status || {},
+    sp = o.spec || {};
+  const nodes = nodesOfCluster(w, o);
+  const devices = nodes.flatMap(n => devicesOfNode(w, n));
+  const phaseCount = (list, phase) => list.filter(x => (x.status || {}).phase === phase).length;
+  const cap = nodes.reduce((a, n) => {
+    const c = ((n.status || {}).resources || {}).capacity || {};
+    return {
+      total: a.total + (c.totalBytes || 0),
+      used: a.used + (c.usedBytes || 0)
+    };
+  }, {
+    total: 0,
+    used: 0
+  });
+  const zones = Array.from(new Set(nodes.map(n => zoneOf(workerOf(w, n, (n.spec || {}).workerNode))).filter(Boolean))).sort();
+  const regions = Array.from(new Set(nodes.map(n => regionOf(workerOf(w, n, (n.spec || {}).workerNode))).filter(Boolean))).sort();
+  return reg({
+    kind: "cluster",
+    id: idOf(o),
+    name: o.metadata.name,
+    namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
+    k8s: k8sOf(o),
+    raw: o,
+    // sites: the cluster's own spec.stretched.site when it is one site of a stretched cluster, else the zones its nodes' workers are labeled with
+    sites: (sp.stretched || {}).site ? [{
+      value: sp.stretched.site,
+      from: "spec.stretched.site"
+    }] : zones.map(z => ({
+      value: z,
+      from: "worker Node label topology.kubernetes.io/zone"
+    })),
+    regions,
+    stretchedSpec: sp.stretched || null,
+    labels: o.metadata.labels || {},
+    phase: s.phase || "Pending",
+    status: s.status || null,
+    message: s.message || "",
+    step: (s.step || {}).state || null,
+    stepClaim: (s.step || {}).claim || null,
+    activeOpsRef: s.activeOpsRef || null,
+    configured: !!s.configured,
+    nqn: s.nqn || null,
+    erasureCodingScheme: s.erasureCodingScheme || null,
+    maxFaultTolerance: s.maxFaultTolerance,
+    rebalancing: !!s.rebalancing,
+    tasks: s.tasks || [],
+    provisioningSlots: s.provisioningSlots || [],
+    failureDomains: s.failureDomains || [],
+    role: s.role || null,
+    members: s.members || [],
+    stretched: s.stretched || null,
+    arbitration: s.arbitration || null,
+    rebalancingMetrics: s.rebalancingMetrics || null,
+    volumeMoveGeneration: s.volumeMoveGeneration,
+    realignedGeneration: s.realignedGeneration,
+    lastDataRealignmentAt: s.lastDataRealignmentAt || null,
+    workloadNames: s.workloadNames || null,
+    spec: sp,
+    stripe: sp.stripe || null,
+    clusterMode: sp.clusterMode || null,
+    deviceClass: sp.deviceClass || null,
+    fabricType: sp.fabricType || null,
+    thresholds: {
+      warn: sp.warningThreshold || null,
+      crit: sp.criticalThreshold || null
+    },
+    counts: {
+      nodes: nodes.length,
+      nodesOnline: phaseCount(nodes, "Online"),
+      nodesProvisioning: phaseCount(nodes, "Provisioning"),
+      nodesOffline: phaseCount(nodes, "Offline"),
+      nodesDegraded: phaseCount(nodes, "Degraded"),
+      nodesRemoving: phaseCount(nodes, "Removing"),
+      devices: devices.length,
+      devicesOnline: phaseCount(devices, "Online"),
+      pools: poolsOfCluster(w, o).length
+    },
+    // the cluster carries status.capacity only as a supercluster; otherwise it is its nodes' sum
+    capacity: s.capacity ? {
+      total: s.capacity.totalBytes || 0,
+      used: s.capacity.usedBytes || 0,
+      provisioned: s.capacity.provisionedBytes || 0,
+      derived: "status.capacity (supercluster)"
+    } : Object.assign(cap, {
+      derived: "sum of StorageNode.status.resources.capacity over the cluster's nodes"
+    }),
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+const normNode = (o, w) => {
+  const s = o.status || {},
+    sp = o.spec || {},
+    res = s.resources || {},
+    cap = res.capacity || {};
+  const cluster = clusterOfRef(w, o, sp.clusterRef);
+  const worker = workerOf(w, o, sp.workerNode);
+  return reg({
+    kind: "node",
+    id: idOf(o),
+    name: o.metadata.name,
+    namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
+    k8s: k8sOf(o),
+    raw: o,
+    zone: zoneOf(worker),
+    region: regionOf(worker),
+    workerFound: !!worker,
+    hostname: s.hostname || sp.workerNode || o.metadata.name,
+    clusterRef: sp.clusterRef,
+    clusterId: cluster ? idOf(cluster) : null,
+    workerNode: sp.workerNode || null,
+    slot: sp.slot,
+    socketId: sp.socketId,
+    nodeIndex: sp.nodeIndex,
+    nodeSet: sp.nodeSet || null,
+    config: sp.config || {},
+    stretchedRemote: !!(sp.stretched || {}).remote,
+    phase: s.phase || "Pending",
+    status: s.status || null,
+    health: s.health,
+    message: s.message || "",
+    step: (s.step || {}).state || null,
+    stepClaim: (s.step || {}).claim || null,
+    activeOpsRef: s.activeOpsRef || null,
+    failureDomain: s.failureDomain || null,
+    uptime: s.uptime || null,
+    nodeAddTaskID: s.nodeAddTaskID || null,
+    ports: s.ports || {},
+    resources: res,
+    capacity: {
+      total: cap.totalBytes || 0,
+      used: cap.usedBytes || 0,
+      sampledAt: cap.sampledAt || null
+    },
+    network: s.network || [],
+    remediation: s.remediation || null,
+    latencyMetrics: s.latencyMetrics || null,
+    counts: {
+      devices: devicesOfNode(w, o).length,
+      devicesOnline: (res.devices || {}).online,
+      volumes: res.volumes
+    },
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+const normDevice = (o, w) => {
+  const s = o.status || {},
+    sp = o.spec || {};
+  const node = w.nodes.find(n => n.metadata.name === sp.nodeRef && sameNs(n, o)) || null;
+  return reg({
+    kind: "device",
+    id: sp.deviceID || o.metadata.uid,
+    name: o.metadata.name,
+    namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
+    k8s: k8sOf(o),
+    raw: o,
+    nodeRef: sp.nodeRef,
+    nodeId: s.nodeID || (node ? idOf(node) : null),
+    clusterId: s.clusterID || (node ? (node.status || {}).uuid : null) || null,
+    phase: s.phase || "Unknown",
+    deviceStatus: s.deviceStatus || null,
+    role: s.role || null,
+    message: s.message || "",
+    activeOpsRef: s.activeOpsRef || null,
+    capacity: {
+      total: (s.capacity || {}).totalBytes || 0
+    },
+    hardware: s.hardware || {},
+    health: s.health || {},
+    site: s.site || null,
+    remote: s.remote,
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+const normPool = (o, w) => {
+  const s = o.status || {},
+    sp = o.spec || {};
+  const cluster = clusterOfRef(w, o, sp.clusterRef);
+  return reg({
+    kind: "pool",
+    id: idOf(o),
+    name: o.metadata.name,
+    namespace: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
+    k8s: k8sOf(o),
+    raw: o,
+    clusterRef: sp.clusterRef,
+    clusterId: cluster ? idOf(cluster) : null,
+    phase: s.phase || "Pending",
+    status: s.status || null,
+    message: s.message || "",
+    activeOpsRef: s.activeOpsRef || null,
+    limits: sp.limits || {},
+    volumeDefaults: sp.volumeDefaults || {},
+    allowedNodes: sp.allowedNodes || [],
+    statusLimits: s.limits || {},
+    storageClassNames: s.storageClassNames || [],
+    defaultStorageClassName: s.defaultStorageClassName || null,
+    members: s.members || [],
+    createdAt: o.metadata.creationTimestamp
+  });
+};
+
+// One read of the four kinds across every namespace, shared by every getter
+// for a few seconds, so a page that asks for a cluster, its nodes, and their
+// devices lists each kind once.
+// Every context is read; one that fails keeps its error in WORLD_ERRORS so
+// the dashboard can say which context is unreachable instead of hiding the
+// rest. Each object is stamped with its context (__ctx).
+let WORLD = null,
+  WORLD_AT = 0,
+  WORLD_ERRORS = {};
+const WORLD_TTL = 4000;
+const WORLD_KINDS = ["StorageCluster", "StorageNode", "StorageDevice", "StoragePool", "Node"];
+function world() {
+  if (WORLD && Date.now() - WORLD_AT < WORLD_TTL) return WORLD;
+  WORLD_AT = Date.now();
+  WORLD = Promise.all(CONTEXTS.map(async c => {
+    const out = {
+      clusters: [],
+      nodes: [],
+      devices: [],
+      pools: [],
+      workers: []
+    };
+    const lists = await Promise.all(WORLD_KINDS.map(k => k8s.list(k, {
+      allNamespaces: true,
+      ctx: c.name
+    }).then(r => ({
+      k,
+      r
+    })).catch(e => ({
+      k,
+      e
+    }))));
+    const errs = {};
+    lists.forEach(({
+      k,
+      r,
+      e
+    }) => {
+      if (e) {
+        errs[k] = e;
+        return;
+      }
+      const stamped = r.map(o => Object.assign(o, {
+        __ctx: c.name
+      }));
+      ({
+        StorageCluster: out.clusters,
+        StorageNode: out.nodes,
+        StorageDevice: out.devices,
+        StoragePool: out.pools,
+        Node: out.workers
+      })[k].push(...stamped);
+    });
+    if (Object.keys(errs).length) WORLD_ERRORS[c.name] = errs;else delete WORLD_ERRORS[c.name];
+    return out;
+  })).then(parts => parts.reduce((a, p) => ({
+    clusters: a.clusters.concat(p.clusters),
+    nodes: a.nodes.concat(p.nodes),
+    devices: a.devices.concat(p.devices),
+    pools: a.pools.concat(p.pools),
+    workers: a.workers.concat(p.workers)
+  }), {
+    clusters: [],
+    nodes: [],
+    devices: [],
+    pools: [],
+    workers: []
+  })).catch(e => {
+    WORLD = null;
+    throw e;
+  });
+  return WORLD;
+}
+const worldErrors = () => WORLD_ERRORS;
+const invalidateWorld = () => {
+  WORLD = null;
+};
+const notFound = (kind, id) => new ApiError(404, `${kind} ${id} not found`, "/" + id, "NotFound");
+const findCluster = (w, id) => w.clusters.find(c => idOf(c) === id) || w.clusters.find(c => c.metadata.name === id) || null;
+const findNode = (w, id) => w.nodes.find(n => idOf(n) === id) || w.nodes.find(n => n.metadata.name === id) || null;
+const findDevice = (w, id) => w.devices.find(d => (d.spec || {}).deviceID === id || d.metadata.uid === id) || w.devices.find(d => d.metadata.name === id) || null;
+const findPool = (w, id) => w.pools.find(x => idOf(x) === id) || w.pools.find(x => x.metadata.name === id) || null;
 const normHost = h => reg({
   kind: "host",
   id: h.uuid,
@@ -2609,124 +3390,6 @@ const normDeployConfig = o => {
     }
   });
 };
-const normNode = n => reg({
-  kind: "node",
-  id: n.uuid,
-  clusterId: n.cluster_id,
-  hostId: n.host_id,
-  zoneId: n.zone_id || null,
-  hostname: n.hostname,
-  ip: n.data_nics && n.data_nics[0] ? n.data_nics[0].ip : null,
-  port: n.data_nics && n.data_nics[0] ? n.data_nics[0].port : 4420,
-  // null: the source did not report the node's NICs (not "none")
-  dataNics: n.data_nics ? n.data_nics.map(x => ({
-    name: x.name,
-    ip: x.ip,
-    port: x.port,
-    socket: x.numa_socket,
-    state: x.state,
-    trtype: x.trtype
-  })) : null,
-  // simplyblock multipathing is ANA: this node plus its secondary (and
-  // tertiary) serve the same volumes; extra data NICs add paths per node
-  anaPaths: n.ana_paths || null,
-  secondaryId: n.secondary_node_id || null,
-  tertiaryId: n.tertiary_node_id || null,
-  multipath: (n.ana_paths || 0) > 1 || (n.data_nics || []).length > 1,
-  op: n.op ? {
-    kind: n.op.kind,
-    phase: n.op.phase,
-    phaseIndex: n.op.phase_index || 0,
-    phases: n.op.phases || [],
-    volumesMoved: n.op.volumes_moved || 0,
-    targetHostname: n.op.target_hostname || null,
-    sourceHostname: n.op.source_hostname || null,
-    startedAt: n.op.started_at,
-    taskId: n.op.task_id
-  } : null,
-  mgmtIp: n.mgmt_ip,
-  failureDomain: n.failure_domain,
-  physicalLabel: n.physical_label,
-  status: n.status,
-  capacity: {
-    total: n.size_total,
-    used: n.size_util
-  },
-  iops: ioOf(n.io_stats),
-  bw: bwOf(n.io_stats),
-  hist: histOf(n.io_history),
-  counts: {
-    devices: n.devices_count || 0,
-    devicesOnline: n.devices_online || 0
-  },
-  cpuCount: n.cpu_count,
-  cpuReserved: n.vcpu_reserved,
-  maxSubsystems: n.max_subsystem_count || null,
-  memory: {
-    total: n.memory_total,
-    reserved: n.memory_reserved,
-    used: n.memory_used
-  },
-  hugepages: {
-    total: n.hugepages_total,
-    used: n.hugepages_used
-  },
-  spdk: n.spdk_version
-});
-const normDevice = d => reg({
-  kind: "device",
-  id: d.uuid,
-  nodeId: d.node_id,
-  clusterId: d.cluster_id,
-  hostId: d.host_id,
-  mode: d.cluster_device_class === "nvme" ? "nvme" : "blockdev",
-  socket: d.numa_socket,
-  serial: d.serial_number,
-  pcie: d.pcie_address,
-  blockdev: d.device_name,
-  model: d.model_number,
-  firmware: d.firmware_revision,
-  status: d.status,
-  health: d.health_check,
-  lastHealthCheck: d.last_health_check,
-  capacity: {
-    total: d.size_total,
-    used: d.size_util
-  },
-  iops: ioOf(d.io_stats),
-  bw: bwOf(d.io_stats),
-  hist: histOf(d.io_history),
-  temp: d.temperature_c,
-  wear: d.percentage_used,
-  poweronHours: d.power_on_hours
-});
-const normPool = p => reg({
-  kind: "pool",
-  id: p.uuid,
-  clusterId: p.cluster_id,
-  name: p.pool_name,
-  dhchap: !!p.dhchap_bidirectional,
-  // a pool is never offline: it is enabled or disabled. Disabled keeps serving I/O
-  // but refuses new volume provisioning.
-  status: p.enabled === false ? "disabled" : "enabled",
-  enabled: p.enabled !== false,
-  qos: p.qos,
-  capacity: {
-    total: p.size_prov,
-    used: p.size_util
-  },
-  lvolBytes: p.lvols_bytes || 0,
-  snapshotBytes: p.snapshots_bytes || 0,
-  storageClasses: p.storage_classes || [],
-  k8sClusterId: p.k8s_cluster_id || null,
-  counts: {
-    volumes: p.lvols_count,
-    volumesOnline: p.lvols_online,
-    snapshots: p.snapshots_count,
-    backups: p.backups_count,
-    storageClasses: p.storage_classes_count || 0
-  }
-});
 const normVolume = v => reg({
   kind: "volume",
   id: v.uuid,
@@ -3705,28 +4368,55 @@ const OPS_TARGET_LABEL = {
   ControlPlane: "control plane",
   Operator: "operator"
 };
+// The step list and the abort points are the operator's graphs (ops-model.jsx);
+// the object carries only the current step, its claim, and its deadline.
 const normOperation = o => {
   const st = o.status || {},
-    step = st.step || {};
+    step = st.step || {},
+    spec = o.spec || {};
+  const r = window.RESOURCES[o.kind] || {};
+  const target = r.ref ? spec[r.ref] : null;
+  const pos = window.stepPosition ? stepPosition(o.kind, spec.action, step.state) : {
+    index: -1,
+    steps: [],
+    abortable: false
+  };
   return {
     id: o.metadata.uid,
     name: o.metadata.name,
+    namespace: o.metadata.namespace || null,
     kind: o.kind,
-    action: (o.spec || {}).action,
-    clusterId: st.clusterId || null,
-    targetKind: st.targetKind || (window.RESOURCES[o.kind] || {}).ops || null,
-    targetName: ((o.spec || {}).targetRef || {}).name || null,
+    action: spec.action,
+    clusterId: null,
+    targetKind: r.ops || null,
+    targetName: target && typeof target === "object" ? target.name : target || null,
     phase: st.phase,
     message: st.message || "",
-    step: step.label || step.state,
+    step: step.state,
     stepKey: step.state,
-    steps: step.labels || step.steps || [],
-    stepIndex: step.index || 0,
-    abortable: !!step.abortable,
-    aborting: !!(o.spec || {}).abort,
+    stepClaim: step.claim || null,
+    stepDeadline: step.deadline || null,
+    steps: pos.steps,
+    stepIndex: pos.index,
+    abortable: pos.abortable,
+    aborting: !!spec.abort,
     startedAt: st.startedAt,
     completedAt: st.completedAt || null,
-    events: st.events || [],
+    observedGeneration: st.observedGeneration,
+    generation: o.metadata.generation,
+    // per-action progress, as the CRD names it
+    rollingRestart: st.rollingRestart || null,
+    drain: st.drain || null,
+    removal: st.removal || null,
+    migration: st.migration || null,
+    relocate: st.relocate || null,
+    deviceStatusBefore: st.deviceStatusBefore || null,
+    configRef: st.configRef || null,
+    creatorRef: spec.creatorRef || null,
+    raw: o,
+    // no Ops kind carries events in its status; the Kubernetes Events of the
+    // object are read by the monitor, not here
+    events: [],
     running: !["Succeeded", "Failed", "Aborted"].includes(st.phase)
   };
 };
@@ -3742,16 +4432,46 @@ const normRole = r => ({
 
 // ---- endpoints -------------------------------------------------------------
 const api = {
-  clusters: () => req("/clusters").then(r => r.map(normCluster)),
-  cluster: id => req(`/clusters/${id}`).then(r => normCluster(r[0])),
+  // ---- the storage kinds: their custom resources, every namespace ----
+  clusters: () => world().then(w => w.clusters.map(c => normCluster(c, w))),
+  cluster: id => world().then(w => {
+    const c = findCluster(w, id);
+    if (!c) throw notFound("StorageCluster", id);
+    return normCluster(c, w);
+  }),
   hosts: cid => req(`/clusters/${cid}/hosts`).then(r => r.map(normHost)),
   host: id => req(`/hosts/${id}`).then(r => normHost(r[0])),
-  nodes: cid => req(`/clusters/${cid}/storage-nodes`).then(r => r.map(normNode)),
-  node: id => req(`/storage-nodes/${id}`).then(r => normNode(r[0])),
-  devices: nid => req(`/storage-nodes/${nid}/devices`).then(r => r.map(normDevice)),
-  device: id => req(`/devices/${id}`).then(r => normDevice(r[0])),
-  pools: cid => req(`/clusters/${cid}/pools`).then(r => r.map(normPool)),
-  pool: id => req(`/pools/${id}`).then(r => normPool(r[0])),
+  nodes: cid => world().then(w => {
+    const c = findCluster(w, cid);
+    return c ? nodesOfCluster(w, c).map(n => normNode(n, w)) : [];
+  }),
+  node: id => world().then(w => {
+    const n = findNode(w, id);
+    if (!n) throw notFound("StorageNode", id);
+    return normNode(n, w);
+  }),
+  devices: nid => world().then(w => {
+    const n = findNode(w, nid);
+    return n ? devicesOfNode(w, n).map(d => normDevice(d, w)) : [];
+  }),
+  clusterDevices: cid => world().then(w => {
+    const c = findCluster(w, cid);
+    return c ? nodesOfCluster(w, c).flatMap(n => devicesOfNode(w, n)).map(d => normDevice(d, w)) : [];
+  }),
+  device: id => world().then(w => {
+    const d = findDevice(w, id);
+    if (!d) throw notFound("StorageDevice", id);
+    return normDevice(d, w);
+  }),
+  pools: cid => world().then(w => {
+    const c = findCluster(w, cid);
+    return c ? poolsOfCluster(w, c).map(x => normPool(x, w)) : [];
+  }),
+  pool: id => world().then(w => {
+    const x = findPool(w, id);
+    if (!x) throw notFound("StoragePool", id);
+    return normPool(x, w);
+  }),
   poolVolumes: pid => req(`/pools/${pid}/lvols`).then(r => r.map(normVolume)),
   poolStorageClasses: pid => req(`/pools/${pid}/storage-classes`).then(r => r.map(normSc)),
   clusterVolumes: cid => req(`/clusters/${cid}/lvols`).then(r => r.map(normVolume)),
@@ -4275,6 +4995,13 @@ function useResource(key, loader, pollMs) {
 }
 Object.assign(window, {
   api,
+  world,
+  invalidateWorld,
+  worldErrors,
+  normCluster,
+  normNode,
+  normDevice,
+  normPool,
   API,
   ApiError,
   STATUS_META,
@@ -7438,10 +8165,11 @@ async function podLogs(name, container, tail) {
 const agent = {
   // The control plane is one deployment across every cluster, so none of these
   // are scoped by cluster.
-  containers: () => upstreamOn("operator") ? areq(AGENT_BASE, "/control-plane/containers").then(r => r.map(normContainer)) : k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {
+  // the pods of the operator's namespace and their logs, read from the Kubernetes API: the operator serves no HTTP API of its own
+  containers: () => k8s.list("Pod").then(ps => ps.map(p => Object.assign(normContainer(podContainer(p)), {
     metrics: false
   }))),
-  containerLogs: (name, container) => upstreamOn("operator") ? areq(AGENT_BASE, `/control-plane/containers/${name}/logs`) : podLogs(name, container),
+  containerLogs: (name, container) => podLogs(name, container),
   fdbBackups: () => areq(AGENT_BASE, "/control-plane/fdb/backups").then(r => r.map(normFdb)),
   fdbRestore: id => asend(AGENT_BASE, "POST", `/control-plane/fdb/backups/${id}/restore`),
   nodeLogs: (nid, stream) => areq(AGENT_BASE, `/nodes/${nid}/logs/${stream}`),
@@ -8088,6 +8816,38 @@ async function loadAccessK8s() {
     k8sRules: true
   });
 }
+
+// The storage objects live in whatever namespaces hold StorageClusters, so
+// the API server is asked for the caller's rules in each of them; a rule set
+// the operator's access view returned for a namespace is kept as is.
+async function loadStorageNamespaceRules() {
+  let targets = [{
+    ns: NS(),
+    ctx: LOCAL_CTX
+  }];
+  try {
+    const w = await world();
+    targets = targets.concat(w.clusters.map(c => ({
+      ns: c.metadata.namespace,
+      ctx: c.__ctx || LOCAL_CTX
+    })));
+  } catch (e) {}
+  const keyOf = t => t.ctx !== LOCAL_CTX ? `${t.ctx}:${t.ns}` : t.ns;
+  const seen = new Set();
+  await Promise.all(targets.filter(t => t.ns && !seen.has(keyOf(t)) && seen.add(keyOf(t))).map(async t => {
+    if (AC_STATE.rules.ns[keyOf(t)]) return;
+    try {
+      const r = await review.rules(t.ns, t.ctx);
+      AC_STATE.rules.ns[keyOf(t)] = (r.resourceRules || []).map(x => ({
+        apiGroups: x.apiGroups || [""],
+        resources: x.resources || [],
+        verbs: x.verbs || [],
+        resourceNames: x.resourceNames
+      }));
+      if (r.incomplete) AC_STATE.incomplete = true;
+    } catch (e) {}
+  }));
+}
 async function loadAccess() {
   try {
     if (DR_MODE()) {
@@ -8132,6 +8892,7 @@ async function loadAccess() {
       });
     }
   }
+  await loadStorageNamespaceRules();
   acNotify();
 }
 
@@ -8140,6 +8901,12 @@ const clusterIdsOf = o => [...new Set([o.kind === "cluster" ? o.id : null, o.clu
 function nsOf(entity, o, op) {
   const N = AC_STATE.ns;
   if (!o) return entity === "k8scluster" || entity === "binding" ? ["*"] : [];
+  // an object read from the Kubernetes API is judged in its own namespace,
+  // which is where the API server judges it too
+  // a namespace of another context is keyed by the context, since each API server has its own rules
+  const ownNs = o.namespace || o.k8s && o.k8s.namespace;
+  const own = ownNs && o.ctx && o.ctx !== LOCAL_CTX ? `${o.ctx}:${ownNs}` : ownNs;
+  if (own && op !== "create" && !["k8scluster", "binding", "role", "labelrequest", "replicationpolicy", "drpolicy"].includes(entity)) return [own];
   if (entity === "k8scluster") {
     if (op === "create") return ["*"]; // create nodepoolallocations is cluster-scoped
     const ids = o.kind === "k8sc" ? [o.id] : o.k8sClusterIds || (o.k8sClusterId ? [o.k8sClusterId] : []);
@@ -8170,7 +8937,9 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*")) && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*")) && (!r.resourceNames || !name || r.resourceNames.includes(name));
+// the operator's group is storage.simplyblock.io; the bare simplyblock.io is the
+// legacy spelling some grants still carry
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "storage.simplyblock.io") || !group && (r.apiGroups || []).includes("simplyblock.io") || (r.apiGroups || []).includes("*")) && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*")) && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {
   if (AC_STATE.rules.cluster.some(r => ruleAllows(r, verb, resource, group, name))) return true;
   if (!ns || ns === "*") return false;
@@ -8403,7 +9172,18 @@ function IdentityMenu({
       color: "var(--dim)",
       fontSize: 12
     }
-  }, here ? "No RoleBinding reaches this namespace — if you can see the object, you are reading it through a wider scope." : "No cluster-scoped binding.")), !!s.demoUsers.length && /*#__PURE__*/React.createElement("div", {
+  }, here ? "No RoleBinding reaches this namespace — if you can see the object, you are reading it through a wider scope." : "No cluster-scoped binding.")), (a.canAnywhere("read", "binding") || a.canAnywhere("read", "role")) && window.__nav && window.__nav.access && /*#__PURE__*/React.createElement("div", {
+    className: "idsec"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "idpick",
+    onClick: () => {
+      setOpen(false);
+      window.__nav.access();
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "lock",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", null, "Access control: roles and grants"))), !!s.demoUsers.length && /*#__PURE__*/React.createElement("div", {
     className: "idsec"
   }, /*#__PURE__*/React.createElement("h4", null, "View as ", /*#__PURE__*/React.createElement("span", {
     style: {
@@ -10015,6 +10795,40 @@ const newClusterDialog = () => ({
     distr_npcs: Number(String(v.ec).split("+")[1])
   }))
 });
+
+// ---- the Ops helpers the storage menus call ------------------------------
+// Every one creates the Ops object in the target's namespace with the CRD's
+// own field names, then drops the cached world so the lock shows at once.
+const afterOps = p => p.then(r => {
+  if (window.invalidateWorld) invalidateWorld();
+  return r;
+});
+const clusterOps = (o, action, params) => afterOps(submitOps("StorageCluster", o.name, action, params || null, {
+  namespace: o.namespace,
+  ctx: o.ctx
+}));
+const nodeOps = (o, action, params, extra) => afterOps(submitOps("StorageNode", o.name, action, params || null, {
+  namespace: o.namespace,
+  ctx: o.ctx
+}).then(created => {
+  // force and reattachVolume sit beside the action, not in a parameter block
+  const flags = Object.entries(extra || {}).filter(([, v]) => v);
+  if (!flags.length) return created;
+  return k8s.patch("StorageNodeOps", created.metadata.name, {
+    spec: Object.fromEntries(flags)
+  }, {
+    namespace: o.namespace,
+    ctx: o.ctx
+  });
+}));
+const deviceOps = (o, action) => afterOps(submitOps("StorageDevice", o.name, action, null, {
+  namespace: o.namespace,
+  ctx: o.ctx
+}));
+const poolOps = (o, action) => afterOps(submitOps("StoragePool", o.name, action, null, {
+  namespace: o.namespace,
+  ctx: o.ctx
+}));
 const ACTIONS = {
   deployconfig: o => [o.status === "Draft" ? {
     label: "Approve and deploy",
@@ -10039,126 +10853,297 @@ const ACTIONS = {
     disabled: true,
     hint: "approval is one-way"
   }].filter(Boolean),
-  cluster: o => [o.caps.rebalancing ? {
-    label: "Rebalance front storage now",
-    icon: "gauge",
-    dialog: {
-      title: `Rebalance ${o.name}?`,
-      desc: "Evens out volume placement across the online storage nodes using instant migration — the primary role is handed over without copying data. Each move files an lvol_migration task, which is where it can be followed. Volumes pinned by node affinity are left where they are.",
-      confirm: "Rebalance now",
-      run: () => api.clusterRebalance(o.id)
-    }
-  } : null, o.caps.rebalancing ? {
-    label: o.autoRebalance.enabled ? "Turn off automatic rebalancing" : "Turn on automatic rebalancing",
+  // ---- the storage kinds: every action is an Ops object with one of the CRD's
+  // actions (OPERATIONS.md). A kind whose status.activeOpsRef is set is locked:
+  // the menu says so and offers the lock holder instead of a second operation.
+  cluster: o => o.activeOpsRef ? [{
+    label: `${o.activeOpsRef} holds the lock`,
     icon: "clock",
-    dialog: {
-      title: `${o.autoRebalance.enabled ? "Turn off" : "Turn on"} automatic rebalancing for ${o.name}?`,
-      desc: o.autoRebalance.enabled ? "Volumes stay where they are until you rebalance the cluster by hand or move one yourself." : "The control plane evens out volume placement across the online storage nodes on its own, by instant migration. Every move files an lvol_migration task.",
-      fields: [{
-        k: "n74",
-        type: "note",
-        label: `${o.autoRebalance.moved24h} volume(s) moved in the last 24 hours, ${o.autoRebalance.moved1h} in the last hour.`
-      }],
-      confirm: o.autoRebalance.enabled ? "Turn off" : "Turn on",
-      run: () => api.clusterSetRebalance(o.id, !o.autoRebalance.enabled)
-    }
-  } : null, o.type === "kubernetes" ? {
-    label: "File storage (RWX)…",
-    icon: "folder",
-    dialog: fileStorageDialog(o)
-  } : {
-    label: "File storage (RWX)…",
-    icon: "folder",
     disabled: true,
-    hint: "Kubernetes deployments only"
+    hint: "status.activeOpsRef: a second StorageClusterOps stays Pending until it finishes"
+  }] : [o.status !== "active" && o.phase !== "Online" && {
+    label: "Activate",
+    icon: "power",
+    dialog: {
+      title: `StorageClusterOps Activate on ${o.name}?`,
+      desc: "Requesting posts the activation to the control plane; Awaiting completes when status.status is active. The operator retries from Requesting for thirty minutes if the cluster falls back to unready or suspended.",
+      confirm: "Create StorageClusterOps",
+      run: () => clusterOps(o, "Activate")
+    }
   }, {
-    label: "Object storage (S3)…",
-    icon: "cloud",
-    dialog: objectStorageDialog(o)
-  }, o.objectStorage && o.objectStorage.enabled ? {
-    label: "Create bucket…",
+    label: "Expand",
     icon: "plus",
-    dialog: newBucketDialog(o)
-  } : null, {
-    label: "KMS — external key management…",
-    icon: "lock",
-    dialog: kmsDialog(o)
-  }, o.kms ? {
-    label: "Test KMS connection",
-    icon: "gauge",
-    run: () => api.clusterTestKms(o.id),
-    toast: "Vault connection tested"
-  } : null, o.status !== "suspended" && {
-    label: "Shut down cluster",
+    dialog: {
+      title: `StorageClusterOps Expand on ${o.name}?`,
+      desc: "Requesting posts the expansion to the control plane; Awaiting completes when status.status is active again. The control plane's cluster_expand and new_device_migration tasks appear in status.tasks meanwhile.",
+      confirm: "Create StorageClusterOps",
+      run: () => clusterOps(o, "Expand")
+    }
+  }, {
+    label: "RollingRestart",
+    icon: "refresh",
+    dialog: {
+      title: `StorageClusterOps RollingRestart on ${o.name}?`,
+      desc: "One node at a time: CheckingPeers (every other node must be online), ShuttingDownNode, RestartingNode, Rebalancing. status.rollingRestart records the walk. Only CheckingPeers and Rebalancing honor spec.abort.",
+      fields: [{
+        k: "refreshSNodeAPI",
+        label: "spec.rollingRestart.refreshSNodeAPI",
+        desc: "Also delete each node's storage-node DaemonSet pod between shutdown and restart (RefreshingPod, AwaitingPod).",
+        type: "checkbox"
+      }],
+      confirm: "Create StorageClusterOps",
+      run: v => clusterOps(o, "RollingRestart", {
+        refreshSNodeAPI: !!v.refreshSNodeAPI
+      })
+    }
+  }, {
+    label: "Restart",
+    icon: "refresh",
+    danger: true,
+    dialog: {
+      title: `StorageClusterOps Restart on ${o.name}?`,
+      danger: true,
+      desc: "ShuttingDown posts a cluster shutdown, Starting posts a start once it is down. Every volume loses its NVMe-oF targets in between. Neither step honors spec.abort.",
+      confirm: "Create StorageClusterOps",
+      run: () => clusterOps(o, "Restart")
+    }
+  }, {
+    label: "Shutdown",
     icon: "power",
     danger: true,
     dialog: {
-      title: `Shut down ${o.name}?`,
+      title: `StorageClusterOps Shutdown on ${o.name}?`,
       danger: true,
-      desc: "All storage nodes are stopped and the cluster is suspended. Connected volumes lose their NVMe-oF targets until the cluster is restarted.",
-      confirm: "Suspend cluster",
-      run: () => api.clusterSuspend(o.id)
-    }
-  }, o.status === "suspended" && {
-    label: "Restart cluster",
-    icon: "refresh",
-    dialog: {
-      title: `Restart ${o.name}?`,
-      desc: "The control plane re-activates every storage node in sequence. The cluster reports in_activation until all nodes are online.",
-      confirm: "Restart",
-      run: () => api.clusterActivate(o.id)
+      desc: "Requesting posts the shutdown; Awaiting completes when the cluster is no longer active. Connected volumes lose their NVMe-oF targets until a Start.",
+      fields: [{
+        k: "confirmName",
+        label: "Type the cluster name to confirm",
+        type: "text",
+        match: o.name,
+        required: true
+      }],
+      confirm: "Create StorageClusterOps",
+      run: () => clusterOps(o, "Shutdown")
     }
   }, {
-    label: "Expand — add storage node",
-    icon: "plus",
+    label: "Start",
+    icon: "power",
     dialog: {
-      title: "Add a storage node",
-      desc: "Pick a prepared host. Its unassigned devices are claimed by the new node, then existing data is rebalanced onto it — the expansion runs asynchronously through adding node, rebalancing data and complete.",
+      title: `StorageClusterOps Start on ${o.name}?`,
+      desc: "Requesting posts the start; Awaiting completes when status.status is active.",
+      confirm: "Create StorageClusterOps",
+      run: () => clusterOps(o, "Start")
+    }
+  }, (o.tasks || []).length > 0 && {
+    label: "CancelTask",
+    icon: "x",
+    dialog: {
+      title: `StorageClusterOps CancelTask on ${o.name}`,
+      desc: "The control plane is asked to cancel one of the tasks in status.tasks; Awaiting completes when the task leaves the window. A task the control plane no longer knows counts as canceled.",
       fields: [{
-        k: "host_id",
-        label: "Target host",
+        k: "taskID",
+        label: "spec.cancelTask.taskID",
         type: "select",
         required: true,
-        load: () => api.hosts(o.id).then(hs => {
-          const ok = hs.filter(h => h.status === "available" && h.counts.nodes < 2 && h.counts.free > 0 && (!(o.zoneIds || []).length || (o.zoneIds || []).includes(h.zoneId)));
-          if (!o.fd || !o.fd.enabled) return ok.map(h => ({
-            v: h.id,
-            l: `${h.hostname} · ${regName(h.zoneId, "zone")} · ${h.counts.free} free devices`
-          }));
-          const fdOf = h => o.fd.scope === "zone" ? regName(h.zoneId, null) : o.fd.scope === "cabinet" ? h.cabinet : h.rack;
-          const counts = {};
-          (o.fd.domains || []).forEach(f => counts[f.name] = f.nodes);
-          const min = o.fd.domains.length ? Math.min(...o.fd.domains.map(f => f.nodes)) : 0;
-          return ok.filter(h => {
-            const f = fdOf(h);
-            return f && (counts[f] === undefined || counts[f] <= min);
-          }).map(h => ({
-            v: h.id,
-            l: `${h.hostname} · ${o.fd.scope} ${fdOf(h)} · ${h.counts.free} free devices`
-          }));
-        }),
-        empty: "No eligible host. A host must be in one of the cluster's zones, carry a failure-domain taint, and sit in a domain that is not already ahead of the others."
-      }, o.fd && o.fd.enabled ? {
-        k: "failure_domain",
-        label: "Failure domain",
-        desc: `Scope: ${o.fd.scope}.`,
-        type: "text",
-        required: true,
-        def: o.fd.domains && o.fd.domains[0] && o.fd.domains[0].name || "",
-        hint: (o.fd.domains || []).length ? "Existing: " + o.fd.domains.map(f => f.name).join(", ") + "." : null
-      } : null, o.fd && o.fd.enabled ? {
-        k: "n71",
-        type: "note",
-        label: "The failure domain is assigned once, now. It is fixed for the node's lifetime — moving a node between domains means removing it and adding it again."
-      } : null, {
-        k: "n13",
-        type: "note",
-        label: o.fd && o.fd.enabled ? `Nodes can only be started on hosts in the cluster's zones. Each ${o.fd.scope} must carry at least two storage nodes and counts may differ by at most one, so expand in pairs` + ((o.fd.domains || []).length ? ` — currently ${o.fd.domains.filter(f => f.name !== "unassigned").map(f => f.name + ": " + f.nodes).join(", ")}.` : ".") : "Storage nodes can only be started on hosts in the zones assigned when the cluster was created."
-      }].filter(Boolean),
-      confirm: "Add node",
-      run: v => api.clusterAddNode(o.id, v.host_id, v.failure_domain)
+        load: () => Promise.resolve((o.tasks || []).map(t => ({
+          v: t.id,
+          l: `${t.type} · ${t.status} · retry ${t.retry || 0} · ${t.id}`
+        })))
+      }],
+      confirm: "Create StorageClusterOps",
+      run: v => clusterOps(o, "CancelTask", {
+        taskID: v.taskID
+      })
     }
   }].filter(Boolean),
+  node: o => o.activeOpsRef ? [{
+    label: `${o.activeOpsRef} holds the lock`,
+    icon: "clock",
+    disabled: true,
+    hint: "status.activeOpsRef: a second StorageNodeOps stays Pending until it finishes"
+  }] : [o.status !== "offline" && o.status !== "in_shutdown" && {
+    label: "Shutdown",
+    icon: "power",
+    danger: true,
+    dialog: {
+      title: `StorageNodeOps Shutdown on ${o.name}?`,
+      danger: true,
+      desc: "Requesting posts the shutdown to the control plane; Awaiting completes when status.status is offline. Nothing is migrated off the node first.",
+      fields: [{
+        k: "force",
+        label: "spec.force",
+        desc: "Pass the control plane's force flag.",
+        type: "checkbox"
+      }],
+      confirm: "Create StorageNodeOps",
+      run: v => nodeOps(o, "Shutdown", null, {
+        force: !!v.force
+      })
+    }
+  }, {
+    label: "Restart",
+    icon: "refresh",
+    dialog: {
+      title: `StorageNodeOps Restart on ${o.name}?`,
+      desc: "Requesting posts the restart (fatal unless the node is offline or spec.force is set); Departing completes when the node has left online; Awaiting when it is back. Only Requesting honors spec.abort.",
+      fields: [{
+        k: "force",
+        label: "spec.force",
+        type: "checkbox"
+      }, {
+        k: "reattachVolume",
+        label: "spec.reattachVolume",
+        desc: "Reattach this node's volumes as part of the restart.",
+        type: "checkbox"
+      }],
+      confirm: "Create StorageNodeOps",
+      run: v => nodeOps(o, "Restart", null, {
+        force: !!v.force,
+        reattachVolume: !!v.reattachVolume
+      })
+    }
+  }, o.status === "online" && {
+    label: "Suspend",
+    icon: "pause",
+    dialog: {
+      title: `StorageNodeOps Suspend on ${o.name}?`,
+      desc: "Requesting posts the suspend; Awaiting completes when status.status is suspended.",
+      confirm: "Create StorageNodeOps",
+      run: () => nodeOps(o, "Suspend")
+    }
+  }, o.status === "suspended" && {
+    label: "Resume",
+    icon: "power",
+    dialog: {
+      title: `StorageNodeOps Resume on ${o.name}?`,
+      desc: "Requesting posts the resume; Awaiting completes when status.status is online.",
+      confirm: "Create StorageNodeOps",
+      run: () => nodeOps(o, "Resume")
+    }
+  }, {
+    label: "Migrate",
+    icon: "move",
+    dialog: {
+      title: `StorageNodeOps Migrate ${o.name} to another worker`,
+      desc: "Preparing labels the target worker and waits for its pod; Relocating restarts the node on it; AwaitingNode waits for online; Promoting asks the control plane to promote the target's devices, fail and migrate the origin's, and re-home the volumes. Only Preparing honors spec.abort.",
+      fields: [{
+        k: "targetWorkerNode",
+        label: "spec.migrate.targetWorkerNode",
+        type: "select",
+        required: true,
+        load: () => k8s.list("Node", {
+          ctx: o.ctx
+        }).then(ns => ns.filter(n => n.metadata.name !== o.workerNode).map(n => ({
+          v: n.metadata.name,
+          l: n.metadata.name
+        }))),
+        empty: "No other Kubernetes Node."
+      }, {
+        k: "newSsdPcie",
+        label: "spec.migrate.newSsdPcie",
+        desc: "Additional NVMe PCI addresses to bind on the target, comma-separated.",
+        type: "text"
+      }],
+      confirm: "Create StorageNodeOps",
+      run: v => nodeOps(o, "Migrate", Object.assign({
+        targetWorkerNode: v.targetWorkerNode
+      }, v.newSsdPcie ? {
+        newSsdPcie: String(v.newSsdPcie).split(",").map(s => s.trim()).filter(Boolean)
+      } : {}))
+    }
+  }, {
+    label: "HostMaintenance",
+    icon: "host",
+    dialog: {
+      title: `StorageNodeOps HostMaintenance on ${o.name}?`,
+      desc: "Holding waits for the worker's drain, ShuttingDown takes the node down, Releasing hands the host over, AwaitingHost waits for it to come back, Restarting brings the node up, Cleanup. Only Holding honors spec.abort.",
+      confirm: "Create StorageNodeOps",
+      run: () => nodeOps(o, "HostMaintenance")
+    }
+  }, {
+    label: "Remove",
+    icon: "trash",
+    danger: true,
+    removes: true,
+    dialog: {
+      title: `StorageNodeOps Remove ${o.name}?`,
+      danger: true,
+      desc: "Validating classifies the volumes and asks the control plane's removal admission; ShuttingDown takes the node down; MigratingDevices runs the control plane's device migration (status.removal); MigratingVolumes creates one PersistentVolumeOps per subsystem (status.drain); Verifying, Removing, AwaitingRemoval. Only Validating honors spec.abort.",
+      fields: [{
+        k: "systemVolumeFilterRegex",
+        label: "spec.remove.systemVolumeFilterRegex",
+        type: "text",
+        def: "^sb-fio-baseline-.*"
+      }, {
+        k: "confirmName",
+        label: "Type the node name to confirm",
+        type: "text",
+        match: o.name,
+        required: true
+      }],
+      confirm: "Create StorageNodeOps",
+      run: v => nodeOps(o, "Remove", {
+        systemVolumeFilterRegex: v.systemVolumeFilterRegex || "^sb-fio-baseline-.*"
+      })
+    }
+  }].filter(Boolean),
+  device: o => o.activeOpsRef ? [{
+    label: `${o.activeOpsRef} holds the lock`,
+    icon: "clock",
+    disabled: true,
+    hint: "status.activeOpsRef: a second StorageDeviceOps stays Pending until it finishes"
+  }] : [{
+    label: "Restart",
+    icon: "refresh",
+    dialog: {
+      title: `StorageDeviceOps Restart on ${o.name}?`,
+      desc: "Requesting posts the restart to the control plane; Awaiting completes when status.deviceStatus is online. Only Requesting honors spec.abort.",
+      confirm: "Create StorageDeviceOps",
+      run: () => deviceOps(o, "Restart")
+    }
+  }, {
+    label: "CheckHealth",
+    icon: "gauge",
+    dialog: {
+      title: `StorageDeviceOps CheckHealth on ${o.name}?`,
+      desc: "One read of the device's health log; status.health.smart is rewritten from it.",
+      confirm: "Create StorageDeviceOps",
+      run: () => deviceOps(o, "CheckHealth")
+    }
+  }, {
+    label: "Fail",
+    icon: "alert",
+    danger: true,
+    dialog: {
+      title: `StorageDeviceOps Fail ${o.name}?`,
+      danger: true,
+      desc: "Removing takes the device out of the data path, Failing marks it failed, Awaiting completes when status.deviceStatus is failed or failed_and_migrated. The control plane rebuilds its chunks elsewhere; nothing reverses a failure. Only Removing honors spec.abort.",
+      fields: [{
+        k: "confirmName",
+        label: "Type the device name to confirm",
+        type: "text",
+        match: o.name,
+        required: true
+      }],
+      confirm: "Create StorageDeviceOps",
+      run: () => deviceOps(o, "Fail")
+    }
+  }],
+  pool: o => o.activeOpsRef ? [{
+    label: `${o.activeOpsRef} holds the lock`,
+    icon: "clock",
+    disabled: true,
+    hint: "status.activeOpsRef"
+  }] : [{
+    label: "Rebalance",
+    icon: "gauge",
+    dialog: {
+      title: `StoragePoolOps Rebalance on ${o.name}?`,
+      desc: "The one action StoragePoolOps has: Validating, Migrating. The reconciler on main does not implement it yet and fails the operation.",
+      confirm: "Create StoragePoolOps",
+      run: () => poolOps(o, "Rebalance")
+    }
+  }],
   host: o => o.status === "discovered" ? [{
     label: "Prepare this worker node",
     icon: "plus",
@@ -10267,668 +11252,6 @@ const ACTIONS = {
       }],
       confirm: "Apply",
       run: v => api.hostSetPlacement(o.id, v)
-    }
-  }],
-  node: o => o.op ? [{
-    label: `${OP_LABEL[o.op.kind]} in progress…`,
-    icon: "clock",
-    disabled: true,
-    hint: `${o.op.phase} · phase ${o.op.phaseIndex + 1} of ${o.op.phases.length}`
-  }] : [o.status === "online" || o.status === "in_restart" ? {
-    label: "Shut down node",
-    icon: "power",
-    danger: true,
-    dialog: {
-      title: `Shut down ${o.hostname}?`,
-      danger: true,
-      desc: "The node reports in shutdown and then offline. Nothing is migrated off it — volumes whose primary sits here fail over to their secondaries, and the cluster runs at reduced redundancy until the node is back. A forced shutdown stops the node without waiting for it to close cleanly.",
-      fields: [{
-        k: "force",
-        label: "Force",
-        desc: "Does not wait for a clean stop.",
-        type: "checkbox"
-      }],
-      confirm: "Shut down",
-      run: v => api.nodeShutdown(o.id, v.force)
-    }
-  } : null, o.status !== "online" && o.status !== "in_restart" ? {
-    label: "Restart node",
-    icon: "refresh",
-    dialog: {
-      title: `Restart ${o.hostname}?`,
-      desc: "The node reports in restart and then online. It re-registers with the control plane, re-attaches its devices, and its chunks resynchronise from the surviving copies.",
-      confirm: "Restart",
-      run: () => api.nodeRestart(o.id)
-    }
-  } : null, {
-    label: "Migrate to another host",
-    icon: "move",
-    dialog: {
-      title: `Migrate ${o.hostname}`,
-      desc: "The node is restarted on a different, already prepared host. Prepare and label the target host first.",
-      fields: [{
-        k: "host_id",
-        label: "Target host",
-        type: "select",
-        required: true,
-        load: () => Promise.all([api.hosts(o.clusterId), api.cluster(o.clusterId)]).then(([hs, c]) => hs.filter(h => h.status === "available" && h.id !== o.hostId && h.counts.nodes === 0 && (!(c.zoneIds || []).length || (c.zoneIds || []).includes(h.zoneId))).map(h => ({
-          v: h.id,
-          l: `${h.hostname} · ${regName(h.zoneId, "zone")} · ${h.counts.free} free devices`
-        }))),
-        empty: "No prepared, empty host in this cluster's zones."
-      }],
-      confirm: "Queue migration",
-      run: v => api.nodeMigrate(o.id, v.host_id)
-    }
-  }, {
-    label: "Add device",
-    icon: "plus",
-    dialog: {
-      title: "Add a device to this node",
-      desc: (REG[o.clusterId] || {}).mode === "nvme" ? "NVMe cluster — identify the drive by PCIe address." : "Block device cluster — identify the drive by block device name.",
-      fields: (REG[o.clusterId] || {}).mode === "nvme" ? [{
-        k: "pcie_address",
-        label: "PCIe address",
-        type: "text",
-        example: "0000:5e:00.0",
-        required: true
-      }] : [{
-        k: "device_name",
-        label: "Block device",
-        type: "text",
-        example: "/dev/sdb",
-        required: true
-      }],
-      confirm: "Add device",
-      run: v => api.nodeAddDevice(o.id, v)
-    }
-  }, {
-    label: "Remove node",
-    icon: "trash",
-    danger: true,
-    removes: true,
-    dialog: {
-      title: `Remove ${o.hostname}?`,
-      danger: true,
-      desc: "The node is drained first: every volume whose primary sits here is moved off by instant migration, without copying data. The node and its device records are then deleted and its host devices released back to the host pool.",
-      fields: [{
-        k: "n26",
-        type: "note",
-        label: "Blocked if a volume is pinned to this node by affinity, if there is no other online node to move to, or if the removal would leave failure domains more than one node apart."
-      }, {
-        k: "confirmName",
-        label: "Type the node hostname to confirm",
-        type: "text",
-        match: o.hostname,
-        required: true
-      }],
-      confirm: "Drain & remove",
-      run: () => api.nodeRemove(o.id),
-      done: "Node removal started — this runs asynchronously and may take a while"
-    }
-  }].filter(Boolean),
-  // Two different things can happen to a bad device, and the difference matters:
-  //   Remove — takes it out of service. Reversible: the cluster still knows the
-  //            device and a restart adds it back.
-  //   Fail   — excludes it permanently and rebuilds its chunks onto the
-  //            remaining devices, restoring fault tolerance without it. Only
-  //            from removed or unavailable, and there is no way back.
-  device: o => {
-    const stopped = o.status === "unavailable" || o.status === "removed";
-    const live = o.status === "online" || o.status === "read_only";
-    const busy = o.status === "in_removal" || o.status === "in_failure" || o.status === "in_restart";
-    const name = o.mode === "nvme" ? o.serial : o.blockdev || o.serial;
-    if (busy) return [{
-      label: `${STATUS_META[o.status].label}…`,
-      icon: "clock",
-      disabled: true,
-      hint: "follow it under the cluster's Operations tab"
-    }];
-    if (o.status === "failed") return [{
-      label: "Permanently failed",
-      icon: "alert",
-      disabled: true,
-      hint: "its chunks were rebuilt onto the remaining devices; this device cannot be re-added"
-    }];
-    return [stopped && {
-      label: o.status === "removed" ? "Add device back" : "Restart device",
-      icon: "refresh",
-      dialog: {
-        title: o.status === "removed" ? `Add ${name} back?` : `Restart ${name}?`,
-        desc: o.status === "removed" ? "Removal is reversible. The node re-attaches the drive, re-admits it to the distribution layer, and its chunks are resynchronised from the surviving copies." : "The node re-attaches the drive and re-admits it to the distribution layer. Its chunks are resynchronised from the surviving copies.",
-        confirm: o.status === "removed" ? "Add back" : "Restart",
-        run: () => api.deviceRestart(o.id)
-      }
-    }, {
-      label: "Run health check",
-      icon: "gauge",
-      disabled: !live,
-      hint: !live ? "the drive is not attached, so its SMART log cannot be read" : null,
-      dialog: {
-        title: `Run a health check on ${name}?`,
-        desc: "nvme-cli re-reads the drive's SMART log on the node. The report is stored on the device and the health traffic light is rewritten from its verdict — available spare against the 10% threshold, media and integrity errors, and the critical warning bit.",
-        confirm: "Run check",
-        run: () => api.deviceHealthCheck(o.id),
-        done: "Health check running — the report and the health status update when it finishes"
-      }
-    }, live && {
-      label: "Remove device",
-      icon: "power",
-      danger: true,
-      dialog: {
-        title: `Remove ${name}?`,
-        danger: true,
-        desc: "The device is taken out of service. This is a temporary state — the cluster keeps the device and you can add it back at any time. Redundancy is reduced while it is out.",
-        fields: [{
-          k: "n73",
-          type: "note",
-          label: "Use this to pull a drive for inspection or replacement. If the drive is not coming back, fail it afterwards so its chunks are rebuilt and fault tolerance is restored without it."
-        }],
-        confirm: "Remove",
-        run: () => api.deviceRemove(o.id),
-        done: "Device removal started — follow it under the cluster's Operations tab"
-      }
-    }, stopped && {
-      label: "Fail device (permanent)",
-      icon: "alert",
-      danger: true,
-      removes: true,
-      dialog: {
-        title: `Permanently fail ${name}?`,
-        danger: true,
-        desc: "The device is excluded from the cluster for good and every chunk that lived on it is rebuilt onto the remaining devices, which restores fault tolerance without this drive. It cannot be added back afterwards.",
-        fields: [{
-          k: "n72",
-          type: "note",
-          label: `Redundancy is currently reduced because this device is ${STATUS_META[o.status].label}. The rebuild moves ${fmtBytes(o.capacity.used)} and restores it. Only fail the device once you are sure the drive will not come back — a removed device can simply be added again.`
-        }, {
-          k: "confirmName",
-          label: "Type the device name to confirm",
-          type: "text",
-          match: name,
-          required: true
-        }],
-        confirm: "Fail permanently",
-        run: () => api.deviceFail(o.id),
-        done: "Failure migration started — follow the rebuild under the cluster's Operations tab"
-      }
-    }].filter(Boolean);
-  },
-  volume: o => [{
-    label: "Expand…",
-    icon: "move",
-    dialog: {
-      title: `Expand ${o.name}`,
-      desc: o.pvc ? "Logical volumes can only grow. Expanding here also raises the request on the PVC bound to this volume; the filesystem is extended on the next mount." : "Logical volumes can only grow — shrinking is refused. The filesystem must be extended inside the guest afterwards.",
-      fields: [{
-        k: "size",
-        label: "Provisioned size",
-        type: "number",
-        unit: "GB",
-        def: gb(o.capacity.total),
-        min: gb(o.capacity.total),
-        required: true
-      }, {
-        k: "n36",
-        type: "note",
-        label: `Currently ${fmtBytes(o.capacity.total)}.` + (o.pvc ? ` Bound to PVC ${o.pvc.namespace}/${o.pvc.name}.` : "")
-      }],
-      confirm: "Expand",
-      run: v => api.volumeResize(o.id, Number(v.size) * GBn)
-    }
-  }, {
-    label: "Take snapshot",
-    icon: "camera",
-    dialog: {
-      title: `Snapshot ${o.name}`,
-      desc: "A copy-on-write snapshot is taken immediately and chained onto the existing snapshot chain. It consumes space only as the volume diverges.",
-      fields: [{
-        k: "name",
-        label: "Snapshot name",
-        type: "text",
-        def: `${o.name}-snap`,
-        required: true
-      }],
-      confirm: "Create snapshot",
-      run: v => api.volumeSnapshot(o.id, v.name)
-    }
-  }, {
-    label: "Clone",
-    icon: "copy",
-    dialog: {
-      title: `Clone ${o.name}`,
-      desc: "Creates a new thin volume in the same pool, backed by a snapshot of this one.",
-      fields: [{
-        k: "name",
-        label: "New volume name",
-        type: "text",
-        def: `${o.name}-clone`,
-        required: true
-      }],
-      confirm: "Clone",
-      run: v => api.volumeClone(o.id, v.name)
-    }
-  }, {
-    label: "Migrate instantly…",
-    icon: "move",
-    dialog: {
-      title: `Move ${o.name} to another node`,
-      desc: "Instant volume migration moves the primary role to another storage node without copying data, so the move completes immediately. Use it to follow a workload or to relieve a hot node.",
-      fields: [{
-        k: "node_id",
-        label: "Target primary node",
-        type: "select",
-        required: true,
-        load: () => api.nodes(o.clusterId).then(ns => ns.filter(n => n.status === "online" && (!o.nodes.primary || n.id !== o.nodes.primary.uuid)).map(n => ({
-          v: n.id,
-          l: `${n.hostname} · ${n.ip}`
-        }))),
-        empty: "No other online node in this cluster."
-      }, {
-        k: "reason",
-        label: "Reason",
-        type: "select",
-        def: "manual",
-        options: [{
-          v: "manual",
-          l: "Manual move"
-        }, {
-          v: "follow_workload",
-          l: "Follow the workload"
-        }, {
-          v: "rebalance",
-          l: "Relieve a hot node"
-        }]
-      }, o.affinity && o.affinity.mode === "node" ? {
-        k: "n23",
-        type: "note",
-        label: `This volume is pinned to ${o.affinity.pinned_node}. Moving it re-pins the affinity to the new node.`
-      } : null].filter(Boolean),
-      confirm: "Move now",
-      run: v => api.volumeMigrate(o.id, v)
-    }
-  }, {
-    label: "Rebalance this volume",
-    icon: "gauge",
-    dialog: {
-      title: `Rebalance ${o.name}?`,
-      desc: "Moves the volume to the least loaded online node in the cluster using instant migration. Nothing is copied.",
-      confirm: "Rebalance",
-      run: () => api.volumeRebalance(o.id)
-    }
-  }, {
-    label: "Affinity…",
-    icon: "link",
-    dialog: {
-      title: `Affinity for ${o.name}`,
-      desc: "Node affinity pins the volume's primary to one node. Pod affinity keeps front storage on whichever node the workload pod runs on, moving it instantly when the pod is rescheduled.",
-      fields: v2 => [{
-        k: "mode",
-        label: "Affinity",
-        type: "select",
-        def: o.affinity ? o.affinity.mode : "none",
-        options: [{
-          v: "none",
-          l: "None — the control plane places it freely"
-        }, {
-          v: "node",
-          l: "Node affinity — pin to a storage node"
-        }, {
-          v: "pod",
-          l: "Pod affinity — follow the workload"
-        }]
-      }, v2.mode === "node" ? {
-        k: "node_id",
-        label: "Pin to node",
-        type: "select",
-        load: () => api.nodes(o.clusterId).then(ns => ns.filter(n => n.status === "online").map(n => ({
-          v: n.id,
-          l: `${n.hostname}${o.nodes.primary && n.id === o.nodes.primary.uuid ? " (current primary)" : ""}`
-        })))
-      } : null, v2.mode === "pod" ? {
-        k: "workload",
-        label: "Workload pod",
-        type: "text",
-        def: o.affinity && o.affinity.workload ? o.affinity.workload : `${o.name}-0`
-      } : null, v2.mode === "pod" ? {
-        k: "n24",
-        type: "note",
-        label: "Requires pod affinity to be enabled on the cluster."
-      } : null].filter(Boolean),
-      confirm: "Apply",
-      run: v => api.volumeSetAffinity(o.id, v)
-    }
-  }, {
-    label: "Snapshot & back up now",
-    icon: "cloud",
-    dialog: {
-      title: `Back up ${o.name}`,
-      desc: "Backups are always taken from a snapshot. This takes a snapshot now and appends a version to the volume\u2019s backup chain — the first version is a full copy, every later one a delta.",
-      fields: [{
-        k: "bucket",
-        label: "Bucket location",
-        type: "text",
-        def: `s3://sb-backup-eu/${o.name}/`,
-        required: true
-      }, {
-        k: "n11",
-        type: "note",
-        label: "Snapshot and backup version become independent objects: deleting the online snapshot later leaves the backup version untouched."
-      }],
-      confirm: "Snapshot & back up",
-      run: v => api.volumeBackup(o.id, v)
-    }
-  }, {
-    label: "Compression-dedup…",
-    icon: "move",
-    dialog: {
-      title: `Compression-dedup for ${o.name}`,
-      desc: "Compression-dedup is a single per-volume switch. Turning it on or off only affects data written from now on — blocks already on disk keep their current form.",
-      fields: [{
-        k: "compression_dedup_enabled",
-        label: "Compression-dedup",
-        type: "checkbox",
-        def: o.dataReduction
-      }, {
-        k: "n20",
-        type: "note",
-        label: "Costs CPU on the storage node and hugepage memory for the fingerprint table."
-      }],
-      confirm: "Apply",
-      run: v => api.volumeSetDataReduction(o.id, v)
-    }
-  }, {
-    label: "QoS limits…",
-    icon: "gauge",
-    dialog: {
-      title: `QoS limits for ${o.name}`,
-      desc: "Caps applied by the storage node to this volume. They override the pool defaults.",
-      fields: qosFields(o.qos),
-      confirm: "Apply limits",
-      run: v => api.volumeSetQos(o.id, v)
-    }
-  }, {
-    label: "Backup policy…",
-    icon: "clock",
-    dialog: {
-      title: `Backup policy for ${o.name}`,
-      desc: "Link this volume to a cluster backup policy, or detach it.",
-      fields: [{
-        k: "policy_id",
-        label: "Policy",
-        type: "select",
-        def: o.backupPolicy ? o.backupPolicy.uuid : "",
-        load: () => api.policies(o.clusterId).then(ps => [{
-          v: "",
-          l: "— none —"
-        }].concat(ps.map(p => ({
-          v: p.id,
-          l: `${p.name} · window ${p.window}`
-        }))))
-      }],
-      confirm: "Apply",
-      run: v => api.volumeSetPolicy(o.id, v.policy_id)
-    }
-  }, o.replication ? {
-    label: "Detach from replication",
-    icon: "link",
-    danger: true,
-    dialog: {
-      title: `Stop replicating ${o.name}?`,
-      desc: `The volume leaves ${o.replication.policyName}. Data already replicated to the target is kept, but no further generations are shipped.`,
-      confirm: "Detach",
-      run: () => api.rpolicyRemoveVolume(o.replication.policyId, o.id)
-    }
-  } : {
-    label: "Attach to replication policy…",
-    icon: "shield",
-    dialog: {
-      title: `Replicate ${o.name}`,
-      desc: "Pick a replication policy in this cluster. Asynchronous policies ship deltas over a cluster pair; synchronous policies acknowledge writes at every zone of a stretched cluster.",
-      fields: [{
-        k: "policy",
-        label: "Replication policy",
-        type: "select",
-        required: true,
-        load: () => api.rpolicies(o.clusterId).then(ps => ps.map(p => ({
-          v: p.id,
-          l: p.mode === "synchronous" ? `${p.name} · synchronous · ${(p.zoneIds || []).length} zones` : `${p.name} · every ${p.frequency} min → ${regName(p.targetClusterId)}`
-        }))).catch(() => []),
-        empty: "No replication policy in this cluster. Create one under Disaster recovery."
-      }],
-      confirm: "Attach",
-      run: v => api.rpolicyAddVolumes(v.policy, [o.id])
-    }
-  }, {
-    label: "Consistency group…",
-    icon: "link",
-    hint: (o.consistencyGroups || []).length ? `in ${o.consistencyGroups.map(g => g.name).join(", ")}` : null,
-    dialog: {
-      title: `Add ${o.name} to a consistency group`,
-      desc: "Members of a consistency group are snapshotted together, at one common point in time. A volume can belong to several groups; a group whose protection is already active cannot take new members.",
-      fields: [{
-        k: "cg",
-        label: "Consistency group",
-        type: "select",
-        required: true,
-        load: () => api.cgroups(o.clusterId).then(gs => gs.filter(g => !g.locked && !(o.consistencyGroups || []).some(x => x.uuid === g.id)).map(g => ({
-          v: g.id,
-          l: `${g.name} · ${g.counts.volumes} volumes`
-        }))),
-        empty: "No group in this cluster can take this volume — every one either already has it or carries an active policy."
-      }],
-      confirm: "Add",
-      run: v => api.cgroupAddVolumes(v.cg, [o.id])
-    }
-  }, {
-    label: "Delete volume",
-    icon: "trash",
-    danger: true,
-    removes: true,
-    dialog: {
-      title: `Delete ${o.name}?`,
-      danger: true,
-      desc: "The volume and all of its snapshots are destroyed. Backups in object storage are kept.",
-      fields: [{
-        k: "confirmName",
-        label: `Type the volume name to confirm`,
-        type: "text",
-        match: o.name,
-        required: true
-      }],
-      confirm: "Delete",
-      run: () => api.volumeDelete(o.id)
-    }
-  }],
-  snapshot: o => [o.backupVersionId ? {
-    label: "Already backed up",
-    icon: "cloud",
-    disabled: true,
-    hint: `version ${o.backupVersionId} was taken from this snapshot`
-  } : {
-    label: "Back up this snapshot",
-    icon: "cloud",
-    dialog: {
-      title: `Back up ${o.name}`,
-      desc: "Appends a version to the volume\u2019s backup chain from this snapshot. Afterwards the snapshot and the backup version are independent — deleting the snapshot leaves the version in the bucket.",
-      fields: [{
-        k: "bucket",
-        label: "Bucket location",
-        type: "text",
-        def: `s3://sb-backup-eu/${o.volumeName}/`,
-        required: true
-      }],
-      confirm: "Back up",
-      run: v => api.snapshotBackup(o.id, v.bucket)
-    }
-  }, {
-    label: "Restore to new volume…",
-    icon: "refresh",
-    op: "create",
-    dialog: {
-      title: `Restore ${o.name}`,
-      desc: "Creates a new volume from this snapshot. The target can be this cluster or any other cluster the control plane manages.",
-      fields: [{
-        k: "cluster_id",
-        label: "Target cluster",
-        type: "select",
-        required: true,
-        def: o.clusterId,
-        load: () => api.clusters().then(cs => cs.map(c => ({
-          v: c.id,
-          l: `${c.name}${c.id === o.clusterId ? " (source)" : ""} · ${c.siting}`
-        })))
-      }, {
-        k: "name",
-        label: "New volume name",
-        type: "text",
-        def: `${o.volumeName}-restored`,
-        required: true
-      }],
-      confirm: "Restore",
-      run: v => api.snapshotRestore(o.id, v)
-    }
-  }, {
-    label: "Clone to new volume",
-    icon: "copy",
-    dialog: {
-      title: `Clone ${o.name}`,
-      desc: "Creates a thin volume from this snapshot in the same pool.",
-      fields: [{
-        k: "name",
-        label: "New volume name",
-        type: "text",
-        def: `${o.volumeName}-from-snap`,
-        required: true
-      }],
-      confirm: "Clone",
-      run: v => api.snapshotClone(o.id, v.name)
-    }
-  }, {
-    label: "Delete snapshot",
-    icon: "trash",
-    danger: true,
-    removes: true,
-    dialog: {
-      title: `Delete ${o.name}?`,
-      danger: true,
-      desc: o.backupVersionId ? `Only the online snapshot is removed. Backup version ${o.backupVersionId} stays in the bucket unchanged, and volumes cloned from this snapshot keep their data.` : "No backup was taken from this snapshot, so this point in time is lost. Volumes cloned from it keep their data.",
-      confirm: "Delete",
-      run: () => api.snapshotDelete(o.id)
-    }
-  }],
-  backup: o => {
-    const vs = o.versions || [];
-    const opts = vs.slice().reverse().map(v => ({
-      v: v.id,
-      l: `${v.id} · ${v.type} · ${fmtDate(v.createdAt)}`
-    }));
-    return [{
-      label: "Restore to new volume…",
-      icon: "refresh",
-      op: "restore",
-      dialog: {
-        title: `Restore ${o.chainId}`,
-        desc: "Rebuilds a new logical volume from the full version plus every delta up to the version you pick — that version is the point in time you get back.",
-        fields: [{
-          k: "version_id",
-          label: "Restore to version",
-          type: "select",
-          required: true,
-          options: opts,
-          empty: "This chain holds no versions."
-        }, {
-          k: "name",
-          label: "New volume name",
-          type: "text",
-          def: `${o.volumeName}-restored`,
-          required: true
-        }],
-        confirm: "Restore",
-        run: v => api.backupRestore(o.id, v.name, v.version_id)
-      }
-    }, {
-      label: "Merge oldest delta into full",
-      icon: "move",
-      disabled: vs.length < 2,
-      hint: vs.length < 2 ? "chain holds a single full version" : null,
-      dialog: {
-        title: `Merge the earliest delta of ${o.chainId}?`,
-        danger: true,
-        desc: "The second-earliest version is folded into the full version, which then covers both, and the delta is removed. This is how older retention is aged out — points in time before the merged version become unrecoverable.",
-        confirm: "Merge",
-        run: () => api.backupMerge(o.id)
-      }
-    }, {
-      label: "Export a version…",
-      icon: "ext",
-      dialog: {
-        title: `Export from ${o.chainId}`,
-        desc: "Copies the chain up to the chosen version to another bucket or an external target.",
-        fields: [{
-          k: "version_id",
-          label: "Version",
-          type: "select",
-          required: true,
-          options: opts
-        }, {
-          k: "destination",
-          label: "Destination",
-          type: "text",
-          def: "s3://sb-archive-cold/",
-          required: true
-        }],
-        confirm: "Export",
-        run: v => api.backupExport(o.id, v.destination, v.version_id)
-      }
-    }, {
-      label: "Delete backup chain",
-      icon: "trash",
-      danger: true,
-      removes: true,
-      dialog: {
-        title: `Delete ${o.chainId}?`,
-        danger: true,
-        desc: `Deleting a volume backup deletes the entire chain — all ${vs.length} version(s), full and deltas. Online snapshots on the cluster are not touched.`,
-        fields: [{
-          k: "confirmName",
-          label: "Type the chain id to confirm",
-          type: "text",
-          match: o.chainId,
-          required: true
-        }],
-        confirm: "Delete chain",
-        run: () => api.backupDelete(o.id)
-      }
-    }];
-  },
-  pool: o => [o.enabled ? {
-    label: "Disable pool",
-    icon: "power",
-    dialog: {
-      title: `Disable ${o.name}?`,
-      desc: "The pool keeps serving its existing volumes — no I/O is interrupted. New volumes can no longer be provisioned into it until it is enabled again.",
-      confirm: "Disable",
-      run: () => api.poolDisable(o.id)
-    }
-  } : {
-    label: "Enable pool",
-    icon: "refresh",
-    dialog: {
-      title: `Enable ${o.name}?`,
-      desc: "Provisioning of new volumes into this pool is allowed again.",
-      confirm: "Enable",
-      run: () => api.poolEnable(o.id)
-    }
-  }, {
-    label: "QoS limits…",
-    icon: "gauge",
-    dialog: {
-      title: `QoS limits for pool ${o.name}`,
-      desc: "Pool-wide caps. Volumes without their own QoS profile inherit these.",
-      fields: qosFields(o.qos),
-      confirm: "Apply limits",
-      run: v => api.poolSetQos(o.id, v)
     }
   }],
   // A pair is never edited: spec.targetCluster is immutable. It can only be
@@ -13931,10 +14254,16 @@ function OpMachine({
     title: "this phase cannot be unwound"
   }, /*#__PURE__*/React.createElement("i", null, "abort"), "not from ", o.step)))));
 }
+
+// The operations of one cluster: the monitor (tasks.jsx), scoped.
 function OperationsPanel({
   cluster,
   nav
 }) {
+  if (window.MonitorView) return /*#__PURE__*/React.createElement(MonitorView, {
+    scope: cluster,
+    nav: nav
+  });
   const [rev, setRev] = useState(0);
   const [q, setQ] = useState("");
   const [onlyRunning, setOnlyRunning] = useState(false);
@@ -14883,16 +15212,13 @@ function ControlPlaneView({
     }
   }, "One deployment manages every storage cluster. Its services, logs and state database are shared, so they live here rather than under any single cluster."))), /*#__PURE__*/React.createElement("div", {
     className: "tabs"
-  }, [["services", "Services"], ["alerts", "Alerts"], ["fdb", "State DB"], ["clusters", "Managed clusters"], showAccess && ["access", "Access"]].filter(Boolean).map(function (t) {
+  }, [["services", "Services"], ["clusters", "Managed clusters"]].map(function (t) {
     return /*#__PURE__*/React.createElement("button", {
       key: t[0],
       className: "tab" + (tab === t[0] ? " on" : ""),
       onClick: () => setTab(t[0])
     }, t[1]);
-  })), tab === "services" && /*#__PURE__*/React.createElement(ControlPlanePanel, null), tab === "alerts" && /*#__PURE__*/React.createElement(AlertsPanel, {
-    cluster: null,
-    nav: nav
-  }), tab === "fdb" && /*#__PURE__*/React.createElement(FdbPanel, null), tab === "clusters" && /*#__PURE__*/React.createElement(CpClusters, {
+  })), tab === "services" && /*#__PURE__*/React.createElement(ControlPlanePanel, null), tab === "clusters" && /*#__PURE__*/React.createElement(CpClusters, {
     nav: nav
   }), tab === "access" && showAccess && /*#__PURE__*/React.createElement(AccessView, {
     nav: nav
@@ -15204,17 +15530,14 @@ function LogsView({
     window.addEventListener("sb-logs-query", h);
     return () => window.removeEventListener("sb-logs-query", h);
   }, []);
-  // keep the URL in step: the address bar is the permalink of what is shown
+  // keep the URL in step: the address bar is the permalink of what is shown.
+  // The filter rewrites the explorer's own history entry; leaving the explorer
+  // leaves that entry as it is, so Back returns to the same query.
   useEffect(() => {
     try {
       window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f));
     } catch (e) {}
   }, [f]);
-  useEffect(() => () => {
-    try {
-      if (/^#logs\b/.test(window.location.hash)) window.history.replaceState(null, "", window.location.pathname + window.location.search);
-    } catch (e) {}
-  }, []);
   const store = graylogOn();
   return /*#__PURE__*/React.createElement("div", {
     className: "scroll"
@@ -15788,6 +16111,2100 @@ Object.assign(window, {
   hashOfFilter,
   logWindow,
   DEFAULT_LOG_FILTER
+});
+})();
+// ---- tasks.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// TASKS AND OPERATIONS: one monitor, two lists, for everything long-running
+//
+// What it shows is what the operator records (OPERATIONS.md), in two lists
+// under one search and state filter. The operator's operations: the Ops
+// objects of every kind with their phase, their step on the action's graph
+// (ops-model.jsx), and the progress fields their CRD carries; a StorageNode
+// in its provisioning machine (a node add); a ClusterDeploymentConfig in its
+// expansion machine. Operations nest only where an object names its parent:
+// a PersistentVolumeOps through spec.creatorRef or the drain-node label, a
+// StorageClusterOps through its controller owner. The control plane's tasks:
+// each StorageCluster's status.tasks window, a flat list whose entries carry
+// the four fields the CRD has (id, type, status, retry) and name the
+// operation that recorded their id (status.nodeAddTaskID,
+// status.relocate.volumes[].taskID) when one did. Nothing is inferred from
+// timing.
+//
+// Cancel is offered exactly where the operator has it: spec.abort while the
+// operation stands at a step its graph marks abortable, and a
+// StorageClusterOps CancelTask for a task in the window. Everything else
+// says why it cannot be canceled.
+// ---------------------------------------------------------------------------
+const WORK_KINDS = ["StorageClusterOps", "StorageNodeOps", "StorageDeviceOps", "StoragePoolOps", "PersistentVolumeOps", "ControlPlaneOps", "OperatorOps", "StorageBackupOps", "ClusterDeploymentConfig"];
+const TERMINAL = ["Succeeded", "Failed", "Aborted"];
+const PHASE_COLOR = {
+  Pending: "var(--dim2)",
+  Running: "var(--info)",
+  Suspended: "var(--warn)",
+  Succeeded: "var(--ok)",
+  Failed: "var(--bad)",
+  Aborted: "var(--warn)",
+  Provisioning: "var(--info)",
+  Expanding: "var(--info)",
+  Draft: "var(--dim2)",
+  Expanded: "var(--ok)",
+  Unknown: "var(--idle)"
+};
+const TASK_PHASE = {
+  new: "Pending",
+  running: "Running",
+  suspended: "Suspended",
+  done: "Succeeded"
+};
+const wkey = (kind, ns, name, ctx) => `${ctx || LOCAL_CTX}/${kind}/${ns || ""}/${name}`;
+
+// ---- the objects the operation points at ---------------------------------------
+const vmByName = (kind, name, ns, ctx) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns) && (!ctx || (v.ctx || LOCAL_CTX) === ctx)) || null;
+const clusterByUUID = uuid => Object.values(REG).find(v => v.kind === "cluster" && v.id === uuid) || null;
+function targetOf(o) {
+  const r = RESOURCES[o.kind] || {},
+    sp = o.spec || {};
+  if (!r.ref) return {
+    kind: null,
+    name: null,
+    vm: null
+  };
+  const raw = sp[r.ref];
+  const name = raw && typeof raw === "object" ? raw.name : raw;
+  const vm = r.ops ? vmByName(r.ops, name, r.ops === "PersistentVolume" ? undefined : o.metadata.namespace, o.__ctx || LOCAL_CTX) : null;
+  return {
+    kind: r.ops,
+    name: name || null,
+    vm
+  };
+}
+function clusterIdOf(o, target) {
+  const st = o.status || {};
+  if (target.vm) return target.vm.kind === "cluster" ? target.vm.id : target.vm.clusterId || null;
+  if (st.migration && st.migration.clusterUUID) return clusterByUUID(st.migration.clusterUUID) ? st.migration.clusterUUID : null;
+  if (st.relocate && st.relocate.sourceClusterUUID) return st.relocate.sourceClusterUUID;
+  if (o.kind === "ClusterDeploymentConfig" && st.clusterRef) {
+    const c = vmByName("StorageCluster", st.clusterRef, o.metadata.namespace, o.__ctx || LOCAL_CTX);
+    return c ? c.id : null;
+  }
+  if (o.kind === "StorageNode") {
+    const c = vmByName("StorageCluster", (o.spec || {}).clusterRef, o.metadata.namespace, o.__ctx || LOCAL_CTX);
+    return c ? c.id : null;
+  }
+  return null;
+}
+
+// ---- normalizers -------------------------------------------------------------------
+// progress as the CRD records it, per kind and action
+function progressOf(o) {
+  const st = o.status || {};
+  if (st.rollingRestart) return {
+    done: st.rollingRestart.nodeIndex || 0,
+    total: (st.rollingRestart.nodes || []).length,
+    unit: "nodes",
+    field: "status.rollingRestart"
+  };
+  if (st.drain) return {
+    done: st.drain.volumesMigrated || 0,
+    total: st.drain.volumesTotal || 0,
+    unit: "volumes",
+    field: "status.drain"
+  };
+  if (st.relocate && (st.relocate.volumes || []).length) return {
+    done: st.relocate.volumes.filter(v => v.cutOver).length,
+    total: st.relocate.volumes.length,
+    unit: "volumes cut over",
+    field: "status.relocate.volumes"
+  };
+  if (st.migration && (st.migration.validationJobs || []).length) return {
+    done: st.migration.validationJobs.filter(j => j.succeeded).length,
+    total: st.migration.validationJobs.length,
+    unit: "validation jobs",
+    field: "status.migration.validationJobs"
+  };
+  if (o.kind === "ClusterDeploymentConfig" && (st.nodeRefs || []).length) return {
+    done: st.nodeRefs.length,
+    total: st.nodeRefs.length,
+    unit: "nodes created",
+    field: "status.nodeRefs"
+  };
+  return null;
+}
+function normOpsItem(o) {
+  const sp = o.spec || {},
+    st = o.status || {};
+  const target = targetOf(o);
+  const pos = stepPosition(o.kind, sp.action, (st.step || {}).state);
+  const phase = st.phase || "Pending";
+  const canAbort = ABORTABLE_KINDS.includes(o.kind);
+  const cancel = TERMINAL.includes(phase) ? {
+    can: false,
+    how: null,
+    reason: `nothing to cancel: the operation is ${phase}`
+  } : sp.abort ? {
+    can: false,
+    how: null,
+    reason: "spec.abort is already set"
+  } : !canAbort ? {
+    can: false,
+    how: null,
+    reason: `${o.kind} has no spec.abort`
+  } : phase === "Pending" ? {
+    can: true,
+    how: "abort-patch",
+    reason: null
+  } : pos.abortable ? {
+    can: true,
+    how: "abort-patch",
+    reason: null
+  } : {
+    can: false,
+    how: null,
+    reason: `step ${(st.step || {}).state || "unknown"} does not honor spec.abort; the graph for ${sp.action} aborts only at ${((graphOf(o.kind, sp.action) || {}).abortable || []).join(", ") || "no step"}`
+  };
+  return {
+    key: wkey(o.kind, o.metadata.namespace, o.metadata.name, o.__ctx),
+    src: "ops",
+    crKind: o.kind,
+    name: o.metadata.name,
+    ns: o.metadata.namespace,
+    ctx: o.__ctx || LOCAL_CTX,
+    uid: o.metadata.uid,
+    clusterId: clusterIdOf(o, target),
+    action: sp.action || null,
+    target,
+    phase,
+    step: (st.step || {}).state || null,
+    stepClaim: (st.step || {}).claim || null,
+    stepDeadline: (st.step || {}).deadline || null,
+    steps: pos.steps,
+    stepIndex: pos.index,
+    abortable: pos.abortable,
+    perNode: pos.perNode,
+    startedAt: st.startedAt || o.metadata.creationTimestamp,
+    completedAt: st.completedAt || null,
+    message: st.message || "",
+    progress: progressOf(o),
+    aborting: !!sp.abort,
+    cancel,
+    creatorRef: sp.creatorRef || null,
+    owner: (o.metadata.ownerReferences || []).find(r => r.controller) || null,
+    labels: o.metadata.labels || {},
+    rollingRestart: st.rollingRestart || null,
+    drain: st.drain || null,
+    removal: st.removal || null,
+    migration: st.migration || null,
+    relocate: st.relocate || null,
+    configRef: st.configRef || null,
+    deferredSince: st.deferredSince || null,
+    taskIds: st.relocate && (st.relocate.volumes || []).map(v => v.taskID).filter(Boolean) || (sp.cancelTask ? [sp.cancelTask.taskID] : []),
+    parentKey: null,
+    children: [],
+    raw: o
+  };
+}
+// a StorageNode being added: the entity's own provisioning machine
+function normNodeAddItem(n) {
+  const st = n.status || {};
+  const pos = stepPosition("StorageNode", null, (st.step || {}).state);
+  const vm = vmByName("StorageNode", n.metadata.name, n.metadata.namespace, n.__ctx || LOCAL_CTX);
+  return {
+    key: wkey("StorageNode", n.metadata.namespace, n.metadata.name, n.__ctx),
+    src: "nodeadd",
+    crKind: "StorageNode",
+    name: n.metadata.name,
+    ns: n.metadata.namespace,
+    ctx: n.__ctx || LOCAL_CTX,
+    uid: n.metadata.uid,
+    clusterId: clusterIdOf(n, {
+      vm: null
+    }),
+    action: "provisioning",
+    target: {
+      kind: "StorageNode",
+      name: n.metadata.name,
+      vm
+    },
+    phase: st.phase === "Failed" ? "Failed" : "Running",
+    step: (st.step || {}).state || null,
+    stepClaim: (st.step || {}).claim || null,
+    stepDeadline: (st.step || {}).deadline || null,
+    steps: pos.steps,
+    stepIndex: pos.index,
+    abortable: false,
+    startedAt: n.metadata.creationTimestamp,
+    completedAt: null,
+    message: st.message || "",
+    progress: null,
+    aborting: false,
+    cancel: {
+      can: false,
+      how: null,
+      reason: "a node add has no abort; deleting the StorageNode creates its Remove operation"
+    },
+    nodeAddTaskID: st.nodeAddTaskID || null,
+    taskIds: st.nodeAddTaskID ? [st.nodeAddTaskID] : [],
+    parentKey: null,
+    children: [],
+    raw: n
+  };
+}
+// one entry of a cluster's status.tasks window
+function normTaskItem(t, cluster) {
+  const phase = TASK_PHASE[t.status] || "Unknown";
+  return {
+    key: `task/${cluster.id}/${t.id}`,
+    src: "task",
+    crKind: null,
+    name: t.id,
+    ns: cluster.namespace,
+    ctx: cluster.ctx,
+    clusterId: cluster.id,
+    action: t.type || null,
+    target: {
+      kind: "StorageCluster",
+      name: cluster.name,
+      vm: cluster
+    },
+    phase,
+    step: null,
+    steps: [],
+    stepIndex: -1,
+    abortable: false,
+    startedAt: null,
+    completedAt: null,
+    message: "",
+    progress: null,
+    aborting: false,
+    retry: t.retry || 0,
+    cancel: TERMINAL.includes(phase) ? {
+      can: false,
+      how: null,
+      reason: "the task is done"
+    } : {
+      can: true,
+      how: "cancel-task",
+      reason: null
+    },
+    parentKey: null,
+    children: [],
+    raw: t
+  };
+}
+
+// ---- the tree ----------------------------------------------------------------------------
+function buildTree(items) {
+  const byKey = new Map(items.map(i => [i.key, i]));
+  items.forEach(i => {
+    i.children = [];
+    i.parentKey = null;
+  });
+  const attach = (child, parent) => {
+    if (parent && parent !== child && !child.parentKey) {
+      child.parentKey = parent.key;
+      parent.children.push(child);
+    }
+  };
+  const ops = items.filter(i => i.src === "ops");
+  ops.forEach(o => {
+    // spec.creatorRef names the operation that created this one (a drain's migrations, the rebalancer's)
+    if (o.creatorRef && o.creatorRef.kind !== "StorageCluster") attach(o, byKey.get(wkey(o.creatorRef.kind, o.creatorRef.namespace, o.creatorRef.name, o.ctx)));
+    // the drain-node label, for a mover that wrote no creatorRef
+    else if (o.crKind === "PersistentVolumeOps" && o.labels["storage.simplyblock.io/drain-node"]) {
+      const drain = ops.find(p => p.crKind === "StorageNodeOps" && p.action === "Remove" && p.target.vm && p.target.vm.id === o.labels["storage.simplyblock.io/drain-node"]);
+      attach(o, drain);
+    }
+    // a controller owner that is itself an operation (the activation a deployment creates)
+    if (o.owner && WORK_KINDS.includes(o.owner.kind)) attach(o, byKey.get(wkey(o.owner.kind, o.ns, o.owner.name, o.ctx)));
+    // a discovery's document
+    if (o.crKind === "OperatorOps" && o.configRef) attach(byKey.get(wkey("ClusterDeploymentConfig", o.ns, o.configRef, o.ctx)), o);
+  });
+  // a node add under the document that created it (status.nodeRefs)
+  items.filter(i => i.src === "nodeadd").forEach(n => {
+    const doc = ops.find(d => d.crKind === "ClusterDeploymentConfig" && d.ns === n.ns && d.ctx === n.ctx && ((d.raw.status || {}).nodeRefs || []).includes(n.name));
+    attach(n, doc);
+  });
+  // a child without a cluster takes its parent's; a creatorRef naming a StorageCluster is that cluster
+  items.forEach(i => {
+    if (!i.clusterId && i.creatorRef && i.creatorRef.kind === "StorageCluster") {
+      const c = vmByName("StorageCluster", i.creatorRef.name, i.creatorRef.namespace, i.ctx);
+      if (c) i.clusterId = c.id;
+    }
+  });
+  const inherit = it => it.children.forEach(c => {
+    if (!c.clusterId) c.clusterId = it.clusterId;
+    inherit(c);
+  });
+  items.filter(i => !i.parentKey).forEach(inherit);
+  // a task under the object that recorded its id
+  const tasks = items.filter(i => i.src === "task");
+  items.filter(i => i.src !== "task" && (i.taskIds || []).length).forEach(o => o.taskIds.forEach(id => tasks.filter(t => t.name === id).forEach(t => attach(t, o))));
+  return items.filter(i => !i.parentKey);
+}
+
+// ---- the store -----------------------------------------------------------------------------
+const workStore = {
+  ready: false,
+  items: [],
+  roots: [],
+  version: 0,
+  listeners: new Set(),
+  timer: null,
+  loading: false,
+  error: null,
+  subscribe(f) {
+    this.listeners.add(f);
+    return () => this.listeners.delete(f);
+  },
+  emit() {
+    this.version++;
+    this.listeners.forEach(f => {
+      try {
+        f();
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  },
+  async load() {
+    if (this.loading) return;
+    this.loading = true;
+    try {
+      const clusters = await api.clusters();
+      // the nodes, devices, and pools go through the registry so an operation's target resolves
+      await Promise.all(clusters.flatMap(c => [api.nodes(c.id), api.clusterDevices(c.id), api.pools(c.id)]));
+      const w = await world();
+      const lists = await Promise.all(CONTEXTS.flatMap(c => WORK_KINDS.map(k => k8s.list(k, {
+        allNamespaces: true,
+        ctx: c.name
+      }).then(r => r.map(o => Object.assign(o, {
+        __ctx: c.name
+      }))).catch(() => []))));
+      const ops = lists.flat().map(normOpsItem);
+      const adds = w.nodes.filter(n => (n.status || {}).phase === "Provisioning" || (n.status || {}).phase === "Pending").map(normNodeAddItem);
+      const tasks = clusters.flatMap(c => (c.tasks || []).map(t => normTaskItem(t, c)));
+      const items = ops.concat(adds, tasks);
+      this.items = items;
+      this.roots = buildTree(items);
+      this.ready = true;
+      this.error = null;
+    } catch (e) {
+      this.error = e;
+    }
+    this.loading = false;
+    this.emit();
+  },
+  start() {
+    if (this.timer) return;
+    const tick = () => this.load().finally(() => {
+      this.timer = setTimeout(tick, document.hidden ? 15000 : 5000);
+    });
+    tick();
+  },
+  all() {
+    return this.items;
+  },
+  countsFor(clusterId) {
+    const mine = this.items.filter(i => i.clusterId === clusterId);
+    return {
+      running: mine.filter(i => i.phase === "Running" || i.phase === "Pending").length,
+      failed: mine.filter(i => i.phase === "Failed").length
+    };
+  },
+  forObject(ref) {
+    const r = ref || {};
+    return this.items.filter(i => r.kind === "cluster" && i.clusterId === r.id && (!i.target.vm || i.target.vm.kind === "cluster") || i.target.vm && i.target.vm.id === r.id || i.src === "nodeadd" && i.name === (r.k8s || {}).name);
+  },
+  byKey(key) {
+    return this.items.find(i => i.key === key) || null;
+  }
+};
+window.work = workStore;
+if ((window.SB_CONFIG || {}).mode !== "dr") setTimeout(() => workStore.start(), 2500);
+function useWork() {
+  const [, f] = React.useState(0);
+  React.useEffect(() => workStore.subscribe(() => f(n => n + 1)), []);
+  return workStore;
+}
+
+// ---- cancellation -------------------------------------------------------------------------------
+function cancelDialog(item) {
+  if (item.cancel.how === "cancel-task") {
+    const c = item.target.vm;
+    return {
+      title: `StorageClusterOps CancelTask for ${item.action} ${item.name}?`,
+      danger: true,
+      desc: "Creates a StorageClusterOps with action CancelTask and spec.cancelTask.taskID set to this task. The operator asks the control plane to cancel it; Awaiting completes when the task leaves status.tasks.",
+      confirm: "Create StorageClusterOps",
+      run: () => submitOps("StorageCluster", c.name, "CancelTask", {
+        taskID: item.name
+      }, {
+        namespace: c.namespace,
+        ctx: c.ctx
+      }).then(() => workStore.load()),
+      done: "CancelTask created"
+    };
+  }
+  return {
+    title: `Abort ${item.crKind} ${item.name}?`,
+    danger: true,
+    desc: `Sets spec.abort. The operator honors it at step ${item.step || "Pending"} and the operation lands in Aborted; past the abortable steps it emits AbortRefused and runs on.`,
+    confirm: "Set spec.abort",
+    run: () => abortOps(item.crKind, item.name, {
+      namespace: item.ns,
+      ctx: item.ctx
+    }).then(() => workStore.load()),
+    done: "spec.abort set"
+  };
+}
+
+// ---- views -----------------------------------------------------------------------------------------
+const Phase = ({
+  p
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "tstat",
+  style: {
+    color: PHASE_COLOR[p] || "var(--dim)"
+  }
+}, /*#__PURE__*/React.createElement(Dot, {
+  c: PHASE_COLOR[p] || "var(--dim)"
+}), p);
+const Elapsed = ({
+  item
+}) => {
+  const [, tick] = React.useState(0);
+  React.useEffect(() => {
+    if (!item.startedAt || item.completedAt || TERMINAL.includes(item.phase)) return;
+    const t = setInterval(() => tick(n => n + 1), 1000);
+    return () => clearInterval(t);
+  }, [item.key, item.phase]);
+  if (!item.startedAt) return /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "unset");
+  const end = item.completedAt ? Date.parse(item.completedAt) : TERMINAL.includes(item.phase) ? null : Date.now();
+  if (!end) return /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "unset");
+  const secs = (end - Date.parse(item.startedAt)) / 1000;
+  if (!(secs >= 0)) return /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      color: "var(--dim2)"
+    },
+    title: "completedAt precedes startedAt"
+  }, "unset");
+  return /*#__PURE__*/React.createElement("span", {
+    className: "mono"
+  }, fmtDur(secs));
+};
+const StepCell = ({
+  it
+}) => it.src === "task" ? /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: {
+    fontSize: 11
+  },
+  title: "status.tasks[].retry"
+}, "retry ", it.retry) : it.step ? /*#__PURE__*/React.createElement("span", {
+  className: "mono",
+  style: {
+    fontSize: 11
+  },
+  title: it.stepDeadline ? `deadline ${fmtDate(it.stepDeadline)}` : "status.step.state"
+}, it.stepIndex >= 0 && it.steps.length ? `${Math.min(it.stepIndex + 1, it.steps.length)}/${it.steps.length} ` : "", it.step, it.perNode && it.rollingRestart && it.step !== "Completed" ? ` (node ${(it.rollingRestart.nodeIndex || 0) + 1}/${(it.rollingRestart.nodes || []).length})` : "") : /*#__PURE__*/React.createElement("span", {
+  style: {
+    color: "var(--dim2)"
+  }
+}, "unset");
+function WorkRow({
+  it,
+  nav,
+  expanded,
+  onToggle,
+  onCancel
+}) {
+  const hasKids = (it.shownChildren !== undefined ? it.shownChildren : it.children.length) > 0;
+  const t = it.target || {};
+  const openTarget = () => {
+    const vm = t.vm;
+    if (vm && vm.kind === "node") return nav.openNode(vm.clusterId, vm.id);
+    if (vm && vm.kind === "device") return nav.openDevice(vm.clusterId, vm.nodeId, vm.id);
+    if (vm && vm.kind === "pool") return nav.openPool(vm.clusterId, vm.id);
+    if (vm && vm.kind === "cluster") return nav.openCluster(vm.id);
+    if (t.kind && t.name) return nav.openCR({
+      ctx: it.ctx,
+      ns: t.kind === "PersistentVolume" ? undefined : it.ns,
+      kind: t.kind,
+      name: t.name
+    });
+  };
+  const label = it.src === "task" ? it.action : it.src === "nodeadd" ? "StorageNode provisioning" : `${it.crKind} ${it.action || ""}`;
+  return /*#__PURE__*/React.createElement("tr", {
+    className: "wrow" + (it.phase === "Failed" ? " failed" : "") + ` tdepth-${Math.min(3, it.depth || 0)}`
+  }, /*#__PURE__*/React.createElement("td", {
+    style: {
+      width: 24
+    }
+  }, hasKids && /*#__PURE__*/React.createElement("button", {
+    className: "xpand",
+    onClick: onToggle
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: expanded ? "chevd" : "chev",
+    s: 11
+  }))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      lineHeight: 1.25,
+      paddingLeft: (it.depth || 0) * 16
+    }
+  }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, label), t.name && /*#__PURE__*/React.createElement(React.Fragment, null, " on ", /*#__PURE__*/React.createElement("button", {
+    className: "tlink",
+    onClick: openTarget
+  }, t.name))), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10,
+      color: "var(--dim2)"
+    }
+  }, it.src === "task" ? `status.tasks[] id ${it.name}` : `${it.ns ? it.ns + "/" : ""}${it.name}`, window.MULTI_CTX ? ` · ${it.ctx}` : ""))), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, it.src === "task" ? "task" : it.crKind)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Phase, {
+    p: it.phase
+  })), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(StepCell, {
+    it: it
+  })), /*#__PURE__*/React.createElement("td", {
+    style: {
+      minWidth: 70
+    }
+  }, it.progress && it.progress.total ? /*#__PURE__*/React.createElement("div", {
+    className: "prog",
+    title: `${it.progress.field}: ${it.progress.done} of ${it.progress.total} ${it.progress.unit}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bar"
+  }, /*#__PURE__*/React.createElement("i", {
+    style: {
+      width: Math.round(it.progress.done / it.progress.total * 100) + "%",
+      "--bc": "var(--info)"
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10
+    }
+  }, it.progress.done, "/", it.progress.total)) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "unset")), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11
+    }
+  }, it.startedAt ? fmtAgo(it.startedAt) : "unset"), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Elapsed, {
+    item: it
+  })), /*#__PURE__*/React.createElement("td", {
+    style: {
+      maxWidth: 260,
+      overflow: "hidden",
+      textOverflow: "ellipsis",
+      whiteSpace: "nowrap"
+    },
+    title: it.message
+  }, it.message || ""), /*#__PURE__*/React.createElement("td", {
+    style: {
+      textAlign: "right",
+      whiteSpace: "nowrap"
+    }
+  }, it.cancel.can ? /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => onCancel(it)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 10
+  }), it.cancel.how === "cancel-task" ? "CancelTask" : "Abort") : /*#__PURE__*/React.createElement("span", {
+    className: "chip",
+    style: {
+      opacity: .55,
+      cursor: "help"
+    },
+    title: it.cancel.reason
+  }, it.aborting ? "aborting" : "no abort"), nav.openWork && /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.openWork(it.clusterId, it.key)
+  }, "Open")));
+}
+function WorkTree({
+  roots,
+  nav,
+  filterFn,
+  onCancel,
+  withTasks
+}) {
+  const [open, setOpen] = useLocal("sb.work.open", {});
+  const kids = it => withTasks ? it.children : it.children.filter(c => c.src !== "task");
+  const isOpen = it => open[it.key] !== false && (open[it.key] || it.phase === "Running" || it.phase === "Failed" || it.depth === 0);
+  const rows = [];
+  const walk = (it, d) => {
+    it.depth = d;
+    it.shownChildren = kids(it).length;
+    rows.push(it);
+    if (isOpen(it)) kids(it).forEach(c => walk(c, d + 1));
+  };
+  roots.filter(filterFn).forEach(r => walk(r, 0));
+  if (!rows.length) return /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "Nothing matches.");
+  return /*#__PURE__*/React.createElement("table", {
+    className: "dt tasks"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null), /*#__PURE__*/React.createElement("th", null, "Operation"), /*#__PURE__*/React.createElement("th", null, "Kind"), /*#__PURE__*/React.createElement("th", null, "status.phase"), /*#__PURE__*/React.createElement("th", null, "status.step"), /*#__PURE__*/React.createElement("th", null, "Progress"), /*#__PURE__*/React.createElement("th", null, "startedAt"), /*#__PURE__*/React.createElement("th", null, "Elapsed"), /*#__PURE__*/React.createElement("th", null, "status.message"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, rows.map(it => /*#__PURE__*/React.createElement(WorkRow, {
+    key: it.key,
+    it: it,
+    nav: nav,
+    expanded: isOpen(it),
+    onToggle: () => setOpen(Object.assign({}, open, {
+      [it.key]: !isOpen(it)
+    })),
+    onCancel: onCancel
+  }))));
+}
+// the control plane's task window: the four fields status.tasks[] carries, the cluster, and the operation that recorded the id
+function TaskTable({
+  tasks,
+  nav,
+  onCancel
+}) {
+  if (!tasks.length) return /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "Nothing matches.");
+  return /*#__PURE__*/React.createElement("table", {
+    className: "dt tasks"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "status.tasks[].id"), /*#__PURE__*/React.createElement("th", null, "type"), /*#__PURE__*/React.createElement("th", null, "StorageCluster"), /*#__PURE__*/React.createElement("th", null, "status"), /*#__PURE__*/React.createElement("th", null, "retry"), /*#__PURE__*/React.createElement("th", null, "Recorded by"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, tasks.map(t => {
+    const parent = t.parentKey ? workStore.byKey(t.parentKey) : null;
+    return /*#__PURE__*/React.createElement("tr", {
+      key: t.key,
+      className: "wrow" + (t.phase === "Failed" ? " failed" : "")
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, t.name, window.MULTI_CTX ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, " \xB7 ", t.ctx) : null), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("b", null, t.action || /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset"))), /*#__PURE__*/React.createElement("td", null, t.clusterId && REG[t.clusterId] ? /*#__PURE__*/React.createElement("button", {
+      className: "tlink",
+      onClick: () => nav.openCluster(t.clusterId)
+    }, REG[t.clusterId].name) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(Phase, {
+      p: t.phase
+    }), /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 10,
+        color: "var(--dim2)",
+        marginLeft: 6
+      },
+      title: "the control plane's own status string"
+    }, t.raw.status)), /*#__PURE__*/React.createElement("td", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, t.retry), /*#__PURE__*/React.createElement("td", null, parent ? /*#__PURE__*/React.createElement("button", {
+      className: "tlink",
+      onClick: () => nav.openWork(parent.clusterId, parent.key),
+      title: parent.src === "nodeadd" ? "status.nodeAddTaskID" : "status.relocate.volumes[].taskID"
+    }, parent.src === "nodeadd" ? `StorageNode ${parent.name}` : `${parent.crKind} ${parent.name}`) : /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "no operation names it")), /*#__PURE__*/React.createElement("td", {
+      style: {
+        textAlign: "right",
+        whiteSpace: "nowrap"
+      }
+    }, t.cancel.can ? /*#__PURE__*/React.createElement("button", {
+      className: "chip",
+      onClick: () => onCancel(t)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "x",
+      s: 10
+    }), "CancelTask") : /*#__PURE__*/React.createElement("span", {
+      className: "chip",
+      style: {
+        opacity: .55,
+        cursor: "help"
+      },
+      title: t.cancel.reason
+    }, "no cancel"), nav.openWork && /*#__PURE__*/React.createElement("button", {
+      className: "chip",
+      onClick: () => nav.openWork(t.clusterId, t.key)
+    }, "Open")));
+  })));
+}
+function MonitorView({
+  seg,
+  nav,
+  scope
+}) {
+  const w = useWork();
+  const p = seg && seg.p || {};
+  const clusterId = scope && scope.id || p.cluster || null;
+  const [state, setState] = React.useState(p.state || "running");
+  const [kind, setKind] = React.useState(p.kind || "");
+  const [type, setType] = React.useState(p.type || "");
+  const [q, setQ] = React.useState(p.q || "");
+  const all = w.items.filter(i => !clusterId || i.clusterId === clusterId);
+  const ops = all.filter(i => i.src !== "task"),
+    tasks = all.filter(i => i.src === "task");
+  const kinds = Array.from(new Set(ops.map(i => i.crKind || i.src))).sort();
+  const types = Array.from(new Set(tasks.map(t => t.action).filter(Boolean))).sort();
+  const roots = w.roots.filter(r => r.src !== "task" && (!clusterId || r.clusterId === clusterId));
+  // the search and the state apply to both lists; the kind and the type each to one
+  const matchesQ = i => !q || `${i.crKind || ""} ${i.action || ""} ${i.name} ${(i.target || {}).name || ""} ${i.message || ""}`.toLowerCase().includes(q.toLowerCase());
+  const stateOk = i => state === "all" || (state === "running" ? ["Running", "Pending", "Suspended"].includes(i.phase) : state === "failed" ? i.phase === "Failed" : true);
+  const matchesOp = i => (!kind || (i.crKind || i.src) === kind) && matchesQ(i) && stateOk(i);
+  const matchesTree = i => matchesOp(i) || i.children.some(c => c.src !== "task" && matchesTree(c));
+  const matchesTask = t => (!type || t.action === type) && matchesQ(t) && stateOk(t);
+  const shownTasks = tasks.filter(matchesTask);
+  const day = Date.now() - 86400000;
+  const counts = {
+    running: all.filter(i => i.phase === "Running" || i.phase === "Pending").length,
+    pending: all.filter(i => i.phase === "Pending").length,
+    failed: all.filter(i => i.phase === "Failed" && Date.parse(i.completedAt || i.startedAt || 0) > day).length,
+    done: all.filter(i => i.phase === "Succeeded" && Date.parse(i.completedAt || i.startedAt || 0) > day).length,
+    cancelable: all.filter(i => i.cancel.can).length,
+    tasks: tasks.length
+  };
+  const cancel = it => window.__ui.dialog(cancelDialog(it), {
+    kind: "operation",
+    id: it.key
+  });
+  const body = /*#__PURE__*/React.createElement(React.Fragment, null, w.error && /*#__PURE__*/React.createElement(ErrorState, {
+    error: w.error,
+    onRetry: () => w.load()
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Running",
+    v: counts.running,
+    c: counts.running ? "var(--info)" : undefined,
+    s: `${counts.pending} Pending`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Failed, 24 h",
+    v: counts.failed,
+    c: counts.failed ? "var(--bad)" : "var(--ok)"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Succeeded, 24 h",
+    v: counts.done
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.tasks",
+    v: counts.tasks,
+    s: "the control plane's window"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Cancelable",
+    v: counts.cancelable,
+    s: "at an abortable step, or a task"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ptools"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "search",
+    style: {
+      minWidth: 220
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    value: q,
+    placeholder: "Search kind, action, type, target, id, message\u2026",
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "seg"
+  }, [["running", "running"], ["failed", "failed"], ["all", "all"]].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    className: state === k ? "on" : "",
+    onClick: () => setState(k)
+  }, l))), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "live"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => w.load(),
+    title: "Refresh"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 12
+  }))), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "0 12px 10px"
+    }
+  }, "The search and the state filter both lists; each list has its own kind or type.")), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Operator operations"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: kind,
+    onChange: e => setKind(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "all kinds"), kinds.map(k => /*#__PURE__*/React.createElement("option", {
+    key: k,
+    value: k
+  }, k))), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, roots.filter(matchesTree).length)), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, !w.ready ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading operations\u2026") : /*#__PURE__*/React.createElement(WorkTree, {
+    roots: roots,
+    nav: nav,
+    filterFn: matchesTree,
+    onCancel: cancel
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "10px 12px 12px"
+    }
+  }, "Every Ops object and every StorageNode in its provisioning machine. A row nests under the object that names it (spec.creatorRef, the drain-node label, a controller owner) and nowhere else. Abort appears while the operation stands at a step its graph honors; the tooltip says why not elsewhere.")), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Control plane tasks"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: type,
+    onChange: e => setType(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "all types"), types.map(t => /*#__PURE__*/React.createElement("option", {
+    key: t,
+    value: t
+  }, t))), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, shownTasks.length)), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, !w.ready ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading tasks\u2026") : /*#__PURE__*/React.createElement(TaskTable, {
+    tasks: shownTasks,
+    nav: nav,
+    onCancel: cancel
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "10px 12px 12px"
+    }
+  }, "Each cluster's status.tasks window, as the operator copies it from the control plane: id, type, status, and retry are the backend's own. A task names the operation that recorded its id (status.nodeAddTaskID, status.relocate.volumes[].taskID) when one did. A finished task leaves the window. CancelTask raises a StorageClusterOps for it.")));
+  if (scope) return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4
+    }
+  }, body);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, "Tasks and operations", clusterId && REG[clusterId] ? ` · ${REG[clusterId].name}` : ""), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, "Long-running work as the operator records it: Ops objects on their step graphs, node adds, and the control plane's task window.")), clusterId && /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.monitor()
+  }, "All clusters")), body);
+}
+function WorkItemDetail({
+  seg,
+  nav
+}) {
+  const w = useWork();
+  const it = w.byKey(seg.id);
+  if (!w.ready) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading operations\u2026"));
+  if (!it) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "clock",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "Not listed any more"), /*#__PURE__*/React.createElement("span", null, "A finished task leaves status.tasks; an operation stays until it is deleted.")));
+  const cancel = x => window.__ui.dialog(cancelDialog(x), {
+    kind: "operation",
+    id: x.key
+  });
+  const label = it.src === "task" ? `${it.action} task` : it.src === "nodeadd" ? `StorageNode ${it.name}` : `${it.crKind} ${it.action || ""}`;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, label, it.target.name && it.src !== "nodeadd" ? ` on ${it.target.name}` : ""), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 14,
+      marginTop: 5,
+      alignItems: "center",
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement(Phase, {
+    p: it.phase
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: "var(--dim)"
+    }
+  }, it.src === "task" ? `status.tasks[] id ${it.name}` : `${it.ns ? it.ns + "/" : ""}${it.name}`))), it.cancel.can && /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: () => cancel(it)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 11
+  }), it.cancel.how === "cancel-task" ? "CancelTask" : "Abort")), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "status.startedAt",
+    v: it.startedAt ? fmtAgo(it.startedAt) : "unset",
+    s: it.startedAt ? fmtDate(it.startedAt) : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Elapsed",
+    v: /*#__PURE__*/React.createElement(Elapsed, {
+      item: it
+    }),
+    s: it.completedAt ? `completedAt ${fmtDate(it.completedAt)}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.step.state",
+    v: it.step || "unset",
+    s: it.stepDeadline ? `deadline ${fmtDate(it.stepDeadline)}` : it.src === "task" ? `retry ${it.retry}` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Progress",
+    v: it.progress ? `${it.progress.done}/${it.progress.total}` : "unset",
+    s: it.progress ? `${it.progress.unit} (${it.progress.field})` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Abort",
+    v: it.cancel.can ? "possible" : "refused",
+    s: it.cancel.reason || "at this step the graph honors spec.abort"
+  })), it.message && /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: it.phase === "Failed" ? "alert" : "list",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, it.message)), it.steps.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Steps of ", it.crKind, " ", it.action || "provisioning"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("ul", {
+    className: "opsteps"
+  }, it.steps.map((s, i) => /*#__PURE__*/React.createElement("li", {
+    key: s,
+    className: it.phase === "Succeeded" || i < it.stepIndex ? "done" : i === it.stepIndex && (it.phase === "Running" || it.src === "nodeadd") ? "on" : i === it.stepIndex && it.phase === "Failed" ? "failed" : i === it.stepIndex && it.phase === "Aborted" ? "aborted" : ""
+  }, /*#__PURE__*/React.createElement("i", null), s, (graphOf(it.crKind, it.action) || {
+    abortable: []
+  }).abortable.includes(s) ? /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    style: {
+      marginLeft: 6
+    }
+  }, "abortable") : null))))), it.children.length > 0 && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Objects that name this one"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(WorkTree, {
+    roots: it.children,
+    nav: nav,
+    filterFn: () => true,
+    onCancel: cancel,
+    withTasks: true
+  }))), it.src !== "task" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "What the operator is doing"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(ObjectEvents, {
+    it: it
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement(OperatorLog, {
+    it: it
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Links"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, it.clusterId && REG[it.clusterId] && /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    onClick: () => nav.openCluster(it.clusterId)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "cluster",
+    s: 10
+  }), REG[it.clusterId].name), it.crKind && /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    onClick: () => nav.openCR({
+      ctx: it.ctx,
+      ns: it.ns,
+      kind: it.crKind,
+      name: it.name
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "list",
+    s: 10
+  }), it.crKind, " ", it.name), it.creatorRef && /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    onClick: () => nav.openCR({
+      ctx: it.ctx,
+      ns: it.creatorRef.namespace,
+      kind: it.creatorRef.kind,
+      name: it.creatorRef.name
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "chev",
+    s: 10
+  }), "spec.creatorRef ", it.creatorRef.kind, "/", it.creatorRef.name)), it.raw && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, it.src === "task" ? "status.tasks[] entry" : "spec and status"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("pre", {
+    className: "code",
+    style: {
+      maxHeight: 360,
+      overflow: "auto"
+    }
+  }, JSON.stringify(it.src === "task" ? it.raw : {
+    spec: it.raw.spec,
+    status: it.raw.status
+  }, null, 2)))));
+}
+// ---- what an operation is doing ------------------------------------------------------------
+// Two records exist of an operation's progress beyond its status: the Events
+// the operator emits on the object (Recorder.Eventf in every controller), and
+// the operator pod's own log, whose reconcile lines carry the object's name
+// because controller-runtime adds the request's key to each of them. Both are
+// read from the Kubernetes API of the operation's context; nothing is inferred.
+const OPERATOR_POD_SELECTOR = "app=simplyblock-operator";
+const OPERATOR_LOG_TAIL = 2000;
+async function operatorPods(ctx) {
+  const pods = await k8s.list("Pod", {
+    allNamespaces: true,
+    ctx,
+    labelSelector: OPERATOR_POD_SELECTOR
+  });
+  return pods.map(p => ({
+    name: p.metadata.name,
+    ns: p.metadata.namespace,
+    containers: (p.spec.containers || []).map(c => c.name),
+    phase: (p.status || {}).phase
+  }));
+}
+// the raw text of pods/log, with timestamps, as lines; k8s.logs parses JSON and a log is not JSON
+async function operatorLogLines(ctx, pod, container, tail) {
+  const path = pathFor("Pod", {
+    name: pod.name,
+    namespace: pod.ns,
+    subresource: "log"
+  }) + `?tailLines=${tail || OPERATOR_LOG_TAIL}&timestamps=true` + (container ? `&container=${encodeURIComponent(container)}` : "");
+  let res;
+  try {
+    res = await fetch(baseFor(ctx) + path, {
+      headers: {
+        Accept: "*/*",
+        Authorization: `Bearer ${window.SB_CONFIG.token}`
+      }
+    });
+  } catch (e) {
+    throw new ApiError(0, "Cannot reach the Kubernetes API", path, "Unreachable");
+  }
+  const text = await res.text();
+  if (!res.ok) {
+    let b = null;
+    try {
+      b = JSON.parse(text);
+    } catch (e) {}
+    throw new ApiError(res.status, b && b.message || "Request failed", path, b && b.reason || null);
+  }
+  return text.split("\n").filter(Boolean).map(line => {
+    const sp = line.indexOf(" ");
+    const ts = sp > 0 ? line.slice(0, sp) : "",
+      msg = sp > 0 ? line.slice(sp + 1) : line;
+    return {
+      ts,
+      level: levelOf(msg),
+      msg,
+      pod: pod.name,
+      container: container || ""
+    };
+  });
+}
+// the Events on one object, newest first
+function ObjectEvents({
+  it
+}) {
+  const r = useResource(`events|${it.ctx}|${it.ns}|${it.crKind}|${it.name}`, () => k8s.list("Event", {
+    namespace: it.ns,
+    ctx: it.ctx,
+    fieldSelector: `involvedObject.name=${it.name}`
+  }).then(evs => evs.filter(e => !e.involvedObject.kind || e.involvedObject.kind === it.crKind).sort((a, b) => Date.parse(b.lastTimestamp || b.eventTime || b.metadata.creationTimestamp || 0) - Date.parse(a.lastTimestamp || a.eventTime || a.metadata.creationTimestamp || 0))), 5000);
+  const evs = r.data || [];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, "Events on ", it.crKind, " ", it.name, /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, evs.length), /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "live")), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, r.error ? /*#__PURE__*/React.createElement(ErrorState, {
+    error: r.error,
+    onRetry: r.reload
+  }) : !r.data ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading events\u2026") : !evs.length ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "The operator has emitted no Event on this object, or the Events have aged out (the API server keeps them for an hour by default).") : /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "lastTimestamp"), /*#__PURE__*/React.createElement("th", null, "type"), /*#__PURE__*/React.createElement("th", null, "reason"), /*#__PURE__*/React.createElement("th", null, "message"), /*#__PURE__*/React.createElement("th", null, "count"))), /*#__PURE__*/React.createElement("tbody", null, evs.map(e => /*#__PURE__*/React.createElement("tr", {
+    key: e.metadata.uid || e.metadata.name,
+    className: e.type === "Warning" ? "failed" : ""
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      whiteSpace: "nowrap"
+    },
+    title: e.lastTimestamp || e.eventTime
+  }, fmtAgo(e.lastTimestamp || e.eventTime || e.metadata.creationTimestamp)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      color: e.type === "Warning" ? "var(--warn)" : undefined
+    }
+  }, e.type)), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11
+    }
+  }, e.reason), /*#__PURE__*/React.createElement("td", {
+    style: {
+      whiteSpace: "pre-wrap"
+    }
+  }, e.message), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11
+    }
+  }, e.count || 1)))))));
+}
+// the operator's log, following, cut to the lines that name the object
+function OperatorLog({
+  it
+}) {
+  const [pods, setPods] = React.useState(null);
+  const [pod, setPod] = React.useState("");
+  const [only, setOnly] = React.useState(true);
+  const [follow, setFollow] = React.useState(!TERMINAL.includes(it.phase));
+  const [q, setQ] = React.useState("");
+  const [err, setErr] = React.useState(null);
+  React.useEffect(() => {
+    operatorPods(it.ctx).then(ps => {
+      setPods(ps);
+      if (ps.length && !pod) setPod(ps[0].name);
+    }).catch(setErr);
+  }, [it.ctx]);
+  const chosen = (pods || []).find(p => p.name === pod) || null;
+  const container = chosen ? chosen.containers.includes("manager") ? "manager" : chosen.containers[0] : "";
+  const r = useResource(chosen ? `oplog|${it.ctx}|${chosen.ns}|${chosen.name}|${container}` : "oplog|none", () => chosen ? operatorLogLines(it.ctx, chosen, container) : Promise.resolve([]), follow ? 3000 : 0);
+  const all = r.data || [];
+  const needle = it.name.toLowerCase(),
+    qq = q.toLowerCase();
+  const lines = all.filter(l => (!only || l.msg.toLowerCase().includes(needle)) && (!qq || l.msg.toLowerCase().includes(qq)));
+  const endRef = React.useRef(null);
+  React.useEffect(() => {
+    if (follow && endRef.current) endRef.current.scrollIntoView({
+      block: "end"
+    });
+  }, [lines.length, follow]);
+  const tools = /*#__PURE__*/React.createElement("div", {
+    className: "ptools"
+  }, pods && pods.length > 1 && /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: pod,
+    onChange: e => setPod(e.target.value)
+  }, pods.map(p => /*#__PURE__*/React.createElement("option", {
+    key: p.name,
+    value: p.name
+  }, p.ns, "/", p.name))), chosen && /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 11,
+      color: "var(--dim)"
+    }
+  }, chosen.ns, "/", chosen.name, " \xB7 ", container), /*#__PURE__*/React.createElement("div", {
+    className: "search",
+    style: {
+      minWidth: 180
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    value: q,
+    placeholder: "Search the lines\u2026",
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("label", {
+    className: "chip",
+    title: `only the lines that carry ${it.name}; controller-runtime puts the reconciled object's key on each line`
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: only,
+    onChange: e => setOnly(e.target.checked)
+  }), " only ", it.name), /*#__PURE__*/React.createElement("label", {
+    className: "chip",
+    title: "re-read the tail every 3 s and keep the end in view"
+  }, /*#__PURE__*/React.createElement("input", {
+    type: "checkbox",
+    checked: follow,
+    onChange: e => setFollow(e.target.checked)
+  }), " follow"), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, lines.length, only || qq ? ` of ${all.length}` : ""), follow && /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "live"), /*#__PURE__*/React.createElement(CopyBtn, {
+    get: () => lines.map(l => `${l.ts} ${l.msg}`).join("\n")
+  }));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "Operator log"), err ? /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(ErrorState, {
+    error: err
+  })) : pods && !pods.length ? /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "No pod with ", OPERATOR_POD_SELECTOR, " in context ", it.ctx, ".")) : /*#__PURE__*/React.createElement(LogStream, {
+    lines: lines,
+    loading: !r.data && !r.error,
+    error: r.error,
+    onRetry: r.reload,
+    tools: tools,
+    height: 420,
+    empty: only ? `None of the last ${all.length} lines of the operator log names ${it.name}.` : "No lines."
+  }), /*#__PURE__*/React.createElement("div", {
+    ref: endRef
+  }), /*#__PURE__*/React.createElement("p", {
+    className: "mdesc",
+    style: {
+      margin: "8px 12px 12px"
+    }
+  }, "The last ", OPERATOR_LOG_TAIL, " lines of the operator pod's log through the Kubernetes API (pods/log), re-read while following. Each reconcile line carries the object it is about, which is what the filter matches on."));
+}
+
+// the top-bar indicator and the chip on a detail head
+function OpsIndicator({
+  nav
+}) {
+  const w = useWork();
+  const running = w.items.filter(i => i.phase === "Running" || i.phase === "Pending").length;
+  const failed = w.items.filter(i => i.phase === "Failed" && Date.parse(i.completedAt || i.startedAt || 0) > Date.now() - 86400000).length;
+  return /*#__PURE__*/React.createElement("button", {
+    className: "tbtn bellwrap",
+    title: `${running} running · ${failed} failed in 24 h`,
+    onClick: () => nav.monitor({
+      state: running ? "running" : "all"
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "clock",
+    s: 14
+  }), running > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bellbadge",
+    style: {
+      background: "var(--info)"
+    }
+  }, running > 99 ? "99+" : running), !running && failed > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bellbadge"
+  }, failed > 99 ? "99+" : failed));
+}
+function OpsLink({
+  obj,
+  nav
+}) {
+  const w = useWork();
+  const mine = w.forObject(obj);
+  const running = mine.filter(i => i.phase === "Running" || i.phase === "Pending").length,
+    failed = mine.filter(i => i.phase === "Failed").length;
+  if (!running && !failed) return null;
+  return /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    onClick: () => nav.monitor({
+      cluster: obj.kind === "cluster" ? obj.id : obj.clusterId,
+      q: obj.name,
+      state: running ? "running" : "failed"
+    })
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "clock",
+    s: 10
+  }), running ? `${running} running` : "", running && failed ? " · " : "", failed ? `${failed} failed` : "");
+}
+Object.assign(window, {
+  workStore,
+  useWork,
+  MonitorView,
+  WorkItemDetail,
+  WorkTree,
+  TaskTable,
+  ObjectEvents,
+  OperatorLog,
+  operatorPods,
+  operatorLogLines,
+  OpsIndicator,
+  OpsLink,
+  normOpsItem,
+  normTaskItem,
+  normNodeAddItem,
+  buildTree,
+  cancelDialog,
+  WORK_KINDS
+});
+})();
+// ---- alerts.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// ALERTS: conditions derived in the console from what the operator writes
+//
+// Every rule reads fields of the custom resources (storage.simplyblock.io/
+// v1alpha2) and names the field it read: a StorageCluster whose status.phase
+// is Degraded, a StorageNode whose status.health is false, a StorageDevice
+// whose status.health.smart.verdict is Failing, an Ops object whose
+// status.phase is Failed, a ControlPlane component with fewer ready replicas
+// than desired. Capacity alerts compare the derived cluster capacity (the sum
+// of its nodes') against the thresholds in the cluster's own spec. An alert
+// opens when its condition holds, is kept with its first-seen time while it
+// holds, and resolves when the condition clears or the object is gone; the
+// resolved ones stay in a history for a day. Silences live in this browser.
+// Nothing here reads a source the operator does not have.
+// ---------------------------------------------------------------------------
+const SEV_RANK = {
+  critical: 2,
+  warning: 1,
+  info: 0
+};
+const SEV_COLOR = {
+  critical: "var(--bad)",
+  warning: "var(--warn)",
+  info: "var(--info)"
+};
+
+// each rule returns alert instances for one world snapshot; `field` says what was read
+const ALERT_RULES = {
+  "cluster.phase": {
+    scope: "cluster",
+    evaluate: w => w.clusters.filter(c => ["Degraded", "Unavailable", "Suspended"].includes(c.phase)).map(c => inst("cluster.phase", c.phase === "Degraded" ? "warning" : "critical", c, c, `StorageCluster ${c.name} is ${c.phase}`, c.message || `status.phase is ${c.phase}; status.status is ${c.status || "unset"}`, "status.phase"))
+  },
+  "cluster.capacity": {
+    scope: "cluster",
+    evaluate: w => w.clusters.flatMap(c => {
+      const t = c.thresholds || {},
+        warn = (t.warn || {}).capacity,
+        crit = (t.crit || {}).capacity;
+      if (!c.capacity.total || !warn && !crit) return [];
+      const pct = c.capacity.used / c.capacity.total * 100;
+      if (crit && pct >= crit) return [inst("cluster.capacity", "critical", c, c, `StorageCluster ${c.name} is ${Math.round(pct)}% full`, `used capacity is at or above spec.criticalThreshold.capacity (${crit}%); the figure is derived: ${c.capacity.derived}`, "spec.criticalThreshold.capacity")];
+      if (warn && pct >= warn) return [inst("cluster.capacity", "warning", c, c, `StorageCluster ${c.name} is ${Math.round(pct)}% full`, `used capacity is at or above spec.warningThreshold.capacity (${warn}%); the figure is derived: ${c.capacity.derived}`, "spec.warningThreshold.capacity")];
+      return [];
+    })
+  },
+  "cluster.stretched": {
+    scope: "cluster",
+    evaluate: w => w.clusters.flatMap(c => {
+      const s = c.stretched || {},
+        out = [];
+      if (s.siteLink === "Unreachable") out.push(inst("cluster.stretched", "critical", c, c, `StorageCluster ${c.name}: the other site is unreachable`, "status.stretched.siteLink is Unreachable", "status.stretched.siteLink"));
+      if (s.lostSite) out.push(inst("cluster.stretched", "critical", c, c, `StorageCluster ${c.name}: site ${s.lostSite} is out of service`, `status.stretched.lostSite is ${s.lostSite}; siteRecord ${s.siteRecord || "unset"}`, "status.stretched.lostSite"));
+      const a = c.arbitration || {};
+      if (a.state && a.state !== "steady") out.push(inst("cluster.stretched", a.state === "partitioned" ? "critical" : "warning", c, c, `StorageCluster ${c.name}: arbitration is ${a.state}`, a.message || `status.arbitration.state is ${a.state}`, "status.arbitration.state"));
+      return out;
+    })
+  },
+  "node.phase": {
+    scope: "node",
+    evaluate: w => w.nodes.filter(n => ["Offline", "Degraded", "Failed"].includes(n.phase)).map(n => inst("node.phase", n.phase === "Degraded" ? "warning" : "critical", n, REG[n.clusterId], `StorageNode ${n.name} is ${n.phase}`, n.message || `status.phase is ${n.phase}; status.status is ${n.status || "unset"}`, "status.phase"))
+  },
+  "node.health": {
+    scope: "node",
+    evaluate: w => w.nodes.filter(n => n.health === false && n.phase === "Online").map(n => inst("node.health", "warning", n, REG[n.clusterId], `StorageNode ${n.name} reports health false while Online`, "status.health is false", "status.health"))
+  },
+  "node.network": {
+    scope: "node",
+    evaluate: w => w.nodes.flatMap(n => (n.network || []).filter(x => x.phase === "Mismatched" || x.phase === "Unavailable" || x.hostReachable === false).map(x => inst("node.network", "warning", n, REG[n.clusterId], `StorageNode ${n.name}: network ${x.network} is ${x.phase}${x.hostReachable === false ? ", not host-reachable" : ""}`, `status.network[].phase is ${x.phase}; hostReachable ${x.hostReachable === undefined ? "unset" : x.hostReachable}`, "status.network[]")))
+  },
+  "node.remediation": {
+    scope: "node",
+    evaluate: w => w.nodes.flatMap(n => {
+      const r = n.remediation || {},
+        flags = ["nodeNotReady", "outOfService", "reportedFenced"].filter(k => r[k]);
+      return flags.length ? [inst("node.remediation", "warning", n, REG[n.clusterId], `StorageNode ${n.name}: ${flags.join(", ")}`, `status.remediation reports ${flags.join(", ")}; observed ${r.observedAt ? fmtAgo(r.observedAt) : "unset"}`, "status.remediation")] : [];
+    })
+  },
+  "device.phase": {
+    scope: "device",
+    evaluate: w => w.devices.filter(d => ["Degraded", "Failed"].includes(d.phase)).map(d => inst("device.phase", d.phase === "Degraded" ? "warning" : "critical", d, REG[d.clusterId], `StorageDevice ${d.name} is ${d.phase}`, d.message || `status.phase is ${d.phase}; status.deviceStatus is ${d.deviceStatus || "unset"}`, "status.phase"))
+  },
+  "device.smart": {
+    scope: "device",
+    evaluate: w => w.devices.filter(d => ["Warning", "Failing"].includes((d.health.smart || {}).verdict)).map(d => inst("device.smart", d.health.smart.verdict === "Failing" ? "critical" : "warning", d, REG[d.clusterId], `StorageDevice ${d.name}: SMART verdict ${d.health.smart.verdict}`, d.health.smart.reason || "status.health.smart.verdict", "status.health.smart.verdict"))
+  },
+  "device.performance": {
+    scope: "device",
+    evaluate: w => w.devices.filter(d => (d.health.performance || {}).verdict === "Slow").map(d => inst("device.performance", "warning", d, REG[d.clusterId], `StorageDevice ${d.name} is Slow`, d.health.performance.reason || "status.health.performance.verdict is Slow", "status.health.performance.verdict"))
+  },
+  "pool.phase": {
+    scope: "pool",
+    evaluate: w => w.pools.filter(p => p.phase !== "Ready").map(p => inst("pool.phase", "warning", p, REG[p.clusterId], `StoragePool ${p.name} is ${p.phase}`, p.message || `status.phase is ${p.phase}`, "status.phase"))
+  },
+  "ops.failed": {
+    scope: "ops",
+    evaluate: w => w.ops.filter(o => o.phase === "Failed" && Date.parse(o.completedAt || o.startedAt || 0) > Date.now() - 86400000).map(o => inst("ops.failed", "warning", {
+      kind: o.crKind,
+      id: o.key,
+      name: o.name,
+      namespace: o.ns
+    }, o.clusterId ? REG[o.clusterId] : null, `${o.crKind} ${o.action || ""} ${o.name} failed`, `${o.message || "status.phase is Failed"}${o.step ? ` (at step ${o.step})` : ""}`, "status.phase"))
+  },
+  "controlplane.phase": {
+    scope: "controlplane",
+    evaluate: w => w.controlplanes.flatMap(cp => {
+      const st = cp.status || {},
+        out = [];
+      if (["Degraded", "Unavailable"].includes(st.phase)) out.push(inst("controlplane.phase", st.phase === "Unavailable" ? "critical" : "warning", {
+        kind: "ControlPlane",
+        id: cp.metadata.uid,
+        name: cp.metadata.name,
+        namespace: cp.metadata.namespace,
+        ctx: cp.__ctx
+      }, null, `ControlPlane ${cp.metadata.name} is ${st.phase}`, st.message || `status.phase is ${st.phase}`, "status.phase"));
+      (st.components || []).filter(c => (c.ready || 0) < (c.desired || 0)).forEach(c => out.push(inst("controlplane.phase", c.essential ? "critical" : "warning", {
+        kind: "ControlPlane",
+        id: cp.metadata.uid + "/" + c.name,
+        name: cp.metadata.name,
+        namespace: cp.metadata.namespace,
+        ctx: cp.__ctx
+      }, null, `ControlPlane component ${c.name}: ${c.ready || 0} of ${c.desired} ready`, `status.components[] ${c.name} ready ${c.ready || 0}, desired ${c.desired}${c.essential ? ", essential" : ""}`, "status.components[]")));
+      return out;
+    })
+  },
+  "driver.phase": {
+    scope: "driver",
+    evaluate: w => w.drivers.filter(d => ["Degraded", "Unavailable"].includes((d.status || {}).phase)).map(d => inst("driver.phase", d.status.phase === "Unavailable" ? "critical" : "warning", {
+      kind: "SimplyblockDriver",
+      id: d.metadata.uid,
+      name: d.metadata.name,
+      namespace: d.metadata.namespace,
+      ctx: d.__ctx
+    }, null, `SimplyblockDriver ${d.metadata.name} is ${d.status.phase}`, d.status.message || `nodesReady ${d.status.nodesReady} of ${d.status.nodesTotal}`, "status.phase"))
+  }
+};
+function inst(rule, severity, obj, cluster, title, detail, field) {
+  return {
+    fingerprint: `${rule}|${obj.kind}|${obj.namespace || ""}|${obj.id || obj.name}`,
+    rule,
+    severity,
+    title,
+    detail,
+    field,
+    object: {
+      kind: obj.kind,
+      id: obj.id,
+      name: obj.name,
+      namespace: obj.namespace,
+      ctx: obj.ctx || (obj.metadata ? obj.__ctx : null) || LOCAL_CTX,
+      clusterId: obj.clusterId || (cluster ? cluster.id : null),
+      nodeId: obj.nodeId || null
+    },
+    clusterId: cluster ? cluster.id : obj.clusterId || null,
+    clusterName: cluster ? cluster.name : null
+  };
+}
+
+// ---- the store -----------------------------------------------------------------------------
+const alertStore = {
+  ready: false,
+  instances: new Map(),
+  history: [],
+  silences: [],
+  listeners: new Set(),
+  timer: null,
+  error: null,
+  lastEval: null,
+  subscribe(f) {
+    this.listeners.add(f);
+    return () => this.listeners.delete(f);
+  },
+  emit() {
+    this.listeners.forEach(f => {
+      try {
+        f();
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  },
+  loadSilences() {
+    try {
+      this.silences = JSON.parse(localStorage.getItem("sb.silences") || "[]").filter(s => !s.until || Date.parse(s.until) > Date.now());
+    } catch (e) {
+      this.silences = [];
+    }
+  },
+  saveSilences() {
+    try {
+      localStorage.setItem("sb.silences", JSON.stringify(this.silences));
+    } catch (e) {}
+  },
+  async evaluate() {
+    try {
+      const perCtx = async kind => (await Promise.all(CONTEXTS.map(c => k8s.list(kind, {
+        allNamespaces: true,
+        ctx: c.name
+      }).then(r => r.map(o => Object.assign(o, {
+        __ctx: c.name
+      }))).catch(() => [])))).flat();
+      const [clusters, cps, drivers] = await Promise.all([api.clusters(), perCtx("ControlPlane"), perCtx("SimplyblockDriver")]);
+      const nodes = (await Promise.all(clusters.map(c => api.nodes(c.id)))).flat();
+      const devices = (await Promise.all(clusters.map(c => api.clusterDevices(c.id)))).flat();
+      const pools = (await Promise.all(clusters.map(c => api.pools(c.id)))).flat();
+      const ops = window.work && window.work.ready ? window.work.items.filter(i => i.src === "ops") : [];
+      const w = {
+        clusters,
+        nodes,
+        devices,
+        pools,
+        ops,
+        controlplanes: cps,
+        drivers
+      };
+      const now = new Date().toISOString();
+      const fresh = new Map();
+      Object.entries(ALERT_RULES).forEach(([id, r]) => {
+        try {
+          r.evaluate(w).forEach(a => fresh.set(a.fingerprint, a));
+        } catch (e) {
+          console.error("alert rule " + id, e);
+        }
+      });
+      fresh.forEach((a, k) => {
+        const old = this.instances.get(k);
+        this.instances.set(k, Object.assign(a, {
+          firstSeen: old ? old.firstSeen : now,
+          lastSeen: now
+        }));
+      });
+      this.instances.forEach((a, k) => {
+        if (!fresh.has(k)) {
+          this.instances.delete(k);
+          this.history.unshift(Object.assign({}, a, {
+            resolvedAt: now
+          }));
+        }
+      });
+      this.history = this.history.filter(h => Date.parse(h.resolvedAt) > Date.now() - 86400000).slice(0, 500);
+      this.ready = true;
+      this.error = null;
+      this.lastEval = now;
+    } catch (e) {
+      this.error = e;
+    }
+    this.emit();
+  },
+  start() {
+    if (this.timer) return;
+    this.loadSilences();
+    const tick = () => this.evaluate().finally(() => {
+      this.timer = setTimeout(tick, document.hidden ? 30000 : 10000);
+    });
+    tick();
+  },
+  isSilenced(a) {
+    return this.silences.find(s => s.fingerprint === a.fingerprint && (!s.until || Date.parse(s.until) > Date.now())) || null;
+  },
+  silence(a, hours, note) {
+    this.silences = this.silences.filter(s => s.fingerprint !== a.fingerprint).concat([{
+      fingerprint: a.fingerprint,
+      until: hours ? new Date(Date.now() + hours * 3600000).toISOString() : null,
+      note: note || "",
+      at: new Date().toISOString()
+    }]);
+    this.saveSilences();
+    this.emit();
+  },
+  unsilence(a) {
+    this.silences = this.silences.filter(s => s.fingerprint !== a.fingerprint);
+    this.saveSilences();
+    this.emit();
+  },
+  all() {
+    return Array.from(this.instances.values()).map(a => Object.assign(a, {
+      silence: this.isSilenced(a),
+      silenced: !!this.isSilenced(a),
+      id: a.fingerprint
+    }));
+  },
+  forCluster(id) {
+    return this.all().filter(a => a.clusterId === id);
+  },
+  forObject(ref) {
+    const r = ref || {};
+    return this.all().filter(a => r.kind === "cluster" && a.clusterId === r.id && a.object.kind === "cluster" || a.object.id && a.object.id === r.id);
+  },
+  countsFor(clusterId) {
+    const as = this.forCluster(clusterId);
+    return {
+      critical: as.filter(a => a.severity === "critical" && !a.silenced).length,
+      warning: as.filter(a => a.severity === "warning" && !a.silenced).length,
+      silenced: as.filter(a => a.silenced).length
+    };
+  },
+  recent(hours) {
+    const cutoff = Date.now() - (hours || 24) * 3600000;
+    return this.history.filter(a => Date.parse(a.resolvedAt) >= cutoff);
+  }
+};
+window.alerts = alertStore;
+if ((window.SB_CONFIG || {}).mode !== "dr") setTimeout(() => alertStore.start(), 3000);
+function useAlerts() {
+  const [, f] = React.useState(0);
+  React.useEffect(() => alertStore.subscribe(() => f(n => n + 1)), []);
+  return alertStore;
+}
+
+// ---- views ------------------------------------------------------------------------------------
+const sortAlerts = (a, b) => (b.silenced ? 0 : 1) - (a.silenced ? 0 : 1) || SEV_RANK[b.severity] - SEV_RANK[a.severity] || Date.parse(b.firstSeen) - Date.parse(a.firstSeen);
+function silenceDialog(a) {
+  return {
+    title: `Silence "${a.title}"?`,
+    desc: "The alert stays evaluated but is counted as silenced in this browser until the silence expires. Silences are not shared.",
+    fields: [{
+      k: "hours",
+      label: "Hours",
+      type: "number",
+      def: 4
+    }, {
+      k: "note",
+      label: "Note",
+      type: "text"
+    }],
+    confirm: "Silence",
+    run: v => {
+      alertStore.silence(a, Number(v.hours) || 0, v.note);
+      return Promise.resolve();
+    },
+    done: "Silenced"
+  };
+}
+function openAlertObject(a, nav) {
+  const o = a.object,
+    vm = o.id ? REG[o.id] : null;
+  if (vm && vm.kind === "cluster") return nav.openCluster(vm.id);
+  if (vm && vm.kind === "node") return nav.openNode(vm.clusterId, vm.id);
+  if (vm && vm.kind === "device") return nav.openDevice(vm.clusterId, vm.nodeId, vm.id);
+  if (vm && vm.kind === "pool") return nav.openPool(vm.clusterId, vm.id);
+  if (o.kind && o.name && nav.openCR) return nav.openCR({
+    ctx: o.ctx,
+    ns: o.namespace,
+    kind: o.kind,
+    name: o.name
+  });
+  if (a.clusterId) return nav.openCluster(a.clusterId);
+}
+function AlertRow({
+  a,
+  nav,
+  resolved
+}) {
+  return /*#__PURE__*/React.createElement("tr", {
+    className: resolved ? "" : a.silenced ? "" : a.severity === "critical" ? "wrow failed" : "",
+    style: a.silenced ? {
+      opacity: .55
+    } : undefined
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+    className: "tstat",
+    style: {
+      color: SEV_COLOR[a.severity]
+    }
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: SEV_COLOR[a.severity]
+  }), a.severity)), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      flexDirection: "column",
+      lineHeight: 1.25
+    }
+  }, /*#__PURE__*/React.createElement("b", null, a.title), /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 11.5,
+      color: "var(--dim)"
+    }
+  }, a.detail))), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)"
+    },
+    title: "the field the rule read"
+  }, a.field), /*#__PURE__*/React.createElement("td", null, a.clusterName ? /*#__PURE__*/React.createElement("button", {
+    className: "tlink",
+    onClick: () => nav.openCluster(a.clusterId)
+  }, a.clusterName) : /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "none")), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    style: {
+      fontSize: 11
+    },
+    title: resolved ? `open ${fmtDate(a.firstSeen)}, resolved ${fmtDate(a.resolvedAt)}` : `first seen ${fmtDate(a.firstSeen)}`
+  }, resolved ? `resolved ${fmtAgo(a.resolvedAt)}` : fmtAgo(a.firstSeen)), /*#__PURE__*/React.createElement("td", {
+    style: {
+      textAlign: "right",
+      whiteSpace: "nowrap"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => openAlertObject(a, nav)
+  }, "Open"), !resolved && (a.silenced ? /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => alertStore.unsilence(a),
+    title: a.silence.note || ""
+  }, "Unsilence") : /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => window.__ui.dialog(silenceDialog(a), {
+      kind: "alert",
+      id: a.fingerprint
+    })
+  }, "Silence"))));
+}
+function AlertList({
+  items,
+  nav,
+  resolved,
+  empty
+}) {
+  if (!items.length) return /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, empty || "No alert.");
+  return /*#__PURE__*/React.createElement("table", {
+    className: "dt tasks"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Severity"), /*#__PURE__*/React.createElement("th", null, "Alert"), /*#__PURE__*/React.createElement("th", null, "Field"), /*#__PURE__*/React.createElement("th", null, "Cluster"), /*#__PURE__*/React.createElement("th", null, resolved ? "Resolved" : "Since"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, items.map(a => /*#__PURE__*/React.createElement(AlertRow, {
+    key: a.fingerprint + (resolved ? a.resolvedAt : ""),
+    a: a,
+    nav: nav,
+    resolved: resolved
+  }))));
+}
+function AlertsView({
+  seg,
+  nav
+}) {
+  const s = useAlerts();
+  const p = seg && seg.p || {};
+  const [sev, setSev] = React.useState(p.sev || "");
+  const [cluster, setCluster] = React.useState(p.cluster || "");
+  const [showSilenced, setShowSilenced] = React.useState(false);
+  const [q, setQ] = React.useState("");
+  const live = s.all().filter(a => (!sev || a.severity === sev) && (!cluster || a.clusterId === cluster) && (showSilenced || !a.silenced) && (!q || `${a.title} ${a.detail} ${a.field}`.toLowerCase().includes(q.toLowerCase()))).sort(sortAlerts);
+  const hist = s.recent(24).filter(a => !cluster || a.clusterId === cluster);
+  const clusters = Array.from(new Set(s.all().map(a => a.clusterId).filter(Boolean))).map(id => REG[id]).filter(Boolean);
+  const counts = {
+    critical: s.all().filter(a => a.severity === "critical" && !a.silenced).length,
+    warning: s.all().filter(a => a.severity === "warning" && !a.silenced).length,
+    silenced: s.all().filter(a => a.silenced).length
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, "Alerts"), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, "Conditions derived from the operator's objects: phases, health verdicts, thresholds in the cluster's own spec, failed operations, control plane components. Each row names the field it read.", s.lastEval ? ` Evaluated ${fmtAgo(s.lastEval)}.` : ""))), s.error && /*#__PURE__*/React.createElement(ErrorState, {
+    error: s.error,
+    onRetry: () => s.evaluate()
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Critical",
+    v: counts.critical,
+    c: counts.critical ? "var(--bad)" : "var(--ok)"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Warning",
+    v: counts.warning,
+    c: counts.warning ? "var(--warn)" : undefined
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Silenced",
+    v: counts.silenced,
+    s: "in this browser"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Resolved, 24 h",
+    v: hist.length
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Rules",
+    v: Object.keys(ALERT_RULES).length,
+    s: "all on CR fields"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "ptools"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "search",
+    style: {
+      minWidth: 220
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    value: q,
+    placeholder: "Search title, detail, field\u2026",
+    onChange: e => setQ(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "seg"
+  }, [["", "all"], ["critical", "critical"], ["warning", "warning"]].map(([k, l]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    className: sev === k ? "on" : "",
+    onClick: () => setSev(k)
+  }, l))), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: cluster,
+    onChange: e => setCluster(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: ""
+  }, "all clusters"), clusters.map(c => /*#__PURE__*/React.createElement("option", {
+    key: c.id,
+    value: c.id
+  }, c.name))), /*#__PURE__*/React.createElement("button", {
+    className: "chip" + (showSilenced ? " on" : ""),
+    onClick: () => setShowSilenced(!showSilenced)
+  }, "silenced"), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, live.length), /*#__PURE__*/React.createElement("span", {
+    className: "live"
+  }, /*#__PURE__*/React.createElement("i", null), "live"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => s.evaluate(),
+    title: "Evaluate now"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 12
+  }))), !s.ready ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "evaluating\u2026") : /*#__PURE__*/React.createElement(AlertList, {
+    items: live,
+    nav: nav,
+    empty: "No open alert."
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Resolved in the last 24 hours"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement(AlertList, {
+    items: hist,
+    nav: nav,
+    resolved: true,
+    empty: "Nothing resolved since this page was opened; the history lives in this browser session."
+  })));
+}
+function AlertsScoped({
+  cluster,
+  nav
+}) {
+  const s = useAlerts();
+  const items = s.forCluster(cluster.id).sort(sortAlerts);
+  const hist = s.recent(24).filter(a => a.clusterId === cluster.id);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "stats",
+    style: {
+      marginBottom: 12
+    }
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Critical",
+    v: items.filter(a => a.severity === "critical" && !a.silenced).length,
+    c: items.some(a => a.severity === "critical" && !a.silenced) ? "var(--bad)" : "var(--ok)"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Warning",
+    v: items.filter(a => a.severity === "warning" && !a.silenced).length
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Resolved, 24 h",
+    v: hist.length
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, !s.ready ? /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "evaluating\u2026") : /*#__PURE__*/React.createElement(AlertList, {
+    items: items,
+    nav: nav,
+    empty: "No open alert on this cluster."
+  })), hist.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Resolved in the last 24 hours"), /*#__PURE__*/React.createElement(AlertList, {
+    items: hist,
+    nav: nav,
+    resolved: true
+  })));
+}
+function AlertBell({
+  nav,
+  clusterId
+}) {
+  const s = useAlerts();
+  const mine = clusterId ? s.forCluster(clusterId) : s.all();
+  const crit = mine.filter(a => a.severity === "critical" && !a.silenced).length,
+    warn = mine.filter(a => a.severity === "warning" && !a.silenced).length;
+  return /*#__PURE__*/React.createElement("button", {
+    className: "tbtn bellwrap",
+    title: `${crit} critical · ${warn} warning${clusterId ? " on this cluster" : ""}`,
+    onClick: () => nav.alerts(clusterId ? {
+      cluster: clusterId
+    } : undefined)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "bell",
+    s: 14
+  }), crit > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bellbadge"
+  }, crit > 99 ? "99+" : crit), !crit && warn > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "bellbadge",
+    style: {
+      background: "var(--warn)"
+    }
+  }, warn > 99 ? "99+" : warn));
+}
+function AlertBadge({
+  obj,
+  nav
+}) {
+  const s = useAlerts();
+  const mine = obj.kind === "cluster" ? s.forCluster(obj.id) : s.forObject(obj);
+  const crit = mine.filter(a => a.severity === "critical" && !a.silenced).length,
+    warn = mine.filter(a => a.severity === "warning" && !a.silenced).length;
+  if (!crit && !warn) return null;
+  return /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    style: {
+      color: crit ? "var(--bad)" : "var(--warn)"
+    },
+    title: mine.map(a => a.title).join("\n"),
+    onClick: e => {
+      e.stopPropagation();
+      nav.alerts({
+        cluster: obj.kind === "cluster" ? obj.id : obj.clusterId
+      });
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "bell",
+    s: 10
+  }), crit ? `${crit} critical` : "", crit && warn ? " · " : "", warn ? `${warn} warning` : "");
+}
+Object.assign(window, {
+  ALERT_RULES,
+  alertStore,
+  useAlerts,
+  AlertsView,
+  AlertsScoped,
+  AlertList,
+  AlertRow,
+  AlertBell,
+  AlertBadge,
+  silenceDialog
 });
 })();
 // ---- rbac-admin.jsx ----
@@ -16843,79 +19260,6 @@ const IoMetrics = ({
   hist: o.hist.bw,
   color: "var(--ok)"
 }));
-function ClusterTile({
-  c,
-  nav
-}) {
-  return /*#__PURE__*/React.createElement("div", {
-    className: "tile",
-    style: {
-      "--sc": STATUS_META[c.status].c
-    },
-    onDoubleClick: () => nav.detail(c)
-  }, /*#__PURE__*/React.createElement(TileHead, {
-    obj: c,
-    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
-      status: c.status
-    }), /*#__PURE__*/React.createElement(Name, null, c.name)),
-    right: /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, c.mode === "nvme" ? "NVMe" : "block device")
-  }), /*#__PURE__*/React.createElement(Uuid, {
-    value: c.id
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "labels"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "siting"), c.siting === "edge" ? "edge" : "data center"), /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "devices"), c.mode === "nvme" ? "NVMe" : "block dev"), c.caps.rebalancing ? /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "rebalancing"), /*#__PURE__*/React.createElement(Dot, {
-    c: c.rebalancing ? "var(--warn)" : "var(--ok)"
-  }), c.rebalancing ? "yes" : "no") : /*#__PURE__*/React.createElement("span", {
-    className: "lab",
-    style: {
-      opacity: .6
-    }
-  }, /*#__PURE__*/React.createElement("i", null, "rebalancing"), "n/a"), c.counts.nodes > 0 && /*#__PURE__*/React.createElement("span", {
-    className: "lab",
-    title: `Fault budget: ${c.faultBudget.kind === "failure_domain" ? "one failure domain" : c.faultBudget.tolerated + " node(s)"} may be lost before the cluster suspends`,
-    style: c.faultBudget.lost > c.faultBudget.tolerated ? {
-      color: "var(--bad)",
-      borderColor: "color-mix(in srgb,var(--bad) 40%,transparent)"
-    } : c.faultBudget.lost ? {
-      color: "var(--warn)",
-      borderColor: "color-mix(in srgb,var(--warn) 40%,transparent)"
-    } : undefined
-  }, /*#__PURE__*/React.createElement("i", null, "nodes online"), c.counts.nodesOnline, "/", c.counts.nodes, c.faultBudget.lost > 0 && ` · ${c.faultBudget.lost}/${c.faultBudget.tolerated} ${c.faultBudget.kind === "failure_domain" ? "FD" : ""} lost`)), /*#__PURE__*/React.createElement(Capacity, {
-    total: c.capacity.total,
-    used: c.capacity.used
-  }), /*#__PURE__*/React.createElement(IoMetrics, {
-    o: c
-  }), /*#__PURE__*/React.createElement(Foot, {
-    items: [{
-      label: "Hosts",
-      count: c.counts.hosts,
-      icon: "host",
-      onClick: () => nav.layer(c, "hosts")
-    }, {
-      label: "Nodes",
-      count: c.counts.nodes,
-      icon: "node",
-      onClick: () => nav.layer(c, "nodes")
-    }, {
-      label: "Pools",
-      count: c.counts.pools,
-      icon: "pool",
-      onClick: () => nav.layer(c, "pools")
-    }, {
-      label: "Details",
-      right: true,
-      onClick: () => nav.detail(c)
-    }]
-  }));
-}
 const HOST_CANDIDATE = {
   discovered: 1,
   inspecting: 1,
@@ -17207,128 +19551,6 @@ function NodeOpBox({
     title: p
   }, wide && /*#__PURE__*/React.createElement("i", null, p)))));
 }
-function NodeTile({
-  n,
-  nav
-}) {
-  return /*#__PURE__*/React.createElement("div", {
-    className: "tile",
-    style: {
-      "--sc": STATUS_META[n.status].c
-    },
-    onDoubleClick: () => nav.detail(n)
-  }, /*#__PURE__*/React.createElement(TileHead, {
-    obj: n,
-    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
-      status: n.status
-    }), /*#__PURE__*/React.createElement(Name, null, n.hostname)),
-    right: /*#__PURE__*/React.createElement("span", {
-      className: "tsub",
-      title: n.multipath ? (n.dataNics || []).map(x => x.ip).join(", ") : n.ip
-    }, n.ip, n.multipath && /*#__PURE__*/React.createElement("em", {
-      style: {
-        fontStyle: "normal",
-        color: "var(--accent)"
-      }
-    }, " +1"))
-  }), /*#__PURE__*/React.createElement(Uuid, {
-    value: n.id
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "labels"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "lab",
-    style: n.failureDomain ? null : {
-      opacity: .55
-    }
-  }, /*#__PURE__*/React.createElement("i", null, "fd"), n.failureDomain || "—"), n.physicalLabel && /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "phys"), n.physicalLabel), n.hostId && /*#__PURE__*/React.createElement("button", {
-    className: "lab link",
-    onClick: e => {
-      e.stopPropagation();
-      nav.openHost(n.clusterId, n.hostId);
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "host",
-    s: 10
-  }), "host")), n.op && /*#__PURE__*/React.createElement(NodeOpBox, {
-    op: n.op
-  }), /*#__PURE__*/React.createElement(Capacity, {
-    total: n.capacity.total,
-    used: n.capacity.used
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "kv"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPU res"), /*#__PURE__*/React.createElement("b", null, n.cpuReserved)), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "RAM used"), /*#__PURE__*/React.createElement("b", null, fmtBytes(n.memory.used, 0), /*#__PURE__*/React.createElement("em", {
-    style: {
-      color: "var(--dim2)",
-      fontStyle: "normal"
-    }
-  }, "/", fmtBytes(n.memory.total, 0)))), /*#__PURE__*/React.createElement("div", {
-    title: "Kubernetes request/limit"
-  }, /*#__PURE__*/React.createElement("span", null, "RAM res"), /*#__PURE__*/React.createElement("b", null, fmtBytes(n.memory.reserved, 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages"), /*#__PURE__*/React.createElement("b", null, fmtBytes(n.hugepages.used, 0), /*#__PURE__*/React.createElement("em", {
-    style: {
-      color: "var(--dim2)",
-      fontStyle: "normal"
-    }
-  }, "/", fmtBytes(n.hugepages.total, 0))))), /*#__PURE__*/React.createElement(IoMetrics, {
-    o: n
-  }), /*#__PURE__*/React.createElement(Foot, {
-    items: [{
-      label: "Devices",
-      count: n.counts.devices,
-      icon: "device",
-      onClick: () => nav.layer(n, "devices")
-    }, {
-      label: "Details",
-      right: true,
-      onClick: () => nav.detail(n)
-    }]
-  }));
-}
-function DeviceTile({
-  d,
-  nav
-}) {
-  const primary = d.mode === "nvme" ? d.serial : d.blockdev;
-  const showHealth = (d.status === "online" || d.status === "read_only") && d.health;
-  return /*#__PURE__*/React.createElement("div", {
-    className: "tile",
-    style: {
-      "--sc": STATUS_META[d.status].c
-    },
-    onDoubleClick: () => nav.detail(d)
-  }, /*#__PURE__*/React.createElement(TileHead, {
-    obj: d,
-    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
-      status: d.status
-    }), /*#__PURE__*/React.createElement(Name, null, primary)),
-    right: showHealth ? /*#__PURE__*/React.createElement("span", {
-      className: "lab",
-      title: "Media health"
-    }, /*#__PURE__*/React.createElement("i", null, "health"), /*#__PURE__*/React.createElement(Dot, {
-      c: STATUS_META[d.health].c
-    })) : null
-  }), /*#__PURE__*/React.createElement(Uuid, {
-    value: d.id
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "labels"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, d.mode === "nvme" ? "pcie" : "serial"), (d.mode === "nvme" ? d.pcie : d.serial) || "—"), /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement("i", null, "dev"), d.blockdev || "—")), /*#__PURE__*/React.createElement(Capacity, {
-    total: d.capacity.total,
-    used: d.capacity.used
-  }), /*#__PURE__*/React.createElement(IoMetrics, {
-    o: d
-  }), /*#__PURE__*/React.createElement(Foot, {
-    items: [{
-      label: "Details",
-      right: true,
-      onClick: () => nav.detail(d)
-    }]
-  }));
-}
 Object.assign(window, {
   NodeOpBox,
   OP_HINT,
@@ -17337,94 +19559,14 @@ Object.assign(window, {
   Name,
   Foot,
   IoMetrics,
-  ClusterTile,
   HostTile,
-  HostCandidateTile,
-  NodeTile,
-  DeviceTile
+  HostCandidateTile
 });
 })();
 // ---- tiles-data.jsx ----
 (function(){
-function PoolTile({
-  p,
-  nav
-}) {
-  return /*#__PURE__*/React.createElement("div", {
-    className: "tile",
-    style: {
-      "--sc": STATUS_META[p.status].c
-    },
-    onDoubleClick: () => nav.detail(p)
-  }, /*#__PURE__*/React.createElement(TileHead, {
-    obj: p,
-    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(TrafficLight, {
-      status: p.status
-    }), /*#__PURE__*/React.createElement(Name, null, p.name)),
-    right: /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, p.enabled ? "pool" : "no new volumes")
-  }), /*#__PURE__*/React.createElement(Uuid, {
-    value: p.id
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "labels"
-  }, p.dhchap && /*#__PURE__*/React.createElement("span", {
-    className: "lab",
-    style: {
-      color: "var(--ro)",
-      borderColor: "color-mix(in srgb,var(--ro) 40%,transparent)"
-    },
-    title: "bi-directional DH-CHAP \u2014 set at creation, immutable"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "lock",
-    s: 10
-  }), "dhchap bi-dir"), p.storageClasses.length ? p.storageClasses.map(sc => /*#__PURE__*/React.createElement("button", {
-    className: "lab link",
-    key: sc.uuid,
-    title: "StorageClass " + sc.name,
-    onClick: e => {
-      e.stopPropagation();
-      nav.openStorageClass(sc.uuid);
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "k8s",
-    s: 10
-  }), /*#__PURE__*/React.createElement("i", null, sc.k8s_cluster || "class"), sc.variant)) : /*#__PURE__*/React.createElement("span", {
-    className: "lab",
-    style: {
-      opacity: .6
-    }
-  }, /*#__PURE__*/React.createElement("i", null, "storage class"), "none")), /*#__PURE__*/React.createElement(QosChips, {
-    qos: p.qos
-  }), /*#__PURE__*/React.createElement(Capacity, {
-    label: "Provisioned",
-    total: p.capacity.total,
-    used: p.capacity.used
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "kv"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Volume data"), /*#__PURE__*/React.createElement("b", null, fmtBytes(p.lvolBytes))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Snapshots"), /*#__PURE__*/React.createElement("b", null, fmtBytes(p.snapshotBytes))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Utilized"), /*#__PURE__*/React.createElement("b", null, fmtBytes(p.capacity.used)))), /*#__PURE__*/React.createElement(Foot, {
-    items: [{
-      label: "Volumes",
-      count: p.counts.volumes,
-      icon: "volume",
-      onClick: () => nav.layer(p, "volumes")
-    }, {
-      label: "Snapshots",
-      count: p.counts.snapshots,
-      icon: "camera",
-      onClick: () => nav.layer(p, "snapshots")
-    }, p.counts.storageClasses > 0 && {
-      label: "Classes",
-      count: p.counts.storageClasses,
-      icon: "k8s",
-      onClick: () => nav.layer(p, "storageclasses")
-    }, {
-      label: "Details",
-      right: true,
-      onClick: () => nav.detail(p)
-    }]
-  }));
-}
+// Tiles of the data layers: logical volumes, snapshots, backups, and backup
+// policies. The storage kinds' tiles live in storage-views.jsx.
 function VolumeTile({
   v,
   nav
@@ -17820,7 +19962,6 @@ function PolicyTile({
   }));
 }
 Object.assign(window, {
-  PoolTile,
   VolumeTile,
   SnapshotTile,
   BackupTile,
@@ -18161,364 +20302,6 @@ function KMS_ROWS(k) {
     status: k.status === "connected" ? "online" : k.status === "sealed" ? "suspended" : "unreachable"
   })], [KMS_ADDR[p] || "Address", k.address], p === "aws_kms" ? ["Region", k.region] : null, p === "hashicorp_vault" ? ["Namespace", k.namespace] : null, ["Auth method", k.auth_method], k.auth_role ? [KMS_ROLE[p] || "Role", k.auth_role] : null, p === "hashicorp_vault" ? ["Transit mount", k.mount_path + "/"] : null, ["Key", k.key_name], ["Key type", k.key_type], ["Rotation", k.rotation_days ? "every " + k.rotation_days + " days" : "manual"], ["Verify TLS", k.verify_tls ? "yes" : "no"], ["Keys in use", k.keys_in_use + " encrypted volume(s)"], ["Scope", "every encrypted volume and bucket in this cluster"], ["Last check", fmtDate(k.last_check_at) + " · " + fmtAgo(k.last_check_at)]].filter(Boolean);
 }
-function ClusterDetail({
-  o: c,
-  nav
-}) {
-  const [tab, setTab] = useState("overview");
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
-    obj: c,
-    title: c.name,
-    badge: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, c.siting === "edge" ? "edge" : "data center"), /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, c.mode === "nvme" ? "NVMe" : "block device")),
-    sub: c.caps.rebalancing ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11.5,
-        color: "var(--dim)",
-        display: "flex",
-        alignItems: "center",
-        gap: 6
-      }
-    }, "rebalancing", /*#__PURE__*/React.createElement(Dot, {
-      c: c.rebalancing ? "var(--warn)" : "var(--ok)"
-    }), c.rebalancing ? "in progress" : "idle") : /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11.5,
-        color: "var(--dim2)"
-      }
-    }, "edge deployment \u2014 no rebalancing, no task engine")
-  }), /*#__PURE__*/React.createElement(Tabs, {
-    active: tab,
-    onChange: setTab,
-    items: [{
-      k: "overview",
-      label: "Overview",
-      icon: "cluster"
-    }, {
-      k: "alerts",
-      label: "Alerts",
-      icon: "bell"
-    }, {
-      k: "ops",
-      label: "Operations",
-      icon: "refresh"
-    }, {
-      k: "file",
-      label: "File storage",
-      icon: "folder"
-    }, c.caps.tasks && {
-      k: "tasks",
-      label: "Tasks",
-      icon: "gauge"
-    }, {
-      k: "logs",
-      label: "Cluster log",
-      icon: "filter"
-    }, {
-      k: "splane",
-      label: "Storage plane logs",
-      icon: "node"
-    }].filter(Boolean)
-  }), tab === "alerts" && /*#__PURE__*/React.createElement(AlertsPanel, {
-    cluster: c,
-    nav: nav
-  }), tab === "ops" && /*#__PURE__*/React.createElement(OperationsPanel, {
-    cluster: c,
-    nav: nav
-  }), tab === "file" && /*#__PURE__*/React.createElement(FileStoragePanel, {
-    cluster: c,
-    nav: nav
-  }), tab === "tasks" && c.caps.tasks && /*#__PURE__*/React.createElement(TasksPanel, {
-    cluster: c
-  }), tab === "logs" && /*#__PURE__*/React.createElement(ClusterLogPanel, {
-    cluster: c
-  }), tab === "splane" && /*#__PURE__*/React.createElement(StoragePlaneLogPanel, {
-    cluster: c
-  }), tab === "overview" && /*#__PURE__*/React.createElement(React.Fragment, null, c.status === "degraded" && /*#__PURE__*/React.createElement("div", {
-    className: "banner"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Cluster degraded."), " ", c.counts.nodes - c.counts.nodesOnline, " of ", c.counts.nodes, " storage nodes are not online", c.faultBudget.kind === "failure_domain" ? ` in ${c.faultBudget.lost} failure domain` : "", " \u2014 inside the fault budget of ", c.faultBudget.kind === "failure_domain" ? "one failure domain" : `${c.faultBudget.tolerated} node${c.faultBudget.tolerated === 1 ? "" : "s"}`, ", capacity is served with reduced redundancy. Losing ", c.faultBudget.kind === "failure_domain" ? "a second domain" : "one more node", " suspends the cluster.")), c.status === "suspended" && /*#__PURE__*/React.createElement("div", {
-    className: "banner"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Cluster suspended."), " ", c.counts.nodesOnline === 0 ? "All storage nodes are stopped. Restart the cluster to resume serving volumes." : `${c.counts.nodes - c.counts.nodesOnline} of ${c.counts.nodes} storage nodes are not online${c.faultBudget.kind === "failure_domain" ? ` across ${c.faultBudget.lost} failure domains` : ""} — more than the fault budget of ${c.faultBudget.kind === "failure_domain" ? "one failure domain" : c.faultBudget.tolerated + " node" + (c.faultBudget.tolerated === 1 ? "" : "s")}. I/O is halted until nodes return; the cluster resumes as degraded once the loss is back inside the budget.`)), /*#__PURE__*/React.createElement("div", {
-    className: "stats"
-  }, /*#__PURE__*/React.createElement(Stat, {
-    k: "Capacity used",
-    v: pct(c.capacity.used, c.capacity.total).toFixed(0) + "%",
-    s: `${fmtBytes(c.capacity.used)} of ${fmtBytes(c.capacity.total)}`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Total IOPS",
-    v: fmtNum(c.iops.r + c.iops.w),
-    s: `${fmtNum(c.iops.r)} r · ${fmtNum(c.iops.w)} w`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Throughput",
-    v: fmtBW(c.bw.r + c.bw.w),
-    s: "GB/s combined"
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Nodes online",
-    v: `${c.counts.nodesOnline}/${c.counts.nodes}`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Hosts",
-    v: `${c.counts.hostsAvailable}/${c.counts.hosts}`,
-    s: "available"
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Devices",
-    v: c.counts.devices,
-    s: `${c.counts.devicesOnline} online`
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "sech"
-  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
-    className: "ln"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "navcards"
-  }, /*#__PURE__*/React.createElement(NavCard, {
-    icon: "host",
-    title: "Hosts",
-    sub: "prepared machines",
-    count: c.counts.hosts,
-    onClick: () => nav.layer(c, "hosts")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "node",
-    title: "Storage nodes",
-    sub: "devices & I/O",
-    count: c.counts.nodes,
-    onClick: () => nav.layer(c, "nodes")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "pool",
-    title: "Storage pools",
-    sub: "QoS & tenancy",
-    count: c.counts.pools,
-    onClick: () => nav.layer(c, "pools")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "volume",
-    title: "Logical volumes",
-    sub: "across all pools",
-    count: c.counts.volumes,
-    onClick: () => nav.layer(c, "volumes")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "camera",
-    title: "Snapshots",
-    sub: "all pools",
-    count: c.counts.snapshots,
-    onClick: () => nav.layer(c, "snapshots")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "cloud",
-    title: "Backups",
-    sub: "object storage",
-    count: c.counts.backups,
-    onClick: () => nav.layer(c, "backups")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "clock",
-    title: "Backup policies",
-    sub: "schedules & retention",
-    count: c.counts.policies,
-    onClick: () => nav.layer(c, "policies")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "shield",
-    title: "Replication policies",
-    sub: c.caps.async_replication ? "DR & synchronous" : "Kubernetes only",
-    count: c.caps.async_replication ? c.counts.rpolicies : "n/a",
-    onClick: () => nav.layer(c, "rpolicies")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "link",
-    title: "Consistency groups",
-    sub: "grouped volumes & group snapshots",
-    count: c.counts.cgroups,
-    onClick: () => nav.layer(c, "cgroups")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "move",
-    title: "Migrations",
-    sub: "move storage to other nodes or clusters",
-    count: c.counts.migrations,
-    onClick: () => nav.layer(c, "migrations")
-  }), c.objectStorage.enabled && /*#__PURE__*/React.createElement(NavCard, {
-    icon: "cloud",
-    title: "Buckets",
-    sub: "S3 on cluster capacity",
-    count: c.counts.buckets,
-    onClick: () => nav.layer(c, "buckets")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "zone",
-    title: "Zones",
-    sub: c.stretched ? "stretched cluster" : "single zone",
-    count: c.counts.zones,
-    onClick: () => nav.layer(c, "zones")
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "dcols"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Cluster configuration"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Label", c.name], ["Siting", c.siting === "edge" ? "edge" : "data center"], ["Device class", c.mode === "nvme" ? "NVMe" : "block device"], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
-      status: c.status
-    })], ["Rebalancing", c.caps.rebalancing ? c.rebalancing ? "yes" : "no" : "not available on edge clusters"], ["Task engine", c.caps.tasks ? "yes" : "not available on edge clusters"], ["Stripe", `${c.distrNdcs} data + ${c.distrNpcs} parity chunks`], ["Software version", `${c.version} · set by the operator release`], ["Regions", (c.regions || []).join(", ") || null], ["Zones", (c.zoneIds || []).length ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: "flex",
-        gap: 8,
-        justifyContent: "flex-end",
-        flexWrap: "wrap"
-      }
-    }, c.zoneIds.map(id => /*#__PURE__*/React.createElement(Ref, {
-      key: id,
-      onClick: () => nav.openZone(id),
-      label: regName(id, "zone")
-    }))) : null], ["Stretched", c.stretched ? `yes — ${(c.zoneIds || []).length} zones` : "no (single zone)"], ["DR target eligible", c.drEligible ? "yes" : "no"], [c.mgmtKind === "Kubernetes API" ? "Kubernetes API" : "Management endpoint", c.mgmt], ["Created", fmtDate(c.createdAt)]]
-  }))), /*#__PURE__*/React.createElement(IOCards, {
-    o: c
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "dcols",
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Feature flags \xB7 fixed at creation"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Multipathing", c.multipathing ? `enabled · ${c.multipathNodes}/${c.counts.nodes} nodes on two paths` : "disabled · single data NIC per node"], ["Node affinity", c.nodeAffinity === "none" ? "none — free placement" : c.nodeAffinity === "strict" ? "strict — volumes can be pinned" : "soft — prefer to keep in place"], ["Pod affinity", c.podAffinity ? "enabled — front storage follows the workload" : "disabled"], ["Failure domains", c.fd.enabled ? `enabled · per ${c.fd.scope}` : "disabled"], ["Synchronous replication", c.syncReplication ? "enabled" : "disabled"], ["Backups", c.backupEnabled ? "enabled" : "disabled"], ["File storage (RWX)", c.fileStorage.enabled ? "pNFS · " + c.counts.rwxPvcs + " claim(s) · MDS " + c.fileStorage.mds_state : "disabled"], ["Object storage (S3)", c.objectStorage.enabled ? c.counts.buckets + " bucket(s) · metadata in FoundationDB" : "disabled"], ["Zones", (c.zoneIds || []).length]]
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "fnote",
-    style: {
-      marginTop: 10,
-      marginBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 12
-  }), "Zones, failure domains and synchronous replication cannot be changed after the cluster is created."))), c.fd.enabled && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("h3", null, "Failure domains \xB7 per ", c.fd.scope), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      padding: 0
-    }
-  }, /*#__PURE__*/React.createElement("table", {
-    className: "dt"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, c.fd.scope), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: "right"
-    }
-  }, "Nodes"), /*#__PURE__*/React.createElement("th", null, "Balance"))), /*#__PURE__*/React.createElement("tbody", null, c.fd.domains.map(d => /*#__PURE__*/React.createElement("tr", {
-    key: d.name
-  }, /*#__PURE__*/React.createElement("td", {
-    className: "mono",
-    style: {
-      fontWeight: 600,
-      color: d.name === "unassigned" ? "var(--bad)" : undefined
-    }
-  }, d.name), /*#__PURE__*/React.createElement("td", {
-    className: "mono",
-    style: {
-      textAlign: "right"
-    }
-  }, d.nodes), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("div", {
-    className: "bar",
-    style: {
-      maxWidth: 140
-    }
-  }, /*#__PURE__*/React.createElement("i", {
-    style: {
-      width: d.nodes / Math.max(1, c.fd.max) * 100 + "%",
-      "--bc": d.name === "unassigned" ? "var(--bad)" : d.nodes === c.fd.max ? "var(--accent)" : "var(--ok)"
-    }
-  }))))))), /*#__PURE__*/React.createElement("div", {
-    className: "fnote",
-    style: {
-      margin: 12
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: c.fd.balanced ? "check" : "alert",
-    s: 12
-  }), c.fd.unassigned ? `${c.fd.unassigned} node(s) sit in no failure domain — their host carries no ${c.fd.scope} taint.` : (c.fd.thin || []).length ? `${(c.fd.thin || []).join(", ")} carries a single node. Each ${c.fd.scope} must hold at least two storage nodes, so a domain can lose one without losing its share of the data.` : c.fd.domains.length < 2 ? `Only one ${c.fd.scope} is in use. Failure domains need at least two, each with at least two nodes.` : c.fd.balanced ? `Balanced: ${c.fd.min}–${c.fd.max} nodes per ${c.fd.scope}, at least two each. Nodes are added and removed in pairs, and the spread must stay within one.` : `Unbalanced: ${c.fd.min}–${c.fd.max} nodes per ${c.fd.scope}. Node counts may differ by at most one.`))), c.caps.rebalancing && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("h3", null, "Volume rebalancing"), /*#__PURE__*/React.createElement("div", {
-    className: "bd"
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Automatic rebalancing", c.autoRebalance.enabled ? "on" : "off — rebalance manually"], ["Volumes moved, last hour", c.autoRebalance.moved1h], ["Volumes moved, last 24 hours", c.autoRebalance.moved24h]]
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "fnote",
-    style: {
-      marginTop: 8,
-      marginBottom: 0
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "move",
-    s: 12
-  }), "A volume moves by instant migration: the primary role is handed to another node without copying data. Every move files an ", /*#__PURE__*/React.createElement("span", {
-    className: "mono"
-  }, "lvol_migration"), " task \u2014 the Tasks tab is where an individual move is followed.")))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Encryption \xB7 KMS"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, c.kms ? /*#__PURE__*/React.createElement(Props, {
-    rows: KMS_ROWS(c.kms)
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "nolim"
-  }, "No KMS configured. Encrypted volumes and buckets cannot be created in this cluster until an external key manager is set up."))), c.objectStorage.enabled && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("h3", null, "Object storage service \xB7 S3"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Endpoint", c.objectStorage.endpoint], ["Region", c.objectStorage.region], ["Addressing", c.objectStorage.addressing], ["Metadata backend", "FoundationDB — the control plane state database"], ["Buckets", c.counts.buckets + " of " + c.objectStorage.max_buckets], ["Default versioning", c.objectStorage.versioning_default ? "on" : "off"]]
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "fnote",
-    style: {
-      marginTop: 10,
-      marginBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 12
-  }), "This is the S3 service the cluster serves to its tenants. The S3 target the cluster writes its own backups to is configured separately below."))), c.backupEnabled && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("h3", null, "Backup target \xB7 S3"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, c.s3 ? /*#__PURE__*/React.createElement(Props, {
-    rows: [["Endpoint", c.s3.endpoint], ["Region", c.s3.region], ["Bucket", c.s3.bucket], ["Path prefix", c.s3.path_prefix], ["Access key id", c.s3.access_key_id], ["Secret", c.s3.secret_access_key], ["Addressing", c.s3.addressing], ["Verify TLS", c.s3.verify_tls ? "yes" : "no"]]
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "nolim"
-  }, "Backups are enabled but no S3 endpoint is configured \u2014 backups will fail until one is set.")))))));
-}
 function HostDetail({
   o: h,
   nav
@@ -18852,419 +20635,7 @@ function HostDetail({
     key: k
   }, /*#__PURE__*/React.createElement("i", null, k), v)))))));
 }
-
-// The devices attached to one node, with the per-device actions in place —
-// restart, health check, fail (failure migration) and remove — so a drive can
-// be dealt with from the node it hangs off, not only from the devices layer.
-function NodeDeviceTable({
-  node,
-  nav
-}) {
-  const [rev, setRev] = useState(0);
-  const {
-    data,
-    loading,
-    error,
-    reload
-  } = useResource("ndev|" + node.id + "|" + rev, () => api.devices(node.id), 6000);
-  const ds = data || [];
-  const nvme = ((REG[node.clusterId] || {}).mode || (ds[0] || {}).mode) === "nvme";
-  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
-    className: "sech"
-  }, /*#__PURE__*/React.createElement("h2", null, "Devices on this node"), /*#__PURE__*/React.createElement("span", {
-    className: "ln"
-  }), /*#__PURE__*/React.createElement("span", {
-    className: "count"
-  }, ds.filter(x => x.status === "online").length, " of ", ds.length, " online")), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      padding: 0
-    }
-  }, error ? /*#__PURE__*/React.createElement("div", {
-    className: "lmsg"
-  }, error.message) : loading && !ds.length ? /*#__PURE__*/React.createElement("div", {
-    className: "lmsg"
-  }, "loading\u2026") : !ds.length ? /*#__PURE__*/React.createElement("div", {
-    className: "lmsg"
-  }, "This node has no devices attached.") : /*#__PURE__*/React.createElement("table", {
-    className: "dt"
-  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Status"), /*#__PURE__*/React.createElement("th", null, nvme ? "Serial" : "Block device"), /*#__PURE__*/React.createElement("th", null, nvme ? "PCIe" : "Serial"), /*#__PURE__*/React.createElement("th", null, "Block device"), /*#__PURE__*/React.createElement("th", null, "Model"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      textAlign: "right"
-    }
-  }, "Capacity"), /*#__PURE__*/React.createElement("th", null, "Health"), /*#__PURE__*/React.createElement("th", {
-    style: {
-      width: 34
-    }
-  }))), /*#__PURE__*/React.createElement("tbody", null, ds.map(x => /*#__PURE__*/React.createElement("tr", {
-    key: x.id
-  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
-    status: x.status,
-    sm: true,
-    label: true
-  })), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
-    className: "tlink",
-    onClick: () => nav.detail(x)
-  }, nvme ? x.serial : x.blockdev || x.serial)), /*#__PURE__*/React.createElement("td", {
-    className: "mono"
-  }, (nvme ? x.pcie : x.serial) || "—"), /*#__PURE__*/React.createElement("td", {
-    className: "mono"
-  }, x.blockdev || "—"), /*#__PURE__*/React.createElement("td", {
-    className: "mono"
-  }, x.model || "—"), /*#__PURE__*/React.createElement("td", {
-    className: "mono",
-    style: {
-      textAlign: "right"
-    }
-  }, fmtBytes(x.capacity.used), " / ", fmtBytes(x.capacity.total)), /*#__PURE__*/React.createElement("td", null, (x.status === "online" || x.status === "read_only") && x.health ? /*#__PURE__*/React.createElement("span", {
-    className: "lab"
-  }, /*#__PURE__*/React.createElement(Dot, {
-    c: STATUS_META[x.health].c
-  }), STATUS_META[x.health].label) : /*#__PURE__*/React.createElement("span", {
-    style: {
-      color: "var(--dim2)"
-    }
-  }, "\u2014")), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(ActionBtn, {
-    obj: x
-  })))))))));
-}
-function NodeDetail({
-  o: n,
-  nav
-}) {
-  const [tab, setTab] = useState("overview");
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
-    obj: n,
-    title: n.hostname,
-    badge: /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, "storage node"),
-    sub: /*#__PURE__*/React.createElement("span", {
-      className: "mono",
-      style: {
-        fontSize: 11.5,
-        color: "var(--dim)"
-      }
-    }, n.ip, ":", n.port)
-  }), /*#__PURE__*/React.createElement(Tabs, {
-    active: tab,
-    onChange: setTab,
-    items: [{
-      k: "overview",
-      label: "Overview",
-      icon: "node"
-    }, {
-      k: "threads",
-      label: "SPDK threads",
-      icon: "gauge"
-    }, {
-      k: "logs",
-      label: "SPDK logs",
-      icon: "filter"
-    }]
-  }), tab === "threads" && /*#__PURE__*/React.createElement(SpdkThreadsPanel, {
-    node: n
-  }), tab === "logs" && /*#__PURE__*/React.createElement(NodeLogPanel, {
-    node: n
-  }), tab === "overview" && /*#__PURE__*/React.createElement(React.Fragment, null, n.status === "unreachable" && /*#__PURE__*/React.createElement("div", {
-    className: "banner"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Node unreachable."), " No heartbeat received. Volumes served by this node have failed over to their secondaries.")), n.op && /*#__PURE__*/React.createElement("div", {
-    className: "card",
-    style: {
-      marginBottom: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "bd"
-  }, /*#__PURE__*/React.createElement(NodeOpBox, {
-    op: n.op,
-    wide: true
-  }), /*#__PURE__*/React.createElement("p", {
-    className: "mdesc",
-    style: {
-      margin: "8px 0 0"
-    }
-  }, OP_HINT[n.op.kind], " Started ", fmtAgo(n.op.startedAt), "; it finishes on its own \u2014 follow it under the cluster's Tasks tab."))), /*#__PURE__*/React.createElement("div", {
-    className: "stats"
-  }, /*#__PURE__*/React.createElement(Stat, {
-    k: "Capacity used",
-    v: pct(n.capacity.used, n.capacity.total).toFixed(0) + "%",
-    s: `${fmtBytes(n.capacity.used)} of ${fmtBytes(n.capacity.total)}`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Devices",
-    v: n.counts.devices,
-    s: `${n.counts.devicesOnline} online`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "vCPU reserved",
-    v: nr(n.cpuReserved),
-    s: n.cpuCount ? `of ${n.cpuCount} vCPUs on the host` : ""
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "System RAM",
-    v: n.memory.total ? fmtBytes(n.memory.total, 0) : "not reported",
-    s: n.memory.used ? `${fmtBytes(n.memory.used, 0)} in use` : "use not reported"
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Storage-plane memory",
-    v: n.memory.reserved ? fmtBytes(n.memory.reserved, 0) : "not reported",
-    s: "SPDK (from hugepages)"
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Hugepages",
-    v: n.hugepages.total ? fmtBytes(n.hugepages.total, 0) : "not reported",
-    s: n.hugepages.used ? `${fmtBytes(n.hugepages.used, 0)} in use` : "on the host; use not reported"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "dcols",
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Resource reservation"), /*#__PURE__*/React.createElement("div", {
-    className: "bd"
-  }, n.memory.used != null ? /*#__PURE__*/React.createElement(AllocBar, {
-    label: "System memory in use",
-    used: n.memory.used,
-    total: n.memory.total,
-    color: "var(--ok)"
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "kv"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "System memory in use"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(NR, {
-    what: "memory in use"
-  })))), n.memory.reserved && n.memory.total ? /*#__PURE__*/React.createElement(AllocBar, {
-    label: "Storage-plane memory (SPDK)",
-    used: n.memory.reserved,
-    total: n.memory.total,
-    color: "var(--accent)"
-  }) : null, n.hugepages.used != null ? /*#__PURE__*/React.createElement(AllocBar, {
-    label: "Hugepages in use",
-    used: n.hugepages.used,
-    total: n.hugepages.total,
-    color: "var(--ro)"
-  }) : /*#__PURE__*/React.createElement("div", {
-    className: "kv"
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages on the host"), /*#__PURE__*/React.createElement("b", null, nrBytes(n.hugepages.total, "hugepages", 0))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Hugepages in use"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(NR, {
-    what: "hugepages in use"
-  })))), /*#__PURE__*/React.createElement("div", {
-    className: "kv",
-    style: {
-      marginTop: 10
-    }
-  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPU reserved"), /*#__PURE__*/React.createElement("b", null, nr(n.cpuReserved))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "vCPUs on host"), /*#__PURE__*/React.createElement("b", null, nr(n.cpuCount))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "SPDK version"), /*#__PURE__*/React.createElement("b", null, nr(n.spdk, "the SPDK version")))))), /*#__PURE__*/React.createElement(IOCards, {
-    o: n
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "sech"
-  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
-    className: "ln"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "navcards"
-  }, /*#__PURE__*/React.createElement(NavCard, {
-    icon: "device",
-    title: "Devices",
-    sub: "attached storage media",
-    count: n.counts.devices,
-    onClick: () => nav.layer(n, "devices")
-  }), n.hostId && /*#__PURE__*/React.createElement(NavCard, {
-    icon: "host",
-    title: "Host",
-    sub: "machine running this node",
-    count: "\u2192",
-    onClick: () => nav.openHost(n.clusterId, n.hostId)
-  })), /*#__PURE__*/React.createElement(NodeDeviceTable, {
-    node: n,
-    nav: nav
-  }), /*#__PURE__*/React.createElement("div", {
-    className: "dcols"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Node properties"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Hostname", n.hostname], ["Management IP", n.mgmtIp], ["Data NICs", (n.dataNics || []).length ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: "flex",
-        flexDirection: "column",
-        gap: 2,
-        alignItems: "flex-end"
-      }
-    }, n.dataNics.map(x => /*#__PURE__*/React.createElement("span", {
-      key: x.name + x.ip
-    }, x.name || /*#__PURE__*/React.createElement(NR, {
-      what: "interface name"
-    }), " \xB7 ", x.ip, ":", x.port, x.trtype ? ` · ${x.trtype}` : ""))) : n.dataNics ? "none" : /*#__PURE__*/React.createElement(NR, {
-      what: "the data NICs"
-    })], ["Multipathing", n.anaPaths > 1 ? /*#__PURE__*/React.createElement("span", null, "yes \u2014 ANA, ", n.anaPaths, " paths: this node", n.secondaryId ? /*#__PURE__*/React.createElement(React.Fragment, null, ", secondary ", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openNode(n.clusterId, n.secondaryId),
-      label: regName(n.secondaryId, shortId(n.secondaryId))
-    })) : null, n.tertiaryId ? /*#__PURE__*/React.createElement(React.Fragment, null, ", tertiary ", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openNode(n.clusterId, n.tertiaryId),
-      label: regName(n.tertiaryId, shortId(n.tertiaryId))
-    })) : null, (n.dataNics || []).length > 1 ? `; ${n.dataNics.length} data NICs each` : "") : (n.dataNics || []).length > 1 ? `yes — ${n.dataNics.length} data NICs` : n.anaPaths ? "no — single path (no secondary node)" : /*#__PURE__*/React.createElement(NR, {
-      what: "the node's paths"
-    })], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
-      status: n.status
-    })], ["Failure domain", n.failureDomain === null || n.failureDomain === undefined ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "var(--dim2)"
-      }
-    }, "not set") : n.failureDomain], ["Physical label", nr(n.physicalLabel, "a physical label")], ["Host", n.hostId ? /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openHost(n.clusterId, n.hostId),
-      label: regName(n.hostId, "host")
-    }) : null], ["Cluster", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openCluster(n.clusterId),
-      label: regName(n.clusterId)
-    })], ["vCPU reserved", nr(n.cpuReserved)], ["Max subsystems", nr(n.maxSubsystems)], ["vCPUs on host", nr(n.cpuCount)], ["System memory", nrBytes(n.memory.total, "system memory", 0)], ["Storage-plane memory (SPDK)", nrBytes(n.memory.reserved, "storage-plane memory", 0)], ["Memory in use", n.memory.used != null ? fmtBytes(n.memory.used, 0) : /*#__PURE__*/React.createElement(NR, {
-      what: "memory in use"
-    })], ["Hugepages", n.hugepages.used != null ? `${fmtBytes(n.hugepages.used, 0)} / ${fmtBytes(n.hugepages.total, 0)}` : /*#__PURE__*/React.createElement(React.Fragment, null, nrBytes(n.hugepages.total, "hugepages", 0), " ", /*#__PURE__*/React.createElement("span", {
-      style: {
-        color: "var(--dim2)"
-      }
-    }, "(use not reported)"))], ["SPDK version", nr(n.spdk, "the SPDK version")]]
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "I/O totals"), /*#__PURE__*/React.createElement("div", {
-    className: "bd"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "stats"
-  }, /*#__PURE__*/React.createElement(Stat, {
-    k: "IOPS read",
-    v: fmtNum(n.iops.r)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "IOPS write",
-    v: fmtNum(n.iops.w)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Read",
-    v: fmtBW(n.bw.r),
-    s: "GB/s"
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Write",
-    v: fmtBW(n.bw.w),
-    s: "GB/s"
-  })))))));
-}
-function DeviceDetail({
-  o: d,
-  nav
-}) {
-  const showHealth = (d.status === "online" || d.status === "read_only") && d.health;
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
-    obj: d,
-    title: d.mode === "nvme" ? d.serial : d.blockdev,
-    badge: /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, d.model),
-    sub: showHealth ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        fontSize: 11.5,
-        color: "var(--dim)",
-        display: "flex",
-        alignItems: "center",
-        gap: 6
-      }
-    }, "health", /*#__PURE__*/React.createElement(TrafficLight, {
-      status: d.health
-    })) : null
-  }), showHealth && d.health === "critical" && /*#__PURE__*/React.createElement("div", {
-    className: "banner"
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Media health critical."), " Elevated error counters reported. Schedule replacement and let the cluster rebalance.")), d.status === "removed" && /*#__PURE__*/React.createElement("div", {
-    className: "banner",
-    style: {
-      color: "var(--warn)",
-      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))",
-      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)"
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "power",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Out of service \u2014 this is reversible."), " The cluster still knows this device and it can be added back at any time; its chunks resynchronise from the surviving copies. Redundancy stays reduced until it returns. If the drive is not coming back, fail it so its chunks are rebuilt and fault tolerance is restored without it.")), d.status === "failed" && /*#__PURE__*/React.createElement("div", {
-    className: "banner",
-    style: {
-      color: "var(--bad)",
-      background: "color-mix(in srgb,var(--bad) 8%,var(--panel))",
-      borderColor: "color-mix(in srgb,var(--bad) 35%,transparent)"
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Permanently failed."), " This device is excluded from the cluster and every chunk that lived on it has been rebuilt onto the remaining devices, so fault tolerance is restored without it. It cannot be added back \u2014 replace the drive and add the new one to the node.")), (d.status === "in_removal" || d.status === "in_failure") && /*#__PURE__*/React.createElement("div", {
-    className: "banner",
-    style: {
-      color: "var(--info)",
-      background: "color-mix(in srgb,var(--info) 8%,var(--panel))",
-      borderColor: "color-mix(in srgb,var(--info) 35%,transparent)"
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "clock",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, d.status === "in_removal" ? "Removal in progress." : "Failure migration in progress."), " ", d.status === "in_removal" ? "The device is being detached from the distribution layer." : "Chunks are being rebuilt onto the remaining devices.", " Follow it under the cluster's Operations tab.")), /*#__PURE__*/React.createElement("div", {
-    className: "stats"
-  }, /*#__PURE__*/React.createElement(Stat, {
-    k: "Capacity used",
-    v: pct(d.capacity.used, d.capacity.total).toFixed(0) + "%",
-    s: `${fmtBytes(d.capacity.used)} of ${fmtBytes(d.capacity.total)}`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "IOPS read",
-    v: fmtNum(d.iops.r)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "IOPS write",
-    v: fmtNum(d.iops.w)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Temperature",
-    v: d.temp + "°C",
-    c: d.temp > 60 ? "var(--warn)" : undefined
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Wear level",
-    v: d.wear + "%",
-    c: d.wear > 25 ? "var(--warn)" : undefined
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Power-on",
-    v: (d.poweronHours / 1000).toFixed(1) + "k",
-    s: "hours"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "dcols"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Device properties"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Serial number", d.serial], ["PCIe address", d.pcie], ["Block device", d.blockdev], ["NUMA socket", d.socket], ["Model", d.model], ["Firmware", d.firmware], ["Status", /*#__PURE__*/React.createElement(TrafficLight, {
-      status: d.status
-    })], showHealth ? ["Health", /*#__PURE__*/React.createElement(TrafficLight, {
-      status: d.health
-    })] : null, d.lastHealthCheck ? ["Last health check", fmtDate(d.lastHealthCheck)] : null, ["Storage node", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openNode(d.clusterId, d.nodeId),
-      label: regName(d.nodeId)
-    })], d.hostId ? ["Host", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openHost(d.clusterId, d.hostId),
-      label: regName(d.hostId, "host")
-    })] : null, ["Cluster", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openCluster(d.clusterId),
-      label: regName(d.clusterId)
-    })], ["Raw capacity", fmtBytes(d.capacity.total)]]
-  }))), /*#__PURE__*/React.createElement(IOCards, {
-    o: d
-  })), /*#__PURE__*/React.createElement("div", {
-    style: {
-      marginTop: 12
-    }
-  }, /*#__PURE__*/React.createElement(SmartCard, {
-    device: d
-  })));
-}
 Object.assign(window, {
-  NodeDeviceTable,
   Props,
   Stat,
   Ref,
@@ -19275,10 +20646,4316 @@ Object.assign(window, {
   DetailHead,
   QosProps,
   regName,
+  HostDetail
+});
+})();
+// ---- cr-headlines.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// CR HEADLINES: what matters first on each kind, and how kinds relate
+//
+// A custom resource has dozens of fields. Which spec fields the first tier
+// of a detail shows comes from the CRD, in an order of its own (cr-view.jsx);
+// the spec tables here only decorate the fields they name: a label, how to
+// format it, a link to a related object, and whether the console offers an
+// edit. They decide the spec rows only when the CRD cannot be read. The
+// status tables still choose the status rows, which the operator writes and
+// the schema cannot rank. A path is spelled exactly as the CRD spells it. Every path
+// is one of storage.simplyblock.io/v1alpha2 on main (or the core kind's own
+// schema); descriptions and enums come from the CRD at run time (cr-view.jsx)
+// and are never restated here. Immutability is read from the CRD too;
+// STATIC_IMMUTABLE is the fallback for a CRD the console cannot read.
+//
+// RELATIONS lists the drill-down cards a kind offers beyond what its curated
+// detail already shows.
+// ---------------------------------------------------------------------------
+const F = {
+  bytes: v => v === null || v === undefined ? null : typeof v === "number" ? fmtBytes(v) : v,
+  bool: v => v === null || v === undefined ? null : v ? "true" : "false",
+  date: v => v ? fmtDate(v) : null,
+  ago: v => v ? fmtAgo(v) : null,
+  list: v => Array.isArray(v) ? v.length ? v.join(", ") : "[]" : v,
+  map: v => v && typeof v === "object" ? Object.entries(v).map(([k, x]) => `${k}=${x}`).join(", ") || "{}" : v,
+  num: v => v === null || v === undefined ? null : fmtNum(v),
+  raw: v => v === null || v === undefined ? null : typeof v === "object" ? JSON.stringify(v) : String(v)
+};
+// the label is the field's own name, so the UI says what the backend says
+const row = (path, opts) => Object.assign({
+  path,
+  label: path.replace(/^(spec|status)\./, ""),
+  fmt: F.raw,
+  mutable: true,
+  type: "text"
+}, opts || {});
+const ro = (path, opts) => row(path, Object.assign({
+  mutable: false
+}, opts || {}));
+const HEADLINES = {
+  StorageCluster: {
+    spec: [ro("spec.clusterMode"), ro("spec.deviceClass"), ro("spec.fabricType"), ro("spec.stripe.dataChunks", {
+      type: "number"
+    }), ro("spec.stripe.parityChunks", {
+      type: "number"
+    }), row("spec.vcpuCount", {
+      type: "number"
+    }), row("spec.maxSubsystemCount", {
+      type: "number"
+    }), row("spec.minHugePagesSize"), ro("spec.nvmfBasePort", {
+      type: "number"
+    }), ro("spec.rpcBasePort", {
+      type: "number"
+    }), ro("spec.snodeApiPort", {
+      type: "number"
+    }), ro("spec.enableFailureDomains", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.enableSyncReplication", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.enableNodeAffinity", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.enableMetadataJournal", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.enableChecksumValidation", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.enableAtomicity4K", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.enableArbitration", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.enableVolumeAutoPlacement", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.disablePlacement", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.disableDataRealignment", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.maxConcurrentWorkerRestarts", {
+      type: "number"
+    }), row("spec.clientDataIfname"), row("spec.warningThreshold.capacity", {
+      type: "number"
+    }), row("spec.warningThreshold.provisionedCapacity", {
+      type: "number"
+    }), row("spec.criticalThreshold.capacity", {
+      type: "number"
+    }), row("spec.criticalThreshold.provisionedCapacity", {
+      type: "number"
+    }), ro("spec.storageNodes.mgmtInterface"), ro("spec.storageNodes.dataInterfaces", {
+      type: "list",
+      fmt: F.list
+    }), ro("spec.storageNodes.nodesPerSocket", {
+      type: "number"
+    }), row("spec.storageNodes.nodeProvisioningBudget", {
+      type: "number"
+    }), row("spec.storageNodes.image"), row("spec.storageNodes.imagePullPolicy", {
+      type: "select"
+    }), ro("spec.storageNodes.enableJournalDevice", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.storageNodes.enableFormat4K", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.storageNodes.enableCpuTopology", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.storageNodes.reservedSystemCPU"), row("spec.storageNodes.socketsToUse", {
+      type: "list",
+      fmt: F.list
+    }), ro("spec.storageNodes.network.spdkOnHostNetwork", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.storageNodes.network.podNetwork", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.backup.endpoint"), row("spec.backup.bucket"), row("spec.backup.region"), row("spec.backup.credentialsSecretRef.name"), row("spec.volumeAutoPlacement.metricsBackend", {
+      type: "select"
+    }), row("spec.volumeAutoPlacement.evaluationInterval"), row("spec.volumeAutoPlacement.imbalanceThreshold", {
+      type: "number"
+    }), row("spec.volumeAutoPlacement.maxVolumeMigrationsPerCycle", {
+      type: "number"
+    }), row("spec.volumeMigrationSettings.dataRealignment.interval"), row("spec.volumeMigrationSettings.dataRealignment.minMoves", {
+      type: "number"
+    }), ro("spec.stretched.site"), ro("spec.stretched.peerSite"), row("spec.stretched.role", {
+      type: "select"
+    }), row("spec.stretched.peerCluster"), ro("spec.superclusterRef"), row("spec.supercluster.placement.strategy", {
+      type: "select"
+    }), ro("spec.kms.vault.endpoint"), ro("spec.kms.kmip.endpoint")],
+    status: [row("status.uuid"), row("status.clusterName"), row("status.phase"), row("status.status"), row("status.message"), row("status.step.state"), row("status.configured", {
+      fmt: F.bool
+    }), row("status.nqn"), row("status.erasureCodingScheme"), row("status.maxFaultTolerance"), row("status.rebalancing", {
+      fmt: F.bool
+    }), row("status.activeOpsRef"), row("status.maxConcurrentWorkerRestarts"), row("status.volumeMoveGeneration"), row("status.realignedGeneration"), row("status.lastDataRealignmentAt", {
+      fmt: F.date
+    }), row("status.role"), row("status.memberCount"), row("status.observedGeneration"), row("status.stretched.role"), row("status.stretched.siteLink"), row("status.stretched.lostSite"), row("status.stretched.peerNodes"), row("status.stretched.peerNodesOnline"), row("status.stretched.siteRecord"), row("status.arbitration.state"), row("status.arbitration.epoch"), row("status.arbitration.fencedNodes", {
+      fmt: F.list
+    }), row("status.arbitration.observedAt", {
+      fmt: F.ago
+    }), row("status.rebalancingMetrics.imbalancePercent"), row("status.rebalancingMetrics.avgDeviationPct"), row("status.rebalancingMetrics.maxDeviationPct"), row("status.rebalancingMetrics.hottestNodeUUID"), row("status.rebalancingMetrics.coolestNodeUUID"), row("status.rebalancingMetrics.lastEvaluatedAt", {
+      fmt: F.ago
+    }), row("status.rebalancingMetrics.lastMigrationAt", {
+      fmt: F.ago
+    }), row("status.workloadNames.nodeAPIService"), row("status.workloadNames.spdkProxyService"), row("status.workloadNames.nodeAPITLSSecret"), row("status.workloadNames.spdkProxyTLSSecret"), row("status.workloadNames.nodeLabelSuffix")],
+    tables: [{
+      path: "status.tasks",
+      title: "status.tasks: the control plane's running and pending jobs",
+      columns: ["id", "type", "status", "retry"]
+    }, {
+      path: "status.provisioningSlots",
+      title: "status.provisioningSlots: workers whose node add is outstanding",
+      columns: ["worker", "node", "takenAt"]
+    }, {
+      path: "status.failureDomains",
+      title: "status.failureDomains",
+      columns: ["name", "index"]
+    }, {
+      path: "status.serviceClasses",
+      title: "status.serviceClasses",
+      columns: ["id", "name", "weight"]
+    }, {
+      path: "status.members",
+      title: "status.members: the supercluster's members",
+      columns: ["name", "uuid", "phase", "placementEligible"]
+    }, {
+      path: "status.arbitration.hostFences",
+      title: "status.arbitration.hostFences",
+      columns: ["node", "state", "epoch", "winner"]
+    }, {
+      path: "status.rebalancingMetrics.nodeMetrics",
+      title: "status.rebalancingMetrics.nodeMetrics",
+      columns: ["nodeUUID", "latencyDeviationPct", "volumeCount", "lastUpdated"]
+    }]
+  },
+  StorageNode: {
+    spec: [ro("spec.clusterRef", {
+      link: "cluster"
+    }), row("spec.workerNode", {
+      link: "worker"
+    }), ro("spec.slot", {
+      type: "number"
+    }), row("spec.socketId"), row("spec.nodeIndex", {
+      type: "number"
+    }), ro("spec.nodeSet"), row("spec.config.sizing.vcpuCount", {
+      type: "number"
+    }), row("spec.config.sizing.minHugePagesSize"), ro("spec.config.mgmtInterface"), ro("spec.config.dataInterfaces", {
+      type: "list",
+      fmt: F.list
+    }), row("spec.config.pcieAllowList", {
+      type: "list",
+      fmt: F.list
+    }), ro("spec.config.pcieDenyList", {
+      type: "list",
+      fmt: F.list
+    }), ro("spec.config.pcieModel"), ro("spec.config.driveSizeRange"), ro("spec.config.deviceNames", {
+      type: "list",
+      fmt: F.list
+    }), ro("spec.config.failureDomain"), ro("spec.config.site"), ro("spec.config.expand", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.config.journalManager.count", {
+      type: "number"
+    }), ro("spec.config.journalManager.percentPerDevice", {
+      type: "number"
+    }), row("spec.config.reservedSystemCPU"), row("spec.config.spdkImage"), row("spec.config.spdkImagePullPolicy", {
+      type: "select"
+    }), row("spec.config.spdkProxyImage"), row("spec.config.spdkProxyImagePullPolicy", {
+      type: "select"
+    }), ro("spec.stretched.remote", {
+      type: "bool",
+      fmt: F.bool
+    })],
+    status: [row("status.uuid"), row("status.hostname"), row("status.phase"), row("status.status"), row("status.health", {
+      fmt: F.bool
+    }), row("status.message"), row("status.step.state"), row("status.activeOpsRef"), row("status.failureDomain"), row("status.uptime"), row("status.nodeAddTaskID"), row("status.observedGeneration"), row("status.ports.management"), row("status.ports.nvmeof"), row("status.ports.rpc"), row("status.ports.lvol"), row("status.resources.cpu"), row("status.resources.memory"), row("status.resources.volumes"), row("status.resources.devices.online"), row("status.resources.devices.total"), row("status.resources.capacity.totalBytes", {
+      fmt: F.bytes
+    }), row("status.resources.capacity.usedBytes", {
+      fmt: F.bytes
+    }), row("status.resources.capacity.sampledAt", {
+      fmt: F.ago
+    }), row("status.latencyMetrics.baselineP50NS", {
+      fmt: F.num
+    }), row("status.latencyMetrics.baselineP99NS", {
+      fmt: F.num
+    }), row("status.latencyMetrics.baselineMeasuredAt", {
+      fmt: F.ago
+    }), row("status.remediation.nodeNotReady", {
+      fmt: F.bool
+    }), row("status.remediation.outOfService", {
+      fmt: F.bool
+    }), row("status.remediation.reportedFenced", {
+      fmt: F.bool
+    }), row("status.remediation.storageFencedEpoch"), row("status.remediation.observedAt", {
+      fmt: F.ago
+    })],
+    tables: [{
+      path: "status.network",
+      title: "status.network: what the SPDK pod reported per storage network",
+      columns: ["network", "phase", "address", "assigned", "interface", "resource", "hostReachable"]
+    }]
+  },
+  StorageDevice: {
+    spec: [ro("spec.nodeRef", {
+      link: "node"
+    }), ro("spec.deviceID")],
+    status: [row("status.phase"), row("status.deviceStatus"), row("status.role"), row("status.message"), row("status.activeOpsRef"), row("status.capacity.totalBytes", {
+      fmt: F.bytes
+    }), row("status.clusterID"), row("status.nodeID"), row("status.site"), row("status.remote", {
+      fmt: F.bool
+    }), row("status.observedGeneration"), row("status.hardware.model"), row("status.hardware.serialNumber"), row("status.hardware.pciAddress"), row("status.hardware.nvmeController"), row("status.health.smart.verdict"), row("status.health.smart.reason"), row("status.health.smart.checkedAt", {
+      fmt: F.ago
+    }), row("status.health.smart.source"), row("status.health.smart.temperatureCelsius"), row("status.health.smart.percentageUsed"), row("status.health.smart.availableSparePercent"), row("status.health.smart.availableSpareThresholdPercent"), row("status.health.smart.mediaErrors"), row("status.health.smart.criticalWarning"), row("status.health.smart.powerOnHours", {
+      fmt: F.num
+    }), row("status.health.smart.unsafeShutdowns"), row("status.health.smart.reallocatedSectors"), row("status.health.smart.pendingSectors"), row("status.health.smart.smartPassed", {
+      fmt: F.bool
+    }), row("status.health.performance.verdict"), row("status.health.performance.reason"), row("status.health.performance.since", {
+      fmt: F.ago
+    }), row("status.health.performance.assessedAt", {
+      fmt: F.ago
+    }), row("status.health.performance.latencyMicroseconds"), row("status.health.performance.fleetLatencyMicroseconds"), row("status.health.performance.latencyRatioPercent"), row("status.health.performance.iopsRatioPercent")]
+  },
+  StoragePool: {
+    spec: [ro("spec.clusterRef", {
+      link: "cluster"
+    }), row("spec.limits.capacity"), row("spec.limits.maxVolumeSize"), row("spec.limits.iops", {
+      type: "number"
+    }), row("spec.limits.throughput.readWrite", {
+      type: "number"
+    }), row("spec.limits.throughput.read", {
+      type: "number"
+    }), row("spec.limits.throughput.write", {
+      type: "number"
+    }), row("spec.allowedNodes", {
+      type: "list",
+      fmt: F.list
+    }), ro("spec.volumeDefaults.filesystem"), ro("spec.volumeDefaults.fabric"), ro("spec.volumeDefaults.iops", {
+      type: "number"
+    }), ro("spec.volumeDefaults.throughput.readWrite", {
+      type: "number"
+    }), ro("spec.volumeDefaults.throughput.read", {
+      type: "number"
+    }), ro("spec.volumeDefaults.throughput.write", {
+      type: "number"
+    }), ro("spec.volumeDefaults.enableCompression", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.volumeDefaults.enableClientCompression", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.volumeDefaults.enableClientDeduplication", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.volumeDefaults.enableReplication", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.volumeDefaults.enableDHCHAP", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.volumeDefaults.maxNamespacesPerSubsystem", {
+      type: "number"
+    }), ro("spec.volumeDefaults.priorityClass"), ro("spec.volumeDefaults.stripeWidth", {
+      type: "number"
+    }), ro("spec.volumeDefaults.stripeSize"), ro("spec.volumeDefaults.tune2fsReservedBlocks")],
+    status: [row("status.uuid"), row("status.phase"), row("status.status"), row("status.message"), row("status.activeOpsRef"), row("status.observedGeneration"), row("status.storageClassNames", {
+      fmt: F.list
+    }), row("status.defaultStorageClassName", {
+      link: "storageclass"
+    }), row("status.allowedNodes", {
+      fmt: F.list
+    }), row("status.limits.capacity"), row("status.limits.iops"), row("status.limits.host"), row("status.limits.throughput.readWrite"), row("status.limits.throughput.read"), row("status.limits.throughput.write")],
+    tables: [{
+      path: "status.members",
+      title: "status.members: the pool in each supercluster member",
+      columns: ["cluster", "uuid", "phase", "message"]
+    }]
+  },
+  ControlPlane: {
+    spec: [row("spec.source.local.image"), row("spec.source.local.imagePullPolicy", {
+      type: "select"
+    }), row("spec.source.local.replicas", {
+      type: "number"
+    }), row("spec.source.local.foundationDB.replicas", {
+      type: "number"
+    }), row("spec.source.local.foundationDB.storageClassName"), ro("spec.source.local.tls.enableTLS", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.source.local.tls.enableMutualTLS", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.source.local.tls.provider"), row("spec.source.local.observability.enableMonitoring", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.source.local.adminTokenSecretRef.name"), row("spec.source.local.eksRoleARN"), row("spec.source.managed.endpoint"), row("spec.source.managed.credentialsSecretRef.name"), row("spec.source.managed.caBundleSecretRef.name"), row("spec.source.managed.storageNodeImage")],
+    status: [row("status.phase"), row("status.message"), row("status.endpoint"), row("status.version"), row("status.lastChecked", {
+      fmt: F.ago
+    }), row("status.step.state"), row("status.activeOpsRef"), row("status.storageClassName"), row("status.observedGeneration")],
+    tables: [{
+      path: "status.components",
+      title: "status.components: the per-component readiness the phase is derived from",
+      columns: ["name", "ready", "desired", "essential"]
+    }]
+  },
+  SimplyblockDriver: {
+    spec: [ro("spec.driverName"), row("spec.image"), row("spec.imagePullPolicy", {
+      type: "select"
+    }), row("spec.controllerReplicas", {
+      type: "number"
+    }), row("spec.enableVolumeSnapshots", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.enableCSIAddons", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.enableNVMeTCPModuleInstall", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.enableServiceAccountAuth", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.disableDeviceMapperIndirection", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.tls.enableTLS", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.tls.enableMutualTLS", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.tls.provider", {
+      type: "select"
+    })],
+    status: [row("status.phase"), row("status.message"), row("status.version"), row("status.controllerReady", {
+      fmt: F.bool
+    }), row("status.nodesReady"), row("status.nodesTotal"), row("status.snapshotSupport"), row("status.origin"), row("status.observedGeneration")]
+  },
+  ClusterDeploymentConfig: {
+    spec: [row("spec.approved", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.clusterRef"), ro("spec.environment"), row("spec.edgeCluster", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.cluster.name"), row("spec.cluster.vcpuCount", {
+      type: "number"
+    }), row("spec.cluster.maxSubsystemCount", {
+      type: "number"
+    }), row("spec.cluster.minHugePagesSize"), row("spec.cluster.fabricType"), row("spec.cluster.clusterMode", {
+      type: "select"
+    }), row("spec.cluster.stripe.dataChunks", {
+      type: "number"
+    }), row("spec.cluster.stripe.parityChunks", {
+      type: "number"
+    }), row("spec.cluster.nodesPerSocket", {
+      type: "number"
+    }), row("spec.cluster.nodeProvisioningBudget", {
+      type: "number"
+    }), row("spec.cluster.enableFailureDomains", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.cluster.enableJournalDevice", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.cluster.enableDriveFormat", {
+      type: "bool",
+      fmt: F.bool
+    }), row("spec.hostOS.family"), row("spec.hostOS.distro"), row("spec.images.spdk.image"), row("spec.images.spdkProxy.image"), row("spec.images.nodeAgent.image")],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.clusterRef", {
+      link: "cluster"
+    }), row("status.nodeRefs", {
+      fmt: F.list
+    }), row("status.expansionStartedAt", {
+      fmt: F.date
+    }), row("status.observedGeneration")],
+    tables: [{
+      path: "status.members",
+      title: "status.members",
+      columns: ["nodeSet", "cluster"]
+    }]
+  },
+  StorageBackup: {
+    spec: [ro("spec.source.claimName", {
+      link: "pvc"
+    }), ro("spec.clusterRef", {
+      link: "cluster"
+    })],
+    status: [row("status.phase"), row("status.apiStatus"), row("status.message"), row("status.activeOpsRef"), row("status.clusterID"), row("status.backup.backupID"), row("status.backup.previousBackupID"), row("status.backup.size", {
+      fmt: F.bytes
+    }), row("status.backup.s3ID"), row("status.backup.startedAt", {
+      fmt: F.date
+    }), row("status.backup.completedAt", {
+      fmt: F.date
+    }), row("status.source.claimName"), row("status.source.claimNamespace"), row("status.source.persistentVolumeName", {
+      link: "pv"
+    }), row("status.source.lvolID"), row("status.source.lvolName"), row("status.source.poolName"), row("status.source.poolUUID"), row("status.source.clusterUUID"), row("status.source.nodeID"), row("status.source.fsType"), row("status.source.volumeMode"), row("status.source.snapshotID"), row("status.source.snapshotName"), row("status.source.group.consistencyGroupName"), row("status.source.group.generation"), row("status.source.group.groupBackupID"), row("status.source.group.memberCount"), row("status.observedGeneration")]
+  },
+  StorageBackupPolicy: {
+    spec: [ro("spec.clusterRef", {
+      link: "cluster"
+    }), ro("spec.schedule"), row("spec.consistencyGroupName"), row("spec.claimSelector.matchLabels", {
+      fmt: F.map
+    })],
+    status: [row("status.phase"), row("status.message"), row("status.policyID"), row("status.clusterID"), row("status.retention.maxVersions"), row("status.retention.maxAge"), row("status.lastBackupAt", {
+      fmt: F.ago
+    }), row("status.observedGeneration")],
+    tables: [{
+      path: "status.attachedClaims",
+      title: "status.attachedClaims: the claims the policy covers",
+      columns: ["name", "persistentVolumeName", "lvolID", "clusterID", "attachedAt"]
+    }, {
+      path: "status.members",
+      title: "status.members",
+      columns: ["cluster", "clusterID", "policyID"]
+    }]
+  },
+  StorageClusterOps: {
+    spec: [ro("spec.clusterRef", {
+      link: "cluster"
+    }), ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.rollingRestart.refreshSNodeAPI", {
+      fmt: F.bool
+    }), ro("spec.cancelTask.taskID")],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.rollingRestart.nodeIndex"), row("status.rollingRestart.nodes", {
+      fmt: F.list
+    }), row("status.rollingRestart.skipped", {
+      fmt: F.list
+    }), row("status.observedGeneration")]
+  },
+  StorageNodeOps: {
+    spec: [ro("spec.nodeRef", {
+      link: "node"
+    }), ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.force", {
+      fmt: F.bool
+    }), ro("spec.reattachVolume", {
+      fmt: F.bool
+    }), ro("spec.migrate.targetWorkerNode", {
+      link: "worker"
+    }), ro("spec.migrate.newSsdPcie", {
+      fmt: F.list
+    }), ro("spec.remove.systemVolumeFilterRegex")],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.drain.volumesMigrated"), row("status.drain.volumesTotal"), row("status.removal.nodeStatus"), row("status.removal.devices", {
+      fmt: F.map
+    }), row("status.removal.prepareAttempts"), row("status.removal.lastPrepareTime", {
+      fmt: F.ago
+    }), row("status.removal.lastProgressTime", {
+      fmt: F.ago
+    }), row("status.observedGeneration")]
+  },
+  StorageDeviceOps: {
+    spec: [ro("spec.deviceRef"), ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    })],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.deviceStatusBefore"), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.observedGeneration")]
+  },
+  StoragePoolOps: {
+    spec: [ro("spec.poolRef", {
+      link: "pool"
+    }), ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    })],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.observedGeneration")]
+  },
+  PersistentVolumeOps: {
+    spec: [ro("spec.persistentVolumeName", {
+      link: "pv"
+    }), ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.migrate.targetNodeRef.namespace"), ro("spec.migrate.targetNodeRef.name", {
+      link: "node"
+    }), ro("spec.relocate.targetClusterRef", {
+      link: "cluster"
+    }), ro("spec.joinConsistencyGroup.groupName"), ro("spec.joinConsistencyGroup.suspendTimeoutSeconds"), ro("spec.creatorRef.kind"), ro("spec.creatorRef.namespace"), ro("spec.creatorRef.name"), ro("spec.creatorRef.uid")],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.deferredSince", {
+      fmt: F.ago
+    }), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.migration.migrationUUID"), row("status.migration.clusterUUID"), row("status.migration.poolUUID"), row("status.migration.volumeUUID"), row("status.migration.subsystemNQN"), row("status.migration.sourceNodeUUID"), row("status.migration.targetNodeUUID"), row("status.migration.memberCount"), row("status.migration.continuedAt", {
+      fmt: F.ago
+    }), row("status.relocate.sourceClusterUUID"), row("status.relocate.targetClusterUUID"), row("status.relocate.targetPoolUUID"), row("status.relocate.committed", {
+      fmt: F.bool
+    }), row("status.relocate.nodesMissingPaths", {
+      fmt: F.list
+    }), row("status.joinConsistencyGroup.groupUUID"), row("status.joinConsistencyGroup.joined", {
+      fmt: F.bool
+    }), row("status.joinConsistencyGroup.targetNQN"), row("status.joinConsistencyGroup.namespacesAt"), row("status.joinConsistencyGroup.rollbackReason"), row("status.observedGeneration")],
+    tables: [{
+      path: "status.migration.connections",
+      title: "status.migration.connections: the paths published on the target",
+      columns: ["nqn", "address", "port", "transport", "nrIOQueues", "ctrlLossTimeoutSeconds"]
+    }, {
+      path: "status.migration.validationJobs",
+      title: "status.migration.validationJobs",
+      columns: ["namespace", "name", "node", "succeeded"]
+    }, {
+      path: "status.relocate.volumes",
+      title: "status.relocate.volumes",
+      columns: ["volumeUUID", "persistentVolumeName", "taskID", "proceeded", "cutOver", "targetVolumeUUID"]
+    }]
+  },
+  ControlPlaneOps: {
+    spec: [ro("spec.controlPlaneRef"), ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.restart.components", {
+      fmt: F.list
+    }), ro("spec.upgrade.image"), ro("spec.backup.backupName"), ro("spec.backup.blobStore"), ro("spec.hostMaintenance.workerNode", {
+      link: "worker"
+    })],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.backupRef"), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.hostMaintenance.zone"), row("status.hostMaintenance.coordinatorPlacement"), row("status.hostMaintenance.coordinators", {
+      fmt: F.list
+    }), row("status.hostMaintenance.excludedProcesses", {
+      fmt: F.list
+    }), row("status.hostMaintenance.processGroups", {
+      fmt: F.list
+    }), row("status.hostMaintenance.drainObservedAt", {
+      fmt: F.ago
+    }), row("status.hostMaintenance.drainObservedBy"), row("status.hostMaintenance.maintenanceUntil", {
+      fmt: F.date
+    }), row("status.observedGeneration")]
+  },
+  OperatorOps: {
+    spec: [ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.discover.configName"), ro("spec.discover.clusterRef", {
+      link: "cluster"
+    }), ro("spec.discover.workers", {
+      fmt: F.list
+    }), ro("spec.discover.nodeSelector", {
+      fmt: F.map
+    }), ro("spec.discover.enableControlPlaneNodes", {
+      fmt: F.bool
+    }), ro("spec.discover.enableFailureDomains", {
+      fmt: F.bool
+    }), ro("spec.discover.enableLogicalBlockDevices", {
+      fmt: F.bool
+    }), ro("spec.discover.failureDomainLabel"), ro("spec.discover.deviceFilter.pcieAllowList", {
+      fmt: F.list
+    }), ro("spec.discover.deviceFilter.pcieDenyList", {
+      fmt: F.list
+    }), ro("spec.discover.deviceFilter.pcieModel"), ro("spec.discover.deviceFilter.driveSizeRange")],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.configRef"), row("status.environment"), row("status.workers", {
+      fmt: F.list
+    }), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.observedGeneration")]
+  },
+  StorageBackupOps: {
+    spec: [ro("spec.action"), row("spec.abort", {
+      type: "bool",
+      fmt: F.bool
+    }), ro("spec.clusterRef.name", {
+      link: "cluster"
+    }), ro("spec.backupRef.name"), ro("spec.backupRef.namespace"), ro("spec.groupBackupID"), ro("spec.groupBackupRef.name"), ro("spec.restore.claimName"), ro("spec.restore.targetPool", {
+      link: "pool"
+    }), ro("spec.restore.volumeMode")],
+    status: [row("status.phase"), row("status.step.state"), row("status.message"), row("status.claimName"), row("status.persistentVolumeName", {
+      link: "pv"
+    }), row("status.restoredLvolID"), row("status.backupID"), row("status.clusterID"), row("status.poolUUID"), row("status.restoredGroupID"), row("status.startedAt", {
+      fmt: F.date
+    }), row("status.completedAt", {
+      fmt: F.date
+    }), row("status.observedGeneration")],
+    tables: [{
+      path: "status.restoredGroupMembers",
+      title: "status.restoredGroupMembers",
+      columns: ["memberName", "lvolID", "claimName"]
+    }]
+  },
+  PersistentVolume: {
+    spec: [ro("spec.capacity.storage"), ro("spec.accessModes", {
+      fmt: F.list
+    }), ro("spec.storageClassName", {
+      link: "storageclass"
+    }), row("spec.persistentVolumeReclaimPolicy", {
+      type: "select",
+      options: ["Retain", "Delete"]
+    }), ro("spec.volumeMode"), ro("spec.csi.driver"), ro("spec.csi.volumeHandle"), ro("spec.csi.fsType"), ro("spec.claimRef.namespace"), ro("spec.claimRef.name", {
+      link: "pvc"
+    })],
+    status: [row("status.phase"), row("status.reason"), row("status.message")]
+  },
+  PersistentVolumeClaim: {
+    spec: [ro("spec.storageClassName", {
+      link: "storageclass"
+    }), row("spec.resources.requests.storage"), ro("spec.accessModes", {
+      fmt: F.list
+    }), ro("spec.volumeMode"), ro("spec.volumeName", {
+      link: "pv"
+    }), ro("spec.dataSource", {
+      fmt: F.raw
+    }), ro("spec.dataSourceRef", {
+      fmt: F.raw
+    })],
+    status: [row("status.phase"), row("status.capacity.storage"), row("status.accessModes", {
+      fmt: F.list
+    }), row("status.allocatedResources.storage")],
+    annotations: ["simplyblock.io/backup-policy", "storage.simplyblock.io/replication-policy", "simplyblock.io/selected-storage-node", "simplyblock.io/qos-rw-iops", "simplyblock.io/qos-rw-mbps"]
+  },
+  StorageClass: {
+    spec: [ro("provisioner"), ro("parameters.cluster_id"), ro("parameters.pool_name", {
+      link: "pool"
+    }), ro("parameters.fabric"), ro("parameters.csi.storage.k8s.io/fstype"), ro("parameters.max_iops"), ro("parameters.max_mbytes_per_sec"), ro("parameters.max_read_mbytes_per_sec"), ro("parameters.max_write_mbytes_per_sec"), ro("parameters.compression"), ro("parameters.client_compression"), ro("parameters.client_deduplication"), ro("parameters.replicate"), ro("parameters.priority_class"), ro("parameters.max_namespace_per_subsys"), ro("parameters.stripe_width"), ro("parameters.stripe_size"), ro("reclaimPolicy"), ro("volumeBindingMode"), row("allowVolumeExpansion", {
+      type: "bool",
+      fmt: F.bool
+    }), row("mountOptions", {
+      fmt: F.list
+    })],
+    status: []
+  },
+  VolumeSnapshot: {
+    spec: [ro("spec.volumeSnapshotClassName"), ro("spec.source.persistentVolumeClaimName", {
+      link: "pvc"
+    }), ro("spec.source.volumeSnapshotContentName")],
+    status: [row("status.readyToUse", {
+      fmt: F.bool
+    }), row("status.creationTime", {
+      fmt: F.date
+    }), row("status.restoreSize"), row("status.boundVolumeSnapshotContentName", {
+      link: "vsc"
+    }), row("status.error.message")]
+  },
+  VolumeSnapshotContent: {
+    spec: [ro("spec.driver"), row("spec.deletionPolicy", {
+      type: "select",
+      options: ["Retain", "Delete"]
+    }), ro("spec.volumeSnapshotRef.namespace"), ro("spec.volumeSnapshotRef.name")],
+    status: [row("status.readyToUse", {
+      fmt: F.bool
+    }), row("status.snapshotHandle"), row("status.restoreSize", {
+      fmt: F.bytes
+    }), row("status.creationTime")]
+  },
+  Node: {
+    spec: [row("spec.unschedulable", {
+      fmt: F.bool
+    }), row("spec.taints", {
+      fmt: F.raw
+    })],
+    status: [row("status.nodeInfo.kubeletVersion"), row("status.nodeInfo.osImage"), row("status.nodeInfo.kernelVersion"), row("status.nodeInfo.containerRuntimeVersion"), row("status.capacity.cpu"), row("status.capacity.memory"), row("status.capacity.pods")]
+  },
+  Pod: {
+    spec: [ro("spec.nodeName"), ro("spec.serviceAccountName"), ro("spec.hostNetwork", {
+      fmt: F.bool
+    })],
+    status: [row("status.phase"), row("status.podIP"), row("status.hostIP"), row("status.startTime", {
+      fmt: F.date
+    })]
+  }
+};
+
+// static immutability, from the CRDs' `self == oldSelf` rules on main, used
+// only when the CRD itself cannot be read
+const STATIC_IMMUTABLE = {
+  StorageCluster: ["spec.deviceClass", "spec.fabricType", "spec.stripe", "spec.nvmfBasePort", "spec.rpcBasePort", "spec.snodeApiPort", "spec.enableFailureDomains", "spec.enableSyncReplication", "spec.enableNodeAffinity", "spec.enableChecksumValidation", "spec.enableAtomicity4K", "spec.enableMetadataJournal", "spec.storageNodes.mgmtInterface", "spec.storageNodes.dataInterfaces", "spec.storageNodes.network", "spec.storageNodes.nodesPerSocket", "spec.storageNodes.enableJournalDevice", "spec.storageNodes.enableFormat4K", "spec.storageNodes.enableBlockFormat", "spec.stretched.site", "spec.stretched.peerSite", "spec.superclusterRef", "spec.kms"],
+  StorageNode: ["spec.clusterRef", "spec.nodeSet", "spec.slot", "spec.config.journalManager", "spec.config.deviceNames", "spec.config.mgmtInterface", "spec.config.dataInterfaces", "spec.config.pcieDenyList", "spec.config.pcieModel", "spec.config.driveSizeRange", "spec.config.failureDomain", "spec.config.site", "spec.config.expand", "spec.stretched.remote"],
+  StorageDevice: ["spec.nodeRef", "spec.deviceID"],
+  StoragePool: ["spec.clusterRef", "spec.volumeDefaults"],
+  ControlPlane: ["spec.source.local.tls"],
+  SimplyblockDriver: ["spec.driverName"],
+  ClusterDeploymentConfig: ["spec.clusterRef", "spec.environment"],
+  StorageBackupPolicy: ["spec.clusterRef", "spec.schedule"],
+  StorageBackup: ["spec.clusterRef", "spec.source"],
+  StorageClusterOps: ["spec.clusterRef", "spec.action", "spec.cancelTask.taskID"],
+  StorageNodeOps: ["spec.nodeRef", "spec.action", "spec.migrate.targetWorkerNode"],
+  StorageDeviceOps: ["spec.deviceRef", "spec.action"],
+  StoragePoolOps: ["spec.poolRef", "spec.action"],
+  PersistentVolumeOps: ["spec.persistentVolumeName", "spec.action", "spec.migrate.targetNodeRef", "spec.relocate.targetClusterRef", "spec.creatorRef"],
+  ControlPlaneOps: ["spec.controlPlaneRef", "spec.action", "spec.upgrade", "spec.restart", "spec.backup", "spec.hostMaintenance"],
+  OperatorOps: ["spec.action"],
+  StorageBackupOps: ["spec.action", "spec.clusterRef", "spec.backupRef", "spec.groupBackupID", "spec.groupBackupRef", "spec.restore"],
+  ReplicationPair: ["spec.targetCluster"],
+  ReplicationSlot: ["spec.policyRef", "spec.pvcRef", "spec.volumeID"],
+  PersistentVolume: ["spec.capacity", "spec.accessModes", "spec.storageClassName", "spec.volumeMode", "spec.csi", "spec.claimRef"],
+  PersistentVolumeClaim: ["spec.storageClassName", "spec.accessModes", "spec.volumeMode", "spec.volumeName", "spec.dataSource", "spec.dataSourceRef"],
+  StorageClass: ["provisioner", "parameters", "reclaimPolicy", "volumeBindingMode"],
+  VolumeSnapshot: ["spec.volumeSnapshotClassName", "spec.source"],
+  VolumeSnapshotContent: ["spec.driver", "spec.volumeSnapshotRef", "spec.source"]
+};
+
+// the map from a view-model kind to its CR kind (what the two tiers render)
+const VM_CR_KIND = {
+  cluster: "StorageCluster",
+  node: "StorageNode",
+  device: "StorageDevice",
+  pool: "StoragePool",
+  volume: "PersistentVolume",
+  pvc: "PersistentVolumeClaim",
+  storageclass: "StorageClass",
+  snapshot: "VolumeSnapshot",
+  backup: "StorageBackup",
+  policy: "StorageBackupPolicy",
+  host: "Node",
+  deployconfig: "ClusterDeploymentConfig",
+  slot: "ReplicationSlot",
+  pair: "ReplicationPair",
+  rpolicy: "ReplicationPolicy",
+  replops: "ReplicationOps",
+  controlplane: "ControlPlane",
+  driver: "SimplyblockDriver"
+};
+
+// drill-down cards a kind offers beyond its curated detail; each resolves to a nav call
+const RELATIONS = {
+  cluster: [{
+    go: "monitor",
+    icon: "clock",
+    title: "Operations",
+    sub: "the Ops objects on this cluster and its nodes, and the control plane's task window"
+  }, {
+    go: "alerts",
+    icon: "bell",
+    title: "Alerts",
+    sub: "open and recently resolved"
+  }],
+  node: [{
+    go: "monitor",
+    icon: "clock",
+    title: "Operations",
+    sub: "restarts, drains, and migrations of this node"
+  }],
+  pool: [{
+    layer: "pvcs",
+    icon: "volume",
+    title: "Claims",
+    sub: "PVCs provisioned through this pool's classes"
+  }],
+  volume: [{
+    layer: "snapshots",
+    icon: "camera",
+    title: "Snapshots",
+    sub: "VolumeSnapshots of this claim"
+  }]
+};
+Object.assign(window, {
+  HEADLINES,
+  STATIC_IMMUTABLE,
+  VM_CR_KIND,
+  RELATIONS,
+  F
+});
+})();
+// ---- cr-view.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// CR VIEW: two tiers over any custom resource, and its Kubernetes side
+//
+//   Essentials   the headline fields of the kind (cr-headlines.jsx), spec
+//                editable in place where the CRD allows it, status read-only,
+//                the active operation, generation drift
+//   Everything   the spec as the CRD describes it, every field set or not and
+//                editable in place, the status as a read-only tree, locked
+//                fields marked, descriptions on hover, and the object as YAML
+//   Kubernetes   owners, labels and annotations, events, the raw metadata
+//
+// Field names are the CRD's own; descriptions, enums, and immutability come
+// from the CRD read through apiextensions (a field whose validation rule says
+// `self == oldSelf`, or whose parent says `!has(oldSelf.x) || has(self.x)`,
+// cannot change after creation). Two more properties come from the CRD's
+// annotations, which the operator's +simplyblock: field markers write
+// (operator/hack/fieldmarkers): an operator-managed field is the operator's to
+// change, an advanced one is shown in Everything only, and an invisible one is
+// not shown at all. Essentials lists the spec fields of the CRD, top-level ones
+// first and then nested ones, each in natural order, so a field added to the
+// API reaches the console without an edit here; the curated headlines of the
+// kind (cr-headlines.jsx) only decorate the fields they name, and one the CRD
+// no longer has is dropped. An edit is refused in the console for immutable
+// and operator-managed fields; every other edit is sent as a dry
+// run first, so a webhook or CEL message is shown verbatim before anything is
+// written. The YAML block stays the whole object, invisible fields included,
+// because it is what a copy or a download is made from.
+//
+// CRPanel is embedded in the curated details; CRView is the standalone page
+// for a kind without one (route segment `cr` with an object key as its id).
+// ---------------------------------------------------------------------------
+const CRD_CACHE = new Map();
+const getPath = (o, path) => String(path || "").split(".").reduce((v, k) => v === null || v === undefined ? undefined : v[k], o);
+const setPath = (patch, path, value) => {
+  const ks = path.split(".");
+  let cur = patch;
+  ks.slice(0, -1).forEach(k => {
+    cur[k] = cur[k] || {};
+    cur = cur[k];
+  });
+  cur[ks[ks.length - 1]] = value;
+  return patch;
+};
+const kindOfRes = kind => RESOURCES[kind] || {};
+const crdNameOf = kind => {
+  const r = kindOfRes(kind);
+  if (!r.plural) return null;
+  const group = r.core ? r.core.includes("/") ? r.core.split("/")[0] : null : GROUP;
+  return group ? `${r.plural}.${group}` : null;
+};
+const downloadText = (name, text) => {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([text], {
+    type: "text/plain"
+  }));
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+// ---- the CRD schema: immutable paths, descriptions, enums -------------------
+async function readCrdSchema(kind) {
+  if (CRD_CACHE.has(kind)) return CRD_CACHE.get(kind);
+  const name = crdNameOf(kind);
+  const p = (async () => {
+    const out = emptySchema(kind);
+    if (!name) return out;
+    let crd;
+    try {
+      crd = await k8s.get("CustomResourceDefinition", name);
+    } catch (e) {
+      out.error = e;
+      return out;
+    }
+    const r = kindOfRes(kind);
+    const want = r.version || (r.core ? r.core.split("/")[1] : VERSION);
+    const version = (crd.spec.versions || []).find(v => v.name === want) || (crd.spec.versions || []).find(v => v.storage) || null;
+    const schema = version && version.schema && version.schema.openAPIV3Schema;
+    if (!schema) return out;
+    out.source = "crd";
+    out.version = version.name;
+    markedPaths(crd, "simplyblock.io/operator-managed-fields", version.name).forEach(p => out.managed.add(p));
+    markedPaths(crd, "simplyblock.io/invisible-fields", version.name).forEach(p => out.invisible.add(p));
+    markedPaths(crd, "simplyblock.io/advanced-fields", version.name).forEach(p => out.advanced.add(p));
+    // within is set below a list or a map: a field there names one field of
+    // every element, which has no single value to show or to patch
+    const walk = (node, path, within) => {
+      if (!node || typeof node !== "object") return;
+      if (path && node.description) out.descriptions[path] = node.description;
+      if (path && node.enum) out.enums[path] = node.enum;
+      if (path && node.type) out.types[path] = node.type;
+      if (path) out.known.add(path);
+      // a spec field Essentials can show and edit: a scalar, a list of
+      // scalars, or a string map; an object is listed through its fields
+      if (path.startsWith("spec.") && !within) out.order.push(path);
+      if (path.startsWith("spec.") && !within) {
+        const items = node.items || {};
+        const scalar = ["string", "integer", "number", "boolean"].includes(node.type);
+        const list = node.type === "array" && ["string", "integer", "number"].includes(items.type);
+        const kv = node.type === "object" && !node.properties && node.additionalProperties && node.additionalProperties.type === "string";
+        if (scalar || list || kv) out.fields.push({
+          path,
+          type: node.type,
+          list,
+          kv
+        });
+      }
+      (node["x-kubernetes-validations"] || []).forEach(v => {
+        const rule = String(v.rule || "");
+        if (/^\s*self\s*==\s*oldSelf\s*$/.test(rule) && path) out.immutable.add(path);
+        let m;
+        // `!has(oldSelf.x) || has(self.x)`: write-once, so immutable once set
+        const re0 = /!has\(oldSelf\.(\w+)\)\s*\|\|\s*has\(self\.(\w+)\)/g;
+        while (m = re0.exec(rule)) {
+          if (m[1] === m[2]) out.immutable.add(path ? `${path}.${m[1]}` : m[1]);
+        }
+        const re = /(?:!has\(oldSelf\.(\w+)\)\s*\|\|\s*)?self\.(\w+)\s*==\s*oldSelf\.(\w+)/g;
+        while (m = re.exec(rule)) {
+          if (m[2] === m[3]) out.immutable.add(path ? `${path}.${m[2]}` : m[2]);
+        }
+        const re2 = /!has\(self\.(\w+)\)\s*\|\|\s*!has\(oldSelf\.(\w+)\)\s*\|\|\s*self\.(\w+)\s*==\s*oldSelf\.(\w+)/g;
+        while (m = re2.exec(rule)) {
+          if (m[3] === m[4]) out.immutable.add(path ? `${path}.${m[3]}` : m[3]);
+        }
+      });
+      Object.entries(node.properties || {}).forEach(([k, child]) => walk(child, path ? `${path}.${k}` : k, within));
+      if (node.items) walk(node.items, path, true);
+      if (node.additionalProperties && typeof node.additionalProperties === "object") walk(node.additionalProperties, path, true);
+    };
+    walk(schema, "");
+    out.specNode = (schema.properties || {}).spec || null;
+    out.fieldByPath = Object.fromEntries(out.fields.map(f => [f.path, f]));
+    return out;
+  })();
+  CRD_CACHE.set(kind, p);
+  return p;
+}
+function useCrdSchema(kind) {
+  const [s, setS] = React.useState(null);
+  React.useEffect(() => {
+    let alive = true;
+    readCrdSchema(kind).then(x => alive && setS(x));
+    return () => {
+      alive = false;
+    };
+  }, [kind]);
+  return s || Object.assign(emptySchema(kind), {
+    loading: true
+  });
+}
+const emptySchema = kind => ({
+  immutable: new Set(STATIC_IMMUTABLE[kind] || []),
+  managed: new Set(),
+  invisible: new Set(),
+  advanced: new Set(),
+  known: new Set(),
+  fields: [],
+  order: [],
+  fieldByPath: {},
+  specNode: null,
+  descriptions: {},
+  enums: {},
+  types: {},
+  source: "static"
+});
+// A marker annotation holds the marked paths per API version as JSON:
+// {"v1alpha2":["spec.a","status.b"]}. A malformed one marks nothing.
+const markedPaths = (crd, key, version) => {
+  try {
+    const v = JSON.parse(((crd.metadata || {}).annotations || {})[key] || "{}")[version];
+    return Array.isArray(v) ? v : [];
+  } catch (e) {
+    return [];
+  }
+};
+// a path is marked when it, or an object above it, is
+const marked = (set, path) => {
+  const parts = path.split(".");
+  for (let i = 1; i <= parts.length; i++) if (set.has(parts.slice(0, i).join("."))) return true;
+  return false;
+};
+const isImmutable = (schema, path) => marked(schema.immutable, path);
+const isManaged = (schema, path) => !!schema.managed && marked(schema.managed, path);
+// An operator-managed field is, to the console, an immutable one: neither is
+// the user's to change. This is the one check every lock decision goes through.
+const isLocked = (schema, path) => !!schema && (isImmutable(schema, path) || isManaged(schema, path));
+const isInvisible = (schema, path) => !!schema.invisible && marked(schema.invisible, path);
+const isAdvanced = (schema, path) => !!schema.advanced && marked(schema.advanced, path);
+// what Essentials leaves out: an advanced field is in Everything only
+const offEssentials = (schema, path) => isInvisible(schema, path) || isAdvanced(schema, path);
+// The spec rows of Essentials. With the CRD read, they are its spec fields:
+// the top-level ones first, then the nested ones, each in natural order
+// (port2 before port10, case aside), which keeps every block together; a curated
+// headline (cr-headlines.jsx) only decorates the field it names, with a label,
+// a format, a link, or a read-only flag, and one naming an object stands in for
+// the fields below it. A headline the CRD does not have is dropped. Without
+// the CRD, the curated headlines are all there is to go by.
+function essentialSpecRows(curated, schema) {
+  if (schema.source !== "crd") return curated.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
+  const byPath = Object.fromEntries(curated.map(r => [r.path, r]));
+  const fields = Object.fromEntries(schema.fields.map(f => [f.path, f]));
+  const rows = [];
+  let inside = null; // a curated object path whose fields it stands in for
+  schema.order.forEach(path => {
+    if (inside && path.startsWith(inside + ".")) return;
+    inside = null;
+    if (byPath[path]) {
+      rows.push(byPath[path]);
+      if (!fields[path]) inside = path;
+      return;
+    }
+    const f = fields[path];
+    if (!f) return;
+    rows.push(rowOfField(path, f));
+  });
+  return rows.filter(r => !offEssentials(schema, r.path)).sort(essentialOrder);
+}
+// the editable row of a CRD field no headline decorates, as Essentials and the
+// Everything tree both edit it
+const rowOfField = (path, f) => ({
+  path,
+  label: path.replace(/^spec\./, ""),
+  mutable: true,
+  fmt: f.type === "boolean" ? F.bool : F.raw,
+  type: f.type === "boolean" ? "bool" : f.type === "integer" || f.type === "number" ? "number" : f.list ? "list" : f.kv ? "kv" : "text"
+});
+const naturally = new Intl.Collator(undefined, {
+  numeric: true,
+  sensitivity: "base"
+});
+const essentialOrder = (a, b) => {
+  const nested = r => (r.path.match(/\./g) || []).length > 1; // beyond "spec."
+  return nested(a) - nested(b) || naturally.compare(a.path, b.path);
+};
+// the badge a locked field carries, immutability first: it binds the operator too
+const lockOf = (schema, path) => !isLocked(schema, path) ? null : isImmutable(schema, path) ? "immutable" : "operator-managed";
+const LOCK_TITLE = {
+  "immutable": "immutable once set",
+  "operator-managed": "set by the operator, not by hand"
+};
+
+// ---- the object -------------------------------------------------------------
+function useCR(ref, rev) {
+  const key = ref ? `${ref.ctx || ""}|${ref.kind}|${ref.ns || ""}|${ref.name}|${rev || 0}` : "none";
+  return useResource("cr|" + key, () => ref ? k8s.get(ref.kind, ref.name, {
+    namespace: ref.ns,
+    ctx: ref.ctx
+  }) : Promise.resolve(null), 6000);
+}
+const refOfVm = vm => {
+  if (!vm) return null;
+  if (vm.k8s && vm.k8s.kind) return {
+    ctx: vm.k8s.ctx || vm.ctx || LOCAL_CTX,
+    ns: vm.k8s.namespace || undefined,
+    kind: vm.k8s.kind,
+    name: vm.k8s.name
+  };
+  const kind = VM_CR_KIND[vm.kind];
+  if (!kind) return null;
+  return {
+    ctx: vm.ctx || LOCAL_CTX,
+    ns: vm.namespace || undefined,
+    kind,
+    name: vm.name || vm.pvName
+  };
+};
+// an object key names the context too, so a deep link lands on the right cluster
+const objKey = (ctx, ns, kind, name) => `${ctx || LOCAL_CTX}/${ns || ""}/${kind}/${name}`;
+const parseObjKey = key => {
+  const [ctx, ns, kind, ...rest] = String(key).split("/");
+  return {
+    ctx: ctx || LOCAL_CTX,
+    ns: ns || undefined,
+    kind,
+    name: rest.join("/")
+  };
+};
+
+// ---- editing ------------------------------------------------------------------
+function useSpecPatch(ref, onDone) {
+  const [busy, setBusy] = React.useState(false);
+  const [err, setErr] = React.useState(null);
+  const save = async (path, value, schema) => {
+    setErr(null);
+    if (isLocked(schema, path)) {
+      setErr(lockOf(schema, path) === "immutable" ? `${path} is immutable once set; the API server would refuse the change` : `${path} is set by the operator; a change made here would be overwritten`);
+      return false;
+    }
+    const patch = setPath({}, path, value);
+    setBusy(true);
+    try {
+      await k8s.patch(ref.kind, ref.name, patch, {
+        namespace: ref.ns,
+        ctx: ref.ctx,
+        dryRun: "All"
+      });
+      await k8s.patch(ref.kind, ref.name, patch, {
+        namespace: ref.ns,
+        ctx: ref.ctx
+      });
+      if (window.invalidateWorld) invalidateWorld();
+      window.__toast(`${path} updated`);
+      if (onDone) onDone();
+      return true;
+    } catch (e) {
+      setErr(e.message);
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
+  return {
+    save,
+    busy,
+    err,
+    clear: () => setErr(null)
+  };
+}
+const coerce = (type, raw) => {
+  if (type === "number") {
+    const n = Number(raw);
+    return isNaN(n) ? raw : n;
+  }
+  if (type === "bool") return raw === true || raw === "true";
+  if (type === "list") return String(raw).split(",").map(s => s.trim()).filter(Boolean);
+  if (type === "kv") {
+    const o = {};
+    String(raw).split(",").map(s => s.trim()).filter(Boolean).forEach(p => {
+      const [k, v] = p.split("=");
+      o[k.trim()] = (v || "").trim();
+    });
+    return o;
+  }
+  return raw;
+};
+const editable = (type, value) => type === "list" ? Array.isArray(value) ? value.join(", ") : "" : type === "kv" ? Object.entries(value || {}).map(([k, v]) => `${k}=${v}`).join(", ") : value === undefined || value === null ? "" : String(value);
+
+// quiet leaves the badge of a locked field to the caller, which shows it next
+// to the field's name (the Everything tree), and shows only the value.
+function InlineField({
+  r,
+  value,
+  lock,
+  patch,
+  schema,
+  quiet
+}) {
+  const [editing, setEditing] = React.useState(false);
+  const [draft, setDraft] = React.useState("");
+  const shown = r.fmt ? r.fmt(value) : value;
+  const opts = r.options || schema && schema.enums[r.path] || null;
+  const badge = lock || (r.mutable === false ? "immutable" : null);
+  const desc = schema && schema.descriptions[r.path] || r.path;
+  if (!editing) {
+    return /*#__PURE__*/React.createElement("span", {
+      className: "ifield",
+      title: desc
+    }, /*#__PURE__*/React.createElement("span", null, shown === null || shown === undefined || shown === "" ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset") : String(shown)), badge ? quiet ? null : /*#__PURE__*/React.createElement("span", {
+      className: "immut",
+      title: LOCK_TITLE[badge]
+    }, badge) : /*#__PURE__*/React.createElement("button", {
+      className: "pen",
+      title: "edit",
+      onClick: () => {
+        setDraft(editable(r.type, value));
+        setEditing(true);
+        patch.clear();
+      }
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "gauge",
+      s: 11
+    })));
+  }
+  const commit = async () => {
+    const ok = await patch.save(r.path, coerce(r.type === "select" ? "text" : r.type, r.type === "bool" ? draft === "true" : draft), schema);
+    if (ok) setEditing(false);
+  };
+  return /*#__PURE__*/React.createElement("span", {
+    className: "ifield editing"
+  }, r.type === "bool" ? /*#__PURE__*/React.createElement("select", {
+    className: "sel finput",
+    value: String(draft),
+    onChange: e => setDraft(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "true"
+  }, "true"), /*#__PURE__*/React.createElement("option", {
+    value: "false"
+  }, "false")) : opts ? /*#__PURE__*/React.createElement("select", {
+    className: "sel finput",
+    value: draft,
+    onChange: e => setDraft(e.target.value)
+  }, opts.map(o => /*#__PURE__*/React.createElement("option", {
+    key: o,
+    value: o
+  }, o))) : /*#__PURE__*/React.createElement("input", {
+    className: "finput",
+    value: draft,
+    type: r.type === "number" ? "number" : "text",
+    onChange: e => setDraft(e.target.value),
+    onKeyDown: e => {
+      if (e.key === "Enter") commit();
+      if (e.key === "Escape") setEditing(false);
+    },
+    autoFocus: true
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    disabled: patch.busy,
+    onClick: commit
+  }, patch.busy ? "…" : "Save"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => setEditing(false)
+  }, "Cancel"), patch.err && /*#__PURE__*/React.createElement("span", {
+    className: "ferr",
+    style: {
+      display: "block",
+      width: "100%"
+    }
+  }, patch.err));
+}
+
+// ---- tier 1 ----------------------------------------------------------------------
+function DriftBanner({
+  obj
+}) {
+  const g = (obj.metadata || {}).generation,
+    og = (obj.status || {}).observedGeneration;
+  if (og === undefined || og === null) return /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginBottom: 8
+    }
+  }, "This kind reports no status.observedGeneration, so a stale status cannot be told from a current one.");
+  if (g === og) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "banner"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "clock",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Status is behind the spec."), " metadata.generation is ", g, "; status.observedGeneration is ", og, ". What status says may predate the latest edit."));
+}
+// the view model in the registry that a CR name points at
+const vmByCR = (kind, name, ns, ctx) => Object.values(REG).find(v => v.k8s && v.k8s.kind === kind && v.k8s.name === name && (!ns || v.k8s.namespace === ns) && (!ctx || (v.ctx || LOCAL_CTX) === ctx));
+function LinkValue({
+  r,
+  value,
+  obj,
+  nav
+}) {
+  if (!r.link || value === undefined || value === null || value === "") return null;
+  const ns = obj.metadata.namespace,
+    ctx = obj.__ctx || LOCAL_CTX;
+  const go = () => {
+    if (r.link === "cluster") {
+      const c = vmByCR("StorageCluster", value, ns, ctx);
+      if (c) nav.openCluster(c.id);else nav.openCR({
+        ctx,
+        ns,
+        kind: "StorageCluster",
+        name: value
+      });
+    } else if (r.link === "node") {
+      const n = vmByCR("StorageNode", value, getPath(obj, r.path.replace(/\.name$/, ".namespace")) || ns, ctx);
+      if (n) nav.openNode(n.clusterId, n.id);else nav.openCR({
+        ctx,
+        ns,
+        kind: "StorageNode",
+        name: value
+      });
+    } else if (r.link === "pool") {
+      const p = vmByCR("StoragePool", value, ns, ctx) || Object.values(REG).find(v => v.kind === "pool" && v.name === value && (v.ctx || LOCAL_CTX) === ctx);
+      if (p) nav.openPool(p.clusterId, p.id);else nav.openCR({
+        ctx,
+        ns,
+        kind: "StoragePool",
+        name: value
+      });
+    } else if (r.link === "worker") nav.openCR({
+      ctx,
+      kind: "Node",
+      name: value
+    });else if (r.link === "storageclass") nav.openCR({
+      ctx,
+      kind: "StorageClass",
+      name: value
+    });else if (r.link === "pvc") nav.openCR({
+      ctx,
+      ns: getPath(obj, r.path.replace(/\.name$/, ".namespace")) || getPath(obj, "status.source.claimNamespace") || ns,
+      kind: "PersistentVolumeClaim",
+      name: value
+    });else if (r.link === "pv") nav.openCR({
+      ctx,
+      kind: "PersistentVolume",
+      name: value
+    });else if (r.link === "vsc") nav.openCR({
+      ctx,
+      kind: "VolumeSnapshotContent",
+      name: value
+    });
+  };
+  return /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    style: {
+      marginLeft: 6
+    },
+    onClick: go
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "chev",
+    s: 9
+  }), "open");
+}
+const shown = (r, v) => {
+  const x = r.fmt ? r.fmt(v) : v;
+  return x === null || x === undefined || x === "" ? null : String(x);
+};
+// " · 2 immutable paths" for the note above Essentials, nothing for none
+const countOf = (n, what) => n ? ` · ${n} ${what} path${n === 1 ? "" : "s"}` : "";
+function EssentialsTab({
+  obj,
+  cref: ref,
+  nav,
+  vm,
+  onChanged
+}) {
+  const schema = useCrdSchema(ref.kind);
+  const patch = useSpecPatch(ref, onChanged);
+  const h = HEADLINES[ref.kind] || {
+    spec: [],
+    status: []
+  };
+  const st = obj.status || {};
+  // a spec row is shown even when unset (it can be set); a status row only when the operator wrote it
+  const rows = (list, isSpec) => list.filter(r => !offEssentials(schema, r.path) && (isSpec || getPath(obj, r.path) !== undefined)).map(r => {
+    const v = getPath(obj, r.path);
+    return [/*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      },
+      title: schema.descriptions[r.path] || r.path
+    }, r.label), /*#__PURE__*/React.createElement("span", {
+      style: {
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        justifyContent: "flex-end",
+        flexWrap: "wrap"
+      }
+    }, isSpec ? /*#__PURE__*/React.createElement(InlineField, {
+      r: r,
+      value: v,
+      lock: lockOf(schema, r.path),
+      patch: patch,
+      schema: schema
+    }) : /*#__PURE__*/React.createElement("span", {
+      title: schema.descriptions[r.path] || r.path
+    }, shown(r, v) === null ? /*#__PURE__*/React.createElement("span", {
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset") : shown(r, v)), /*#__PURE__*/React.createElement(LinkValue, {
+      r: r,
+      value: v,
+      obj: Object.assign({
+        __ctx: ref.ctx
+      }, obj),
+      nav: nav
+    }))];
+  });
+  const specRows = rows(essentialSpecRows(h.spec, schema), true),
+    statusRows = rows(h.status, false);
+  const anns = (h.annotations || []).map(k => [k, (obj.metadata.annotations || {})[k]]).filter(([, v]) => v !== undefined);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(DriftBanner, {
+    obj: obj
+  }), st.activeOpsRef && /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    style: {
+      color: "var(--info)",
+      background: "var(--accent-soft)",
+      borderColor: "var(--accent-line)"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "clock",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "status.activeOpsRef:"), " ", st.activeOpsRef, ". A second operation on this object stays Pending until it finishes. ", nav.monitor && /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => nav.monitor({
+      cluster: vm && (vm.kind === "cluster" ? vm.id : vm.clusterId),
+      q: st.activeOpsRef
+    })
+  }, "Follow it"))), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginBottom: 8
+    }
+  }, "Field names are the CRD's. Descriptions on hover ", schema.source === "crd" ? `come from the ${ref.kind} CRD (${schema.version})` : schema.loading ? "are loading" : "are unavailable: the CRD could not be read, so only the console's static immutability table applies", countOf(schema.immutable.size, "immutable"), countOf(schema.managed.size, "operator-managed"), ". Edits are dry-run against the API server first."), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "spec"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, specRows.length ? /*#__PURE__*/React.createElement(Props, {
+    rows: specRows
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No headline spec fields for ", ref.kind, "."))), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, statusRows.length ? /*#__PURE__*/React.createElement(Props, {
+    rows: statusRows
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No status reported yet."))), anns.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "metadata.annotations the operator reads"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: anns.map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, k), v])
+  }))), window.ConditionsCard && (st.conditions || []).length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement(ConditionsCard, {
+    conditions: st.conditions
+  })))), (h.tables || []).filter(t => !offEssentials(schema, t.path)).map(t => {
+    const rowsT = getPath(obj, t.path);
+    if (!Array.isArray(rowsT) || !rowsT.length) return null;
+    const columns = t.columns.filter(c => !isInvisible(schema, `${t.path}.${c}`));
+    return /*#__PURE__*/React.createElement("div", {
+      key: t.path,
+      className: "card",
+      style: {
+        marginTop: 12
+      }
+    }, /*#__PURE__*/React.createElement("h3", {
+      title: schema.descriptions[t.path] || t.path
+    }, t.title), /*#__PURE__*/React.createElement("div", {
+      className: "bd",
+      style: {
+        padding: 0
+      }
+    }, /*#__PURE__*/React.createElement("table", {
+      className: "dt"
+    }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, columns.map(c => /*#__PURE__*/React.createElement("th", {
+      key: c,
+      className: "mono",
+      title: schema.descriptions[`${t.path}.${c}`] || `${t.path}[].${c}`
+    }, c)))), /*#__PURE__*/React.createElement("tbody", null, rowsT.map((x, i) => /*#__PURE__*/React.createElement("tr", {
+      key: i
+    }, columns.map(c => /*#__PURE__*/React.createElement("td", {
+      key: c,
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, x[c] === undefined || x[c] === null ? "unset" : typeof x[c] === "object" ? JSON.stringify(x[c]) : String(x[c])))))))));
+  }));
+}
+
+// ---- tier 2 ------------------------------------------------------------------------
+function JsonTree({
+  data,
+  path,
+  schema,
+  depth
+}) {
+  const [open, setOpen] = React.useState((depth || 0) < 2);
+  if (data === null || data === undefined) return /*#__PURE__*/React.createElement("span", {
+    className: "v",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "null");
+  if (typeof data !== "object") return /*#__PURE__*/React.createElement("span", {
+    className: "v"
+  }, typeof data === "string" ? `"${data}"` : String(data));
+  // an invisible field is left out before anything is counted, so the {n} does not give it away
+  const entries = Array.isArray(data) ? data.map((v, i) => [String(i), v]) : Object.entries(data).filter(([k]) => !(schema && isInvisible(schema, path ? `${path}.${k}` : k)));
+  if (!entries.length) return /*#__PURE__*/React.createElement("span", {
+    className: "v",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, Array.isArray(data) ? "[]" : "{}");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "jt"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "tg",
+    onClick: () => setOpen(!open)
+  }, open ? "▾" : "▸", " ", Array.isArray(data) ? `[${entries.length}]` : `{${entries.length}}`), open && /*#__PURE__*/React.createElement("div", {
+    className: "n"
+  }, entries.map(([k, v]) => {
+    const p = path ? Array.isArray(data) ? path : `${path}.${k}` : k;
+    const lock = !Array.isArray(data) && lockOf(schema, p);
+    return /*#__PURE__*/React.createElement("div", {
+      key: k,
+      title: schema && schema.descriptions[p] ? schema.descriptions[p] : p
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "k"
+    }, k), lock && /*#__PURE__*/React.createElement("span", {
+      className: "immut",
+      title: LOCK_TITLE[lock]
+    }, lock), ": ", /*#__PURE__*/React.createElement(JsonTree, {
+      data: v,
+      path: p,
+      schema: schema,
+      depth: (depth || 0) + 1
+    }));
+  })));
+}
+// SpecTree is the Everything tab's spec: every field the CRD has, set or not,
+// in natural order, beside every field the object holds that the CRD does not
+// name. A field Essentials can edit is edited here in place, an advanced one
+// too, since this is where it is shown; a locked one carries its badge and no
+// edit. What the inline editor cannot take, a list of objects or a map of
+// them, is shown as the object holds it. An invisible field is left out.
+function SpecTree({
+  node,
+  data,
+  path,
+  schema,
+  depth,
+  patch
+}) {
+  const [open, setOpen] = React.useState((depth || 0) < 2 && data !== undefined);
+  const props = node && node.properties || {};
+  const value = data && typeof data === "object" && !Array.isArray(data) ? data : {};
+  const keys = [...new Set([...Object.keys(props), ...Object.keys(value)])].filter(k => !isInvisible(schema, `${path}.${k}`)).sort(naturally.compare);
+  if (!keys.length) return /*#__PURE__*/React.createElement("span", {
+    className: "v",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "{}");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "jt"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "tg",
+    onClick: () => setOpen(!open)
+  }, open ? "▾" : "▸", " ", `{${keys.length}}`, data === undefined && /*#__PURE__*/React.createElement("span", {
+    style: {
+      color: "var(--dim2)"
+    }
+  }, " unset")), open && /*#__PURE__*/React.createElement("div", {
+    className: "n"
+  }, keys.map(k => {
+    const p = `${path}.${k}`,
+      v = value[k],
+      child = props[k],
+      f = schema.fieldByPath[p];
+    const lock = lockOf(schema, p);
+    const badge = lock && /*#__PURE__*/React.createElement("span", {
+      className: "immut",
+      title: LOCK_TITLE[lock]
+    }, lock);
+    const desc = schema.descriptions[p] || p;
+    const shown = f ? /*#__PURE__*/React.createElement(InlineField, {
+      r: rowOfField(p, f),
+      value: v,
+      lock: lock,
+      patch: patch,
+      schema: schema,
+      quiet: true
+    }) : child && child.type === "object" && child.properties ? /*#__PURE__*/React.createElement(SpecTree, {
+      node: child,
+      data: v,
+      path: p,
+      schema: schema,
+      depth: (depth || 0) + 1,
+      patch: patch
+    }) : v === undefined ? /*#__PURE__*/React.createElement("span", {
+      className: "v",
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "unset") : /*#__PURE__*/React.createElement(JsonTree, {
+      data: v,
+      path: p,
+      schema: schema,
+      depth: (depth || 0) + 1
+    });
+    return /*#__PURE__*/React.createElement("div", {
+      key: k,
+      title: desc
+    }, /*#__PURE__*/React.createElement("span", {
+      className: "k"
+    }, k), badge, ": ", shown);
+  })));
+}
+function toYaml(v, indent) {
+  const pad = "  ".repeat(indent || 0);
+  if (v === null || v === undefined) return "null";
+  if (typeof v === "string") return /[\n:#{}\[\],&*?|<>=!%@`"']|^\s|\s$|^$|^(true|false|null|yes|no|~)$|^-?\d/.test(v) ? v.includes("\n") ? "|\n" + v.split("\n").map(l => pad + "  " + l).join("\n") : JSON.stringify(v) : v;
+  if (typeof v !== "object") return String(v);
+  if (Array.isArray(v)) return v.length ? "\n" + v.map(x => `${pad}- ${typeof x === "object" && x !== null ? toYaml(x, (indent || 0) + 1).replace(/^\n/, "").replace(new RegExp("^" + pad + "  "), "") : toYaml(x, (indent || 0) + 1)}`).join("\n") : "[]";
+  const keys = Object.keys(v);
+  if (!keys.length) return "{}";
+  return "\n" + keys.map(k => {
+    const x = v[k];
+    const s = toYaml(x, (indent || 0) + 1);
+    return `${pad}${k}:${s.startsWith("\n") ? s : " " + s}`;
+  }).join("\n");
+}
+function YamlBlock({
+  obj
+}) {
+  const clean = Object.assign({}, obj, {
+    metadata: Object.assign({}, obj.metadata, {
+      managedFields: undefined
+    })
+  });
+  const text = toYaml(clean, 0).replace(/^\n/, "");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 10
+    }
+  }, "YAML", /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement(CopyBtn, {
+    get: () => text,
+    label: "Copy"
+  }), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: () => downloadText(`${obj.kind}-${obj.metadata.name}.yaml`, text)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "cloud",
+    s: 11
+  }), "Download")), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("pre", {
+    className: "code yaml"
+  }, text)));
+}
+function EverythingTab({
+  obj,
+  cref: ref,
+  onChanged
+}) {
+  const schema = useCrdSchema(ref.kind);
+  const patch = useSpecPatch(ref, onChanged);
+  const spec = obj.spec !== undefined ? obj.spec : Object.fromEntries(Object.entries(obj).filter(([k]) => !["apiVersion", "kind", "metadata", "status"].includes(k)));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "spec"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, schema.source === "crd" && schema.specNode ? /*#__PURE__*/React.createElement(SpecTree, {
+    node: schema.specNode,
+    data: obj.spec || {},
+    path: "spec",
+    schema: schema,
+    depth: 0,
+    patch: patch
+  }) : /*#__PURE__*/React.createElement(JsonTree, {
+    data: spec,
+    path: "spec",
+    schema: schema,
+    depth: 0
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement(JsonTree, {
+    data: obj.status || {},
+    path: "status",
+    schema: schema,
+    depth: 0
+  })))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement(YamlBlock, {
+    obj: obj
+  })));
+}
+
+// ---- the Kubernetes side -----------------------------------------------------------------
+function KubernetesTab({
+  obj,
+  cref: ref,
+  nav
+}) {
+  const m = obj.metadata || {};
+  const {
+    data: events
+  } = useResource("crev|" + ref.ctx + "|" + m.uid, () => k8s.list("Event", {
+    namespace: m.namespace || "default",
+    fieldSelector: `involvedObject.uid=${m.uid}`,
+    ctx: ref.ctx
+  }).catch(() => []), 10000);
+  const evs = (events || []).slice().sort((a, b) => Date.parse(b.lastTimestamp || b.eventTime || 0) - Date.parse(a.lastTimestamp || a.eventTime || 0));
+  const openRef = r => nav.openCR({
+    ctx: ref.ctx,
+    ns: m.namespace,
+    kind: r.kind,
+    name: r.name
+  });
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "metadata.ownerReferences"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, (m.ownerReferences || []).length ? (m.ownerReferences || []).map(o => /*#__PURE__*/React.createElement("div", {
+    key: o.uid,
+    className: "labels",
+    style: {
+      marginBottom: 6
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "lab link",
+    onClick: () => openRef(o)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "chev",
+    s: 9
+  }), o.kind, "/", o.name), o.controller && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "controller"), "true"))) : /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "No owner: this object stands on its own."))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "metadata"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["name", /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, m.name)], ["namespace", m.namespace || "cluster-scoped"], ["uid", /*#__PURE__*/React.createElement("span", {
+      className: "mono",
+      style: {
+        fontSize: 11
+      }
+    }, m.uid)], ["resourceVersion", m.resourceVersion], ["generation", m.generation], ["creationTimestamp", fmtDate(m.creationTimestamp)], ["deletionTimestamp", m.deletionTimestamp ? fmtDate(m.deletionTimestamp) : null], ["finalizers", (m.finalizers || []).join(", ") || null], ["context", ref.ctx]]
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "dcols",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "metadata.labels"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, Object.entries(m.labels || {}).map(([k, v]) => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    className: "lab mono",
+    style: {
+      fontSize: 10.5
+    }
+  }, /*#__PURE__*/React.createElement("i", null, k), v)), !Object.keys(m.labels || {}).length && /*#__PURE__*/React.createElement("span", {
+    className: "nolim"
+  }, "none")))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "metadata.annotations"), /*#__PURE__*/React.createElement("div", {
+    className: "bd"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, Object.entries(m.annotations || {}).filter(([k]) => k !== "kubectl.kubernetes.io/last-applied-configuration").map(([k, v]) => /*#__PURE__*/React.createElement("span", {
+    key: k,
+    className: "lab mono",
+    style: {
+      fontSize: 10.5
+    },
+    title: v
+  }, /*#__PURE__*/React.createElement("i", null, k), String(v).slice(0, 60))), !Object.keys(m.annotations || {}).length && /*#__PURE__*/React.createElement("span", {
+    className: "nolim"
+  }, "none"))))), /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Events"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, evs.length ? /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "type"), /*#__PURE__*/React.createElement("th", null, "reason"), /*#__PURE__*/React.createElement("th", null, "count"), /*#__PURE__*/React.createElement("th", null, "lastTimestamp"), /*#__PURE__*/React.createElement("th", null, "message"))), /*#__PURE__*/React.createElement("tbody", null, evs.map(e => /*#__PURE__*/React.createElement("tr", {
+    key: e.metadata.uid
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    style: {
+      color: e.type === "Warning" ? "var(--warn)" : undefined
+    }
+  }, e.type)), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, e.reason), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, e.count || 1), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, fmtAgo(e.lastTimestamp || e.eventTime)), /*#__PURE__*/React.createElement("td", null, e.message))))) : /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "No event recorded for this object."))));
+}
+
+// ---- panel, page, list ------------------------------------------------------------------------
+function CRPanel({
+  vm,
+  nav,
+  cref: refProp
+}) {
+  const ref = refProp || refOfVm(vm);
+  const [tab, setTab] = React.useState("essentials");
+  const [rev, setRev] = React.useState(0);
+  const {
+    data: obj,
+    loading,
+    error,
+    reload
+  } = useCR(ref, rev);
+  if (!ref) return /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "No custom resource backs this object.");
+  if (error) return /*#__PURE__*/React.createElement(ErrorState, {
+    error: error,
+    onRetry: reload
+  });
+  if (loading || !obj) return /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading ", ref.kind, " ", ref.name, "\u2026");
+  const items = [{
+    k: "essentials",
+    label: "Essentials",
+    icon: "list"
+  }, {
+    k: "everything",
+    label: "Everything",
+    icon: "gauge"
+  }, {
+    k: "k8s",
+    label: "Kubernetes",
+    icon: "k8s"
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "crpanel"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "tabs sub"
+  }, items.map(t => /*#__PURE__*/React.createElement("button", {
+    key: t.k,
+    className: "tab" + (tab === t.k ? " on" : ""),
+    onClick: () => setTab(t.k)
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: t.icon,
+    s: 12
+  }), t.label)), /*#__PURE__*/React.createElement("span", {
+    style: {
+      flex: 1
+    }
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)",
+      alignSelf: "center"
+    }
+  }, obj.apiVersion, " ", ref.kind, " ", ref.ns ? ref.ns + "/" : "", ref.name, window.MULTI_CTX ? ` · ${ref.ctx}` : "")), tab === "essentials" && /*#__PURE__*/React.createElement(EssentialsTab, {
+    obj: obj,
+    cref: ref,
+    nav: nav,
+    vm: vm,
+    onChanged: () => setRev(r => r + 1)
+  }), tab === "everything" && /*#__PURE__*/React.createElement(EverythingTab, {
+    obj: obj,
+    cref: ref,
+    onChanged: () => setRev(r => r + 1)
+  }), tab === "k8s" && /*#__PURE__*/React.createElement(KubernetesTab, {
+    obj: obj,
+    cref: ref,
+    nav: nav
+  }));
+}
+const CR_PHASE = o => (o.status || {}).phase || (o.status || {}).status || (o.status || {}).state || null;
+function CRView({
+  seg,
+  nav
+}) {
+  const ref = parseObjKey(seg.id);
+  const {
+    data: obj,
+    loading,
+    error,
+    reload
+  } = useCR(ref, 0);
+  if (error) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement(ErrorState, {
+    error: error,
+    onRetry: reload,
+    kind: ref.kind
+  }));
+  if (loading || !obj) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "reading ", ref.kind, " ", ref.name, "\u2026"));
+  const phase = CR_PHASE(obj);
+  const abortable = (window.ABORTABLE_KINDS || []).includes(obj.kind) && !["Succeeded", "Failed", "Aborted"].includes((obj.status || {}).phase);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 11,
+      flexWrap: "wrap"
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, obj.metadata.name), /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, obj.kind), phase && /*#__PURE__*/React.createElement("span", {
+    className: "badge"
+  }, phase)), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, obj.apiVersion, " \xB7 ", obj.metadata.namespace ? `namespace ${obj.metadata.namespace}` : "cluster-scoped")), abortable && /*#__PURE__*/React.createElement("button", {
+    className: "btn",
+    onClick: () => abortOps(obj.kind, obj.metadata.name, {
+      namespace: ref.ns,
+      ctx: ref.ctx
+    }).then(() => {
+      window.__toast("spec.abort set");
+      reload();
+    }).catch(e => window.__toast(e.message))
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 11
+  }), "Abort")), /*#__PURE__*/React.createElement(CRPanel, {
+    cref: ref,
+    nav: nav,
+    vm: null
+  }));
+}
+// the relation cards a curated detail adds below its own
+function RelationCards({
+  vm,
+  nav
+}) {
+  const rels = RELATIONS[vm.kind] || [];
+  if (!rels.length) return null;
+  const go = r => {
+    if (r.layer) return nav.layer(vm, r.layer);
+    if (r.go === "monitor") return nav.monitor ? nav.monitor({
+      cluster: vm.kind === "cluster" ? vm.id : vm.clusterId,
+      q: vm.kind === "cluster" ? undefined : vm.name,
+      state: "all"
+    }) : nav.layer(vm, "ops");
+    if (r.go === "alerts") return nav.alerts ? nav.alerts({
+      cluster: vm.kind === "cluster" ? vm.id : vm.clusterId
+    }) : null;
+  };
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "More"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, rels.map(r => /*#__PURE__*/React.createElement(NavCard, {
+    key: r.title,
+    icon: r.icon,
+    title: r.title,
+    sub: r.sub,
+    count: "",
+    onClick: () => go(r)
+  }))));
+}
+// the custom resource section every curated detail ends with
+function CRSection({
+  vm,
+  nav
+}) {
+  const [open, setOpen] = useLocal("sb.cr.open", true);
+  const ref = refOfVm(vm);
+  if (!ref) return null;
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 14
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      cursor: "pointer"
+    },
+    onClick: () => setOpen(!open)
+  }, /*#__PURE__*/React.createElement("h2", null, /*#__PURE__*/React.createElement(Icon, {
+    n: open ? "chevd" : "chev",
+    s: 11
+  }), " ", ref.kind, ": spec and status"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "mono",
+    style: {
+      fontSize: 10.5,
+      color: "var(--dim2)"
+    }
+  }, ref.ns ? ref.ns + "/" : "", ref.name)), open && /*#__PURE__*/React.createElement(CRPanel, {
+    vm: vm,
+    nav: nav
+  }), /*#__PURE__*/React.createElement(RelationCards, {
+    vm: vm,
+    nav: nav
+  }));
+}
+Object.assign(window, {
+  CRPanel,
+  CRView,
+  CRSection,
+  RelationCards,
+  EssentialsTab,
+  EverythingTab,
+  KubernetesTab,
+  JsonTree,
+  YamlBlock,
+  toYaml,
+  downloadText,
+  useCrdSchema,
+  readCrdSchema,
+  isInvisible,
+  isLocked,
+  useSpecPatch,
+  refOfVm,
+  objKey,
+  parseObjKey,
+  getPath,
+  setPath
+});
+})();
+// ---- storage-views.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// STORAGE VIEWS: the tiles and detail pages of StorageCluster, StorageNode,
+// StorageDevice, and StoragePool, drawn from the custom resources
+// (storage.simplyblock.io/v1alpha2) and nothing else. Every value shown is a
+// field of the object, named as the CRD names it, or a value derived from
+// such fields with its formula stated next to it (a cluster's capacity is the
+// sum of its nodes'; its node counts are its nodes' phases). The two-tier
+// resource view (cr-view.jsx) follows each curated page, so every field the
+// operator writes is one scroll away.
+// ---------------------------------------------------------------------------
+const PhaseTag = ({
+  phase,
+  status
+}) => /*#__PURE__*/React.createElement("span", {
+  style: {
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 6,
+    flexWrap: "wrap"
+  }
+}, /*#__PURE__*/React.createElement(TrafficLight, {
+  status: phase || "Unknown"
+}), status && /*#__PURE__*/React.createElement("span", {
+  className: "lab mono",
+  title: "status.status: the control plane's own lifecycle string"
+}, /*#__PURE__*/React.createElement("i", null, "status"), status));
+const StepTag = ({
+  step,
+  claim
+}) => step ? /*#__PURE__*/React.createElement("span", {
+  className: "lab mono",
+  title: claim ? `status.step.claim: attempt ${claim.attempt}, lease until ${claim.leaseUntil}` : "status.step.state"
+}, /*#__PURE__*/React.createElement("i", null, "step"), step) : null;
+const OpsRef = ({
+  name,
+  nav,
+  vm
+}) => name ? /*#__PURE__*/React.createElement("button", {
+  className: "lab link",
+  title: "status.activeOpsRef: the operation that holds this object's lock",
+  onClick: e => {
+    e.stopPropagation();
+    if (nav.monitor) nav.monitor({
+      cluster: vm.kind === "cluster" ? vm.id : vm.clusterId,
+      q: name
+    });
+  }
+}, /*#__PURE__*/React.createElement(Icon, {
+  n: "clock",
+  s: 10
+}), /*#__PURE__*/React.createElement("i", null, "activeOpsRef"), name) : null;
+const Derived = ({
+  formula
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "srctag",
+  title: "derived: " + formula
+}, /*#__PURE__*/React.createElement(Icon, {
+  n: "gauge",
+  s: 10
+}), "derived");
+const pct = (used, total) => total ? Math.round(used / total * 100) : 0;
+
+// ---- tiles --------------------------------------------------------------------
+function ClusterTile({
+  c,
+  nav
+}) {
+  const cap = c.capacity;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[c.phase] ? STATUS_META[c.phase].c : "var(--idle)"
+    },
+    onDoubleClick: () => nav.detail(c)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: c,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(PhaseTag, {
+      phase: c.phase,
+      status: c.status
+    }), /*#__PURE__*/React.createElement(Name, null, c.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      title: "spec.clusterMode"
+    }, c.clusterMode || "Standard")
+  }), /*#__PURE__*/React.createElement(Uuid, {
+    value: c.id
+  }), c.message && /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    title: "status.message"
+  }, c.message), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "metadata.namespace"
+  }, /*#__PURE__*/React.createElement("i", null, "ns"), c.namespace), c.erasureCodingScheme && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.erasureCodingScheme"
+  }, /*#__PURE__*/React.createElement("i", null, "EC"), c.erasureCodingScheme), c.maxFaultTolerance !== undefined && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.maxFaultTolerance"
+  }, /*#__PURE__*/React.createElement("i", null, "FTT"), c.maxFaultTolerance), c.deviceClass && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "spec.deviceClass"
+  }, /*#__PURE__*/React.createElement("i", null, "deviceClass"), c.deviceClass), /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.rebalancing"
+  }, /*#__PURE__*/React.createElement("i", null, "rebalancing"), /*#__PURE__*/React.createElement(Dot, {
+    c: c.rebalancing ? "var(--warn)" : "var(--ok)"
+  }), c.rebalancing ? "true" : "false"), /*#__PURE__*/React.createElement(StepTag, {
+    step: c.step
+  }), /*#__PURE__*/React.createElement(OpsRef, {
+    name: c.activeOpsRef,
+    nav: nav,
+    vm: c
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "StorageNode.status.phase of the cluster's nodes",
+    style: c.counts.nodesOnline < c.counts.nodes ? {
+      color: "var(--warn)"
+    } : undefined
+  }, /*#__PURE__*/React.createElement("i", null, "nodes Online"), c.counts.nodesOnline, "/", c.counts.nodes), /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "StorageDevice.status.phase of the cluster's devices",
+    style: c.counts.devicesOnline < c.counts.devices ? {
+      color: "var(--warn)"
+    } : undefined
+  }, /*#__PURE__*/React.createElement("i", null, "devices Online"), c.counts.devicesOnline, "/", c.counts.devices), c.tasks.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.tasks: the control plane's running and pending jobs"
+  }, /*#__PURE__*/React.createElement("i", null, "tasks"), c.tasks.length), c.provisioningSlots.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.provisioningSlots"
+  }, /*#__PURE__*/React.createElement("i", null, "node adds"), c.provisioningSlots.length)), cap.total > 0 && /*#__PURE__*/React.createElement("div", {
+    title: "derived: " + cap.derived
+  }, /*#__PURE__*/React.createElement(Capacity, {
+    total: cap.total,
+    used: cap.used
+  })), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Nodes",
+      count: c.counts.nodes,
+      icon: "node",
+      onClick: () => nav.layer(c, "nodes")
+    }, {
+      label: "Pools",
+      count: c.counts.pools,
+      icon: "pool",
+      onClick: () => nav.layer(c, "pools")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(c)
+    }]
+  }));
+}
+function NodeTile({
+  n,
+  nav
+}) {
+  const cap = n.capacity,
+    res = n.resources;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[n.phase] ? STATUS_META[n.phase].c : "var(--idle)"
+    },
+    onDoubleClick: () => nav.detail(n)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: n,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(PhaseTag, {
+      phase: n.phase,
+      status: n.status
+    }), /*#__PURE__*/React.createElement(Name, null, n.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "tsub",
+      title: "status.ports.management"
+    }, (n.ports || {}).management || "")
+  }), /*#__PURE__*/React.createElement(Uuid, {
+    value: n.id
+  }), n.message && /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    title: "status.message"
+  }, n.message), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "spec.workerNode"
+  }, /*#__PURE__*/React.createElement("i", null, "workerNode"), n.workerNode), n.failureDomain && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.failureDomain"
+  }, /*#__PURE__*/React.createElement("i", null, "failureDomain"), n.failureDomain), n.health !== undefined && n.health !== null && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.health"
+  }, /*#__PURE__*/React.createElement("i", null, "health"), /*#__PURE__*/React.createElement(Dot, {
+    c: n.health ? "var(--ok)" : "var(--bad)"
+  }), String(n.health)), /*#__PURE__*/React.createElement(StepTag, {
+    step: n.step,
+    claim: n.stepClaim
+  }), /*#__PURE__*/React.createElement(OpsRef, {
+    name: n.activeOpsRef,
+    nav: nav,
+    vm: n
+  })), cap.total > 0 && /*#__PURE__*/React.createElement("div", {
+    title: "status.resources.capacity"
+  }, /*#__PURE__*/React.createElement(Capacity, {
+    total: cap.total,
+    used: cap.used
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", {
+    title: "status.resources.cpu"
+  }, /*#__PURE__*/React.createElement("span", null, "cpu"), /*#__PURE__*/React.createElement("b", null, res.cpu !== undefined ? res.cpu : "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "status.resources.memory"
+  }, /*#__PURE__*/React.createElement("span", null, "memory"), /*#__PURE__*/React.createElement("b", null, res.memory || "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "status.resources.volumes"
+  }, /*#__PURE__*/React.createElement("span", null, "volumes"), /*#__PURE__*/React.createElement("b", null, res.volumes !== undefined ? res.volumes : "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "status.resources.devices"
+  }, /*#__PURE__*/React.createElement("span", null, "devices"), /*#__PURE__*/React.createElement("b", null, res.devices ? `${res.devices.online}/${res.devices.total}` : "unset"))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Devices",
+      count: n.counts.devices,
+      icon: "device",
+      onClick: () => nav.layer(n, "devices")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(n)
+    }]
+  }));
+}
+const verdictColor = v => v === "Ok" ? "var(--ok)" : v === "Warning" || v === "Slow" ? "var(--warn)" : v === "Failing" ? "var(--bad)" : "var(--dim2)";
+function DeviceTile({
+  d,
+  nav
+}) {
+  const hw = d.hardware,
+    smart = d.health.smart || {},
+    perf = d.health.performance || {};
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[d.phase] ? STATUS_META[d.phase].c : "var(--idle)"
+    },
+    onDoubleClick: () => nav.detail(d)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: d,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(PhaseTag, {
+      phase: d.phase,
+      status: d.deviceStatus
+    }), /*#__PURE__*/React.createElement(Name, null, d.name)),
+    right: /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      title: "status.role"
+    }, d.role || "unset")
+  }), /*#__PURE__*/React.createElement(Uuid, {
+    value: d.id
+  }), d.message && /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    title: "status.message"
+  }, d.message), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab mono",
+    title: "status.hardware.pciAddress"
+  }, /*#__PURE__*/React.createElement("i", null, "pci"), hw.pciAddress || "unset"), /*#__PURE__*/React.createElement("span", {
+    className: "lab mono",
+    title: "status.hardware.serialNumber"
+  }, /*#__PURE__*/React.createElement("i", null, "serial"), hw.serialNumber || "unset"), smart.verdict && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.health.smart.verdict" + (smart.reason ? ": " + smart.reason : "")
+  }, /*#__PURE__*/React.createElement("i", null, "smart"), /*#__PURE__*/React.createElement(Dot, {
+    c: verdictColor(smart.verdict)
+  }), smart.verdict), perf.verdict && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "status.health.performance.verdict" + (perf.reason ? ": " + perf.reason : "")
+  }, /*#__PURE__*/React.createElement("i", null, "performance"), /*#__PURE__*/React.createElement(Dot, {
+    c: verdictColor(perf.verdict)
+  }), perf.verdict), /*#__PURE__*/React.createElement(OpsRef, {
+    name: d.activeOpsRef,
+    nav: nav,
+    vm: d
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", {
+    title: "status.capacity.totalBytes"
+  }, /*#__PURE__*/React.createElement("span", null, "totalBytes"), /*#__PURE__*/React.createElement("b", null, d.capacity.total ? fmtBytes(d.capacity.total) : "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "status.hardware.model"
+  }, /*#__PURE__*/React.createElement("span", null, "model"), /*#__PURE__*/React.createElement("b", {
+    style: {
+      fontSize: 11
+    }
+  }, hw.model || "unset"))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(d)
+    }]
+  }));
+}
+function PoolTile({
+  p,
+  nav
+}) {
+  const lim = p.limits || {};
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile",
+    style: {
+      "--sc": STATUS_META[p.phase] ? STATUS_META[p.phase].c : "var(--idle)"
+    },
+    onDoubleClick: () => nav.detail(p)
+  }, /*#__PURE__*/React.createElement(TileHead, {
+    obj: p,
+    left: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(PhaseTag, {
+      phase: p.phase,
+      status: p.status
+    }), /*#__PURE__*/React.createElement(Name, null, p.name)),
+    right: p.defaultStorageClassName ? /*#__PURE__*/React.createElement("span", {
+      className: "badge",
+      title: "status.defaultStorageClassName"
+    }, "default class") : null
+  }), /*#__PURE__*/React.createElement(Uuid, {
+    value: p.id
+  }), p.message && /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    title: "status.message"
+  }, p.message), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, p.storageClassNames.map(sc => /*#__PURE__*/React.createElement("button", {
+    key: sc,
+    className: "lab link",
+    title: "status.storageClassNames: StorageClass " + sc,
+    onClick: e => {
+      e.stopPropagation();
+      nav.openCR({
+        kind: "StorageClass",
+        name: sc
+      });
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "k8s",
+    s: 10
+  }), sc)), !p.storageClassNames.length && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    style: {
+      opacity: .6
+    }
+  }, /*#__PURE__*/React.createElement("i", null, "storageClassNames"), "[]"), /*#__PURE__*/React.createElement(OpsRef, {
+    name: p.activeOpsRef,
+    nav: nav,
+    vm: p
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "kv"
+  }, /*#__PURE__*/React.createElement("div", {
+    title: "spec.limits.capacity"
+  }, /*#__PURE__*/React.createElement("span", null, "limits.capacity"), /*#__PURE__*/React.createElement("b", null, lim.capacity || "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "spec.limits.maxVolumeSize"
+  }, /*#__PURE__*/React.createElement("span", null, "maxVolumeSize"), /*#__PURE__*/React.createElement("b", null, lim.maxVolumeSize || "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "spec.limits.iops"
+  }, /*#__PURE__*/React.createElement("span", null, "limits.iops"), /*#__PURE__*/React.createElement("b", null, lim.iops !== undefined ? fmtNum(lim.iops) : "unset")), /*#__PURE__*/React.createElement("div", {
+    title: "spec.volumeDefaults.filesystem"
+  }, /*#__PURE__*/React.createElement("span", null, "filesystem"), /*#__PURE__*/React.createElement("b", null, (p.volumeDefaults || {}).filesystem || "unset"))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Volumes",
+      icon: "volume",
+      onClick: () => nav.layer(p, "volumes")
+    }, {
+      label: "Details",
+      right: true,
+      onClick: () => nav.detail(p)
+    }]
+  }));
+}
+
+// ---- details ----------------------------------------------------------------------
+const TaskWindowCard = ({
+  tasks
+}) => /*#__PURE__*/React.createElement("div", {
+  className: "card"
+}, /*#__PURE__*/React.createElement("h3", {
+  title: "StorageCluster.status.tasks"
+}, "status.tasks \xB7 the control plane's running and pending jobs"), /*#__PURE__*/React.createElement("div", {
+  className: "bd",
+  style: {
+    padding: 0
+  }
+}, tasks.length ? /*#__PURE__*/React.createElement("table", {
+  className: "dt"
+}, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "type"), /*#__PURE__*/React.createElement("th", null, "status"), /*#__PURE__*/React.createElement("th", null, "retry"), /*#__PURE__*/React.createElement("th", null, "id"))), /*#__PURE__*/React.createElement("tbody", null, tasks.map(t => /*#__PURE__*/React.createElement("tr", {
+  key: t.id
+}, /*#__PURE__*/React.createElement("td", {
+  className: "mono"
+}, t.type), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("span", {
+  className: "badge"
+}, t.status)), /*#__PURE__*/React.createElement("td", {
+  className: "mono"
+}, t.retry || 0), /*#__PURE__*/React.createElement("td", {
+  className: "mono",
+  style: {
+    fontSize: 11,
+    color: "var(--dim)"
+  }
+}, t.id))))) : /*#__PURE__*/React.createElement("div", {
+  className: "lmsg"
+}, "No task is running or pending.")));
+function ClusterDetail({
+  o: c,
+  nav
+}) {
+  const [tab, setTab] = useState("overview");
+  const cap = c.capacity,
+    k = c.counts;
+  const items = [{
+    k: "overview",
+    label: "Overview",
+    icon: "cluster"
+  }, {
+    k: "alerts",
+    label: "Alerts",
+    icon: "bell"
+  }, {
+    k: "ops",
+    label: "Operations",
+    icon: "clock"
+  }, {
+    k: "eventlog",
+    label: "Event log",
+    icon: "list"
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: Object.assign({}, c, {
+      status: c.phase
+    }),
+    title: c.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
+      className: "lab mono",
+      title: "metadata.namespace"
+    }, /*#__PURE__*/React.createElement("i", null, "ns"), c.namespace), c.status && /*#__PURE__*/React.createElement("span", {
+      className: "lab mono",
+      title: "status.status"
+    }, /*#__PURE__*/React.createElement("i", null, "status"), c.status), /*#__PURE__*/React.createElement(StepTag, {
+      step: c.step
+    }), /*#__PURE__*/React.createElement(OpsRef, {
+      name: c.activeOpsRef,
+      nav: nav,
+      vm: c
+    }), window.AlertBadge && /*#__PURE__*/React.createElement(AlertBadge, {
+      obj: c,
+      nav: nav
+    })),
+    badge: c.message ? /*#__PURE__*/React.createElement("span", {
+      className: "mdesc",
+      title: "status.message"
+    }, c.message) : null
+  }), /*#__PURE__*/React.createElement(Tabs, {
+    items: items,
+    active: tab,
+    onChange: setTab
+  }), tab === "overview" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "status.phase",
+    v: c.phase,
+    c: STATUS_META[c.phase] ? STATUS_META[c.phase].c : undefined,
+    s: c.status ? "status.status " + c.status : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "nodes Online",
+    v: `${k.nodesOnline}/${k.nodes}`,
+    c: k.nodesOnline < k.nodes ? "var(--warn)" : undefined,
+    s: [k.nodesProvisioning && `${k.nodesProvisioning} Provisioning`, k.nodesOffline && `${k.nodesOffline} Offline`, k.nodesDegraded && `${k.nodesDegraded} Degraded`, k.nodesRemoving && `${k.nodesRemoving} Removing`].filter(Boolean).join(" · ") || "StorageNode.status.phase"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "devices Online",
+    v: `${k.devicesOnline}/${k.devices}`,
+    c: k.devicesOnline < k.devices ? "var(--warn)" : undefined,
+    s: "StorageDevice.status.phase"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "capacity ", /*#__PURE__*/React.createElement(Derived, {
+    formula: cap.derived
+  })), cap.total ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "v md"
+  }, pct(cap.used, cap.total), "%"), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, fmtBytes(cap.used), " of ", fmtBytes(cap.total))) : /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "v sm",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "unset"), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, "no node reports capacity yet"))), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.erasureCodingScheme",
+    v: c.erasureCodingScheme || "unset",
+    s: c.maxFaultTolerance !== undefined ? `maxFaultTolerance ${c.maxFaultTolerance}` : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.tasks",
+    v: c.tasks.length,
+    s: c.tasks.length ? c.tasks.map(t => t.type).slice(0, 3).join(", ") : "none running or pending"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.rebalancing",
+    v: c.rebalancing ? "true" : "false",
+    c: c.rebalancing ? "var(--warn)" : undefined,
+    s: c.volumeMoveGeneration !== undefined ? `volumeMoveGeneration ${c.volumeMoveGeneration}` : null
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, /*#__PURE__*/React.createElement(NavCard, {
+    icon: "node",
+    title: "Storage nodes",
+    sub: "StorageNode objects with spec.clusterRef naming this cluster",
+    count: k.nodes,
+    onClick: () => nav.layer(c, "nodes")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "device",
+    title: "Devices",
+    sub: "StorageDevice objects of those nodes",
+    count: k.devices,
+    onClick: () => nav.layer(c, "devices")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "pool",
+    title: "Storage pools",
+    sub: "StoragePool objects with spec.clusterRef naming this cluster",
+    count: k.pools,
+    onClick: () => nav.layer(c, "pools")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "volume",
+    title: "Logical volumes",
+    sub: "PersistentVolumes provisioned by this cluster",
+    count: "",
+    onClick: () => nav.layer(c, "volumes")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "camera",
+    title: "Snapshots",
+    sub: "VolumeSnapshots of those volumes",
+    count: "",
+    onClick: () => nav.layer(c, "snapshots")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "cloud",
+    title: "Backups",
+    sub: "StorageBackup objects",
+    count: "",
+    onClick: () => nav.layer(c, "backups")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "clock",
+    title: "Backup policies",
+    sub: "StorageBackupPolicy objects",
+    count: "",
+    onClick: () => nav.layer(c, "policies")
+  })), (c.tasks.length > 0 || c.provisioningSlots.length > 0) && /*#__PURE__*/React.createElement("div", {
+    className: "dcols",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement(TaskWindowCard, {
+    tasks: c.tasks
+  }), c.provisioningSlots.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", {
+    title: "StorageCluster.status.provisioningSlots"
+  }, "status.provisioningSlots"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "worker"), /*#__PURE__*/React.createElement("th", null, "node"), /*#__PURE__*/React.createElement("th", null, "takenAt"))), /*#__PURE__*/React.createElement("tbody", null, c.provisioningSlots.map(s => /*#__PURE__*/React.createElement("tr", {
+    key: s.worker
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, s.worker), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, s.node), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, fmtAgo(s.takenAt))))))))), /*#__PURE__*/React.createElement(CRSection, {
+    vm: c,
+    nav: nav
+  })), tab === "alerts" && (window.AlertsScoped ? /*#__PURE__*/React.createElement(AlertsScoped, {
+    cluster: c,
+    nav: nav
+  }) : /*#__PURE__*/React.createElement(ComingView, {
+    name: "The alert view"
+  })), tab === "ops" && /*#__PURE__*/React.createElement(OperationsPanel, {
+    cluster: c,
+    nav: nav
+  }), tab === "eventlog" && /*#__PURE__*/React.createElement(ClusterLogPanel, {
+    cluster: c
+  }));
+}
+function NodeDetail({
+  o: n,
+  nav
+}) {
+  const [tab, setTab] = useState("overview");
+  const res = n.resources,
+    ports = n.ports,
+    cap = n.capacity;
+  // the StorageNode CRD's field markers decide which spec.config fields the card shows (cr-view.jsx)
+  // FIXME: remove together with the spec.config card below, which is all this
+  // CRD lookup serves.
+  const schema = window.useCrdSchema ? useCrdSchema("StorageNode") : null;
+  const items = [{
+    k: "overview",
+    label: "Overview",
+    icon: "node"
+  }, {
+    k: "logs",
+    label: "Storage plane logs",
+    icon: "list"
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: Object.assign({}, n, {
+      status: n.phase
+    }),
+    title: n.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+      className: "lab link",
+      title: "spec.clusterRef",
+      onClick: () => nav.openCluster(n.clusterId)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "cluster",
+      s: 10
+    }), n.clusterRef), /*#__PURE__*/React.createElement("span", {
+      className: "lab mono",
+      title: "spec.workerNode"
+    }, /*#__PURE__*/React.createElement("i", null, "workerNode"), n.workerNode), n.status && /*#__PURE__*/React.createElement("span", {
+      className: "lab mono",
+      title: "status.status"
+    }, /*#__PURE__*/React.createElement("i", null, "status"), n.status), /*#__PURE__*/React.createElement(StepTag, {
+      step: n.step,
+      claim: n.stepClaim
+    }), /*#__PURE__*/React.createElement(OpsRef, {
+      name: n.activeOpsRef,
+      nav: nav,
+      vm: n
+    })),
+    badge: n.message ? /*#__PURE__*/React.createElement("span", {
+      className: "mdesc",
+      title: "status.message"
+    }, n.message) : null
+  }), /*#__PURE__*/React.createElement(Tabs, {
+    items: items,
+    active: tab,
+    onChange: setTab
+  }), tab === "overview" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "status.phase",
+    v: n.phase,
+    c: STATUS_META[n.phase] ? STATUS_META[n.phase].c : undefined,
+    s: n.status ? "status.status " + n.status : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.health",
+    v: n.health === undefined || n.health === null ? "unset" : String(n.health),
+    c: n.health === false ? "var(--bad)" : undefined
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "resources.devices",
+    v: res.devices ? `${res.devices.online}/${res.devices.total}` : "unset",
+    s: "online / total"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "resources.volumes",
+    v: res.volumes !== undefined ? res.volumes : "unset"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "resources.capacity"), cap.total ? /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "v md"
+  }, pct(cap.used, cap.total), "%"), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, fmtBytes(cap.used), " of ", fmtBytes(cap.total), cap.sampledAt ? ` · sampled ${fmtAgo(cap.sampledAt)}` : "")) : /*#__PURE__*/React.createElement("div", {
+    className: "v sm",
+    style: {
+      color: "var(--dim2)"
+    }
+  }, "unset")), /*#__PURE__*/React.createElement(Stat, {
+    k: "resources.cpu",
+    v: res.cpu !== undefined ? res.cpu : "unset",
+    s: res.memory ? `memory ${res.memory}` : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.uptime",
+    v: n.uptime || "unset"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status.ports"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["management", ports.management], ["nvmeof", ports.nvmeof], ["rpc", ports.rpc], ["lvol", ports.lvol]].map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), v === undefined ? null : /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, String(v))])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "spec.config"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["mgmtInterface", n.config.mgmtInterface], ["dataInterfaces", (n.config.dataInterfaces || []).join(", ")], ["pcieAllowList", (n.config.pcieAllowList || []).join(", ")], ["failureDomain", n.config.failureDomain], ["site", n.config.site], ["expand", n.config.expand === undefined ? null : String(n.config.expand)]].filter(([k]) => !(schema && isInvisible(schema, "spec.config." + k))).map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), v === undefined || v === null || v === "" ? null : /*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, String(v))])
+  })))), n.network.length > 0 && /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "status.network"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "network"), /*#__PURE__*/React.createElement("th", null, "phase"), /*#__PURE__*/React.createElement("th", null, "address"), /*#__PURE__*/React.createElement("th", null, "assigned"), /*#__PURE__*/React.createElement("th", null, "interface"), /*#__PURE__*/React.createElement("th", null, "hostReachable"))), /*#__PURE__*/React.createElement("tbody", null, n.network.map(x => /*#__PURE__*/React.createElement("tr", {
+    key: x.network
+  }, /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, x.network), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: x.phase === "Attached" ? "Online" : x.phase === "Pending" ? "Pending" : "Failed",
+    label: x.phase
+  })), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, x.address || "unset"), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, x.assigned || "unset"), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, x.interface || "unset"), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, x.hostReachable === undefined ? "unset" : String(x.hostReachable)))))))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, /*#__PURE__*/React.createElement(NavCard, {
+    icon: "device",
+    title: "Devices",
+    sub: "StorageDevice objects with spec.nodeRef naming this node",
+    count: n.counts.devices,
+    onClick: () => nav.layer(n, "devices")
+  }), /*#__PURE__*/React.createElement(NavCard, {
+    icon: "host",
+    title: "Worker node",
+    sub: "the Kubernetes Node " + n.workerNode,
+    count: "",
+    onClick: () => nav.openCR({
+      kind: "Node",
+      name: n.workerNode
+    })
+  })), /*#__PURE__*/React.createElement(CRSection, {
+    vm: n,
+    nav: nav
+  })), tab === "logs" && /*#__PURE__*/React.createElement(StoragePlaneLogPanel, {
+    node: n
+  }));
+}
+function DeviceDetail({
+  o: d,
+  nav
+}) {
+  const hw = d.hardware,
+    smart = d.health.smart || {},
+    perf = d.health.performance || {};
+  const num = v => v === undefined || v === null ? null : /*#__PURE__*/React.createElement("span", {
+    className: "mono"
+  }, String(v));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: Object.assign({}, d, {
+      status: d.phase
+    }),
+    title: d.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+      className: "lab link",
+      title: "spec.nodeRef",
+      onClick: () => nav.openNode(d.clusterId, d.nodeId)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "node",
+      s: 10
+    }), d.nodeRef), d.deviceStatus && /*#__PURE__*/React.createElement("span", {
+      className: "lab mono",
+      title: "status.deviceStatus"
+    }, /*#__PURE__*/React.createElement("i", null, "deviceStatus"), d.deviceStatus), /*#__PURE__*/React.createElement("span", {
+      className: "lab",
+      title: "status.role"
+    }, /*#__PURE__*/React.createElement("i", null, "role"), d.role || "unset"), /*#__PURE__*/React.createElement(OpsRef, {
+      name: d.activeOpsRef,
+      nav: nav,
+      vm: d
+    })),
+    badge: d.message ? /*#__PURE__*/React.createElement("span", {
+      className: "mdesc",
+      title: "status.message"
+    }, d.message) : null
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "status.phase",
+    v: d.phase,
+    c: STATUS_META[d.phase] ? STATUS_META[d.phase].c : undefined,
+    s: d.deviceStatus ? "deviceStatus " + d.deviceStatus : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "capacity.totalBytes",
+    v: d.capacity.total ? fmtBytes(d.capacity.total) : "unset"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "health.smart.verdict",
+    v: smart.verdict || "unset",
+    c: verdictColor(smart.verdict),
+    s: smart.reason
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "health.performance.verdict",
+    v: perf.verdict || "unset",
+    c: verdictColor(perf.verdict),
+    s: perf.reason
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status.hardware"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["model", hw.model], ["serialNumber", hw.serialNumber], ["pciAddress", hw.pciAddress], ["nvmeController", hw.nvmeController]].map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), num(v)])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status.health.smart"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["checkedAt", smart.checkedAt ? fmtAgo(smart.checkedAt) : null], ["source", smart.source], ["temperatureCelsius", smart.temperatureCelsius], ["percentageUsed", smart.percentageUsed], ["availableSparePercent", smart.availableSparePercent], ["availableSpareThresholdPercent", smart.availableSpareThresholdPercent], ["mediaErrors", smart.mediaErrors], ["criticalWarning", smart.criticalWarning], ["powerOnHours", smart.powerOnHours], ["unsafeShutdowns", smart.unsafeShutdowns]].map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), num(v)])
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "dcols",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status.health.performance"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["assessedAt", perf.assessedAt ? fmtAgo(perf.assessedAt) : null], ["since", perf.since ? fmtAgo(perf.since) : null], ["latencyMicroseconds", perf.latencyMicroseconds], ["fleetLatencyMicroseconds", perf.fleetLatencyMicroseconds], ["latencyRatioPercent", perf.latencyRatioPercent], ["iopsRatioPercent", perf.iopsRatioPercent]].map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), num(v)])
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "identity"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: [["spec.deviceID", d.id], ["status.clusterID", d.clusterId], ["status.nodeID", d.nodeId], ["status.site", d.site], ["status.remote", d.remote === undefined ? null : String(d.remote)]].map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), num(v)])
+  })))), /*#__PURE__*/React.createElement(CRSection, {
+    vm: d,
+    nav: nav
+  }));
+}
+function PoolDetail({
+  o: p,
+  nav
+}) {
+  const lim = p.limits || {},
+    vd = p.volumeDefaults || {},
+    sl = p.statusLimits || {};
+  const num = v => v === undefined || v === null || v === "" ? null : /*#__PURE__*/React.createElement("span", {
+    className: "mono"
+  }, typeof v === "object" ? JSON.stringify(v) : String(v));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement(DetailHead, {
+    obj: Object.assign({}, p, {
+      status: p.phase
+    }),
+    title: p.name,
+    sub: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("button", {
+      className: "lab link",
+      title: "spec.clusterRef",
+      onClick: () => nav.openCluster(p.clusterId)
+    }, /*#__PURE__*/React.createElement(Icon, {
+      n: "cluster",
+      s: 10
+    }), p.clusterRef), p.status && /*#__PURE__*/React.createElement("span", {
+      className: "lab mono",
+      title: "status.status"
+    }, /*#__PURE__*/React.createElement("i", null, "status"), p.status), /*#__PURE__*/React.createElement(OpsRef, {
+      name: p.activeOpsRef,
+      nav: nav,
+      vm: p
+    })),
+    badge: p.message ? /*#__PURE__*/React.createElement("span", {
+      className: "mdesc",
+      title: "status.message"
+    }, p.message) : null
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "status.phase",
+    v: p.phase,
+    c: STATUS_META[p.phase] ? STATUS_META[p.phase].c : undefined,
+    s: p.status ? "status.status " + p.status : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "spec.limits.capacity",
+    v: lim.capacity || "unset",
+    s: sl.capacity ? `status.limits.capacity ${sl.capacity}` : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "spec.limits.iops",
+    v: lim.iops !== undefined ? fmtNum(lim.iops) : "unset",
+    s: sl.iops !== undefined ? `status.limits.iops ${fmtNum(sl.iops)}` : null
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "status.storageClassNames",
+    v: p.storageClassNames.length,
+    s: p.defaultStorageClassName ? `default ${p.defaultStorageClassName}` : null
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "dcols"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "spec.volumeDefaults"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: Object.entries(vd).map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), num(v)])
+  }), !Object.keys(vd).length && /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "unset"))), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("h3", null, "status.limits"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      paddingTop: 2,
+      paddingBottom: 2
+    }
+  }, /*#__PURE__*/React.createElement(Props, {
+    rows: Object.entries(sl).map(([k, v]) => [/*#__PURE__*/React.createElement("span", {
+      className: "mono"
+    }, k), num(v)])
+  }), !Object.keys(sl).length && /*#__PURE__*/React.createElement("div", {
+    className: "nolim"
+  }, "unset")))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "navcards"
+  }, /*#__PURE__*/React.createElement(NavCard, {
+    icon: "volume",
+    title: "Logical volumes",
+    sub: "PersistentVolumes whose class is assigned to this pool",
+    count: "",
+    onClick: () => nav.layer(p, "volumes")
+  }), p.storageClassNames.map(sc => /*#__PURE__*/React.createElement(NavCard, {
+    key: sc,
+    icon: "k8s",
+    title: sc,
+    sub: "StorageClass assigned to this pool (status.storageClassNames)",
+    count: "",
+    onClick: () => nav.openCR({
+      kind: "StorageClass",
+      name: sc
+    })
+  }))), /*#__PURE__*/React.createElement(CRSection, {
+    vm: p,
+    nav: nav
+  }));
+}
+Object.assign(window, {
+  ClusterTile,
+  NodeTile,
+  DeviceTile,
+  PoolTile,
   ClusterDetail,
-  HostDetail,
   NodeDetail,
-  DeviceDetail
+  DeviceDetail,
+  PoolDetail,
+  PhaseTag,
+  StepTag,
+  OpsRef,
+  Derived,
+  TaskWindowCard
+});
+})();
+// ---- dashboard.jsx ----
+(function(){
+// ---------------------------------------------------------------------------
+// FLEET DASHBOARD: the root of the Clusters section
+//
+// One view for every deployment shape: a few sites with a cluster each, a
+// lifecycle ladder of contexts, tenants in namespaces, a dozen edge clusters
+// in one Kubernetes cluster, or one context per edge site. The grouping
+// switch picks the dimension, and every dimension is something the objects
+// or the console's configuration actually carry: the Kubernetes context, the
+// namespace, the site (a stretched cluster's spec.stretched.site, else the
+// topology.kubernetes.io/zone label of the workers the nodes run on, which is
+// what "sites are tagged nodes" means), the region label, any label on the
+// StorageCluster, or any label the administrator configured on a context.
+// Each group says where its value came from. Counts and capacity are the
+// derived values api.jsx documents; alerts and operations come from their
+// stores; the control planes are the ControlPlane objects of each context.
+// ---------------------------------------------------------------------------
+const SM = s => STATUS_META[s] || {
+  c: "var(--idle)",
+  rank: 1,
+  label: s || "unknown"
+};
+const FLEET_POLL = 10000;
+const NONE = "none";
+const BASE_GROUPINGS = {
+  context: {
+    label: "Context",
+    keysOf: c => [c.ctx],
+    from: () => "the Kubernetes context the object was read from"
+  },
+  namespace: {
+    label: "Namespace",
+    keysOf: c => [c.namespace],
+    from: () => "metadata.namespace"
+  },
+  site: {
+    label: "Site",
+    keysOf: c => c.sites.length ? c.sites.map(s => s.value) : [NONE],
+    from: c => (c.sites[0] || {}).from || "no site: the cluster is not stretched and no worker carries a zone label"
+  },
+  region: {
+    label: "Region",
+    keysOf: c => c.regions.length ? c.regions : [NONE],
+    from: () => "worker Node label topology.kubernetes.io/region"
+  },
+  flat: {
+    label: "Flat",
+    keysOf: () => [""],
+    from: () => null
+  }
+};
+// "label:<key>" groups by a StorageCluster label, "ctxlabel:<key>" by a label the console's configuration gives the context
+function groupingOf(key) {
+  if (BASE_GROUPINGS[key]) return BASE_GROUPINGS[key];
+  if (key.startsWith("label:")) {
+    const k = key.slice(6);
+    return {
+      label: k,
+      keysOf: c => [(c.labels || {})[k] || NONE],
+      from: () => `metadata.labels[${k}]`
+    };
+  }
+  if (key.startsWith("ctxlabel:")) {
+    const k = key.slice(9);
+    return {
+      label: k,
+      keysOf: c => [(ctxLabels(c.ctx) || {})[k] || NONE],
+      from: () => `the console's configuration of context ${k}`
+    };
+  }
+  return BASE_GROUPINGS.flat;
+}
+const groupBy = (clusters, key) => {
+  const g = groupingOf(key);
+  const map = new Map();
+  clusters.forEach(c => g.keysOf(c).forEach(k => {
+    if (!map.has(k)) map.set(k, {
+      key: k,
+      from: g.from(c),
+      rows: []
+    });
+    map.get(k).rows.push(c);
+  }));
+  const groups = Array.from(map.values());
+  groups.sort((a, b) => (a.key === NONE) - (b.key === NONE) || a.key.localeCompare(b.key));
+  return groups;
+};
+// the grouping keys on offer: the fixed ones, every label key a cluster carries, every label key a context declares
+const groupingKeys = clusters => {
+  const labelKeys = Array.from(new Set(clusters.flatMap(c => Object.keys(c.labels || {})))).sort();
+  const ctxKeys = window.ctxLabelKeys ? ctxLabelKeys() : [];
+  return [{
+    k: "context",
+    l: "Context",
+    on: window.MULTI_CTX
+  }, {
+    k: "namespace",
+    l: "Namespace",
+    on: true
+  }, {
+    k: "site",
+    l: "Site",
+    on: true
+  }, {
+    k: "region",
+    l: "Region",
+    on: clusters.some(c => c.regions.length)
+  }].filter(x => x.on).map(x => ({
+    k: x.k,
+    l: x.l
+  })).concat(ctxKeys.map(k => ({
+    k: "ctxlabel:" + k,
+    l: `context ${k}`
+  })), labelKeys.map(k => ({
+    k: "label:" + k,
+    l: `label ${k}`
+  })), [{
+    k: "flat",
+    l: "Flat"
+  }]);
+};
+
+// ---- the fleet -----------------------------------------------------------------
+async function loadFleet() {
+  const clusters = await api.clusters();
+  const cps = (await Promise.all(CONTEXTS.map(c => k8s.list("ControlPlane", {
+    allNamespaces: true,
+    ctx: c.name
+  }).then(r => r.map(o => Object.assign(o, {
+    __ctx: c.name
+  }))).catch(() => [])))).flat();
+  // the nodes at each site: a StorageNode belongs to the zone of its worker (or its stretched site)
+  const nodes = (await Promise.all(clusters.map(c => api.nodes(c.id).catch(() => [])))).flat();
+  const nodesAt = {};
+  nodes.forEach(n => {
+    const site = n.zone || (n.config || {}).site || NONE;
+    const a = nodesAt[site] || (nodesAt[site] = {
+      total: 0,
+      online: 0
+    });
+    a.total++;
+    if (n.phase === "Online") a.online++;
+  });
+  const rows = clusters.map(c => {
+    const th = c.thresholds || {};
+    const cap = c.capacity;
+    return Object.assign({}, c, {
+      utilPct: cap.total ? cap.used / cap.total * 100 : 0,
+      warnCap: (th.warn || {}).capacity,
+      critCap: (th.crit || {}).capacity,
+      controlPlane: cps.find(cp => cp.__ctx === c.ctx) || null
+    });
+  });
+  return {
+    rows,
+    controlPlanes: cps,
+    nodesAt
+  };
+}
+const NO_ALERTS = {
+    critical: 0,
+    warning: 0,
+    silenced: 0
+  },
+  NO_OPS = {
+    running: 0,
+    failed: 0
+  };
+function useFleet(rev) {
+  const r = useResource("fleet|" + rev, loadFleet, FLEET_POLL);
+  // the stores re-render this view as they evaluate, so the counts are read at render time
+  const al = window.useAlerts ? useAlerts() : null;
+  const wk = window.useWork ? useWork() : null;
+  const alertRev = al ? al.lastEval : 0,
+    workRev = wk ? wk.version : 0;
+  const clusters = React.useMemo(() => ((r.data || {}).rows || []).map(c => Object.assign({}, c, {
+    alerts: al && al.ready ? al.countsFor(c.id) : NO_ALERTS,
+    ops: wk && wk.ready ? wk.countsFor(c.id) : NO_OPS
+  })), [r.data, alertRev, workRev]);
+  const controlPlanes = (r.data || {}).controlPlanes || [];
+  const nodesAt = (r.data || {}).nodesAt || {};
+  const sites = React.useMemo(() => groupBy(clusters, "site").map(g => ({
+    id: g.key,
+    from: g.from,
+    clusters: g.rows,
+    nodes: (nodesAt[g.key] || {}).total || 0,
+    nodesOnline: (nodesAt[g.key] || {}).online || 0,
+    contexts: Array.from(new Set(g.rows.map(c => c.ctx))),
+    stretched: g.rows.filter(c => c.stretchedSpec),
+    capacity: {
+      used: g.rows.reduce((n, c) => n + (c.capacity.used || 0), 0),
+      total: g.rows.reduce((n, c) => n + (c.capacity.total || 0), 0)
+    },
+    alerts: g.rows.reduce((a, c) => ({
+      critical: a.critical + c.alerts.critical,
+      warning: a.warning + c.alerts.warning
+    }), {
+      critical: 0,
+      warning: 0
+    }),
+    worst: g.rows.reduce((w, c) => Math.max(w, SM(c.phase).rank), 0)
+  })), [clusters]);
+  return Object.assign({}, r, {
+    clusters,
+    controlPlanes,
+    sites,
+    errors: window.worldErrors ? worldErrors() : {}
+  });
+}
+
+// ---- primitives ----------------------------------------------------------------
+// a bar with the cluster's own threshold ticks when its spec states them
+function Meter({
+  pct,
+  warn,
+  crit,
+  mini,
+  title
+}) {
+  const p = Math.max(0, Number(pct) || 0);
+  const c = crit && p >= crit ? "var(--bad)" : warn && p >= warn ? "var(--warn)" : "var(--accent)";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "meter" + (mini ? " mini" : ""),
+    title: title || `${p.toFixed(0)}%${warn ? ` · spec.warningThreshold.capacity ${warn}%` : ""}${crit ? ` · spec.criticalThreshold.capacity ${crit}%` : ""}`
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bar"
+  }, /*#__PURE__*/React.createElement("i", {
+    style: {
+      width: Math.min(100, p) + "%",
+      "--bc": c
+    }
+  }), warn && /*#__PURE__*/React.createElement("span", {
+    className: "tick",
+    style: {
+      left: Math.min(100, warn) + "%"
+    }
+  }), crit && /*#__PURE__*/React.createElement("span", {
+    className: "tick",
+    style: {
+      left: Math.min(100, crit) + "%"
+    }
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "mono mp",
+    style: {
+      color: c
+    }
+  }, p.toFixed(0), "%"));
+}
+const SevCount = ({
+  critical,
+  warning,
+  onClick
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "sev" + (onClick ? " link" : ""),
+  onClick: onClick
+}, critical ? /*#__PURE__*/React.createElement("b", {
+  className: "crit"
+}, critical) : null, warning ? /*#__PURE__*/React.createElement("b", {
+  className: "warn"
+}, warning) : null, !critical && !warning ? /*#__PURE__*/React.createElement("span", {
+  className: "none"
+}, "0") : null);
+const OpsCount = ({
+  running,
+  failed,
+  onClick
+}) => /*#__PURE__*/React.createElement("span", {
+  className: "sev" + (onClick ? " link" : ""),
+  onClick: onClick
+}, running ? /*#__PURE__*/React.createElement("b", {
+  className: "run"
+}, running) : null, failed ? /*#__PURE__*/React.createElement("b", {
+  className: "crit"
+}, failed) : null, !running && !failed ? /*#__PURE__*/React.createElement("span", {
+  className: "none"
+}, "0") : null);
+function VirtualList({
+  rows,
+  rowHeight,
+  render,
+  height,
+  overscan = 12
+}) {
+  const [top, setTop] = React.useState(0);
+  const h = height || 560;
+  const start = Math.max(0, Math.floor(top / rowHeight) - overscan);
+  const end = Math.min(rows.length, Math.ceil((top + h) / rowHeight) + overscan);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "vlist",
+    style: {
+      height: h
+    },
+    onScroll: e => setTop(e.target.scrollTop)
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      height: rows.length * rowHeight,
+      position: "relative"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "absolute",
+      top: start * rowHeight,
+      left: 0,
+      right: 0
+    }
+  }, rows.slice(start, end).map((r, i) => render(r, start + i)))));
+}
+const Provenance = ({
+  from
+}) => from ? /*#__PURE__*/React.createElement("span", {
+  className: "prov",
+  title: from
+}, from.length > 38 ? from.slice(0, 36) + "…" : from) : null;
+const cpPhase = cp => cp ? (cp.status || {}).phase || "Pending" : null;
+
+// ---- the roll-up -----------------------------------------------------------------
+function FleetRollup({
+  clusters,
+  sites,
+  controlPlanes,
+  nav
+}) {
+  const n = clusters.length;
+  const byPhase = {};
+  clusters.forEach(c => {
+    byPhase[c.phase] = (byPhase[c.phase] || 0) + 1;
+  });
+  const online = byPhase.Online || 0;
+  const worst = clusters.reduce((w, c) => Math.max(w, SM(c.phase).rank), 0);
+  const nodes = clusters.reduce((a, c) => ({
+    t: a.t + c.counts.nodes,
+    o: a.o + c.counts.nodesOnline
+  }), {
+    t: 0,
+    o: 0
+  });
+  const devs = clusters.reduce((a, c) => ({
+    t: a.t + c.counts.devices,
+    o: a.o + c.counts.devicesOnline
+  }), {
+    t: 0,
+    o: 0
+  });
+  const cap = clusters.reduce((a, c) => ({
+    u: a.u + (c.capacity.used || 0),
+    t: a.t + (c.capacity.total || 0)
+  }), {
+    u: 0,
+    t: 0
+  });
+  const alerts = clusters.reduce((a, c) => ({
+    c: a.c + c.alerts.critical,
+    w: a.w + c.alerts.warning
+  }), {
+    c: 0,
+    w: 0
+  });
+  const ops = clusters.reduce((a, c) => ({
+    r: a.r + c.ops.running,
+    f: a.f + c.ops.failed
+  }), {
+    r: 0,
+    f: 0
+  });
+  const cpAvail = controlPlanes.filter(cp => cpPhase(cp) === "Available").length;
+  const others = Object.entries(byPhase).filter(([p]) => p !== "Online").map(([p, k]) => `${k} ${p}`).join(" · ");
+  return /*#__PURE__*/React.createElement("div", {
+    className: "stats fleet"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Clusters Online",
+    v: `${online}/${n}`,
+    c: worst >= 3 ? "var(--bad)" : worst >= 2 ? "var(--warn)" : undefined,
+    s: others || "status.phase Online on every cluster"
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Nodes Online",
+    v: `${nodes.o}/${nodes.t}`,
+    c: nodes.o < nodes.t ? "var(--warn)" : undefined,
+    s: `${sites.filter(s => s.id !== NONE).length} site${sites.filter(s => s.id !== NONE).length === 1 ? "" : "s"}`
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Devices Online",
+    v: `${devs.o}/${devs.t}`,
+    c: devs.o < devs.t ? "var(--warn)" : undefined,
+    s: devs.t - devs.o ? `${devs.t - devs.o} not Online` : "all Online"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Capacity used ", /*#__PURE__*/React.createElement(Derived, {
+    formula: "sum of StorageNode.status.resources.capacity over every cluster"
+  })), /*#__PURE__*/React.createElement(Meter, {
+    pct: cap.t ? cap.u / cap.t * 100 : 0
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, fmtBytes(cap.u), " of ", fmtBytes(cap.t))), /*#__PURE__*/React.createElement("div", {
+    className: "stat link",
+    onClick: () => nav.alerts && nav.alerts()
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Open alerts"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: alerts.c ? "var(--bad)" : alerts.w ? "var(--warn)" : "var(--ok)"
+    }
+  }, alerts.c), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, alerts.w, " warning")), /*#__PURE__*/React.createElement("div", {
+    className: "stat link",
+    onClick: () => nav.monitor && nav.monitor({
+      state: "running"
+    })
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Operations"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: ops.f ? "var(--bad)" : ops.r ? "var(--info)" : undefined
+    }
+  }, ops.r), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, "running \xB7 ", ops.f, " failed")), /*#__PURE__*/React.createElement("div", {
+    className: "stat link",
+    onClick: () => {
+      const el = document.getElementById("cplanes");
+      if (el) el.scrollIntoView({
+        behavior: "smooth"
+      });
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Control planes Available"), /*#__PURE__*/React.createElement("div", {
+    className: "v",
+    style: {
+      color: cpAvail < controlPlanes.length ? "var(--warn)" : undefined
+    }
+  }, cpAvail, "/", controlPlanes.length), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, "ControlPlane.status.phase per context")));
+}
+
+// ---- the matrix --------------------------------------------------------------------
+const matrixCols = labelKey => ["", "Cluster", "Sites", labelKey ? labelKey.replace(/^(ctx)?label:/, "") : "Phase", "Namespace", "Alerts", "Ops", "Nodes", "Devices", "Capacity", "Step", "Control plane", ""];
+function ClusterRow({
+  r,
+  nav,
+  labelKey,
+  style
+}) {
+  const sm = SM(r.phase);
+  const bad = sm.rank >= 3 ? " bad" : sm.rank >= 2 ? " warn" : "";
+  const g = labelKey ? groupingOf(labelKey) : null;
+  const cp = r.controlPlane;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cmxr" + bad,
+    style: style,
+    onDoubleClick: () => nav.openCluster(r.id)
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "c-st"
+  }, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: r.phase,
+    sm: true,
+    label: false
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "c-name"
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "tlink",
+    onClick: () => nav.openCluster(r.id)
+  }, r.name), /*#__PURE__*/React.createElement("span", {
+    className: "c-sub mono"
+  }, window.MULTI_CTX ? r.ctx + " · " : "", r.status || r.phase)), /*#__PURE__*/React.createElement("span", {
+    className: "c-sites"
+  }, r.sites.length ? r.sites.slice(0, 2).map(s => /*#__PURE__*/React.createElement("span", {
+    key: s.value,
+    className: "lab sitelab",
+    title: s.from,
+    onClick: () => nav.openSite(s.value)
+  }, s.value)) : /*#__PURE__*/React.createElement("span", {
+    className: "none"
+  }, NONE), r.sites.length > 2 && /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: r.sites.slice(2).map(s => s.value).join(", ")
+  }, "+", r.sites.length - 2), r.stretchedSpec && /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    title: "spec.stretched"
+  }, "stretched")), /*#__PURE__*/React.createElement("span", {
+    className: "c-stage"
+  }, g ? /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    title: g.from(r)
+  }, g.keysOf(r)[0]) : /*#__PURE__*/React.createElement("span", {
+    className: "badge",
+    title: "status.phase"
+  }, r.phase)), /*#__PURE__*/React.createElement("span", {
+    className: "c-tenant mono",
+    title: "metadata.namespace"
+  }, r.namespace), /*#__PURE__*/React.createElement("span", {
+    className: "c-alerts"
+  }, /*#__PURE__*/React.createElement(SevCount, {
+    critical: r.alerts.critical,
+    warning: r.alerts.warning,
+    onClick: nav.alerts ? () => nav.alerts({
+      cluster: r.id
+    }) : null
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "c-ops"
+  }, /*#__PURE__*/React.createElement(OpsCount, {
+    running: r.ops.running,
+    failed: r.ops.failed,
+    onClick: nav.monitor ? () => nav.monitor({
+      cluster: r.id
+    }) : null
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "c-nodes mono",
+    title: "StorageNode.status.phase Online / all",
+    style: {
+      color: r.counts.nodesOnline < r.counts.nodes ? "var(--warn)" : undefined
+    }
+  }, r.counts.nodesOnline, "/", r.counts.nodes), /*#__PURE__*/React.createElement("span", {
+    className: "c-devs mono",
+    title: "StorageDevice.status.phase Online / all",
+    style: {
+      color: r.counts.devicesOnline < r.counts.devices ? "var(--warn)" : undefined
+    }
+  }, r.counts.devicesOnline, "/", r.counts.devices), /*#__PURE__*/React.createElement("span", {
+    className: "c-cap"
+  }, r.capacity.total ? /*#__PURE__*/React.createElement(Meter, {
+    mini: true,
+    pct: r.utilPct,
+    warn: r.warnCap,
+    crit: r.critCap,
+    title: `${fmtBytes(r.capacity.used)} of ${fmtBytes(r.capacity.total)} · ${r.capacity.derived}`
+  }) : /*#__PURE__*/React.createElement("span", {
+    className: "none"
+  }, "unset")), /*#__PURE__*/React.createElement("span", {
+    className: "c-iops mono",
+    style: {
+      fontSize: 10.5
+    },
+    title: r.activeOpsRef ? "status.activeOpsRef" : "status.step.state"
+  }, r.activeOpsRef ? r.activeOpsRef : r.step || "unset"), /*#__PURE__*/React.createElement("span", {
+    className: "c-cp",
+    title: cp ? `ControlPlane ${cp.metadata.name} status.phase` : "no ControlPlane object in this context"
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: cp ? SM(cpPhase(cp)).c : "var(--dim2)"
+  }), cp ? cpPhase(cp) : NONE), /*#__PURE__*/React.createElement("span", {
+    className: "c-act"
+  }, /*#__PURE__*/React.createElement(ActionBtn, {
+    obj: REG[r.id] || r
+  })));
+}
+function ClusterMatrix({
+  groups,
+  nav,
+  grouping
+}) {
+  const [collapsed, setCollapsed] = useLocal("sb.fleet.collapsed", {});
+  const labelKey = grouping.startsWith("label:") || grouping.startsWith("ctxlabel:") ? grouping : null;
+  const flat = [];
+  groups.forEach(g => {
+    if (grouping !== "flat") flat.push({
+      head: g
+    });
+    if (!collapsed[g.key]) g.rows.forEach(r => flat.push({
+      row: r
+    }));
+  });
+  const render = (it, i) => it.head ? /*#__PURE__*/React.createElement(GroupRow, {
+    key: "g" + it.head.key,
+    g: it.head,
+    grouping: grouping,
+    collapsed: !!collapsed[it.head.key],
+    onToggle: () => setCollapsed(Object.assign({}, collapsed, {
+      [it.head.key]: !collapsed[it.head.key]
+    })),
+    nav: nav
+  }) : /*#__PURE__*/React.createElement(ClusterRow, {
+    key: it.row.id + "|" + i,
+    r: it.row,
+    nav: nav,
+    labelKey: labelKey
+  });
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cmx"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "cmxh"
+  }, matrixCols(labelKey).map((c, i) => /*#__PURE__*/React.createElement("span", {
+    key: i
+  }, c))), flat.length > 80 ? /*#__PURE__*/React.createElement(VirtualList, {
+    rows: flat,
+    rowHeight: 36,
+    render: render
+  }) : flat.map(render));
+}
+function GroupRow({
+  g,
+  grouping,
+  collapsed,
+  onToggle,
+  nav
+}) {
+  const worst = g.rows.reduce((w, c) => Math.max(w, SM(c.phase).rank), 0);
+  const alerts = g.rows.reduce((a, c) => ({
+    c: a.c + c.alerts.critical,
+    w: a.w + c.alerts.warning
+  }), {
+    c: 0,
+    w: 0
+  });
+  const label = g.key === NONE ? `no ${groupingOf(grouping).label}` : g.key;
+  return /*#__PURE__*/React.createElement("div", {
+    className: "cmxg",
+    onClick: onToggle
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "gt"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: collapsed ? "chev" : "chevd",
+    s: 10
+  }), label, /*#__PURE__*/React.createElement(Provenance, {
+    from: g.from
+  })), /*#__PURE__*/React.createElement("span", {
+    className: "gc"
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: worst >= 3 ? "var(--bad)" : worst >= 2 ? "var(--warn)" : "var(--ok)"
+  }), g.rows.length, " cluster", g.rows.length === 1 ? "" : "s"), /*#__PURE__*/React.createElement("span", {
+    className: "gc"
+  }, /*#__PURE__*/React.createElement(SevCount, {
+    critical: alerts.c,
+    warning: alerts.w
+  })), grouping === "site" && g.key !== NONE && /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: e => {
+      e.stopPropagation();
+      nav.openSite(g.key);
+    }
+  }, "Open site"));
+}
+
+// ---- control planes ---------------------------------------------------------------------
+function ControlPlanesCard({
+  controlPlanes,
+  nav
+}) {
+  return /*#__PURE__*/React.createElement("div", {
+    className: "card",
+    id: "cplanes",
+    style: {
+      marginTop: 12
+    }
+  }, /*#__PURE__*/React.createElement("h3", null, "Control planes \xB7 the ControlPlane object of each context"), /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, !CONTEXTS.length ? null : /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "Context"), /*#__PURE__*/React.createElement("th", null, "ControlPlane"), /*#__PURE__*/React.createElement("th", null, "status.phase"), /*#__PURE__*/React.createElement("th", null, "status.version"), /*#__PURE__*/React.createElement("th", null, "status.endpoint"), /*#__PURE__*/React.createElement("th", null, "status.components"), /*#__PURE__*/React.createElement("th", null, "activeOpsRef"), /*#__PURE__*/React.createElement("th", null))), /*#__PURE__*/React.createElement("tbody", null, CONTEXTS.map(c => {
+    const cps = controlPlanes.filter(cp => cp.__ctx === c.name);
+    if (!cps.length) return /*#__PURE__*/React.createElement("tr", {
+      key: c.name
+    }, /*#__PURE__*/React.createElement("td", {
+      className: "mono"
+    }, c.name), /*#__PURE__*/React.createElement("td", {
+      colSpan: 6,
+      style: {
+        color: "var(--dim2)"
+      }
+    }, "no ControlPlane object"), /*#__PURE__*/React.createElement("td", null));
+    return cps.map(cp => {
+      const st = cp.status || {};
+      const comps = st.components || [];
+      const notReady = comps.filter(x => (x.ready || 0) < (x.desired || 0));
+      return /*#__PURE__*/React.createElement("tr", {
+        key: c.name + cp.metadata.name
+      }, /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, c.name), /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, cp.metadata.namespace, "/", cp.metadata.name), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+        status: cpPhase(cp),
+        sm: true
+      })), /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, st.version || "unset"), /*#__PURE__*/React.createElement("td", {
+        className: "mono",
+        style: {
+          fontSize: 11
+        }
+      }, st.endpoint || "unset"), /*#__PURE__*/React.createElement("td", {
+        className: "mono",
+        title: comps.map(x => `${x.name} ${x.ready || 0}/${x.desired}`).join("\n"),
+        style: {
+          color: notReady.length ? "var(--warn)" : undefined
+        }
+      }, comps.length ? `${comps.length - notReady.length}/${comps.length} ready` : "unset"), /*#__PURE__*/React.createElement("td", {
+        className: "mono"
+      }, st.activeOpsRef || ""), /*#__PURE__*/React.createElement("td", {
+        style: {
+          textAlign: "right",
+          whiteSpace: "nowrap"
+        }
+      }, /*#__PURE__*/React.createElement("button", {
+        className: "chip",
+        onClick: () => nav.openCR({
+          ctx: c.name,
+          ns: cp.metadata.namespace,
+          kind: "ControlPlane",
+          name: cp.metadata.name
+        })
+      }, "Resource"), c.local && nav.cp && /*#__PURE__*/React.createElement("button", {
+        className: "chip",
+        onClick: () => nav.cp()
+      }, "Pods and logs")));
+    });
+  })))));
+}
+
+// the top bar's pill: how many ControlPlane objects report status.phase Available, across the contexts
+function ControlPlanePill({
+  nav
+}) {
+  const r = useResource("cp-pill", () => Promise.all(CONTEXTS.map(c => k8s.list("ControlPlane", {
+    allNamespaces: true,
+    ctx: c.name
+  }).catch(() => []))).then(rs => rs.flat()), 15000);
+  const cps = r.data || [];
+  if (!cps.length) return /*#__PURE__*/React.createElement("span", {
+    className: "env",
+    title: "no ControlPlane object in any context"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pulse",
+    style: {
+      background: "var(--dim2)"
+    }
+  }), "no control plane");
+  const avail = cps.filter(cp => cpPhase(cp) === "Available").length;
+  const ok = avail === cps.length;
+  return /*#__PURE__*/React.createElement("span", {
+    className: "env",
+    style: {
+      cursor: "pointer"
+    },
+    title: cps.map(cp => `${cp.metadata.namespace}/${cp.metadata.name}: ${cpPhase(cp)}`).join("\n"),
+    onClick: () => {
+      nav.dashboard();
+      setTimeout(() => {
+        const el = document.getElementById("cplanes");
+        if (el) el.scrollIntoView({
+          behavior: "smooth"
+        });
+      }, 300);
+    }
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "pulse",
+    style: ok ? undefined : {
+      background: "var(--warn)"
+    }
+  }), avail, "/", cps.length, " control plane", cps.length === 1 ? "" : "s", " Available");
+}
+
+// ---- sites ---------------------------------------------------------------------------
+function SiteCard({
+  s,
+  nav
+}) {
+  const c = s.worst >= 3 ? "var(--bad)" : s.worst >= 2 ? "var(--warn)" : "var(--ok)";
+  return /*#__PURE__*/React.createElement("div", {
+    className: "tile sitecard",
+    style: {
+      "--sc": c
+    },
+    onDoubleClick: () => nav.openSite(s.id)
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "th"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      minWidth: 0,
+      flex: 1
+    }
+  }, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: s.worst >= 3 ? "Degraded" : s.worst >= 2 ? "Degraded" : "Online",
+    label: s.worst >= 2 ? "a cluster is not Online" : "every cluster Online"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "tname"
+  }, s.id === NONE ? "No site" : s.id), /*#__PURE__*/React.createElement("div", {
+    className: "tsub"
+  }, /*#__PURE__*/React.createElement(Provenance, {
+    from: s.from
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "labels"
+  }, /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "clusters"), s.clusters.length), /*#__PURE__*/React.createElement("span", {
+    className: "lab",
+    title: "StorageNodes whose worker carries this zone"
+  }, /*#__PURE__*/React.createElement("i", null, "nodes Online"), s.nodesOnline, "/", s.nodes), /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "contexts"), s.contexts.join(", ")), s.stretched.length > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "lab"
+  }, /*#__PURE__*/React.createElement("i", null, "stretched"), s.stretched.length)), s.capacity.total > 0 && /*#__PURE__*/React.createElement(Capacity, {
+    total: s.capacity.total,
+    used: s.capacity.used
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "kv",
+    style: {
+      marginTop: 8
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("span", null, "Alerts"), /*#__PURE__*/React.createElement("b", null, /*#__PURE__*/React.createElement(SevCount, {
+    critical: s.alerts.critical,
+    warning: s.alerts.warning
+  })))), /*#__PURE__*/React.createElement(Foot, {
+    items: [{
+      label: "Details",
+      right: true,
+      onClick: () => nav.openSite(s.id)
+    }]
+  }));
+}
+function SiteBoard({
+  sites,
+  nav
+}) {
+  if (!sites.length) return /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "zone",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "No sites"), /*#__PURE__*/React.createElement("span", null, "A site is a stretched cluster's spec.stretched.site or the topology.kubernetes.io/zone label of the workers the storage nodes run on."));
+  return /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, sites.map(s => /*#__PURE__*/React.createElement(SiteCard, {
+    key: s.id,
+    s: s,
+    nav: nav
+  })));
+}
+function FleetSiteDetail({
+  seg,
+  nav,
+  rev
+}) {
+  const fleet = useFleet(rev);
+  const site = fleet.sites.find(s => s.id === seg.id) || null;
+  const {
+    data: nodes
+  } = useResource("sitenodes|" + seg.id + "|" + (site ? site.clusters.map(c => c.id).join(",") : ""), () => site ? Promise.all(site.clusters.map(c => api.nodes(c.id).catch(() => []))).then(rs => rs.flat()) : Promise.resolve([]), 15000);
+  if (fleet.loading && !fleet.data) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "lmsg"
+  }, "loading\u2026"));
+  if (!site) return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "zone",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "Site ", seg.id, " is not known"), /*#__PURE__*/React.createElement("span", null, "No stretched cluster names it and no worker carries it as a zone.")));
+  const nodeRows = (nodes || []).filter(n => site.id === NONE ? !n.zone && !(n.config || {}).site : n.zone === site.id || (n.config || {}).site === site.id);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, site.id === NONE ? "No site" : site.id), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, "Site ", /*#__PURE__*/React.createElement(Provenance, {
+    from: site.from
+  }), " \xB7 ", site.clusters.length, " cluster", site.clusters.length === 1 ? "" : "s", " across ", site.contexts.length, " context", site.contexts.length === 1 ? "" : "s"))), /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, /*#__PURE__*/React.createElement(Stat, {
+    k: "Clusters",
+    v: site.clusters.length,
+    s: site.stretched.length ? `${site.stretched.length} stretched` : ""
+  }), /*#__PURE__*/React.createElement(Stat, {
+    k: "Nodes Online",
+    v: `${site.nodesOnline}/${site.nodes}`,
+    c: site.nodesOnline < site.nodes ? "var(--warn)" : undefined,
+    s: "StorageNodes at this site"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Capacity used ", /*#__PURE__*/React.createElement(Derived, {
+    formula: "sum of StorageNode.status.resources.capacity over the whole of every cluster with a node at this site"
+  })), /*#__PURE__*/React.createElement(Meter, {
+    pct: site.capacity.total ? site.capacity.used / site.capacity.total * 100 : 0
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "s"
+  }, fmtBytes(site.capacity.used), " of ", fmtBytes(site.capacity.total))), /*#__PURE__*/React.createElement("div", {
+    className: "stat"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "k"
+  }, "Open alerts"), /*#__PURE__*/React.createElement("div", {
+    className: "v"
+  }, /*#__PURE__*/React.createElement(SevCount, {
+    critical: site.alerts.critical,
+    warning: site.alerts.warning
+  })))), /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Clusters at this site"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  })), /*#__PURE__*/React.createElement(ClusterMatrix, {
+    groups: [{
+      key: site.id,
+      from: site.from,
+      rows: site.clusters
+    }],
+    nav: nav,
+    grouping: "flat"
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "sech",
+    style: {
+      marginTop: 16
+    }
+  }, /*#__PURE__*/React.createElement("h2", null, "Storage nodes at this site"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, nodeRows.length)), /*#__PURE__*/React.createElement("div", {
+    className: "card"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "bd",
+    style: {
+      padding: 0
+    }
+  }, /*#__PURE__*/React.createElement("table", {
+    className: "dt"
+  }, /*#__PURE__*/React.createElement("thead", null, /*#__PURE__*/React.createElement("tr", null, /*#__PURE__*/React.createElement("th", null, "StorageNode"), /*#__PURE__*/React.createElement("th", null, "spec.clusterRef"), /*#__PURE__*/React.createElement("th", null, "status.phase"), /*#__PURE__*/React.createElement("th", null, "zone"), /*#__PURE__*/React.createElement("th", null, "spec.workerNode"), /*#__PURE__*/React.createElement("th", null, "Context"))), /*#__PURE__*/React.createElement("tbody", null, nodeRows.map(n => /*#__PURE__*/React.createElement("tr", {
+    key: n.id
+  }, /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement("button", {
+    className: "tlink",
+    onClick: () => nav.openNode(n.clusterId, n.id)
+  }, n.name)), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, n.clusterRef), /*#__PURE__*/React.createElement("td", null, /*#__PURE__*/React.createElement(TrafficLight, {
+    status: n.phase,
+    sm: true
+  })), /*#__PURE__*/React.createElement("td", {
+    className: "mono",
+    title: "topology.kubernetes.io/zone of the worker Node"
+  }, n.zone || (n.config || {}).site || "unset"), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, n.workerNode), /*#__PURE__*/React.createElement("td", {
+    className: "mono"
+  }, n.ctx))))))));
+}
+function SitesView({
+  nav,
+  rev
+}) {
+  const fleet = useFleet(rev);
+  return /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "sech"
+  }, /*#__PURE__*/React.createElement("h2", null, "Sites"), /*#__PURE__*/React.createElement("span", {
+    className: "ln"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, fleet.sites.length)), fleet.loading && !fleet.data ? /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, Array.from({
+    length: 4
+  }).map((_, i) => /*#__PURE__*/React.createElement("div", {
+    className: "skel",
+    key: i
+  }))) : /*#__PURE__*/React.createElement(SiteBoard, {
+    sites: fleet.sites,
+    nav: nav
+  }));
+}
+
+// ---- the view ----------------------------------------------------------------------------
+function DashboardView({
+  nav,
+  seg,
+  rev
+}) {
+  const p = seg.p || {};
+  const [group, setGroup] = useLocal("sb.fleet.group", window.MULTI_CTX ? "context" : "namespace");
+  const [view, setView] = useLocal("sb.fleet.view", "matrix");
+  const [q, setQ] = React.useState(p.q || "");
+  const [phases, setPhases] = React.useState(p.phase || []);
+  const [sort, setSort] = React.useState(p.sort || "health");
+  React.useEffect(() => {
+    if (p.group) setGroup(p.group);
+    if (p.view) setView(p.view);
+  }, [p.group, p.view]);
+  const fleet = useFleet(rev);
+  const all = fleet.clusters;
+  const counts = {};
+  all.forEach(c => {
+    counts[c.phase] = (counts[c.phase] || 0) + 1;
+  });
+  const keys = groupingKeys(all);
+  const groupKey = keys.some(k => k.k === group) ? group : (keys[0] || {
+    k: "flat"
+  }).k;
+  const filtered = React.useMemo(() => {
+    const s = q.trim().toLowerCase();
+    const cmp = {
+      health: (a, b) => SM(b.phase).rank - SM(a.phase).rank || b.alerts.critical - a.alerts.critical || a.name.localeCompare(b.name),
+      name: (a, b) => a.name.localeCompare(b.name),
+      util: (a, b) => b.utilPct - a.utilPct,
+      capacity: (a, b) => (b.capacity.total || 0) - (a.capacity.total || 0),
+      alerts: (a, b) => b.alerts.critical - a.alerts.critical || b.alerts.warning - a.alerts.warning
+    }[sort] || ((a, b) => a.name.localeCompare(b.name));
+    return all.filter(c => (!phases.length || phases.includes(c.phase)) && (!s || [c.name, c.id, c.ctx, c.namespace, c.phase, c.status].concat(c.sites.map(x => x.value), Object.values(c.labels || {})).filter(Boolean).join(" ").toLowerCase().includes(s))).sort(cmp);
+  }, [all, q, phases, sort]);
+  const groups = React.useMemo(() => groupBy(filtered, groupKey), [filtered, groupKey]);
+  const ctxErrors = Object.entries(fleet.errors || {}).filter(([, e]) => e && Object.keys(e).length);
+  const phaseOrder = Object.keys(counts).sort((a, b) => SM(b).rank - SM(a).rank);
+  return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+    className: "toolbar"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "search"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 13,
+    c: "var(--dim2)"
+  }), /*#__PURE__*/React.createElement("input", {
+    value: q,
+    placeholder: "Search name, namespace, context, site, label\u2026",
+    onChange: e => setQ(e.target.value)
+  }), q && /*#__PURE__*/React.createElement("button", {
+    onClick: () => setQ(""),
+    style: {
+      display: "flex",
+      color: "var(--dim2)"
+    }
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "x",
+    s: 11
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "chips"
+  }, phaseOrder.map(s => /*#__PURE__*/React.createElement("button", {
+    key: s,
+    className: "chip" + (phases.includes(s) ? " on" : ""),
+    title: "status.phase",
+    onClick: () => setPhases(phases.includes(s) ? phases.filter(x => x !== s) : phases.concat([s]))
+  }, /*#__PURE__*/React.createElement(Dot, {
+    c: SM(s).c
+  }), s, /*#__PURE__*/React.createElement("span", {
+    className: "n"
+  }, counts[s])))), /*#__PURE__*/React.createElement("div", {
+    className: "spacer"
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "count"
+  }, filtered.length), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: groupKey,
+    onChange: e => setGroup(e.target.value),
+    title: "Group clusters by"
+  }, keys.map(k => /*#__PURE__*/React.createElement("option", {
+    key: k.k,
+    value: k.k
+  }, "by ", k.l))), /*#__PURE__*/React.createElement("select", {
+    className: "sel",
+    value: sort,
+    onChange: e => setSort(e.target.value)
+  }, /*#__PURE__*/React.createElement("option", {
+    value: "health"
+  }, "Unhealthy first"), /*#__PURE__*/React.createElement("option", {
+    value: "alerts"
+  }, "Most alerts"), /*#__PURE__*/React.createElement("option", {
+    value: "name"
+  }, "Name (A\u2013Z)"), /*#__PURE__*/React.createElement("option", {
+    value: "util"
+  }, "Utilization \u2193"), /*#__PURE__*/React.createElement("option", {
+    value: "capacity"
+  }, "Capacity \u2193")), /*#__PURE__*/React.createElement("div", {
+    className: "seg",
+    title: "View"
+  }, [["matrix", "list"], ["tiles", "cluster"], ["sites", "zone"]].map(([k, ic]) => /*#__PURE__*/React.createElement("button", {
+    key: k,
+    className: view === k ? "on" : "",
+    onClick: () => setView(k),
+    title: k
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: ic,
+    s: 12
+  })))), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    onClick: fleet.reload,
+    title: "Refresh"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "refresh",
+    s: 12
+  }))), /*#__PURE__*/React.createElement("div", {
+    className: "scroll"
+  }, ctxErrors.map(([ctx, errs]) => /*#__PURE__*/React.createElement("div", {
+    className: "banner",
+    key: ctx
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "alert",
+    s: 15
+  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Context ", ctx, " is partly unreachable."), " ", Object.entries(errs).map(([k, e]) => `${k}: ${e.message || e}`).join(" · ")))), fleet.error && /*#__PURE__*/React.createElement(ErrorState, {
+    error: fleet.error,
+    onRetry: fleet.reload
+  }), fleet.loading && !all.length ? /*#__PURE__*/React.createElement("div", {
+    className: "stats"
+  }, Array.from({
+    length: 7
+  }).map((_, i) => /*#__PURE__*/React.createElement("div", {
+    className: "skel",
+    key: i,
+    style: {
+      height: 62
+    }
+  }))) : /*#__PURE__*/React.createElement(FleetRollup, {
+    clusters: filtered,
+    sites: fleet.sites,
+    controlPlanes: fleet.controlPlanes,
+    nav: nav
+  }), !fleet.loading && !all.length && !fleet.error && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "cluster",
+    s: 24
+  }), /*#__PURE__*/React.createElement("b", null, "No clusters"), /*#__PURE__*/React.createElement("span", null, "No StorageCluster in any configured context.")), all.length > 0 && !filtered.length && /*#__PURE__*/React.createElement("div", {
+    className: "empty"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "search",
+    s: 22
+  }), /*#__PURE__*/React.createElement("b", null, "No clusters match"), /*#__PURE__*/React.createElement("button", {
+    className: "chip",
+    style: {
+      marginTop: 6
+    },
+    onClick: () => {
+      setQ("");
+      setPhases([]);
+    }
+  }, "Reset filters")), filtered.length > 0 && view === "matrix" && /*#__PURE__*/React.createElement(ClusterMatrix, {
+    groups: groups,
+    nav: nav,
+    grouping: groupKey
+  }), filtered.length > 0 && view === "tiles" && groups.map(g => /*#__PURE__*/React.createElement("div", {
+    key: g.key
+  }, groupKey !== "flat" && /*#__PURE__*/React.createElement("div", {
+    className: "grouplbl"
+  }, g.key === NONE ? `no ${groupingOf(groupKey).label}` : g.key, /*#__PURE__*/React.createElement(Provenance, {
+    from: g.from
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "grid"
+  }, g.rows.map(c => /*#__PURE__*/React.createElement(ClusterTile, {
+    key: c.id,
+    c: REG[c.id] || c,
+    nav: nav
+  }))))), filtered.length > 0 && view === "sites" && /*#__PURE__*/React.createElement(SiteBoard, {
+    sites: fleet.sites.filter(s => s.clusters.some(c => filtered.includes(c))),
+    nav: nav
+  }), !fleet.loading && /*#__PURE__*/React.createElement(ControlPlanesCard, {
+    controlPlanes: fleet.controlPlanes,
+    nav: nav
+  })));
+}
+Object.assign(window, {
+  ControlPlanePill,
+  DashboardView,
+  SitesView,
+  SiteBoard,
+  FleetSiteDetail,
+  ClusterMatrix,
+  FleetRollup,
+  ControlPlanesCard,
+  Meter,
+  SevCount,
+  OpsCount,
+  VirtualList,
+  groupBy,
+  groupingOf,
+  groupingKeys,
+  useFleet,
+  loadFleet,
+  Provenance,
+  SM
 });
 })();
 // ---- dr.jsx ----
@@ -37358,150 +43035,9 @@ Object.assign(window, {
 })();
 // ---- details-data.jsx ----
 (function(){
-function PoolDetail({
-  o: p,
-  nav
-}) {
-  return /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement(DetailHead, {
-    obj: p,
-    title: p.name,
-    badge: /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("span", {
-      className: "badge"
-    }, "storage pool"), p.dhchap && /*#__PURE__*/React.createElement("span", {
-      className: "badge",
-      style: {
-        color: "var(--ro)",
-        borderColor: "color-mix(in srgb,var(--ro) 45%,transparent)"
-      }
-    }, "dhchap bi-dir"), !p.enabled && /*#__PURE__*/React.createElement("span", {
-      className: "badge",
-      style: {
-        color: "var(--warn)",
-        borderColor: "color-mix(in srgb,var(--warn) 45%,transparent)"
-      }
-    }, "disabled"))
-  }), p.dhchap && /*#__PURE__*/React.createElement("div", {
-    className: "banner",
-    style: {
-      color: "var(--ro)",
-      background: "color-mix(in srgb,var(--ro) 7%,var(--panel))",
-      borderColor: "color-mix(in srgb,var(--ro) 35%,transparent)"
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "lock",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Bi-directional DH-CHAP."), " Host and subsystem authenticate each other on every connection. It was set when the pool was created and cannot be turned off \u2014 a pool without mutual authentication has to be created separately.")), !p.enabled && /*#__PURE__*/React.createElement("div", {
-    className: "banner",
-    style: {
-      color: "var(--warn)",
-      background: "color-mix(in srgb,var(--warn) 8%,var(--panel))",
-      borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)"
-    }
-  }, /*#__PURE__*/React.createElement(Icon, {
-    n: "alert",
-    s: 15
-  }), /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("b", null, "Pool disabled."), " Existing volumes keep serving I/O normally \u2014 only provisioning of new volumes into this pool is blocked.")), /*#__PURE__*/React.createElement("div", {
-    className: "stats"
-  }, /*#__PURE__*/React.createElement(Stat, {
-    k: "Volumes",
-    v: p.counts.volumes,
-    s: `${p.counts.volumesOnline} online`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Provisioned",
-    v: fmtBytes(p.capacity.total)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Utilized",
-    v: fmtBytes(p.capacity.used),
-    s: pct(p.capacity.used, p.capacity.total).toFixed(0) + "% of provisioned"
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Volume data",
-    v: fmtBytes(p.lvolBytes)
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Snapshot data",
-    v: fmtBytes(p.snapshotBytes),
-    s: `${p.counts.snapshots} snapshots`
-  }), /*#__PURE__*/React.createElement(Stat, {
-    k: "Backup chains",
-    v: p.counts.backups
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "sech"
-  }, /*#__PURE__*/React.createElement("h2", null, "Drill down"), /*#__PURE__*/React.createElement("span", {
-    className: "ln"
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "navcards"
-  }, /*#__PURE__*/React.createElement(NavCard, {
-    icon: "volume",
-    title: "Logical volumes",
-    sub: "in this pool",
-    count: p.counts.volumes,
-    onClick: () => nav.layer(p, "volumes")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "camera",
-    title: "Snapshots",
-    sub: "scoped to this pool",
-    count: p.counts.snapshots,
-    onClick: () => nav.layer(p, "snapshots")
-  }), /*#__PURE__*/React.createElement(NavCard, {
-    icon: "cloud",
-    title: "Backups",
-    sub: "scoped to this pool",
-    count: p.counts.backups,
-    onClick: () => nav.layer(p, "backups")
-  }), p.counts.storageClasses > 0 && /*#__PURE__*/React.createElement(NavCard, {
-    icon: "k8s",
-    title: "StorageClasses",
-    sub: "generated from this pool",
-    count: p.counts.storageClasses,
-    onClick: () => nav.layer(p, "storageclasses")
-  })), /*#__PURE__*/React.createElement("div", {
-    className: "dcols"
-  }, /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Pool properties"), /*#__PURE__*/React.createElement("div", {
-    className: "bd",
-    style: {
-      paddingTop: 2,
-      paddingBottom: 2
-    }
-  }, /*#__PURE__*/React.createElement(Props, {
-    rows: [["Name", p.name], ["State", /*#__PURE__*/React.createElement(TrafficLight, {
-      status: p.status
-    })], ["Provisioning", p.enabled ? "allowed" : "blocked — pool disabled"], ["Node affinity", "none — pools are cluster-wide and carry no primary, secondary or tertiary node"], ["StorageClasses", p.storageClasses.length ? /*#__PURE__*/React.createElement("span", {
-      style: {
-        display: "flex",
-        flexDirection: "column",
-        gap: 3,
-        alignItems: "flex-end"
-      }
-    }, p.storageClasses.map(sc => /*#__PURE__*/React.createElement("span", {
-      key: sc.uuid,
-      style: {
-        display: "flex",
-        gap: 7,
-        alignItems: "baseline"
-      }
-    }, /*#__PURE__*/React.createElement("em", {
-      style: {
-        fontStyle: "normal",
-        color: "var(--dim2)",
-        fontSize: 10.5
-      }
-    }, sc.k8s_cluster), /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openStorageClass(sc.uuid),
-      label: sc.name
-    })))) : null], ["Cluster", /*#__PURE__*/React.createElement(Ref, {
-      onClick: () => nav.openCluster(p.clusterId),
-      label: regName(p.clusterId)
-    })], ["Volumes", p.counts.volumes], ["Provisioned", fmtBytes(p.capacity.total)], ["Volume data", fmtBytes(p.lvolBytes)], ["Snapshot data", fmtBytes(p.snapshotBytes)], ["Utilized", `${fmtBytes(p.capacity.used)} · ${pct(p.capacity.used, p.capacity.total).toFixed(0)}%`]]
-  }))), /*#__PURE__*/React.createElement("div", {
-    className: "card"
-  }, /*#__PURE__*/React.createElement("h3", null, "Quality of service"), /*#__PURE__*/React.createElement("div", {
-    className: "bd"
-  }, /*#__PURE__*/React.createElement(QosProps, {
-    qos: p.qos,
-    fallback: "No QoS limits configured on this pool."
-  })))));
-}
+// Detail pages of the data layers: logical volumes, snapshots, backups, and
+// backup policies, plus the detail dispatch. The storage kinds' pages live in
+// storage-views.jsx.
 function VolumeDetail({
   o: v,
   nav
@@ -38173,7 +43709,6 @@ const Detail = ({
   }) : null;
 };
 Object.assign(window, {
-  PoolDetail,
   VolumeDetail,
   VolumeReplicationCard,
   SnapshotDetail,
@@ -38196,6 +43731,41 @@ const ROOT_PATH = DR_ONLY ? [{
 }] : [{
   t: "clusters"
 }];
+
+// The location in the URL: every view is a browser history entry, so Back and
+// Forward move between views and a copied URL opens the view it came from.
+// It is a fragment, #/<segment>/<segment>, because the page loads its scripts
+// by relative URL, which a real path would break. A segment is its layer, then
+// =<id>, then ;<the remaining fields as JSON>, each URI-encoded. The log
+// explorer owns #logs?<filter> (logs.jsx), which is the logs layer.
+const hashOfPath = p => "#/" + p.map(s => {
+  const {
+    t,
+    id,
+    ...rest
+  } = s;
+  return encodeURIComponent(t) + (id != null ? "=" + encodeURIComponent(id) : "") + (Object.keys(rest).length ? ";" + encodeURIComponent(JSON.stringify(rest)) : "");
+}).join("/");
+function pathOfHash(hash) {
+  const h = String(hash || "");
+  if (/^#logs\b/.test(h)) return [{
+    t: "logs"
+  }];
+  if (!h.startsWith("#/") || h.length < 3) return null;
+  try {
+    return h.slice(2).split("/").map(part => {
+      const [head, rest] = part.split(";");
+      const [t, id] = head.split("=");
+      return Object.assign(rest ? JSON.parse(decodeURIComponent(rest)) : {}, {
+        t: decodeURIComponent(t)
+      }, id != null ? {
+        id: decodeURIComponent(id)
+      } : {});
+    });
+  } catch (e) {
+    return null;
+  }
+}
 // Layers that need the storage operator: hidden in DR-only mode.
 const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "mpaths", "appgroups"];
 const LAYER_META = {
@@ -38205,6 +43775,35 @@ const LAYER_META = {
   },
   cluster: {
     icon: "cluster"
+  },
+  // any custom resource, by its object key (cr-view.jsx)
+  cr: {
+    icon: "list"
+  },
+  // the operations monitor (tasks.jsx), at the section level or under a cluster
+  monitor: {
+    label: "Tasks and operations",
+    icon: "clock"
+  },
+  work: {
+    icon: "clock"
+  },
+  // the alerts derived from the objects (alerts.jsx)
+  alerts: {
+    label: "Alerts",
+    icon: "bell"
+  },
+  // the fleet dashboard's sites (dashboard.jsx) and the access page
+  sites: {
+    label: "Sites",
+    icon: "zone"
+  },
+  site: {
+    icon: "zone"
+  },
+  access: {
+    label: "Access",
+    icon: "lock"
   },
   cp: {
     label: "Control plane",
@@ -38748,7 +44347,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id) : o.kind === "deployconf
   id: o.id
 }];
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
-const segLabel = s => s.id ? REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id) : LAYER_META[s.t].label;
+const segLabel = s => s.t === "site" ? s.id === "none" ? "No site" : s.id : s.t === "work" ? String(s.id).split("/").pop() : s.t === "cr" ? String(s.id).split("/").slice(2).join(" ") : s.id ? REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id) : LAYER_META[s.t].label;
 const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain, o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`), o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest, o.rack, o.cabinet, o.hostClass, o.location, o.region, o.mode, o.namespace, o.planName, o.pathName, o.from, o.to, o.appName, o.targetName, o.currentCluster, o.action, o.phase, o.verdict, o.schedule, o.replication && o.replication.policyName, o.sourceClusterId && regName(o.sourceClusterId), o.targetClusterId && regName(o.targetClusterId)].filter(Boolean).join(" ").toLowerCase();
 const healthOf = o => (STATUS_META[o.status] || {
   rank: 9
@@ -38855,7 +44454,7 @@ const SORT_KEYS = {
 const clusterOf = seg => seg.t === "cluster" ? seg.id : (REG[seg.id] || {}).clusterId;
 // Each view advertises the surface that actually backs it: a CRD, a core object,
 // or an operator /proposed collection for the kinds v1alpha1 does not model yet.
-const G_ = "/apis/storage.simplyblock.io/v1alpha1/namespaces/{ns}";
+const G_ = "/apis/storage.simplyblock.io/v1alpha2/namespaces/{ns}";
 const crd = (p, sel) => `GET ${G_}/${p}${sel ? "?labelSelector=" + sel.replace("storage.simplyblock.io/", "…/") : ""}`;
 const crd1 = p => `GET ${G_}/${p}/{name}`;
 const prop = p => `GET /operator/v1/proposed/${p}`;
@@ -38876,8 +44475,8 @@ const VIEWS = {
   },
   devices: {
     kind: "device",
-    load: p => api.devices(p.id),
-    api: () => crd("storagedevices", OWNER)
+    load: p => p.t === "cluster" ? api.clusterDevices(p.id) : api.devices(p.id),
+    api: p => crd("storagedevices", p.t === "cluster" ? CLUS : "storage.simplyblock.io/node")
   },
   pools: {
     kind: "pool",
@@ -40276,7 +45875,14 @@ class ViewBoundary extends React.Component {
   }
 }
 function App() {
-  const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  // The URL decides the view when it names one; the stored path restores the
+  // last view when it does not (a bare URL, a bookmark from before).
+  const [storedPath, storePath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  const [rawPath, setRawPath] = useState(() => pathOfHash(window.location.hash) || storedPath);
+  const setPath = useCallback(p => {
+    setRawPath(p);
+    storePath(p);
+  }, [storePath]);
   // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
   // in DR-only mode anything outside the DR section is unreachable
   const path = useMemo(() => {
@@ -40355,6 +45961,28 @@ function App() {
   const viewKey = path.map(s => s.t + (s.id || "")).join("/");
   const pathRef = useRef(path);
   pathRef.current = path;
+  // A navigation adds a history entry; the first render only names the entry
+  // it landed on. Nothing is pushed when the URL already shows this path, which
+  // is the case after Back, Forward, and an edited address.
+  const pathHash = hashOfPath(path);
+  const landed = useRef(false);
+  useEffect(() => {
+    const shown = pathOfHash(window.location.hash);
+    if (shown && hashOfPath(shown) === pathHash) {
+      landed.current = true;
+      return;
+    }
+    const url = window.location.pathname + window.location.search + pathHash;
+    try {
+      window.history[landed.current ? "pushState" : "replaceState"](null, "", url);
+    } catch (e) {}
+    landed.current = true;
+  }, [pathHash]);
+  useEffect(() => {
+    const h = () => setPath(pathOfHash(window.location.hash) || ROOT_PATH);
+    window.addEventListener("popstate", h);
+    return () => window.removeEventListener("popstate", h);
+  }, [setPath]);
   useEffect(() => {
     setQ("");
     setFilters([]);
@@ -40376,6 +46004,58 @@ function App() {
       t: l
     }]),
     openCluster: cid => go(pC(cid)),
+    alerts: p => go([Object.assign({
+      t: "alerts"
+    }, p ? {
+      p
+    } : {})]),
+    dashboard: p => go([Object.assign({
+      t: "clusters"
+    }, p ? {
+      p
+    } : {})]),
+    sites: () => go([{
+      t: "clusters"
+    }, {
+      t: "sites"
+    }]),
+    openSite: name => go([{
+      t: "clusters"
+    }, {
+      t: "sites"
+    }, {
+      t: "site",
+      id: name
+    }]),
+    access: () => go([{
+      t: "access"
+    }]),
+    // the operations monitor; a filter rides on the segment
+    monitor: p => go(p && p.cluster ? [...pC(p.cluster), Object.assign({
+      t: "monitor"
+    }, {
+      p
+    })] : [Object.assign({
+      t: "monitor"
+    }, p ? {
+      p
+    } : {})]),
+    openWork: (cid, key) => go(cid ? [...pC(cid), {
+      t: "monitor"
+    }, {
+      t: "work",
+      id: key
+    }] : [{
+      t: "monitor"
+    }, {
+      t: "work",
+      id: key
+    }]),
+    // any custom resource, as a child of wherever the user is
+    openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {
+      t: "cr",
+      id: objKey(ref.ctx, ref.ns, ref.kind, ref.name)
+    }]),
     openHost: (cid, hid) => go(pH(cid, hid)),
     openNode: (cid, nid) => go(pN(cid, nid)),
     openDevice: (cid, nid, did) => go(pD(cid, nid, did)),
@@ -40450,8 +46130,11 @@ function App() {
     logs: params => {
       const f = Object.assign({}, DEFAULT_LOG_FILTER, params || {});
       if (params && (params.from || params.to)) f.range = "";
+      // its own history entry, unless the explorer is open already and only
+      // takes a new query
+      const open = pathRef.current.length === 1 && pathRef.current[0].t === "logs";
       try {
-        window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f));
+        window.history[open ? "replaceState" : "pushState"](null, "", window.location.pathname + window.location.search + hashOfFilter(f));
       } catch (e) {}
       // an open explorer takes the new query; a closed one reads it from the URL
       try {
@@ -40524,7 +46207,7 @@ function App() {
   const parentSeg = path[path.length - 2];
   const apiHint = cur.id ? DETAIL_API[cur.t] : VIEWS[cur.t] ? VIEWS[cur.t].api(parentSeg || {}) : cur.t === "aidisc" ? drcrd("discoverygraphs") + " · " + drcrd("discoveryruns", true) : cur.t === "proposals" ? drcrd("drproposals", true) : "—";
   const s0 = path[0] && path[0].t;
-  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : "clusters";
+  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : s0 === "monitor" ? "ops" : s0 === "alerts" ? "alerts" : "clusters";
   const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
@@ -40585,16 +46268,25 @@ function App() {
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Disaster recovery")), /*#__PURE__*/React.createElement("button", {
-    className: section === "cp" ? "on" : "",
-    onClick: () => nav.cp(),
-    title: "Control plane"
+  }, "Disaster recovery")), window.AlertsView && /*#__PURE__*/React.createElement("button", {
+    className: section === "alerts" ? "on" : "",
+    onClick: () => nav.alerts(),
+    title: "Alerts"
   }, /*#__PURE__*/React.createElement(Icon, {
-    n: "host",
+    n: "bell",
     s: 13
   }), /*#__PURE__*/React.createElement("span", {
     className: "swlabel"
-  }, "Control plane")), /*#__PURE__*/React.createElement("button", {
+  }, "Alerts")), window.MonitorView && /*#__PURE__*/React.createElement("button", {
+    className: section === "ops" ? "on" : "",
+    onClick: () => nav.monitor(),
+    title: "Tasks and operations"
+  }, /*#__PURE__*/React.createElement(Icon, {
+    n: "clock",
+    s: 13
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "swlabel"
+  }, "Operations")), /*#__PURE__*/React.createElement("button", {
     className: "sw-logs" + (section === "logs" ? " on" : ""),
     onClick: () => nav.logs(),
     title: "Logs"
@@ -40668,24 +46360,30 @@ function App() {
     className: "menu-item" + (ctxCluster && ctxCluster.id === c.id ? " on" : ""),
     onClick: () => nav.openCluster(c.id)
   }, /*#__PURE__*/React.createElement(Dot, {
-    c: STATUS_META[c.status].c
+    c: (STATUS_META[c.phase] || STATUS_META[c.status] || {}).c
   }), /*#__PURE__*/React.createElement("span", {
     style: {
       flex: 1
     }
   }, c.name), /*#__PURE__*/React.createElement("span", {
-    className: "badge"
-  }, c.siting === "edge" ? "edge" : "dc")))))), /*#__PURE__*/React.createElement("div", {
+    className: "mono",
+    style: {
+      fontSize: 10,
+      color: "var(--dim2)"
+    },
+    title: "context \xB7 metadata.namespace"
+  }, window.MULTI_CTX ? c.ctx + " · " : "", c.namespace)))))), /*#__PURE__*/React.createElement("div", {
     className: "spacer"
-  }), window.SB_CONFIG.mock && /*#__PURE__*/React.createElement(MockPanel, null), !DR_ONLY && /*#__PURE__*/React.createElement("span", {
+  }), window.SB_CONFIG.mock && /*#__PURE__*/React.createElement(MockPanel, null), !DR_ONLY && window.ControlPlanePill && /*#__PURE__*/React.createElement(ControlPlanePill, {
+    nav: nav
+  }), DR_ONLY && /*#__PURE__*/React.createElement("span", {
     className: "env"
   }, /*#__PURE__*/React.createElement("span", {
     className: "pulse"
-  }), "control plane healthy"), DR_ONLY && /*#__PURE__*/React.createElement("span", {
-    className: "env"
-  }, /*#__PURE__*/React.createElement("span", {
-    className: "pulse"
-  }), "dr-hub"), !DR_ONLY && /*#__PURE__*/React.createElement("button", {
+  }), "dr-hub"), !DR_ONLY && (window.AlertBell ? /*#__PURE__*/React.createElement(AlertBell, {
+    nav: nav,
+    clusterId: (path.find(x => x.t === "cluster") || {}).id
+  }) : /*#__PURE__*/React.createElement("button", {
     className: "tbtn bellwrap",
     title: alertCount ? `${alertCount} critical alert(s)` : "No critical alerts",
     onClick: () => {
@@ -40697,7 +46395,9 @@ function App() {
     s: 14
   }), alertCount > 0 && /*#__PURE__*/React.createElement("span", {
     className: "bellbadge"
-  }, alertCount > 99 ? "99+" : alertCount)), /*#__PURE__*/React.createElement("button", {
+  }, alertCount > 99 ? "99+" : alertCount))), !DR_ONLY && window.OpsIndicator && /*#__PURE__*/React.createElement(OpsIndicator, {
+    nav: nav
+  }), /*#__PURE__*/React.createElement("button", {
     className: "tbtn",
     title: "Toggle theme",
     onClick: () => setTheme(theme === "light" ? "dark" : "light")
@@ -40739,7 +46439,55 @@ function App() {
   }, "Resolving your access\u2026")) : /*#__PURE__*/React.createElement(ViewBoundary, {
     routeKey: viewKey,
     onReset: () => nav.root()
-  }, cur.id ? /*#__PURE__*/React.createElement(DetailView, {
+  }, cur.t === "site" ? /*#__PURE__*/React.createElement(FleetSiteDetail, {
+    key: viewKey,
+    seg: cur,
+    nav: nav,
+    rev: rev
+  }) : cur.t === "sites" ? /*#__PURE__*/React.createElement(SitesView, {
+    key: viewKey,
+    nav: nav,
+    rev: rev
+  }) : cur.t === "access" ? /*#__PURE__*/React.createElement("div", {
+    className: "scroll",
+    key: viewKey
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "dhead"
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      flex: 1,
+      minWidth: 0
+    }
+  }, /*#__PURE__*/React.createElement("h1", null, "Access"), /*#__PURE__*/React.createElement("div", {
+    className: "mdesc",
+    style: {
+      marginTop: 4
+    }
+  }, "Roles, grants, and effective access of this console's users."))), /*#__PURE__*/React.createElement(AccessView, {
+    nav: nav
+  })) : cur.t === "clusters" && path.length === 1 && !DR_ONLY && window.DashboardView ? /*#__PURE__*/React.createElement(DashboardView, {
+    key: viewKey,
+    seg: cur,
+    nav: nav,
+    rev: rev
+  }) : cur.t === "cr" ? /*#__PURE__*/React.createElement(CRView, {
+    key: viewKey,
+    seg: cur,
+    nav: nav
+  }) : cur.t === "alerts" ? /*#__PURE__*/React.createElement(AlertsView, {
+    key: viewKey,
+    seg: cur,
+    nav: nav
+  }) : cur.t === "work" ? /*#__PURE__*/React.createElement(WorkItemDetail, {
+    key: viewKey,
+    seg: cur,
+    nav: nav
+  }) : cur.t === "monitor" ? /*#__PURE__*/React.createElement(MonitorView, {
+    key: viewKey,
+    seg: cur,
+    nav: nav,
+    scope: path.find(x => x.t === "cluster")
+  }) : cur.id ? /*#__PURE__*/React.createElement(DetailView, {
     key: viewKey,
     seg: cur,
     nav: nav,

@@ -55,10 +55,13 @@ type Store struct {
 	rng      *rand.Rand
 	rngMu    sync.Mutex
 	now      func() time.Time
+	// operatorLog is what the simulated operator has logged about this world's
+	// operations; the operator pod's log serves it (operatorlog.go)
+	operatorLog *OperatorLog
 }
 
 func NewStore(seed uint64) *Store {
-	return &Store{
+	st := &Store{
 		defs:     map[GVR]ResourceDef{},
 		byGR:     map[string]ResourceDef{},
 		objs:     map[GVR]map[string]map[string]any{},
@@ -66,6 +69,8 @@ func NewStore(seed uint64) *Store {
 		rng:      rand.New(rand.NewPCG(seed, seed^0x9e3779b97f4a7c15)),
 		now:      time.Now,
 	}
+	st.operatorLog = NewOperatorLog(func() time.Time { return st.now() })
+	return st
 }
 
 func (s *Store) Register(defs ...ResourceDef) {
@@ -90,6 +95,15 @@ func (s *Store) Lookup(group, version, resource string) (ResourceDef, bool) {
 		return ResourceDef{}, false
 	}
 	return d, true
+}
+
+// LookupResource resolves a group+resource at whichever version the mock
+// serves it, which is the one the generator writes.
+func (s *Store) LookupResource(group, resource string) (ResourceDef, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	d, ok := s.byGR[group+"/"+resource]
+	return d, ok
 }
 
 func (s *Store) Defs() []ResourceDef {

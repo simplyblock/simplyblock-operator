@@ -1,33 +1,5 @@
-function PoolTile({p, nav}) {
-  return (
-    <div className="tile" style={{"--sc": STATUS_META[p.status].c}} onDoubleClick={() => nav.detail(p)}>
-      <TileHead obj={p} left={<><TrafficLight status={p.status} /><Name>{p.name}</Name></>}
-        right={<span className="badge">{p.enabled ? "pool" : "no new volumes"}</span>} />
-      <Uuid value={p.id} />
-      <div className="labels">
-        {p.dhchap && <span className="lab" style={{color: "var(--ro)", borderColor: "color-mix(in srgb,var(--ro) 40%,transparent)"}} title="bi-directional DH-CHAP — set at creation, immutable"><Icon n="lock" s={10} />dhchap bi-dir</span>}
-        {p.storageClasses.length
-          ? p.storageClasses.map(sc => <button className="lab link" key={sc.uuid} title={"StorageClass " + sc.name}
-              onClick={e => {e.stopPropagation(); nav.openStorageClass(sc.uuid);}}><Icon n="k8s" s={10} /><i>{sc.k8s_cluster || "class"}</i>{sc.variant}</button>)
-          : <span className="lab" style={{opacity: .6}}><i>storage class</i>none</span>}
-      </div>
-      <QosChips qos={p.qos} />
-      <Capacity label="Provisioned" total={p.capacity.total} used={p.capacity.used} />
-      <div className="kv">
-        <div><span>Volume data</span><b>{fmtBytes(p.lvolBytes)}</b></div>
-        <div><span>Snapshots</span><b>{fmtBytes(p.snapshotBytes)}</b></div>
-        <div><span>Utilized</span><b>{fmtBytes(p.capacity.used)}</b></div>
-      </div>
-      <Foot items={[
-        {label: "Volumes", count: p.counts.volumes, icon: "volume", onClick: () => nav.layer(p, "volumes")},
-        {label: "Snapshots", count: p.counts.snapshots, icon: "camera", onClick: () => nav.layer(p, "snapshots")},
-        p.counts.storageClasses > 0 && {label: "Classes", count: p.counts.storageClasses, icon: "k8s", onClick: () => nav.layer(p, "storageclasses")},
-        {label: "Details", right: true, onClick: () => nav.detail(p)}
-      ]} />
-    </div>
-  );
-}
-
+// Tiles of the data layers: logical volumes, snapshots, backups, and backup
+// policies. The storage kinds' tiles live in storage-views.jsx.
 function VolumeTile({v, nav}) {
   const link = (ref, role) => ref
     ? <button key={role} className="lab link" title={ref.hostname} onClick={e => {e.stopPropagation(); nav.openNode(v.clusterId, ref.uuid);}}><i>{role}</i>{ref.hostname.split("-").slice(-2).join("-")}</button>
@@ -172,4 +144,4 @@ function PolicyTile({p, nav}) {
   );
 }
 
-Object.assign(window, {PoolTile, VolumeTile, SnapshotTile, BackupTile, PolicyTile});
+Object.assign(window, {VolumeTile, SnapshotTile, BackupTile, PolicyTile});

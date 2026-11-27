@@ -509,7 +509,7 @@ one interface for every worker it lists.
 | NUMA topology                                      | No document field expresses it, so nothing is lost at the group level                                       |
 | Model, vendor, serial, rotational                  | A mixed-model fleet at identical slots is one group. Model can only exclude devices, never split groups     |
 | Kube role                                          | Deliberate: the split by role happens after grouping, so identical infra machines stay one group            |
-| Memory, CPU, huge pages                            | Two machines with identical disks and very different RAM are one group, and `spdkSystemMemory` is never set |
+| Memory, CPU, huge pages                            | Two machines with identical disks and very different RAM are one group; the control plane sizes SPDK's memory on each |
 | Interface kind, speed, members                     | Two workers whose `eth0` is a bare NIC on one and a bond on the other are one group                         |
 
 **Address handling.** Addresses are deduplicated (`GROUNDED`: a controller with

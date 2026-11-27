@@ -4,6 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    simplyblock.io/advanced-fields: '{"v1alpha2":["spec.nodeIndex","spec.slot","spec.socketId","spec.stretched.remote"]}'
+    simplyblock.io/invisible-fields: '{"v1alpha2":["spec.config.journalManager","spec.config.reservedSystemCPU","spec.config.sizing","spec.config.spdkImage","spec.config.spdkImagePullPolicy","spec.config.spdkProxyImage","spec.config.spdkProxyImagePullPolicy","spec.stretched"]}'
+    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.config.deviceNames","spec.nodeIndex","spec.socketId","spec.workerNode"]}'
   name: storagenodes.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -493,21 +496,15 @@ spec:
                         as a path under /dev. One list carries both spellings, and every entry is of
                         the class its cluster declares in StorageCluster.spec.deviceClass: a list
                         mixing the two, or naming the class the cluster is not, is rejected by the
-                        StorageNode validating webhook. Set explicitly, it overrides every filter
-                        below. Immutable: it selects which physical devices the node owns.
+                        StorageNode validating webhook. It is the node's whole device selection,
+                        and only the operator changes it: a migration adds the drives it bound on
+                        the target host, so they survive a later rebuild of the node. The webhook
+                        refuses a change from anyone else; an immutability marker would refuse the
+                        migration too.
                       items:
                         pattern: ^([0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]|/dev/[a-zA-Z0-9._/-]+|[a-zA-Z0-9._-]+)$
                         type: string
                       type: array
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
-                    driveSizeRange:
-                      description: DriveSizeRange filters devices by size.
-                      type: string
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
                     expand:
                       description: |-
                         Expand marks this node as an addition to an already-active cluster, which
@@ -567,32 +564,6 @@ spec:
                       x-kubernetes-validations:
                         - message: field is immutable
                           rule: self == oldSelf
-                    pcieAllowList:
-                      description: |-
-                        PcieAllowList selects devices by PCI address. It is the one device field a
-                        migration writes, merging spec.migrate.newSsdPcie into it so devices added
-                        on the target host survive a later rebuild, so it is guarded by the
-                        StorageNode validating webhook rather than by a marker. This and the two
-                        PCI filters below belong to an NVMe cluster: the webhook rejects them on a
-                        cluster whose deviceClass is LogicalBlock, because a logical block device
-                        has no PCI address to match.
-                      items:
-                        type: string
-                      type: array
-                    pcieDenyList:
-                      description: PcieDenyList excludes devices by PCI address.
-                      items:
-                        type: string
-                      type: array
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
-                    pcieModel:
-                      description: PcieModel filters devices by PCI model string.
-                      type: string
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
                     reservedSystemCPU:
                       description: |-
                         ReservedSystemCPU is the CPU set held back from SPDK for the system, as a
@@ -640,6 +611,9 @@ spec:
                             floor rather than a limit: the effective allocation is the larger of this
                             value and the minimum the node's device and subsystem count requires.
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                         vcpuCount:
                           description: |-
                             VCPUCount is the number of vCPUs allocated to SPDK on this node, as an
@@ -647,9 +621,15 @@ spec:
                           format: int32
                           minimum: 4
                           type: integer
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       required:
                         - vcpuCount
                       type: object
+                      x-kubernetes-validations:
+                        - message: field minHugePagesSize is immutable once set
+                          rule: '!has(oldSelf.minHugePagesSize) || has(self.minHugePagesSize)'
                     spdkImage:
                       description: |-
                         SpdkImage overrides the SPDK image the control plane starts for this node,
@@ -686,32 +666,16 @@ spec:
                         - Never
                         - IfNotPresent
                       type: string
-                    spdkSystemMemory:
-                      description: |-
-                        SpdkSystemMemory is the memory the control plane starts this node's SPDK
-                        with, as a size string such as 4G or 512M. It can be raised, because a
-                        node whose device count grew legitimately needs more, and who may raise it
-                        is decided at admission.
-                      pattern: ^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$
-                      type: string
                   required:
                     - sizing
                   type: object
                   x-kubernetes-validations:
                     - message: field journalManager is immutable once set
                       rule: '!has(oldSelf.journalManager) || has(self.journalManager)'
-                    - message: field deviceNames is immutable once set
-                      rule: '!has(oldSelf.deviceNames) || has(self.deviceNames)'
                     - message: field mgmtInterface is immutable once set
                       rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
                     - message: field dataInterfaces is immutable once set
                       rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
-                    - message: field pcieDenyList is immutable once set
-                      rule: '!has(oldSelf.pcieDenyList) || has(self.pcieDenyList)'
-                    - message: field pcieModel is immutable once set
-                      rule: '!has(oldSelf.pcieModel) || has(self.pcieModel)'
-                    - message: field driveSizeRange is immutable once set
-                      rule: '!has(oldSelf.driveSizeRange) || has(self.driveSizeRange)'
                     - message: field failureDomain is immutable once set
                       rule: '!has(oldSelf.failureDomain) || has(self.failureDomain)'
                     - message: field site is immutable once set
@@ -924,6 +888,9 @@ spec:
                     a node that is still being added reads why its own add is failing.
                   type: string
                 observedGeneration:
+                  description: |-
+                    ObservedGeneration is the generation the rest of this status was computed
+                    from, so a stale status can be told from a current one.
                   format: int64
                   type: integer
                 phase:
@@ -961,8 +928,6 @@ spec:
                   type: object
                 remediation:
                   description: |-
-                    ObservedGeneration is the generation the rest of this status was computed
-                    from, so a stale status can be told from a current one.
                     Remediation is what Kubernetes knows about this node's host, reported
                     for the two-node arbiter as positive fencing evidence.
                   properties:

@@ -62,6 +62,13 @@ const (
 	annoV1Alpha1NodeCPUTopology  = "storage.simplyblock.io/v1alpha1-spec.overrides.enableCpuTopology"
 	annoV1Alpha1NodeReservedCPUs = "storage.simplyblock.io/v1alpha1-spec.overrides.reservedSystemCPU"
 	annoV1Alpha1NodePostedAt     = "storage.simplyblock.io/v1alpha1-status.postedAt"
+	// The node's own device selectors and memory budget left the hub: a
+	// v1alpha2 node states its devices in spec.config.deviceNames.
+	annoV1Alpha1NodeSpdkMemory = "storage.simplyblock.io/v1alpha1-spec.overrides.spdkSystemMemory"
+	annoV1Alpha1NodePcieAllow  = "storage.simplyblock.io/v1alpha1-spec.overrides.pcieAllowList"
+	annoV1Alpha1NodePcieDeny   = "storage.simplyblock.io/v1alpha1-spec.overrides.pcieDenyList"
+	annoV1Alpha1NodePcieModel  = "storage.simplyblock.io/v1alpha1-spec.overrides.pcieModel"
+	annoV1Alpha1NodeDriveSizes = "storage.simplyblock.io/v1alpha1-spec.overrides.driveSizeRange"
 )
 
 // The annotations holding the hub fields this version cannot express. The two
@@ -96,6 +103,15 @@ func (src *StorageNode) ConvertTo(dstRaw conversion.Hub) error {
 	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1NodeSkipKubelet, overrides.SkipKubeletConfiguration)
 	stashRemovedBool(&dst.ObjectMeta, annoV1Alpha1NodeCPUTopology, overrides.EnableCpuTopology)
 	stashRemoved(&dst.ObjectMeta, annoV1Alpha1NodeReservedCPUs, overrides.ReservedSystemCPU)
+	stashRemoved(&dst.ObjectMeta, annoV1Alpha1NodeSpdkMemory, overrides.SpdkSystemMemory)
+	stashRemoved(&dst.ObjectMeta, annoV1Alpha1NodePcieModel, overrides.PcieModel)
+	stashRemoved(&dst.ObjectMeta, annoV1Alpha1NodeDriveSizes, overrides.DriveSizeRange)
+	if err := stash(&dst.ObjectMeta, annoV1Alpha1NodePcieAllow, overrides.PcieAllowList); err != nil {
+		return err
+	}
+	if err := stash(&dst.ObjectMeta, annoV1Alpha1NodePcieDeny, overrides.PcieDenyList); err != nil {
+		return err
+	}
 	if err := stash(&dst.ObjectMeta, annoV1Alpha1NodePostedAt, src.Status.PostedAt); err != nil {
 		return err
 	}
@@ -108,16 +124,11 @@ func (src *StorageNode) ConvertTo(dstRaw conversion.Hub) error {
 		NodeIndex:  src.Spec.NodeIndex,
 		Slot:       src.Spec.SocketIndex,
 		Config: v1alpha2.StorageNodeConfig{
-			SpdkImage:        overrides.SpdkImage,
-			SpdkProxyImage:   overrides.SpdkProxyImage,
-			SpdkSystemMemory: overrides.SpdkSystemMemory,
-			PcieAllowList:    overrides.PcieAllowList,
-			PcieDenyList:     overrides.PcieDenyList,
-			PcieModel:        overrides.PcieModel,
-			DriveSizeRange:   overrides.DriveSizeRange,
-			DeviceNames:      overrides.DeviceNames,
-			FailureDomain:    formatInt32(overrides.FailureDomain),
-			Expand:           overrides.Expand,
+			SpdkImage:      overrides.SpdkImage,
+			SpdkProxyImage: overrides.SpdkProxyImage,
+			DeviceNames:    overrides.DeviceNames,
+			FailureDomain:  formatInt32(overrides.FailureDomain),
+			Expand:         overrides.Expand,
 		},
 	}
 	if jm := overrides.JournalManagerSpec; jm != nil {
@@ -187,11 +198,9 @@ func (dst *StorageNode) ConvertFrom(srcRaw conversion.Hub) error {
 		Overrides: &StorageNodeOverrides{
 			SpdkImage:                config.SpdkImage,
 			SpdkProxyImage:           config.SpdkProxyImage,
-			SpdkSystemMemory:         config.SpdkSystemMemory,
-			PcieAllowList:            config.PcieAllowList,
-			PcieDenyList:             config.PcieDenyList,
-			PcieModel:                config.PcieModel,
-			DriveSizeRange:           config.DriveSizeRange,
+			SpdkSystemMemory:         unstashRemoved(&dst.ObjectMeta, annoV1Alpha1NodeSpdkMemory),
+			PcieModel:                unstashRemoved(&dst.ObjectMeta, annoV1Alpha1NodePcieModel),
+			DriveSizeRange:           unstashRemoved(&dst.ObjectMeta, annoV1Alpha1NodeDriveSizes),
 			DeviceNames:              config.DeviceNames,
 			FailureDomain:            parseInt32(config.FailureDomain),
 			Expand:                   config.Expand,
@@ -216,6 +225,12 @@ func (dst *StorageNode) ConvertFrom(srcRaw conversion.Hub) error {
 		Uptime:        src.Status.Uptime,
 		FailureDomain: parseInt32(src.Status.FailureDomain),
 		ActiveOpsRef:  src.Status.ActiveOpsRef,
+	}
+	if err := unstash(&dst.ObjectMeta, annoV1Alpha1NodePcieAllow, &dst.Spec.Overrides.PcieAllowList); err != nil {
+		return err
+	}
+	if err := unstash(&dst.ObjectMeta, annoV1Alpha1NodePcieDeny, &dst.Spec.Overrides.PcieDenyList); err != nil {
+		return err
 	}
 	if err := unstash(&dst.ObjectMeta, annoV1Alpha1NodePostedAt, &dst.Status.PostedAt); err != nil {
 		return err

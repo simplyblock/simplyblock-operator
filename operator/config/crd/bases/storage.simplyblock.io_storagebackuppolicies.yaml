@@ -138,32 +138,18 @@ spec:
                   varies. Set at most one of this and ClaimSelector.
                 maxLength: 63
                 type: string
-              maxAge:
-                description: |-
-                  MaxAge is how long to keep a backup ("30d," "720h"). Empty means no limit
-                  by age. Retention is enforced by the control plane, not here. Immutable,
-                  for the reason Schedule is.
-                pattern: ^[1-9]\d*[mhdw]$
-                type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
-              maxVersions:
-                description: |-
-                  MaxVersions is how many backups of one claim to keep. Zero means no limit
-                  by count. Immutable, for the reason Schedule is.
-                format: int32
-                minimum: 0
-                type: integer
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               schedule:
                 description: |-
                   Schedule is the tiered schedule the control plane runs the policy on, as a
-                  space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7").
-                  Intervals must be strictly increasing, and the supported units are m, h,
-                  d, and w.
+                  space-separated list of interval,keep_count pairs ("15m,4 60m,11 24h,7"):
+                  four quarter-hourly backups, eleven hourly, and seven daily. Intervals
+                  must be strictly increasing, and the supported units are m, h, d, and w.
+
+                  It is also the policy's whole statement of retention. The control plane
+                  keeps as many backups as the tiers' keep counts add up to, for as long as
+                  the furthest tier reaches back, and status.retention shows both numbers.
+                  There is no separate version or age cap to set, so the object cannot
+                  promise one thing in the schedule and another beside it.
 
                   Immutable, and that is a property of the control plane rather than a
                   choice. The control plane offers no call that applies a changed schedule:
@@ -183,10 +169,6 @@ spec:
             x-kubernetes-validations:
             - message: field schedule is immutable once set
               rule: '!has(oldSelf.schedule) || has(self.schedule)'
-            - message: field maxVersions is immutable once set
-              rule: '!has(oldSelf.maxVersions) || has(self.maxVersions)'
-            - message: field maxAge is immutable once set
-              rule: '!has(oldSelf.maxAge) || has(self.maxAge)'
             - message: 'set at most one of claimSelector and consistencyGroupName:
                 a policy backs up either independent claims or one whole consistency
                 group'
@@ -291,6 +273,24 @@ spec:
               policyID:
                 description: PolicyID is the control plane's identifier for the policy.
                 type: string
+              retention:
+                description: |-
+                  Retention is what spec.schedule keeps, as derived from its tiers and
+                  handed to the control plane: the version count and the age the pruning
+                  honors. Absent while the policy has no schedule.
+                properties:
+                  maxAge:
+                    description: |-
+                      MaxAge is how long the control plane keeps a backup ("7d," "36h"): the
+                      reach of the schedule's furthest tier. Empty means no limit by age.
+                    type: string
+                  maxVersions:
+                    description: |-
+                      MaxVersions is how many backups of one claim the control plane keeps: the
+                      schedule's keep counts added up. Zero means no limit by count.
+                    format: int32
+                    type: integer
+                type: object
             type: object
         required:
         - spec

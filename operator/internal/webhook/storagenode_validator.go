@@ -272,25 +272,6 @@ func deviceClassDenial(
 					"deviceClass LogicalBlock, whose devices are named by path",
 				strings.Join(addresses, ", "), cluster.Name)
 		}
-		// The PCI filters match on something a logical block device does not have,
-		// so they are rejected rather than ignored: a filter that silently selects
-		// nothing is a node that comes up with no devices and no reason given.
-		var stated []string
-		if len(config.PcieAllowList) > 0 {
-			stated = append(stated, "spec.config.pcieAllowList")
-		}
-		if len(config.PcieDenyList) > 0 {
-			stated = append(stated, "spec.config.pcieDenyList")
-		}
-		if config.PcieModel != "" {
-			stated = append(stated, "spec.config.pcieModel")
-		}
-		if len(stated) > 0 {
-			return fmt.Sprintf(
-				"%s %s stated and cluster %q has deviceClass LogicalBlock, whose "+
-					"devices have no PCI address to match",
-				strings.Join(stated, " and "), plural(len(stated), "is", "are"), cluster.Name)
-		}
 	}
 	return ""
 }

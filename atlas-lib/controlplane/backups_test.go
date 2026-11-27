@@ -412,3 +412,37 @@ func TestClientCreateGroupBackupRefused(t *testing.T) {
 		t.Errorf("err = %v, want a 409 StatusError", err)
 	}
 }
+
+// ScheduleRetention reads the retention a tiered schedule already states: the
+// version count is every tier's keep count added up, and the age is the tier
+// that reaches furthest back, in the largest unit that divides it.
+func TestScheduleRetention(t *testing.T) {
+	for _, tc := range []struct {
+		schedule    string
+		maxVersions int32
+		maxAge      string
+	}{
+		{"", 0, ""},
+		{"24h,7", 7, "7d"},
+		{"15m,4 60m,11 24h,7", 22, "7d"},
+		{"15m,4 60m,11 24h,73", 88, "73d"},
+		{"1h,36", 36, "36h"},
+		{"90m,3", 3, "270m"},
+		{"1w,8", 8, "8w"},
+		{"12h,14", 14, "7d"},
+	} {
+		r, err := ScheduleRetention(tc.schedule)
+		if err != nil {
+			t.Errorf("%q: %v", tc.schedule, err)
+			continue
+		}
+		if r.MaxVersions != tc.maxVersions || r.MaxAge != tc.maxAge {
+			t.Errorf("%q: got %d versions, %q age; want %d, %q", tc.schedule, r.MaxVersions, r.MaxAge, tc.maxVersions, tc.maxAge)
+		}
+	}
+	for _, bad := range []string{"daily", "24h", "24h,", "0 2 * * *", "24x,7", "24h,7,1"} {
+		if _, err := ScheduleRetention(bad); err == nil {
+			t.Errorf("%q: expected an error", bad)
+		}
+	}
+}

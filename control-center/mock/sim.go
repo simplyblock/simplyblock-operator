@@ -20,16 +20,18 @@ type Simulator struct {
 	ns       string
 	failRate float64
 
-	mu    sync.Mutex
-	rng   *rand.Rand
-	ticks map[string]int // uid -> ticks spent Running
+	mu      sync.Mutex
+	rng     *rand.Rand
+	ticks   map[string]int  // uid -> ticks spent in the current step
+	refused map[string]bool // uid -> an AbortRefused or OperationQueued event was already emitted
 }
 
 func NewSimulator(st *Store, ns string, failRate float64, seed uint64) *Simulator {
 	return &Simulator{
 		st: st, ns: ns, failRate: failRate,
-		rng:   rand.New(rand.NewPCG(seed^0xa5a5a5a5, seed<<1|1)),
-		ticks: map[string]int{},
+		rng:     rand.New(rand.NewPCG(seed^0xa5a5a5a5, seed<<1|1)),
+		ticks:   map[string]int{},
+		refused: map[string]bool{},
 	}
 }
 
@@ -46,39 +48,23 @@ func (s *Simulator) Run(ctx context.Context, interval time.Duration) {
 	}
 }
 
-// opsKinds lists every resource that follows the Pending/Running/terminal
-// convention, including the proposed kinds so UI-created objects of those
-// types progress too.
-var opsKinds = []struct {
-	version, resource string
-	terminalOK        string
-	phases            []string // path Pending -> ... -> terminalOK
-	subPhases         []string
-}{
-	{"v1alpha1", "storageclusterops", "Succeeded", nil, nil},
-	{"v1alpha1", "storagenodeops", "Succeeded", nil, []string{"Validating", "Suspending", "Restarting", "Verifying"}},
-	{"v1alpha1", "replicationops", "Succeeded", nil, nil},
-	{"v1alpha2", "operatorops", "Succeeded", nil, nil},
-	{"v1alpha1", "storagedeviceops", "Succeeded", nil, nil},
-	{"v1alpha1", "storagepoolops", "Succeeded", nil, nil},
-	{"v1alpha1", "storagebackupops", "Succeeded", nil, nil},
-	{"v1alpha1", "controlplaneops", "Succeeded", nil, nil},
-	{"v1alpha1", "persistentvolumeops", "Succeeded", nil, nil},
-	{"v1alpha1", "volumemigrations", "Completed", []string{"Pending", "Validating", "Running"}, nil},
-}
-
-// Tick advances every in-flight object by one step.
+// Tick advances every in-flight object by one step: the Ops kinds along the
+// operator's step graphs (sim_ops.go), ReplicationOps along its own phases.
 func (s *Simulator) Tick() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, k := range opsKinds {
-		d, ok := s.st.Lookup(sbGroup, k.version, k.resource)
+	for resource := range opsGraphs {
+		d, ok := s.st.LookupResource(sbGroup, resource)
 		if !ok {
 			continue
 		}
-		items, _ := s.st.List(d, "", "", "")
-		for _, obj := range items {
-			s.advanceOp(d, obj, k.terminalOK, k.phases, k.subPhases)
+		for _, obj := range mustList(s.st, d) {
+			s.advanceGraphOp(d, obj)
+		}
+	}
+	if d, ok := s.st.LookupResource(sbGroup, "replicationops"); ok {
+		for _, obj := range mustList(s.st, d) {
+			s.advanceOp(d, obj, "Succeeded", nil, nil)
 		}
 	}
 	s.advanceDRPCs()
@@ -90,12 +76,12 @@ func (s *Simulator) Tick() {
 // advanceProjection plays the agent side of the hub/agent split: it refreshes
 // the managed-cluster heartbeat (lastSyncTime) and, on the transport-namespace
 // StorageCluster projection, catches observedGeneration up to the hub's spec
-// generation — so a spec the UI just changed shows "Pending" for one tick and
-// then "Applied".
+// generation, so a spec the UI just changed shows Pending for one tick and
+// then Applied.
 func (s *Simulator) advanceProjection() {
 	now := time.Now().UTC().Format(time.RFC3339)
 
-	if d, ok := s.st.Lookup(sbGroup, "v1alpha1", "managedclusters"); ok {
+	if d, ok := s.st.LookupResource(sbGroup, "managedclusters"); ok {
 		for _, mc := range mustList(s.st, d) {
 			if getStr(mc, "status.agentConnected") == "false" {
 				continue
@@ -105,9 +91,10 @@ func (s *Simulator) advanceProjection() {
 		}
 	}
 
-	// The projected StorageCluster lives in a sb-mc-* namespace; its status is
-	// agent-authored. Catch observedGeneration up to generation (drift heals).
-	if d, ok := s.st.Lookup(sbGroup, "v1alpha1", "storageclusters"); ok {
+	// A hub-projected StorageCluster (none is generated any more; a client may
+	// still create one in a sb-mc-* namespace) is agent-authored: catch its
+	// observedGeneration up to generation.
+	if d, ok := s.st.LookupResource(sbGroup, "storageclusters"); ok {
 		for _, sc := range mustList(s.st, d) {
 			ns := getStr(sc, "metadata.namespace")
 			if len(ns) < 6 || ns[:6] != "sb-mc-" {
@@ -134,7 +121,7 @@ func (s *Simulator) advanceProjection() {
 // UI distinguish "applied" from "pending" (design-crd-model.md §7.9).
 func (s *Simulator) reconcileObservedGeneration() {
 	for _, d := range s.st.Defs() {
-		if d.Group != sbGroup || !isEntityKind(d.Resource) {
+		if d.Group != sbGroup || !hasObservedGeneration(d.Resource) {
 			continue
 		}
 		for _, obj := range mustList(s.st, d) {
@@ -152,6 +139,18 @@ func (s *Simulator) reconcileObservedGeneration() {
 			}
 		}
 	}
+}
+
+// hasObservedGeneration lists the kinds whose status carries observedGeneration
+// on main, plus the mock's hub-only scaffold.
+func hasObservedGeneration(resource string) bool {
+	switch resource {
+	case "storageclusters", "storagenodes", "storagedevices", "storagepools", "controlplanes",
+		"simplyblockdrivers", "storagebackups", "storagebackuppolicies", "clusterdeploymentconfigs",
+		"managedclusters", "storageclusterclasses", "nodepoolallocations":
+		return true
+	}
+	return false
 }
 
 func mustList(st *Store, d ResourceDef) []map[string]any {
@@ -258,7 +257,7 @@ func (s *Simulator) onSuccess(d ResourceDef, obj map[string]any) {
 		return
 	}
 	// a successful failover flips the policy's slots
-	slotsDef, ok := s.st.Lookup(sbGroup, "v1alpha1", "replicationslots")
+	slotsDef, ok := s.st.LookupResource(sbGroup, "replicationslots")
 	if !ok {
 		return
 	}
@@ -328,7 +327,7 @@ func (s *Simulator) advanceDRPCs() {
 // refreshTelemetry nudges a couple of nodes' heartbeat fields so lists look
 // alive without flooding the watch streams.
 func (s *Simulator) refreshTelemetry() {
-	d, ok := s.st.Lookup(sbGroup, "v1alpha1", "storagenodes")
+	d, ok := s.st.LookupResource(sbGroup, "storagenodes")
 	if !ok {
 		return
 	}
@@ -338,7 +337,6 @@ func (s *Simulator) refreshTelemetry() {
 	}
 	for i := 0; i < 2; i++ {
 		obj := items[s.rng.IntN(int(len(items)))]
-		setPath(obj, "status.postedAt", time.Now().UTC().Format(time.RFC3339))
 		if used, ok := getPath(obj, "status.resources.capacity.usedBytes").(float64); ok {
 			jitter := (s.rng.Float64() - 0.45) * 0.002 * used
 			setPath(obj, "status.resources.capacity.usedBytes", used+jitter)

@@ -17,7 +17,31 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
 
 ## Recent additions
 
-- **DR hub client** — the Disaster recovery section now reads and writes the
+- **Fleet dashboard over several Kubernetes contexts:** the Clusters section
+  opens on every StorageCluster of every configured context (`dashboard.jsx`,
+  `contexts.jsx`), grouped by context, namespace, site, region, any label on
+  the StorageCluster, or any label the console's configuration gives a context;
+  each group names the field its value came from. A site is a stretched
+  cluster's `spec.stretched.site`, else the `topology.kubernetes.io/zone` label
+  of the workers the storage nodes run on. `SB_CONFIG.contexts[]` lists the
+  contexts (`name`, `labels`, `k8sBase`, `namespaces`, `local`); with none
+  configured the console reads its own cluster as the one context. The
+  control planes card and the top bar's pill show each context's ControlPlane
+  object; the former Control plane section lives there, and Access under the
+  identity menu. The mock serves several contexts with `--contexts`.
+
+- **Storage sections on v1alpha2, nothing invented:** the Clusters section reads
+  StorageCluster, StorageNode, StorageDevice, and StoragePool from
+  `storage.simplyblock.io/v1alpha2` across every namespace and shows the objects'
+  own fields under the CRD's names, with descriptions, enums, and immutability
+  read from the CRDs at run time (`storage-views.jsx`, `cr-view.jsx`,
+  `cr-headlines.jsx`, checked by `deploy/build/check-crd-paths.py`). Actions are
+  Ops objects with the CRDs' action enums; the Tasks and operations section and
+  the Alerts section are derived from the objects alone ([OPERATIONS.md](OPERATIONS.md),
+  `tasks.jsx`, `alerts.jsx`). The mock emits the same shapes and serves the
+  operator's CRD files.
+
+- **DR hub client:** the Disaster recovery section now reads and writes the
   `dr.simplyblock.io` CRs of [simplyblock-dr](https://github.com/simplyblock/simplyblock-dr)
   (plans, DR paths, protected applications, recovery plans, actions, tests,
   schedules, restores, site profiles, DHCP servers, DRConfig; site-mapper
@@ -27,29 +51,29 @@ sections are Clusters, Kubernetes, Disaster recovery and Control plane.
   stripped-down DR-only console for a hub without a simplyblock control plane
   (preview: `?mode=dr`). See [INTEGRATION.md](INTEGRATION.md#disaster-recovery-and-the-dr-only-console).
 
-- **Cluster discovery and deployment** — `Kubernetes → cluster → Discovery & deployment`: filtered hardware discovery, then a deployment document (draft → approve) that runs node configuration, storage-node addition and activation asynchronously, with a per-step log.
-- **Migration paths** — online site migration by asynchronous replication plus KubeVirt live migration; application groups, convergence backlog, sequenced queue.
-- **Ransomware recovery** — group-consistent backup policies as a recovery basis for protected applications, with point-in-time failover by generation or timestamp.
-- **Ramen recipes** — per-application boot sequences (ordered groups, readiness gates, hooks, failure policy) driving capture and recovery workflows.
-- **File and object storage** — pNFS-backed RWX PVCs and S3 buckets as first-class objects, both replicable and backupable.
+- **Cluster discovery and deployment:** `Kubernetes → cluster → Discovery & deployment`: filtered hardware discovery, then a deployment document (draft → approve) that runs node configuration, storage-node addition and activation asynchronously, with a per-step log.
+- **Migration paths:** online site migration by asynchronous replication plus KubeVirt live migration; application groups, convergence backlog, sequenced queue.
+- **Ransomware recovery:** group-consistent backup policies as a recovery basis for protected applications, with point-in-time failover by generation or timestamp.
+- **Ramen recipes:** per-application boot sequences (ordered groups, readiness gates, hooks, failure policy) driving capture and recovery workflows.
+- **File and object storage:** pNFS-backed RWX PVCs and S3 buckets as first-class objects, both replicable and backupable.
 
 ## Files
 
-| File | Role |
-|---|---|
-| `index.html` | Shell, design tokens, script load order |
-| `api.jsx` | **API client.** Endpoints, response envelope, wire→view-model normalizers, `useResource` hook |
-| `agent.jsx` | **Agent / Prometheus client** — everything API v2 does *not* expose (see below) |
-| `panels.jsx` | Tasks, cluster log, control-plane containers, FDB backups, SPDK threads & logs, SMART |
-| `mock-backend.jsx` | Fixture store shaped like v2 payloads (snake_case, uuid FKs). Design/validation only |
-| `mock-api.jsx` | `fetch` interceptor serving the fixtures, including every mutation route |
-| `ui.jsx` | Primitives: traffic light, capacity bar, sparkline, metric block, icons, formatters |
-| `actions.jsx` | Command registry per object kind + kebab menus + parameterised confirm dialogs |
-| `tiles.jsx` / `tiles-data.jsx` | Tiles: cluster, host, node, device / pool, volume, snapshot, backup, policy |
-| `details.jsx` / `details-data.jsx` | Detail pages, same split |
-| `app.jsx` | Breadcrumb router, overview + detail views, sorting/filtering/scoping, cluster switcher; `SB_MODE` (full / dr) |
-| `k8s-client.jsx` | Kubernetes API transport: resource registry per API group (storage, DR hub, Ramen, OCM), paths, access reviews |
-| `drhub-api.jsx` / `drhub.jsx` | **DR hub client.** View models over the `dr.simplyblock.io` CRs, the mutations the console performs (RecoveryAction, TestBubble, RestoreAction, TestSchedule, plan / path / application / recovery plan), dashboard, tiles, details, dialogs |
+| File                               | Role                                                                                                                                                                                                                                         |
+|------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `index.html`                       | Shell, design tokens, script load order                                                                                                                                                                                                      |
+| `api.jsx`                          | **API client.** Endpoints, response envelope, wire→view-model normalizers, `useResource` hook                                                                                                                                                |
+| `agent.jsx`                        | **Agent / Prometheus client** — everything API v2 does *not* expose (see below)                                                                                                                                                              |
+| `panels.jsx`                       | Tasks, cluster log, control-plane containers, FDB backups, SPDK threads & logs, SMART                                                                                                                                                        |
+| `mock-backend.jsx`                 | Fixture store shaped like v2 payloads (snake_case, UUID FKs). Design/validation only                                                                                                                                                         |
+| `mock-api.jsx`                     | `fetch` interceptor serving the fixtures, including every mutation route                                                                                                                                                                     |
+| `ui.jsx`                           | Primitives: traffic light, capacity bar, sparkline, metric block, icons, formatters                                                                                                                                                          |
+| `actions.jsx`                      | Command registry per object kind + kebab menus + parameterized confirm dialogs                                                                                                                                                               |
+| `tiles.jsx` / `tiles-data.jsx`     | Tiles: cluster, host, node, device / pool, volume, snapshot, backup, policy                                                                                                                                                                  |
+| `details.jsx` / `details-data.jsx` | Detail pages, same split                                                                                                                                                                                                                     |
+| `app.jsx`                          | Breadcrumb router, overview + detail views, sorting/filtering/scoping, cluster switcher; `SB_MODE` (full / dr)                                                                                                                               |
+| `k8s-client.jsx`                   | Kubernetes API transport: resource registry per API group (storage, DR hub, Ramen, OCM), paths, access reviews                                                                                                                               |
+| `drhub-api.jsx` / `drhub.jsx`      | **DR hub client.** View models over the `dr.simplyblock.io` CRs, the mutations the console performs (RecoveryAction, TestBubble, RestoreAction, TestSchedule, plan / path / application / recovery plan), dashboard, tiles, details, dialogs |
 
 ## Object model & navigation
 
@@ -70,7 +94,7 @@ Clusters
 Snapshots and backups are one page reached from three scopes; the parent
 breadcrumb segment *is* the filter, and the toolbar shows a scope pill.
 
-**Hosts** are physical/virtual machines that have been prepared and labelled;
+**Hosts** are physical/virtual machines that have been prepared and labeled;
 they appear in the list automatically. A host carries NUMA socket count, its
 PCIe-NVMe devices per socket (assigned to a storage node or free), unused
 unpartitioned Linux block devices, vCPU, system RAM, hugepages
@@ -96,13 +120,13 @@ serial, capacity, model, and PCIe address for NVMe. Filters apply *during*
 discovery, so an excluded device is never reported and a boot disk cannot end up
 in a node set by accident:
 
-| Filter | Field |
-|---|---|
-| smallest / largest device | `deviceFilter.driveSizeRange{min,max}` |
-| PCIe allow / deny | `deviceFilter.pcieAllowList`, `pcieDenyList` |
-| block device names | `deviceFilter.blockDeviceNames` |
-| unpartitioned Linux block devices | `deviceFilter.enableLogicalBlockDevices` |
-| which workers to inspect | `nodeSelector.matchLabels` |
+| Filter                            | Field                                        |
+|-----------------------------------|----------------------------------------------|
+| smallest / largest device         | `deviceFilter.driveSizeRange{min,max}`       |
+| PCIe allow / deny                 | `deviceFilter.pcieAllowList`, `pcieDenyList` |
+| block device names                | `deviceFilter.blockDeviceNames`              |
+| unpartitioned Linux block devices | `deviceFilter.enableLogicalBlockDevices`     |
+| which workers to inspect          | `nodeSelector.matchLabels`                   |
 
 Discovery reports every worker node that carries no storage node yet; deciding
 which of them to *use* happens in the wizard, not in discovery.
@@ -124,12 +148,12 @@ Core isolation is a per-group flag; CPU topology is enforced either way.
 (`PATCH spec.approved`; anything else is refused 422). It starts four
 asynchronous, observable steps:
 
-| Step | What changes |
-|---|---|
-| `CreateCluster` | the cluster exists, status `unready` |
-| `PrepareNodes` | persistent hugepage reservation + core isolation on each host, hosts become `available` |
-| `AddStorageNodes` | one storage node pod per group, devices claimed, cluster `in_activation` |
-| `ActivateCluster` | nodes and devices online, default pool created, cluster `online` |
+| Step              | What changes                                                                            |
+|-------------------|-----------------------------------------------------------------------------------------|
+| `CreateCluster`   | the cluster exists, status `unready`                                                    |
+| `PrepareNodes`    | persistent hugepage reservation + core isolation on each host, hosts become `available` |
+| `AddStorageNodes` | one storage node pod per group, devices claimed, cluster `in_activation`                |
+| `ActivateCluster` | nodes and devices online, default pool created, cluster `online`                        |
 
 A document in flight cannot be deleted (403 from the webhook — it would strand
 half-configured nodes). A document naming `spec.clusterRef` instead of
@@ -141,16 +165,16 @@ One bucket is one filesystem is one logical volume, so a bucket inherits
 everything a volume can do. The bucket list (Clusters > a cluster > Buckets)
 supports:
 
-- **Create** — name (S3 naming rules enforced), pool, size, quota, versioning,
+- **Create:** name (S3 naming rules enforced), pool, size, quota, versioning,
   object lock (one-way; a locked bucket cannot be deleted), KMS encryption,
   default storage class, owner and up to 50 **bucket tags**.
-- **Delete** — refused while the bucket holds objects or object lock is on,
+- **Delete:** refused while the bucket holds objects or object lock is on,
   matching S3 semantics. The backing volume goes with it.
-- **Replication** — *Replicate → attach to a policy* joins the bucket's volume
+- **Replication:** *Replicate → attach to a policy* joins the bucket's volume
   to a replication policy whose source is the bucket's cluster (sync across
   zones or async to a paired cluster); *Detach* leaves it. The tile shows the
   mode, the detail links to the policy.
-- **Search and browse by S3 metadata** — the toolbar filters by tag (`key`
+- **Search and browse by S3 metadata:** the toolbar filters by tag (`key`
   matches any bucket carrying it, `key=value` exact), by region, and by
   configuration (versioned, object lock, encrypted, public, replicated / not
   replicated, has lifecycle rules). Free-text search also matches tags, owner
@@ -179,18 +203,18 @@ discovered  →  inspecting  →  ready to configure  →  available
                 pod running)                          run storage nodes)
 ```
 
-- **discovered** — the worker node is visible but simplyblock knows nothing about
+- **discovered:** the worker node is visible but simplyblock knows nothing about
   its hardware. Candidate tiles are hatched, carry a checkbox, and show only what
   the Kubernetes node object provides (kubelet, instance type, zone, vCPU, RAM).
 - Select any number of them and hit **Prepare n nodes** — `POST
   /clusters/{uuid}/hosts/prepare {host_ids[]}` schedules the inspection pod.
-- **inspecting** — the pod collects the NUMA topology, the NVMe/block devices and
+- **inspecting:** the pod collects the NUMA topology, the NVMe/block devices and
   the NICs. The tile shows the pod name and a live indicator.
-- **ready to configure** — the inventory is in. **Configure** opens the form:
+- **ready to configure:** the inventory is in. **Configure** opens the form:
   NUMA socket(s) to use, system memory per storage-plane pod, hugepages per pod,
   the devices to assign, the management NIC and the data NIC(s) — all picked from
   what was actually discovered. `POST /hosts/{uuid}/configure`.
-- **available** — labelled `simplyblock.io/storage-node=true`; a storage node can
+- **available:** labeled `simplyblock.io/storage-node=true`; a storage node can
   now be started on it, or a node migrated onto it.
 
 ## Edge clusters
@@ -198,12 +222,12 @@ discovered  →  inspecting  →  ready to configure  →  available
 Edge is a materially different deployment, and the UI reflects that rather than
 showing dead controls:
 
-- **no rebalancing** — the tile shows `rebalancing n/a`, the detail page says so.
-- **no task engine** — the Tasks tab is not rendered, and
+- **no rebalancing:** the tile shows `rebalancing n/a`, the detail page says so.
+- **no task engine:** the Tasks tab is not rendered, and
   `GET /clusters/{uuid}/tasks` answers **501** with an explanation.
-- **block device class only** — NVMe is not offered; the create-cluster form drops
+- **block device class only:** NVMe is not offered; the create-cluster form drops
   the option as soon as you pick Edge, and the API rejects it.
-- **managed through the Kubernetes API** — the endpoint row is labelled
+- **managed through the Kubernetes API:** the endpoint row is labeled
   *Kubernetes API*, not *Management endpoint*.
 
 There is no separate optimization field; the device class alone describes the
@@ -217,15 +241,16 @@ sources are read straight from the containers / the node / Prometheus. Anywhere
 this data appears the UI carries a dashed **source tag** so operators know it has
 a different availability guarantee than the control plane API.
 
-| Data | Source | Endpoint used here ||---|---|---|
-| Live vCPU/RAM/disk allocation of fdb, simplyblock services, prometheus, and (if deployed) graylog / opensearch / mongo | container runtime | `GET {agent}/control-plane/containers` |
-| Control plane container logs | `kubectl logs` | `GET {agent}/control-plane/containers/{name}/logs` |
-| FoundationDB (state DB) backup versions + restore | fdbbackup agent | `GET {agent}/control-plane/fdb/backups`, `POST …/{id}/restore` |
-| SPDK and SPDK-proxy live log stream | node agent | `GET {agent}/nodes/{uuid}/logs/{spdk\|spdk-proxy}` |
-| SPDK thread utilization per core / per thread | Prometheus | `GET {prom}/query?query=spdk_thread_busy_percent{node="…"}` |
-| SMART output + on-demand re-read | nvme-cli on the node | `GET {agent}/devices/{uuid}/smart`, `POST …/smart/refresh` |
+| Data                                                                                                                   | Source               | Endpoint used here                                                            |     |
+|------------------------------------------------------------------------------------------------------------------------|----------------------|-------------------------------------------------------------------------------|-----|
+| Live vCPU/RAM/disk allocation of fdb, simplyblock services, Prometheus, and (if deployed) Graylog / OpenSearch / mongo | container runtime    | `GET {agent}/control-plane/containers`                                        |     |
+| Control plane container logs                                                                                           | `kubectl logs`       | `GET {agent}/control-plane/containers/{name}/logs`                            |     |
+| FoundationDB (state DB) backup versions + restore                                                                      | fdbbackup agent      | `GET {agent}/control-plane/fdb/backups`, `POST …/{id}/restore`                |     |
+| SPDK and SPDK-proxy live log stream                                                                                    | node agent           | `GET {agent}/nodes/{uuid}/logs/{spdk\                          | spdk-proxy}` |     |
+| SPDK thread utilization per core / per thread                                                                          | Prometheus           | `GET {prom}/query?query=spdk_thread_busy_percent{node="…"}`                   |     |
+| SMART output + on-demand re-read                                                                                       | nvme-cli on the node | `GET {agent}/devices/{uuid}/smart`, `POST …/smart/refresh`                    |     |
 
-Tasks and the cluster event log *are* modelled on API v2
+Tasks and the cluster event log *are* modeled on API v2
 (`/clusters/{uuid}/tasks`, `/tasks/{uuid}/subtasks`, `POST /tasks/{uuid}/cancel`,
 `/clusters/{uuid}/logs`) — move them to the agent client if that turns out to be wrong.
 
@@ -235,13 +260,13 @@ The console talks to exactly three things. It does **not** call the control plan
 REST API — anything the control plane knows reaches the UI through a CRD status
 written by a controller.
 
-| Surface | `SB_CONFIG` key | Serves |
-|---|---|---|
-| Kubernetes API | `k8sBase` | CRDs in `storage.simplyblock.io/v1alpha1`; core objects (Node, Pod, PV, PVC, StorageClass, Secret, Event); pod logs |
-| Operator API | `operatorBase` | `/releases` compatibility matrix, SSE watch, and `/proposed/*` for kinds v1alpha1 does not model yet |
-| Log store | `graylogBase` | Graylog's universal search (`/search/universal/absolute`, oldest first): the Logs view. Without it the view tails a pod's log from the Kubernetes API |
-| Helm | `helmBase` | release, revision, chart, values |
-| Control plane API (read-only) | `cpBase` | storage clusters, nodes, devices, pools, volumes, snapshots, tasks, logs and alerts where they are not CRDs here (a hub managing sites); GET only, credentials scrubbed by the proxy (`deploy/redact.js`) |
+| Surface                       | `SB_CONFIG` key | Serves                                                                                                                                                                                                    |
+|-------------------------------|-----------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Kubernetes API                | `k8sBase`       | CRDs in `storage.simplyblock.io/v1alpha1`; core objects (Node, Pod, PV, PVC, StorageClass, Secret, Event); pod logs                                                                                       |
+| Operator API                  | `operatorBase`  | `/releases` compatibility matrix, SSE watch, and `/proposed/*` for kinds v1alpha1 does not model yet                                                                                                      |
+| Log store                     | `graylogBase`   | Graylog's universal search (`/search/universal/absolute`, oldest first): the Logs view. Without it the view tails a pod's log from the Kubernetes API                                                     |
+| Helm                          | `helmBase`      | release, revision, chart, values                                                                                                                                                                          |
+| Control plane API (read-only) | `cpBase`        | storage clusters, nodes, devices, pools, volumes, snapshots, tasks, logs and alerts where they are not CRDs here (a hub managing sites); GET only, credentials scrubbed by the proxy (`deploy/redact.js`) |
 
 `SB_CONFIG.upstreams` says which optional upstreams the pod proxies. A screen
 whose only source is off renders "Not available in this deployment" with the
@@ -306,19 +331,19 @@ Every long-running action creates an `<Entity>Ops` object:
 POST /apis/.../storagenodeops     {spec: {action: "Restart", targetRef: {name}}}
 ```
 
-| Kind | Actions |
-|---|---|
-| `StorageClusterOps` | Suspend · Activate · Expand · Rebalance |
-| `StorageNodeOps` | Restart · Shutdown · Migrate · Remove · AddDevice |
-| `StorageDeviceOps` | Restart · Fail · Remove · HealthCheck |
-| `StoragePoolOps` | Enable · Disable · UpdateQos |
-| `StorageBackupOps` | Merge · Restore · Export · Delete |
-| `PersistentVolumeOps` | Resize · Snapshot · Clone · Migrate · Backup |
-| `ControlPlaneOps` | Restart · RestoreStateDatabase |
-| `OperatorOps` | Discover |
+| Kind                      | Actions                                                 |
+|---------------------------|---------------------------------------------------------|
+| `StorageClusterOps`       | Suspend · Activate · Expand · Rebalance                 |
+| `StorageNodeOps`          | Restart · Shutdown · Migrate · Remove · AddDevice       |
+| `StorageDeviceOps`        | Restart · Fail · Remove · HealthCheck                   |
+| `StoragePoolOps`          | Enable · Disable · UpdateQos                            |
+| `StorageBackupOps`        | Merge · Restore · Export · Delete                       |
+| `PersistentVolumeOps`     | Resize · Snapshot · Clone · Migrate · Backup            |
+| `ControlPlaneOps`         | Restart · RestoreStateDatabase                          |
+| `OperatorOps`             | Discover                                                |
 | `ClusterDeploymentConfig` | drafted by discovery, deployed by `spec.approved: true` |
 
-Rules the console honours:
+Rules the console honors:
 
 - `status.phase` and `status.step.state` carry progress; `status.events` the history.
 - **`spec.abort` is the only stop.** A cancel is `PATCH {spec:{abort:true}}`, never a
@@ -368,9 +393,9 @@ if v2 differs. Some responses need **expansions** so tiles render without N+1 ca
 If rollups or history are not available on the list endpoints, they can be dropped
 to a second `/iostats` call — the view models already isolate them.
 
-## Behaviour
+## Behavior
 
-- **Polling** — the active view refetches every 6 s without a skeleton flash; every
+- **Polling:** the active view refetches every 6 s without a skeleton flash; every
   successful action forces an immediate refresh.
 - **Breadcrumb** is the only navigation state; persisted to `localStorage` and
   restored on reload. Ancestor labels resolve through a UUID registry, so a deep
@@ -382,7 +407,7 @@ to a second `/iostats` call — the view models already isolate them.
 
 ## Mock controls (design + validation)
 
-The **mock api** menu in the header injects slow network, offline, empty
+The **mock API** menu in the header injects slow network, offline, empty
 collections, random 503s, and a single failure — loading, empty and error states
 are reachable without a real cluster. Mutations write to the fixture store, so
 shutting a node down really does turn its devices amber.
@@ -412,11 +437,11 @@ configured identically and travel the same control path down to the CSI driver;
 what differs is the parameter map the replication class carries, and therefore
 what the driver does with the data.
 
-| Method | Class mode | RPO | RTO | Generation select | Failback | Driver-side target |
-|---|---|---|---|---|---|---|
-| synchronous | `sync` | 0 | seconds | no | yes | peer cluster, inline write mirror |
-| asynchronous | `async` | = interval | seconds | no | yes | peer cluster, block delta per epoch |
-| generation vault | `snapshot-s3` | = interval | minutes | **yes** | **no** | S3 bucket, immutable objects + manifest |
+| Method           | Class mode    | RPO        | RTO     | Generation select | Failback | Driver-side target                      |
+|------------------|---------------|------------|---------|-------------------|----------|-----------------------------------------|
+| synchronous      | `sync`        | 0          | seconds | no                | yes      | peer cluster, inline write mirror       |
+| asynchronous     | `async`       | = interval | seconds | no                | yes      | peer cluster, block delta per epoch     |
+| generation vault | `snapshot-s3` | = interval | minutes | **yes**           | **no**   | S3 bucket, immutable objects + manifest |
 
 Navigation: `Disaster recovery › Protection plans › Plan › {Applications, Sites}`
 and `… › Applications › Application`. A site is one managed cluster; its name
@@ -428,12 +453,12 @@ mirror, distinct region does not.
 
 The plan detail shows what the orchestrator produced, with a cardinality box:
 
-| Kind | Cardinality | Why |
-|---|---|---|
-| `DRCluster` | one per site | created once at onboarding |
-| `DRPolicy` | one per pair × interval | every field immutable, so every pair a method could ever use is created up front |
-| `DRPlacementControl` | one per application | the only object rewritten during operation; a rebind is a delete plus a create |
-| `VRClass` / `VGRClass` | one per method × interval | not a Ramen object, but the switch Ramen reads |
+| Kind                   | Cardinality               | Why                                                                              |
+|------------------------|---------------------------|----------------------------------------------------------------------------------|
+| `DRCluster`            | one per site              | created once at onboarding                                                       |
+| `DRPolicy`             | one per pair × interval   | every field immutable, so every pair a method could ever use is created up front |
+| `DRPlacementControl`   | one per application       | the only object rewritten during operation; a rebind is a delete plus a create   |
+| `VRClass` / `VGRClass` | one per method × interval | not a Ramen object, but the switch Ramen reads                                   |
 
 **The one derivation that fails silently.** `methods[].interval` is written to
 both `DRPolicy.spec.schedulingInterval` and the class's
@@ -460,14 +485,14 @@ no field anywhere in its API, and two of them are reads the console cannot be
 truthful without — read from Kubernetes alone, a plan with three declared
 methods shows a healthy single-leg posture and no generations at all.
 
-| # | Payload | Direction | Consumed by |
-|---|---|---|---|
-| 1 | peer / topology binding | down | driver, at site onboarding |
-| 2 | generation selection | down | `PromoteVolume` — it has no point-in-time argument |
-| 3 | retention and lock enforcement | both | object store, which owns the state |
-| 4 | **generation catalogue** | up | **this console** — no CR represents a generation |
-| 5 | **per-leg lag** | up | **this console** — only the orchestrated leg has a VRG |
-| 6 | arbitration token | both | quorum across three or more sites, which `clusterFence` cannot express |
+| #   | Payload                        | Direction | Consumed by                                                            |
+|-----|--------------------------------|-----------|------------------------------------------------------------------------|
+| 1   | peer / topology binding        | down      | driver, at site onboarding                                             |
+| 2   | generation selection           | down      | `PromoteVolume` — it has no point-in-time argument                     |
+| 3   | retention and lock enforcement | both      | object store, which owns the state                                     |
+| 4   | **generation catalog**         | up        | **this console** — no CR represents a generation                       |
+| 5   | **per-leg lag**                | up        | **this console** — only the orchestrated leg has a VRG                 |
+| 6   | arbitration token              | both      | quorum across three or more sites, which `clusterFence` cannot express |
 
 ### Restoring from a generation
 
@@ -480,7 +505,7 @@ select generation → pin out of band → rebind DRPC to the vault policy
 ```
 
 The pin is cleared once the promote resolves; a stale pin would make the next
-ordinary failover resolve to an old generation. Afterwards failback is gone and
+ordinary failover resolve to an old generation. Afterward, failback is gone and
 the application is flagged for re-protection: the original site's pre-compromise
 state cannot be reconstructed, because the source volume is gone or untrusted
 and the vault holds generations rather than a live peer.
@@ -518,7 +543,7 @@ points at one — but they are no longer the top-level DR object.
 ## Open
 
 - Cluster-level *site migration* is expressed today as "put every volume in a
-  migration group and cut over". If you want a single "migrate this cluster"
+  migration group and cut over." If you want a single "migrate this cluster"
   wizard that creates the group, tracks all volumes and reports one progress
   number, say so and I will add it.
 - Replication is cluster-scoped in the navigation, as you chose. An all-clusters

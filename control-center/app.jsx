@@ -6,11 +6,43 @@ const DR_ONLY = (window.SB_CONFIG || {}).mode === "dr"
   // design preview only: ?mode=dr on the fixture backend shows the DR-only console
   || (!!(window.SB_CONFIG || {}).mock && new URLSearchParams(location.search).get("mode") === "dr");
 const ROOT_PATH = DR_ONLY ? [{t: "dr"}] : [{t: "clusters"}];
+
+// The location in the URL: every view is a browser history entry, so Back and
+// Forward move between views and a copied URL opens the view it came from.
+// It is a fragment, #/<segment>/<segment>, because the page loads its scripts
+// by relative URL, which a real path would break. A segment is its layer, then
+// =<id>, then ;<the remaining fields as JSON>, each URI-encoded. The log
+// explorer owns #logs?<filter> (logs.jsx), which is the logs layer.
+const hashOfPath = p => "#/" + p.map(s => {
+  const {t, id, ...rest} = s;
+  return encodeURIComponent(t) + (id != null ? "=" + encodeURIComponent(id) : "")
+    + (Object.keys(rest).length ? ";" + encodeURIComponent(JSON.stringify(rest)) : "");
+}).join("/");
+function pathOfHash(hash) {
+  const h = String(hash || "");
+  if (/^#logs\b/.test(h)) return [{t: "logs"}];
+  if (!h.startsWith("#/") || h.length < 3) return null;
+  try {
+    return h.slice(2).split("/").map(part => {
+      const [head, rest] = part.split(";");
+      const [t, id] = head.split("=");
+      return Object.assign(rest ? JSON.parse(decodeURIComponent(rest)) : {}, {t: decodeURIComponent(t)}, id != null ? {id: decodeURIComponent(id)} : {});
+    });
+  } catch (e) { return null; }
+}
 // Layers that need the storage operator: hidden in DR-only mode.
 const STORAGE_DR_LAYERS = ["pairs", "rpolicies", "slots", "replops", "zones", "mpaths", "appgroups"];
 
 const LAYER_META = {
   clusters: {label: "Clusters", icon: "cluster"}, cluster: {icon: "cluster"},
+  // any custom resource, by its object key (cr-view.jsx)
+  cr: {icon: "list"},
+  // the operations monitor (tasks.jsx), at the section level or under a cluster
+  monitor: {label: "Tasks and operations", icon: "clock"}, work: {icon: "clock"},
+  // the alerts derived from the objects (alerts.jsx)
+  alerts: {label: "Alerts", icon: "bell"},
+  // the fleet dashboard's sites (dashboard.jsx) and the access page
+  sites: {label: "Sites", icon: "zone"}, site: {icon: "zone"}, access: {label: "Access", icon: "lock"},
   cp: {label: "Control plane", icon: "host"},
   hosts: {label: "Hosts", icon: "host"}, host: {icon: "host"},
   nodes: {label: "Storage nodes", icon: "node"}, node: {icon: "node"},
@@ -130,7 +162,7 @@ const detailPath = o => o.kind === "cluster" ? pC(o.id)
   : [...pC(o.clusterId), {t: "policies"}, {t: "policy", id: o.id}];
 
 const nameOf = o => o.hostname || o.name || (o.mode === "nvme" ? o.serial : o.blockdev) || o.serial || o.chainId || "";
-const segLabel = s => s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
+const segLabel = s => s.t === "site" ? (s.id === "none" ? "No site" : s.id) : s.t === "work" ? String(s.id).split("/").pop() : s.t === "cr" ? String(s.id).split("/").slice(2).join(" ") : s.id ? (REG[s.id] ? nameOf(REG[s.id]) : shortId(s.id)) : LAYER_META[s.t].label;
 const searchable = o => [nameOf(o), o.id, o.ip, o.mgmtIp, o.serial, o.pcie, o.blockdev, o.failureDomain,
   o.owner, o.storageClass, ...Object.entries(o.tags || {}).map(([k, v]) => `${k}=${v}`),
   o.physicalLabel, o.poolName, o.volumeName, o.chainId, o.bucket, o.type, o.finest,
@@ -191,7 +223,7 @@ const SORT_KEYS = {
 const clusterOf = seg => seg.t === "cluster" ? seg.id : (REG[seg.id] || {}).clusterId;
 // Each view advertises the surface that actually backs it: a CRD, a core object,
 // or an operator /proposed collection for the kinds v1alpha1 does not model yet.
-const G_ = "/apis/storage.simplyblock.io/v1alpha1/namespaces/{ns}";
+const G_ = "/apis/storage.simplyblock.io/v1alpha2/namespaces/{ns}";
 const crd = (p, sel) => `GET ${G_}/${p}${sel ? "?labelSelector=" + sel.replace("storage.simplyblock.io/", "…/") : ""}`;
 const crd1 = p => `GET ${G_}/${p}/{name}`;
 const prop = p => `GET /operator/v1/proposed/${p}`;
@@ -206,7 +238,7 @@ const VIEWS = {
   nodes: {kind: "node",
     load: p => p.t === "host" ? api.nodes(clusterOf(p)).then(ns => ns.filter(n => n.hostId === p.id)) : api.nodes(p.id),
     api: p => crd("storagenodes", p.t === "host" ? OWNER : CLUS)},
-  devices: {kind: "device", load: p => api.devices(p.id), api: () => crd("storagedevices", OWNER)},
+  devices: {kind: "device", load: p => p.t === "cluster" ? api.clusterDevices(p.id) : api.devices(p.id), api: p => crd("storagedevices", p.t === "cluster" ? CLUS : "storage.simplyblock.io/node")},
   pools: {kind: "pool", load: p => api.pools(p.id), api: () => crd("storagepools", CLUS)},
   volumes: {kind: "volume",
     load: p => p.t === "rpolicy" ? api.rpolicyVolumes(p.id) : p.t === "cgroup" ? api.cgroupVolumes(p.id)
@@ -670,7 +702,11 @@ class ViewBoundary extends React.Component {
 }
 
 function App() {
-  const [rawPath, setPath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  // The URL decides the view when it names one; the stored path restores the
+  // last view when it does not (a bare URL, a bookmark from before).
+  const [storedPath, storePath] = useLocal(DR_ONLY ? "sb.drpath" : "sb.path", ROOT_PATH);
+  const [rawPath, setRawPath] = useState(() => pathOfHash(window.location.hash) || storedPath);
+  const setPath = useCallback(p => { setRawPath(p); storePath(p); }, [storePath]);
   // a stored path may name a layer that no longer exists (renamed kinds) — fall back to the root;
   // in DR-only mode anything outside the DR section is unreachable
   const path = useMemo(() => {
@@ -731,6 +767,23 @@ function App() {
   const cur = path[path.length - 1];
   const viewKey = path.map(s => s.t + (s.id || "")).join("/");
   const pathRef = useRef(path); pathRef.current = path;
+  // A navigation adds a history entry; the first render only names the entry
+  // it landed on. Nothing is pushed when the URL already shows this path, which
+  // is the case after Back, Forward, and an edited address.
+  const pathHash = hashOfPath(path);
+  const landed = useRef(false);
+  useEffect(() => {
+    const shown = pathOfHash(window.location.hash);
+    if (shown && hashOfPath(shown) === pathHash) { landed.current = true; return; }
+    const url = window.location.pathname + window.location.search + pathHash;
+    try { window.history[landed.current ? "pushState" : "replaceState"](null, "", url); } catch (e) {}
+    landed.current = true;
+  }, [pathHash]);
+  useEffect(() => {
+    const h = () => setPath(pathOfHash(window.location.hash) || ROOT_PATH);
+    window.addEventListener("popstate", h);
+    return () => window.removeEventListener("popstate", h);
+  }, [setPath]);
   useEffect(() => { setQ(""); setFilters([]); }, [viewKey]);
   useEffect(() => {
     const missing = path.filter(s => s.id && !REG[s.id]);
@@ -743,6 +796,16 @@ function App() {
     layer: (o, l) => go([...detailPath(o), {t: l}]),
     layerRef: (cid, l) => go([...pC(cid), {t: l}]),
     openCluster: cid => go(pC(cid)),
+    alerts: p => go([Object.assign({t: "alerts"}, p ? {p} : {})]),
+    dashboard: p => go([Object.assign({t: "clusters"}, p ? {p} : {})]),
+    sites: () => go([{t: "clusters"}, {t: "sites"}]),
+    openSite: name => go([{t: "clusters"}, {t: "sites"}, {t: "site", id: name}]),
+    access: () => go([{t: "access"}]),
+    // the operations monitor; a filter rides on the segment
+    monitor: p => go(p && p.cluster ? [...pC(p.cluster), Object.assign({t: "monitor"}, {p})] : [Object.assign({t: "monitor"}, p ? {p} : {})]),
+    openWork: (cid, key) => go(cid ? [...pC(cid), {t: "monitor"}, {t: "work", id: key}] : [{t: "monitor"}, {t: "work", id: key}]),
+    // any custom resource, as a child of wherever the user is
+    openCR: ref => go([...pathRef.current.filter(s => s.t !== "cr"), {t: "cr", id: objKey(ref.ctx, ref.ns, ref.kind, ref.name)}]),
     openHost: (cid, hid) => go(pH(cid, hid)),
     openNode: (cid, nid) => go(pN(cid, nid)),
     openDevice: (cid, nid, did) => go(pD(cid, nid, did)),
@@ -794,7 +857,10 @@ function App() {
     logs: params => {
       const f = Object.assign({}, DEFAULT_LOG_FILTER, params || {});
       if (params && (params.from || params.to)) f.range = "";
-      try { window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
+      // its own history entry, unless the explorer is open already and only
+      // takes a new query
+      const open = pathRef.current.length === 1 && pathRef.current[0].t === "logs";
+      try { window.history[open ? "replaceState" : "pushState"](null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
       // an open explorer takes the new query; a closed one reads it from the URL
       try { window.dispatchEvent(new CustomEvent("sb-logs-query", {detail: f})); } catch (e) {}
       go([{t: "logs"}]);
@@ -835,7 +901,7 @@ function App() {
     : cur.t === "aidisc" ? drcrd("discoverygraphs") + " · " + drcrd("discoveryruns", true)
     : cur.t === "proposals" ? drcrd("drproposals", true) : "—";
   const s0 = path[0] && path[0].t;
-  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : "clusters";
+  const section = s0 === "dr" ? "dr" : s0 === "k8s" ? "k8s" : s0 === "cp" ? "cp" : s0 === "logs" ? "logs" : s0 === "monitor" ? "ops" : s0 === "alerts" ? "alerts" : "clusters";
   const drVisible = DR_ONLY || acc.canAnywhere("read", "drhub") || acc.canAnywhere("read", "drpolicy") || acc.canAnywhere("read", "replicationpolicy") || acc.canAnywhere("read", "application");
   const upOne = path.length > 1 ? () => go(path.slice(0, -1)) : null;
   const upLabel = path.length > 1 ? segLabel(path[path.length - 2]) : "";
@@ -853,7 +919,8 @@ function App() {
           <button className={section === "clusters" ? "on" : ""} onClick={() => nav.root()} title="Clusters"><Icon n="cluster" s={13} /><span className="swlabel">Clusters</span></button>
           {acc.canAnywhere("read", "k8scluster") && <button className={section === "k8s" ? "on" : ""} onClick={() => nav.k8s()} title="Kubernetes"><Icon n="k8s" s={13} /><span className="swlabel">Kubernetes</span></button>}
           {drVisible && <button className={section === "dr" ? "on" : ""} onClick={() => nav.dr()} title="Disaster recovery"><Icon n="shield" s={13} /><span className="swlabel">Disaster recovery</span></button>}
-          <button className={section === "cp" ? "on" : ""} onClick={() => nav.cp()} title="Control plane"><Icon n="host" s={13} /><span className="swlabel">Control plane</span></button>
+          {window.AlertsView && <button className={section === "alerts" ? "on" : ""} onClick={() => nav.alerts()} title="Alerts"><Icon n="bell" s={13} /><span className="swlabel">Alerts</span></button>}
+          {window.MonitorView && <button className={section === "ops" ? "on" : ""} onClick={() => nav.monitor()} title="Tasks and operations"><Icon n="clock" s={13} /><span className="swlabel">Operations</span></button>}
           <button className={"sw-logs" + (section === "logs" ? " on" : "")} onClick={() => nav.logs()} title="Logs"><Icon n="list" s={13} /><span className="swlabel">Logs</span></button>
         </div>}
         {DR_ONLY && <div className="sectionsw">
@@ -873,8 +940,8 @@ function App() {
               <button className="menu-item" onClick={() => nav.root()}><Icon n="cluster" s={13} c="var(--dim)" />All clusters</button>
               {clusters.map(c => (
                 <button key={c.id} className={"menu-item" + (ctxCluster && ctxCluster.id === c.id ? " on" : "")} onClick={() => nav.openCluster(c.id)}>
-                  <Dot c={STATUS_META[c.status].c} /><span style={{flex: 1}}>{c.name}</span>
-                  <span className="badge">{c.siting === "edge" ? "edge" : "dc"}</span>
+                  <Dot c={(STATUS_META[c.phase] || STATUS_META[c.status] || {}).c} /><span style={{flex: 1}}>{c.name}</span>
+                  <span className="mono" style={{fontSize: 10, color: "var(--dim2)"}} title="context · metadata.namespace">{window.MULTI_CTX ? c.ctx + " · " : ""}{c.namespace}</span>
                 </button>
               ))}
             </div>
@@ -882,12 +949,13 @@ function App() {
         </div>}
         <div className="spacer"></div>
         {window.SB_CONFIG.mock && <MockPanel />}
-        {!DR_ONLY && <span className="env"><span className="pulse"></span>control plane healthy</span>}
+        {!DR_ONLY && window.ControlPlanePill && <ControlPlanePill nav={nav} />}
         {DR_ONLY && <span className="env"><span className="pulse"></span>dr-hub</span>}
-        {!DR_ONLY && <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
+        {!DR_ONLY && (window.AlertBell ? <AlertBell nav={nav} clusterId={(path.find(x => x.t === "cluster") || {}).id} /> : <button className="tbtn bellwrap" title={alertCount ? `${alertCount} critical alert(s)` : "No critical alerts"}
           onClick={() => { const s = path.find(x => x.t === "cluster"); if (s) nav.openCluster(s.id); else if (clusters.length) nav.openCluster(clusters.find(c => c.status === "degraded") ? clusters.find(c => c.status === "degraded").id : clusters[0].id); }}>
           <Icon n="bell" s={14} />{alertCount > 0 && <span className="bellbadge">{alertCount > 99 ? "99+" : alertCount}</span>}
-        </button>}
+        </button>)}
+        {!DR_ONLY && window.OpsIndicator && <OpsIndicator nav={nav} />}
         <button className="tbtn" title="Toggle theme" onClick={() => setTheme(theme === "light" ? "dark" : "light")}><Icon n={theme === "light" ? "moon" : "sun"} s={14} /></button>
         <IdentityMenu here={cur.id ? REG[cur.id] : null} />
       </div>
@@ -911,7 +979,23 @@ function App() {
 
       {!acc.state.ready ? <div className="scroll"><div className="lmsg">Resolving your access…</div></div> :
       <ViewBoundary routeKey={viewKey} onReset={() => nav.root()}>
-      {cur.id
+      {cur.t === "site"
+        ? <FleetSiteDetail key={viewKey} seg={cur} nav={nav} rev={rev} />
+        : cur.t === "sites"
+        ? <SitesView key={viewKey} nav={nav} rev={rev} />
+        : cur.t === "access"
+        ? <div className="scroll" key={viewKey}><div className="dhead"><div style={{flex: 1, minWidth: 0}}><h1>Access</h1><div className="mdesc" style={{marginTop: 4}}>Roles, grants, and effective access of this console's users.</div></div></div><AccessView nav={nav} /></div>
+        : cur.t === "clusters" && path.length === 1 && !DR_ONLY && window.DashboardView
+        ? <DashboardView key={viewKey} seg={cur} nav={nav} rev={rev} />
+        : cur.t === "cr"
+        ? <CRView key={viewKey} seg={cur} nav={nav} />
+        : cur.t === "alerts"
+        ? <AlertsView key={viewKey} seg={cur} nav={nav} />
+        : cur.t === "work"
+        ? <WorkItemDetail key={viewKey} seg={cur} nav={nav} />
+        : cur.t === "monitor"
+        ? <MonitorView key={viewKey} seg={cur} nav={nav} scope={path.find(x => x.t === "cluster")} />
+        : cur.id
         ? <DetailView key={viewKey} seg={cur} nav={nav} rev={rev} up={upOne} upLabel={upLabel} />
         : cur.t === "dr"
         ? <DrHubHome key={viewKey} nav={nav} />

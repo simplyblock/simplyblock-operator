@@ -217,12 +217,14 @@ type BackupCredentials struct {
 	// no access key stored anywhere in Kubernetes.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:default=Secret
+	// +k8s:immutable
 	Source BackupCredentialsSource `json:"source"`
 
 	// SecretRef names the Secret holding access_key_id and secret_access_key.
 	// Required when source is Secret, and rejected when source is
 	// ProviderChain.
 	// +optional
+	// +k8s:immutable
 	SecretRef *corev1.LocalObjectReference `json:"secretRef,omitempty"`
 }
 
@@ -263,14 +265,17 @@ type BackupStoreSpec struct {
 	// Endpoint is the S3 endpoint, for example, https://s3.example.com.
 	// +kubebuilder:validation:Pattern=`^https?://[a-zA-Z0-9.-]+(:[0-9]{1,5})?(/.*)?$`
 	// +kubebuilder:validation:Required
+	// +k8s:immutable
 	Endpoint string `json:"endpoint"`
 
 	// Bucket is the bucket backups are written to and read from.
 	// +kubebuilder:validation:Required
+	// +k8s:immutable
 	Bucket string `json:"bucket"`
 
 	// Region is the bucket's region, for endpoints that do not imply one.
 	// +optional
+	// +k8s:immutable
 	Region string `json:"region,omitempty"`
 
 	// CredentialsSecretRef names the Secret holding the access key and the
@@ -281,6 +286,7 @@ type BackupStoreSpec struct {
 	// store that authenticates without a static key has to use Credentials.
 	// Set exactly one of the two.
 	// +optional
+	// +k8s:immutable
 	CredentialsSecretRef *corev1.LocalObjectReference `json:"credentialsSecretRef,omitempty"`
 
 	// Credentials is how this store's endpoint is authenticated to. Replaces
@@ -304,22 +310,6 @@ const (
 	// StorageClusterDeviceClassLogicalBlock is a cluster whose nodes hand over
 	// logical block devices, named by path. The backend accepts them from 26.4.
 	StorageClusterDeviceClassLogicalBlock StorageClusterDeviceClass = "LogicalBlock"
-)
-
-// MetricsBackend selects where the rebalancer reads a node's I/O load from.
-// The values are PascalCase, as every enum this group defines is; v1alpha1
-// spelled them lowercase and the conversion maps between the two.
-// +kubebuilder:validation:Enum=ControlPlane;Prometheus;Uniform
-type MetricsBackend string
-
-const (
-	MetricsBackendControlPlane MetricsBackend = "ControlPlane"
-	MetricsBackendPrometheus   MetricsBackend = "Prometheus"
-
-	// MetricsBackendUniform reports IOPS=1 for every node, which disables
-	// IOPS-based scoring while leaving capacity and volume-count balancing
-	// active.
-	MetricsBackendUniform MetricsBackend = "Uniform"
 )
 
 // BaselineStrategy selects how the per-node latency baseline, the denominator
@@ -373,7 +363,9 @@ type DataRealignmentSettings struct {
 	// migration for as long as the control plane needs, measured at tens of
 	// minutes on a loaded cluster. The trigger annotation bypasses it. Defaults
 	// to 10m.
+	// +kubebuilder:default="10m"
 	// +optional
+	// +simplyblock:advanced
 	Interval *metav1.Duration `json:"interval,omitempty"`
 
 	// MinMoves is how many volume moves accumulate before a realignment is
@@ -382,7 +374,9 @@ type DataRealignmentSettings struct {
 	// trades how promptly the structures are realigned for migration
 	// throughput. The trigger annotation bypasses it.
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=1
 	// +optional
+	// +simplyblock:advanced
 	MinMoves *int32 `json:"minMoves,omitempty"`
 }
 
@@ -400,6 +394,8 @@ type VolumeMigrationSettings struct {
 	// and the rebalancer's latency and baseline Jobs run. It must carry
 	// nvme-cli, and for rebalancing also fio and jq.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	RebalancerImage *string `json:"rebalancerImage,omitempty"`
 
 	// DataRealignment tunes the post-migration realignment.
@@ -418,17 +414,20 @@ type VolumeAutoPlacementSettings struct {
 	// the dry run, and it is spelled as a disable because the behavior it
 	// governs is on by default.
 	// +optional
+	// +simplyblock:advanced
 	DisableMigration *bool `json:"disableMigration,omitempty"`
 
 	// EvaluationInterval is how often the rebalancer evaluates load. Defaults
 	// to 60s.
 	// +optional
+	// +simplyblock:advanced
 	EvaluationInterval *metav1.Duration `json:"evaluationInterval,omitempty"`
 
 	// ImbalanceThreshold is the latency deviation from baseline, in percent, a
 	// node must exceed before it is considered a rebalancing source. Defaults
 	// to 80.
 	// +optional
+	// +simplyblock:advanced
 	ImbalanceThreshold *int32 `json:"imbalanceThreshold,omitempty"`
 
 	// MinHotColdDifferencePct is how far below the hot source, in percentage
@@ -436,29 +435,30 @@ type VolumeAutoPlacementSettings struct {
 	// It is what stops a migration between two near-equally loaded nodes.
 	// Defaults to 20.
 	// +optional
+	// +simplyblock:advanced
 	MinHotColdDifferencePct *int32 `json:"minHotColdDifferencePct,omitempty"`
 
 	// DefaultCoolDownSeconds is how long a volume is left alone after it has
 	// been migrated. Defaults to 600.
 	// +optional
+	// +simplyblock:advanced
 	DefaultCoolDownSeconds *int32 `json:"defaultCoolDownSeconds,omitempty"`
 
 	// MaxVolumeMigrationsPerCycle caps how many volumes one cycle moves.
 	// Defaults to 10.
 	// +optional
+	// +simplyblock:advanced
 	MaxVolumeMigrationsPerCycle *int32 `json:"maxVolumeMigrationsPerCycle,omitempty"`
 
 	// StorageNodeCandidateCount is how many of the most loaded nodes are
 	// evaluated each cycle to find the best source. Defaults to 3.
 	// +optional
+	// +simplyblock:advanced
 	StorageNodeCandidateCount *int32 `json:"storageNodeCandidateCount,omitempty"`
-
-	// MetricsBackend selects the source of I/O metrics. Defaults to Prometheus.
-	// +optional
-	MetricsBackend *MetricsBackend `json:"metricsBackend,omitempty"`
 
 	// PrometheusURL is required when MetricsBackend is Prometheus.
 	// +optional
+	// +simplyblock:advanced
 	PrometheusURL *string `json:"prometheusURL,omitempty"`
 
 	// EnableLatencyBenchmark turns on fio-based NVMe-oF latency measurement
@@ -466,6 +466,7 @@ type VolumeAutoPlacementSettings struct {
 	// rebalancer image that volume migration runs: rebalancerImage under
 	// volumeMigrationSettings, or the operator's own release.
 	// +optional
+	// +simplyblock:advanced
 	EnableLatencyBenchmark *bool `json:"enableLatencyBenchmark,omitempty"`
 
 	// LatencyBenchmarkInterval is how often those Jobs run against each storage
@@ -473,42 +474,50 @@ type VolumeAutoPlacementSettings struct {
 	// is the cadence at which the probe sidecar publishes samples. Defaults to
 	// 5m.
 	// +optional
+	// +simplyblock:advanced
 	LatencyBenchmarkInterval *metav1.Duration `json:"latencyBenchmarkInterval,omitempty"`
 
 	// BaselineStrategy selects how the per-node baseline is derived. Defaults
 	// to RollingWindow.
 	// +optional
+	// +simplyblock:advanced
 	BaselineStrategy *BaselineStrategy `json:"baselineStrategy,omitempty"`
 
 	// BaselineWindow is the look-back the RollingWindow strategy reduces.
 	// Defaults to 6h.
 	// +optional
+	// +simplyblock:advanced
 	BaselineWindow *metav1.Duration `json:"baselineWindow,omitempty"`
 
 	// BaselineColdStart selects what happens to an under-sampled node. Defaults
 	// to PartialWindow.
 	// +optional
+	// +simplyblock:advanced
 	BaselineColdStart *BaselineColdStartPolicy `json:"baselineColdStart,omitempty"`
 
 	// BaselineMinSamples is the sample count below which a node counts as
 	// under-sampled. Defaults to 6.
 	// +optional
+	// +simplyblock:advanced
 	BaselineMinSamples *int32 `json:"baselineMinSamples,omitempty"`
 
 	// BaselineOutlierK is the Hampel-identifier threshold: a sample is rejected
 	// when it lies more than k·1.4826·MAD from the window median, so a lower
 	// value rejects more. Defaults to 3.0.
 	// +optional
+	// +simplyblock:advanced
 	BaselineOutlierK *float64 `json:"baselineOutlierK,omitempty"`
 
 	// IOPSWeight weights per-volume IOPS in the volume I/O score. Defaults to
 	// 1.0.
 	// +optional
+	// +simplyblock:advanced
 	IOPSWeight *float64 `json:"iopsWeight,omitempty"`
 
 	// ThroughputWeight weights per-volume throughput, in MB/s, in the volume
 	// I/O score. Defaults to 0.1.
 	// +optional
+	// +simplyblock:advanced
 	ThroughputWeight *float64 `json:"throughputWeight,omitempty"`
 }
 
@@ -595,6 +604,8 @@ type OpenShiftSpec struct {
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	// +kubebuilder:default=worker
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	MachineConfigPool string `json:"machineConfigPool,omitempty"`
 }
 
@@ -614,6 +625,8 @@ type StorageNodesSpec struct {
 	// Image is the storage-node container image. Defaults to the ControlPlane
 	// singleton's spec.image when unset, so a deployment states the version once.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	Image crdtypes.ImageReference `json:"image,omitempty"`
 
 	// ImagePullPolicy controls when that image is pulled. It defaults to Always
@@ -625,6 +638,8 @@ type StorageNodesSpec struct {
 	// +kubebuilder:validation:Enum=Always;Never;IfNotPresent
 	// +kubebuilder:default=Always
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
 
 	// MgmtInterface is the management network interface storage nodes bind.
@@ -651,6 +666,8 @@ type StorageNodesSpec struct {
 	// SocketsToUse restricts deployment to selected NUMA sockets. Empty means
 	// socket 0 alone.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	SocketsToUse []string `json:"socketsToUse,omitempty"`
 
 	// NodesPerSocket is how many storage nodes run per NUMA socket.
@@ -658,6 +675,7 @@ type StorageNodesSpec struct {
 	// +kubebuilder:default=1
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	NodesPerSocket *int32 `json:"nodesPerSocket,omitempty"`
 
 	// NodeProvisioningBudget limits how many workers may be in the node-add
@@ -669,6 +687,7 @@ type StorageNodesSpec struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:default=1
 	// +optional
+	// +k8s:immutable
 	NodeProvisioningBudget *int32 `json:"nodeProvisioningBudget,omitempty"`
 
 	// EnableJournalDevice dedicates the smallest NVMe device on each node to the
@@ -678,12 +697,14 @@ type StorageNodesSpec struct {
 	// default journal split).
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	EnableJournalDevice *bool `json:"enableJournalDevice,omitempty"`
 
 	// EnableFormat4K formats NVMe devices to a 4K block size where the device
 	// supports it.
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	EnableFormat4K *bool `json:"enableFormat4K,omitempty"`
 
 	// EnableBlockFormat wipes the partition tables and filesystem signatures
@@ -707,21 +728,28 @@ type StorageNodesSpec struct {
 
 	// EnableCpuTopology turns on topology-aware CPU assignment.
 	// +optional
+	// +simplyblock:invisible
 	EnableCpuTopology *bool `json:"enableCpuTopology,omitempty"`
 
 	// ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	ReservedSystemCPU string `json:"reservedSystemCPU,omitempty"`
 
 	// EnableKubeletConfiguration lets the storage node apply the kubelet
 	// configuration changes it needs. Off by default, which is the behavior the
 	// retired skipKubeletConfiguration expressed by being set.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	EnableKubeletConfiguration *bool `json:"enableKubeletConfiguration,omitempty"`
 
 	// UbuntuHost states that the worker's host OS is Ubuntu, which changes how
 	// the node configures huge pages and the kernel modules it loads.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	UbuntuHost *bool `json:"ubuntuHost,omitempty"`
 
 	// Talos states that the workers run Talos Linux: an immutable host with no
@@ -731,6 +759,8 @@ type StorageNodesSpec struct {
 	// sets it from spec.environment, as it sets OpenShift; the node agent reads
 	// it as TALOS_CLUSTER.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	Talos *bool `json:"talos,omitempty"`
 
 	// TalosctlImage is the talosctl image the node runs as a Job on a Talos
@@ -738,6 +768,8 @@ type StorageNodesSpec struct {
 	// a deployment pins it to the cluster's Talos minor, or to a mirror on an
 	// air-gapped site. It is spec.images.talosctl on the deployment config.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	TalosctlImage string `json:"talosctlImage,omitempty"`
 
 	// TalosMachineConfig is who writes a Talos worker's machine config: the
@@ -750,6 +782,8 @@ type StorageNodesSpec struct {
 	// the Talos API access feature issues. Read only when Talos is stated; the
 	// node agent reads it as TALOS_MACHINE_CONFIG.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	TalosMachineConfig TalosMachineConfigMode `json:"talosMachineConfig,omitempty"`
 
 	// OpenShift is what this deployment states because it runs on OpenShift,
@@ -759,15 +793,18 @@ type StorageNodesSpec struct {
 
 	// Tolerations are applied to the storage-node pods.
 	// +optional
+	// +k8s:immutable
 	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
 
 	// ContainerResources sets requests and limits for the storage-node container.
 	// Unset enforces no limits.
 	// +optional
+	// +k8s:immutable
 	ContainerResources corev1.ResourceRequirements `json:"containerResources,omitempty"`
 
 	// InitContainerResources does the same for the init container.
 	// +optional
+	// +k8s:immutable
 	InitContainerResources corev1.ResourceRequirements `json:"initContainerResources,omitempty"`
 }
 
@@ -809,6 +846,7 @@ type StretchedSpec struct {
 	// means the same as peerSite.
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
+	// +simplyblock:operatorManaged
 	PeerCluster string `json:"peerCluster,omitempty"`
 
 	// Role is Leader or Follower. A leader creates and activates the backend
@@ -816,6 +854,7 @@ type StretchedSpec struct {
 	// cluster and manages only its own site's nodes. A change is a role swap,
 	// delivered from the hub.
 	// +kubebuilder:validation:Required
+	// +simplyblock:operatorManaged
 	Role StretchedRole `json:"role"`
 }
 
@@ -891,6 +930,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:validation:Minimum=10
 	// +kubebuilder:validation:Maximum=500
 	// +optional
+	// +k8s:immutable
 	MaxSubsystemCount *int32 `json:"maxSubsystemCount,omitempty"`
 
 	// VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -906,6 +946,7 @@ type StorageClusterSpec struct {
 	// every cluster except a supercluster.
 	// +kubebuilder:validation:Minimum=4
 	// +optional
+	// +k8s:immutable
 	VCPUCount *int32 `json:"vcpuCount,omitempty"`
 
 	// MinHugePagesSize is the smallest huge-page allocation each storage node
@@ -915,6 +956,7 @@ type StorageClusterSpec struct {
 	// count requires, so simplyblock takes more when it needs more. Omitted,
 	// the computed minimum is used.
 	// +optional
+	// +k8s:immutable
 	MinHugePagesSize string `json:"minHugePagesSize,omitempty"`
 
 	// Stripe is the erasure-coding layout every volume in the cluster is
@@ -935,6 +977,8 @@ type StorageClusterSpec struct {
 	// once at cluster-add, so an edit moves the next attach onto the named
 	// interface.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	ClientDataIfname string `json:"clientDataIfname,omitempty"`
 
 	// NvmfBasePort is the base of the NVMe-oF port range every node binds.
@@ -947,6 +991,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=4420
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	NvmfBasePort *int32 `json:"nvmfBasePort,omitempty"`
 
 	// RpcBasePort is the base of the RPC port range every node binds. Its
@@ -956,6 +1001,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=8080
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	RpcBasePort *int32 `json:"rpcBasePort,omitempty"`
 
 	// SnodeApiPort is the port each node's storage-node API listens on. Its
@@ -965,6 +1011,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=50001
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	SnodeApiPort *int32 `json:"snodeApiPort,omitempty"`
 
 	// EnableFailureDomains opts the cluster into failure-domain mode, where
@@ -991,6 +1038,7 @@ type StorageClusterSpec struct {
 	// cluster leaves it unset. Requires enableSyncReplication, and cannot be added
 	// to or removed from an existing cluster.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedSpec `json:"stretched,omitempty"`
 
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -1015,6 +1063,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:advanced
 	EnableChecksumValidation *bool `json:"enableChecksumValidation,omitempty"`
 
 	// EnableAtomicity4K enforces 4K write atomicity on devices that report a
@@ -1040,6 +1089,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=false
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	EnableAtomicity4K *bool `json:"enableAtomicity4K,omitempty"`
 
 	// EnableMetadataJournal journals the lvstore's metadata pages, so a write
@@ -1056,6 +1106,7 @@ type StorageClusterSpec struct {
 	// +kubebuilder:default=true
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:invisible
 	EnableMetadataJournal *bool `json:"enableMetadataJournal,omitempty"`
 
 	// DeviceClass is the class of backend storage every node in this cluster
@@ -1128,10 +1179,12 @@ type StorageClusterSpec struct {
 	// cannot be turned off, since a drain, a rebalance, and a device
 	// replacement are all performed by moving volumes.
 	// +optional
+	// +simplyblock:advanced
 	DisableDataRealignment *bool `json:"disableDataRealignment,omitempty"`
 
 	// EnableVolumeAutoPlacement turns on automatic, latency-driven rebalancing.
 	// +optional
+	// +simplyblock:advanced
 	EnableVolumeAutoPlacement *bool `json:"enableVolumeAutoPlacement,omitempty"`
 
 	// VolumeMigrationSettings controls how volume migration and the
@@ -1163,6 +1216,7 @@ type StorageClusterSpec struct {
 	// grants may continue alone. Without it a Dual cluster tolerates the loss
 	// of either node without arbitration. Only valid when clusterMode is Dual.
 	// +optional
+	// +simplyblock:invisible
 	EnableArbitration *bool `json:"enableArbitration,omitempty"`
 
 	// Arbitration tunes the two-node arbitration that enableArbitration turns
@@ -1185,12 +1239,15 @@ type StorageClusterSpec struct {
 	// created. Set at creation and never changed.
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	SuperclusterRef string `json:"superclusterRef,omitempty"`
 
 	// DisablePlacement stops new volumes being placed in this member. Volumes
 	// already in it stay where they are and keep working. Valid only on a
 	// member.
 	// +optional
+	// +simplyblock:advanced
 	DisablePlacement *bool `json:"disablePlacement,omitempty"`
 
 	// ServiceClasses are the I/O service classes volumes are placed in, and the
@@ -1216,6 +1273,7 @@ type ServiceClassesSpec struct {
 	// +kubebuilder:validation:Maximum=1000
 	// +kubebuilder:default=100
 	// +optional
+	// +simplyblock:advanced
 	DefaultWeight *int32 `json:"defaultWeight,omitempty"`
 
 	// Classes are the service classes besides Default. A class keeps the
@@ -1225,6 +1283,7 @@ type ServiceClassesSpec struct {
 	// +listMapKey=name
 	// +kubebuilder:validation:MaxItems=5
 	// +optional
+	// +simplyblock:advanced
 	Classes []ServiceClass `json:"classes,omitempty"`
 
 	// ReplicationShare is the percentage of I/O scheduling given to snapshot
@@ -1236,6 +1295,7 @@ type ServiceClassesSpec struct {
 	// +kubebuilder:validation:Maximum=74
 	// +kubebuilder:default=10
 	// +optional
+	// +simplyblock:advanced
 	ReplicationShare *int32 `json:"replicationShare,omitempty"`
 }
 
@@ -1438,6 +1498,7 @@ type StorageClusterStatus struct {
 	// Stretched is this site's view of its stretched cluster, read from the
 	// control plane; set only when spec.stretched is.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedStatus `json:"stretched,omitempty"`
 
 	// Role is what this cluster is within a supercluster: Standalone,
@@ -1515,6 +1576,8 @@ type SuperclusterPlacement struct {
 	// MostAvailableCapacity.
 	// +kubebuilder:default=MostAvailableCapacity
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	Strategy PlacementStrategy `json:"strategy,omitempty"`
 }
 
@@ -1697,6 +1760,8 @@ type StorageNetworkSpec struct {
 	// With data networks, the RPC stays on that interface and the data moves to the
 	// networks' interfaces, whose addresses are stable, so no Service is kept.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	PodNetwork bool `json:"podNetwork,omitempty"`
 
 	// SpdkOnHostNetwork runs the SPDK pods on the host network, where they bind
@@ -1704,6 +1769,8 @@ type StorageNetworkSpec struct {
 	// do not agree on what their NICs are called: each node names its own in
 	// its spec.config.dataInterfaces, which is allowed only in this mode.
 	// +optional
+	// +k8s:immutable
+	// +simplyblock:advanced
 	SpdkOnHostNetwork bool `json:"spdkOnHostNetwork,omitempty"`
 
 	// Data are the Multus networks the storage nodes serve volumes on, each a

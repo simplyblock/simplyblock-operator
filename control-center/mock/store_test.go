@@ -6,7 +6,7 @@ import (
 )
 
 func testDef() ResourceDef {
-	return def(sbGroup, "v1alpha1", "storagenodeops", "StorageNodeOps", true)
+	return def(sbGroup, "v1alpha2", "storagenodeops", "StorageNodeOps", true)
 }
 
 func newTestStore() *Store {
@@ -29,7 +29,7 @@ func TestCreateGetUpdateDelete(t *testing.T) {
 	if getStr(created, "metadata.uid") == "" || getStr(created, "metadata.resourceVersion") == "" {
 		t.Fatalf("create did not fill identity fields: %v", created["metadata"])
 	}
-	if getStr(created, "apiVersion") != "storage.simplyblock.io/v1alpha1" {
+	if getStr(created, "apiVersion") != "storage.simplyblock.io/v1alpha2" {
 		t.Fatalf("wrong apiVersion %q", getStr(created, "apiVersion"))
 	}
 

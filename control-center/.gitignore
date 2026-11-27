@@ -1,0 +1,3 @@
+# npm installs the Babel toolchain, React, and the typefaces here (package.json);
+# they are build inputs, never committed.
+node_modules/

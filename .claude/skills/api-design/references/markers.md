@@ -71,6 +71,57 @@ A doc comment reading `// Immutable.` is the spelling that enforces nothing.
 and `check-crds.py` reports every field that claims immutability in prose without
 backing it.
 
+## The simplyblock field markers
+
+Three markers of this repository's own describe a field to the Control Center.
+controller-gen ignores them. `make manifests` runs `hack/fieldmarkers` after it,
+which resolves each marked field to its path per API version and writes the
+list onto the CRD as an annotation. An annotation is the carrier because the API
+server drops any schema key it does not know, and an annotation on the CRD
+object survives into the cluster, where the console reads it.
+
+| Marker                         | CRD annotation                           | In the Control Center                                            |
+|--------------------------------|------------------------------------------|------------------------------------------------------------------|
+| `+simplyblock:operatorManaged` | `simplyblock.io/operator-managed-fields` | Badged `operator-managed` and locked, as an immutable field is   |
+| `+simplyblock:advanced`        | `simplyblock.io/advanced-fields`         | Left out of Essentials, shown and edited in Everything           |
+| `+simplyblock:invisible`       | `simplyblock.io/invisible-fields`        | Left out of Essentials and the Everything tree, kept in the YAML |
+
+```go
+// Owner is the StorageCluster this record belongs to. The operator sets it.
+// +simplyblock:operatorManaged
+// +optional
+Owner string `json:"owner,omitempty"`
+```
+
+A marker applies to the field and everything below it, and to every kind and
+version that reaches the field, through a pointer, a list, a map, or an inline
+embed. The annotation value is JSON keyed by version,
+`{"v1alpha2":["spec.owner"]}`. A misspelled `+simplyblock:` marker fails
+`make manifests` instead of being skipped.
+
+**What Essentials lists.** Every spec field the CRD has, whether it is set or
+not: a scalar, a list of scalars, or a string map. Top-level fields come first,
+then nested ones, each in natural order, so `port2` precedes `port10` and every
+block stays together. A field inside a list of objects is not listed, because its path
+names a field of every element. The curated headlines in
+`control-center/cr-headlines.jsx` only decorate the fields they name, with a
+label, a format, or a link, and one the CRD no longer has is dropped. So a new
+field reaches Essentials without an edit to the console, and keeping it out is
+a marker on the field: `advanced` for a setting few need, `invisible` for one
+nobody should see.
+
+**What Everything lists.** The spec tree shows every field the CRD has, set or
+not, advanced ones included, and edits each in place as Essentials does. A
+list of objects or a map of them is shown as the object holds it. Unset blocks
+are collapsed. The status tree shows what the operator wrote, read-only.
+
+**None of the markers is enforced at admission.** `operatorManaged` stops an edit in
+the console only, and `kubectl` can still change the field. A field a user must not
+change belongs in `status`, or needs the webhook check that compares the old
+and new values for a requester that is not the operator (`isOperator` in
+`internal/webhook/storagenode_validator.go`). `advanced` and `invisible` hide
+nothing from anyone who can read the object.
+
 ## Cross-field rules worth writing
 
 CEL runs at admission, which is the cheapest place to say no:

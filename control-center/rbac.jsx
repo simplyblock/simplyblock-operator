@@ -98,6 +98,23 @@ async function loadAccessK8s() {
     rules: {cluster: norm, ns: {}}, incomplete: !!rules.incomplete, grants: [], scopes: null, demoUsers: [], k8sRules: true});
 }
 
+// The storage objects live in whatever namespaces hold StorageClusters, so
+// the API server is asked for the caller's rules in each of them; a rule set
+// the operator's access view returned for a namespace is kept as is.
+async function loadStorageNamespaceRules() {
+  let targets = [{ns: NS(), ctx: LOCAL_CTX}];
+  try { const w = await world(); targets = targets.concat(w.clusters.map(c => ({ns: c.metadata.namespace, ctx: c.__ctx || LOCAL_CTX}))); } catch (e) {}
+  const keyOf = t => t.ctx !== LOCAL_CTX ? `${t.ctx}:${t.ns}` : t.ns;
+  const seen = new Set();
+  await Promise.all(targets.filter(t => t.ns && !seen.has(keyOf(t)) && seen.add(keyOf(t))).map(async t => {
+    if (AC_STATE.rules.ns[keyOf(t)]) return;
+    try {
+      const r = await review.rules(t.ns, t.ctx);
+      AC_STATE.rules.ns[keyOf(t)] = (r.resourceRules || []).map(x => ({apiGroups: x.apiGroups || [""], resources: x.resources || [], verbs: x.verbs || [], resourceNames: x.resourceNames}));
+      if (r.incomplete) AC_STATE.incomplete = true;
+    } catch (e) {}
+  }));
+}
 async function loadAccess() {
   try {
     if (DR_MODE()) { await loadAccessK8s(); acNotify(); return; }
@@ -110,6 +127,7 @@ async function loadAccess() {
     try { await loadAccessK8s(); }
     catch (e2) { Object.assign(AC_STATE, {ready: true, error: e, user: null, rules: {cluster: [], ns: {}}, grants: [], scopes: null}); }
   }
+  await loadStorageNamespaceRules();
   acNotify();
 }
 
@@ -118,6 +136,12 @@ const clusterIdsOf = o => [...new Set([o.kind === "cluster" ? o.id : null, o.clu
 function nsOf(entity, o, op) {
   const N = AC_STATE.ns;
   if (!o) return entity === "k8scluster" || entity === "binding" ? ["*"] : [];
+  // an object read from the Kubernetes API is judged in its own namespace,
+  // which is where the API server judges it too
+  // a namespace of another context is keyed by the context, since each API server has its own rules
+  const ownNs = o.namespace || (o.k8s && o.k8s.namespace);
+  const own = ownNs && o.ctx && o.ctx !== LOCAL_CTX ? `${o.ctx}:${ownNs}` : ownNs;
+  if (own && op !== "create" && !["k8scluster", "binding", "role", "labelrequest", "replicationpolicy", "drpolicy"].includes(entity)) return [own];
   if (entity === "k8scluster") {
     if (op === "create") return ["*"];                                   // create nodepoolallocations is cluster-scoped
     const ids = o.kind === "k8sc" ? [o.id] : (o.k8sClusterIds || (o.k8sClusterId ? [o.k8sClusterId] : []));
@@ -149,7 +173,9 @@ function scopeNamespaces(sc) {
 }
 
 // ---- rule evaluation (SSRR, local) --------------------------------------------
-const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "simplyblock.io") || (r.apiGroups || []).includes("*"))
+// the operator's group is storage.simplyblock.io; the bare simplyblock.io is the
+// legacy spelling some grants still carry
+const ruleAllows = (r, verb, resource, group, name) => ((r.apiGroups || []).includes(group || "storage.simplyblock.io") || (!group && (r.apiGroups || []).includes("simplyblock.io")) || (r.apiGroups || []).includes("*"))
   && (r.resources.includes(resource) || r.resources.includes("*")) && (r.verbs.includes(verb) || r.verbs.includes("*"))
   && (!r.resourceNames || !name || r.resourceNames.includes(name));
 function allowedIn(ns, verb, resource, group, name) {
@@ -264,6 +290,8 @@ function IdentityMenu({here}) {
             <span style={{color: "var(--dim2)"}}>via {g.subject.kind.toLowerCase()} {g.subject.name.replace(/^oidc:/, "")}</span>
           </div>) : <div style={{color: "var(--dim)", fontSize: 12}}>{here ? "No RoleBinding reaches this namespace — if you can see the object, you are reading it through a wider scope." : "No cluster-scoped binding."}</div>}
         </div>
+        {(a.canAnywhere("read", "binding") || a.canAnywhere("read", "role")) && window.__nav && window.__nav.access && <div className="idsec">
+          <button className="idpick" onClick={() => { setOpen(false); window.__nav.access(); }}><Icon n="lock" s={13} /><span>Access control: roles and grants</span></button></div>}
         {!!s.demoUsers.length && <div className="idsec"><h4>View as <span style={{color: "var(--dim2)", fontWeight: 400}}>fixture backend — stands in for impersonation</span></h4>
           {s.demoUsers.map(u => <button key={u.name} className={"idpick" + (u.name === s.user ? " on" : "")} onClick={() => {
             localStorage.setItem("sb.viewas", u.name); setOpen(false); a.load().then(() => window.dispatchEvent(new Event("sb:access")));

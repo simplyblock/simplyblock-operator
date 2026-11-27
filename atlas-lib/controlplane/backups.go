@@ -11,6 +11,8 @@
 package controlplane
 
 import (
+	"strconv"
+	"regexp"
 	"context"
 	"fmt"
 	"net/http"
@@ -261,6 +263,63 @@ func (c *Client) BackupPolicyByName(ctx context.Context, clusterID, name string)
 		}
 	}
 	return BackupPolicy{}, fmt.Errorf("backup policy %q in cluster %s: %w", name, clusterID, errs.ErrNotFound)
+}
+
+// Retention is what a tiered schedule keeps: how many backups in all, and how
+// far back the oldest reaches.
+type Retention struct {
+	MaxVersions int32
+	MaxAge      string
+}
+
+// scheduleTier is one "<interval>,<keep>" pair of a tiered schedule.
+var scheduleTier = regexp.MustCompile(`^(\d+)([mhdw]),(\d+)$`)
+
+// minutesPerUnit is the control plane's schedule units, in minutes.
+var minutesPerUnit = map[string]int64{"m": 1, "h": 60, "d": 1440, "w": 10080}
+
+// ScheduleRetention reads the retention a tiered schedule states, so a caller
+// has one statement of it rather than two that can disagree. The schedule is a
+// space-separated list of "<interval>,<keep>" pairs with units m, h, d, and w:
+// "15m,4 60m,11 24h,7" keeps four quarter-hourly, eleven hourly, and seven
+// daily backups. MaxVersions is every tier's keep count added up (22), and
+// MaxAge is the reach of the tier that goes furthest back (7d), in the largest
+// of days, hours, or minutes that divides it evenly; weeks are used only when
+// that tier itself counts in weeks, so a daily tier reads as days. An empty
+// schedule is no limit by either.
+func ScheduleRetention(schedule string) (Retention, error) {
+	var r Retention
+	var reachMinutes int64
+	units := []string{"d", "h", "m"}
+	for _, tier := range strings.Fields(schedule) {
+		m := scheduleTier.FindStringSubmatch(tier)
+		if m == nil {
+			return Retention{}, fmt.Errorf("schedule %q: %q is not an <interval>,<keep> pair with a unit of m, h, d, or w", schedule, tier)
+		}
+		interval, _ := strconv.ParseInt(m[1], 10, 64)
+		keep, _ := strconv.ParseInt(m[3], 10, 64)
+		if interval == 0 || keep == 0 {
+			return Retention{}, fmt.Errorf("schedule %q: %q has a zero interval or keep count", schedule, tier)
+		}
+		r.MaxVersions += int32(keep)
+		if reach := interval * keep * minutesPerUnit[m[2]]; reach > reachMinutes {
+			reachMinutes = reach
+			if m[2] == "w" {
+				units = []string{"w", "d", "h", "m"}
+			} else {
+				units = []string{"d", "h", "m"}
+			}
+		}
+	}
+	if reachMinutes > 0 {
+		for _, unit := range units {
+			if reachMinutes%minutesPerUnit[unit] == 0 {
+				r.MaxAge = fmt.Sprintf("%d%s", reachMinutes/minutesPerUnit[unit], unit)
+				break
+			}
+		}
+	}
+	return r, nil
 }
 
 // CreateBackupPolicyParams are the inputs for creating a backup policy. Only

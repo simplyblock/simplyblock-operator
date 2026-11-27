@@ -1,55 +1,6 @@
-function PoolDetail({o: p, nav}) {
-  return (
-    <div>
-      <DetailHead obj={p} title={p.name} badge={<><span className="badge">storage pool</span>
-        {p.dhchap && <span className="badge" style={{color: "var(--ro)", borderColor: "color-mix(in srgb,var(--ro) 45%,transparent)"}}>dhchap bi-dir</span>}
-        {!p.enabled && <span className="badge" style={{color: "var(--warn)", borderColor: "color-mix(in srgb,var(--warn) 45%,transparent)"}}>disabled</span>}</>} />
-      {p.dhchap && <div className="banner" style={{color: "var(--ro)", background: "color-mix(in srgb,var(--ro) 7%,var(--panel))", borderColor: "color-mix(in srgb,var(--ro) 35%,transparent)"}}>
-        <Icon n="lock" s={15} /><span><b>Bi-directional DH-CHAP.</b> Host and subsystem authenticate each other on every connection. It was set when the pool was created and cannot be turned off — a pool without mutual authentication has to be created separately.</span></div>}
-      {!p.enabled && <div className="banner" style={{color: "var(--warn)", background: "color-mix(in srgb,var(--warn) 8%,var(--panel))", borderColor: "color-mix(in srgb,var(--warn) 35%,transparent)"}}>
-        <Icon n="alert" s={15} /><span><b>Pool disabled.</b> Existing volumes keep serving I/O normally — only provisioning of new volumes into this pool is blocked.</span></div>}
-      <div className="stats">
-        <Stat k="Volumes" v={p.counts.volumes} s={`${p.counts.volumesOnline} online`} />
-        <Stat k="Provisioned" v={fmtBytes(p.capacity.total)} />
-        <Stat k="Utilized" v={fmtBytes(p.capacity.used)} s={pct(p.capacity.used, p.capacity.total).toFixed(0) + "% of provisioned"} />
-        <Stat k="Volume data" v={fmtBytes(p.lvolBytes)} />
-        <Stat k="Snapshot data" v={fmtBytes(p.snapshotBytes)} s={`${p.counts.snapshots} snapshots`} />
-        <Stat k="Backup chains" v={p.counts.backups} />
-      </div>
-      <div className="sech"><h2>Drill down</h2><span className="ln"></span></div>
-      <div className="navcards">
-        <NavCard icon="volume" title="Logical volumes" sub="in this pool" count={p.counts.volumes} onClick={() => nav.layer(p, "volumes")} />
-        <NavCard icon="camera" title="Snapshots" sub="scoped to this pool" count={p.counts.snapshots} onClick={() => nav.layer(p, "snapshots")} />
-        <NavCard icon="cloud" title="Backups" sub="scoped to this pool" count={p.counts.backups} onClick={() => nav.layer(p, "backups")} />
-        {p.counts.storageClasses > 0 && <NavCard icon="k8s" title="StorageClasses" sub="generated from this pool" count={p.counts.storageClasses} onClick={() => nav.layer(p, "storageclasses")} />}
-      </div>
-      <div className="dcols">
-        <div className="card"><h3>Pool properties</h3><div className="bd" style={{paddingTop: 2, paddingBottom: 2}}>
-          <Props rows={[
-            ["Name", p.name], ["State", <TrafficLight status={p.status} />],
-            ["Provisioning", p.enabled ? "allowed" : "blocked — pool disabled"],
-            ["Node affinity", "none — pools are cluster-wide and carry no primary, secondary or tertiary node"],
-            ["StorageClasses", p.storageClasses.length
-              ? <span style={{display: "flex", flexDirection: "column", gap: 3, alignItems: "flex-end"}}>
-                  {p.storageClasses.map(sc => (
-                    <span key={sc.uuid} style={{display: "flex", gap: 7, alignItems: "baseline"}}>
-                      <em style={{fontStyle: "normal", color: "var(--dim2)", fontSize: 10.5}}>{sc.k8s_cluster}</em>
-                      <Ref onClick={() => nav.openStorageClass(sc.uuid)} label={sc.name} />
-                    </span>
-                  ))}
-                </span>
-              : null],
-            ["Cluster", <Ref onClick={() => nav.openCluster(p.clusterId)} label={regName(p.clusterId)} />],
-            ["Volumes", p.counts.volumes], ["Provisioned", fmtBytes(p.capacity.total)],
-            ["Volume data", fmtBytes(p.lvolBytes)], ["Snapshot data", fmtBytes(p.snapshotBytes)],
-            ["Utilized", `${fmtBytes(p.capacity.used)} · ${pct(p.capacity.used, p.capacity.total).toFixed(0)}%`]
-          ]} /></div></div>
-        <div className="card"><h3>Quality of service</h3><div className="bd"><QosProps qos={p.qos} fallback="No QoS limits configured on this pool." /></div></div>
-      </div>
-    </div>
-  );
-}
-
+// Detail pages of the data layers: logical volumes, snapshots, backups, and
+// backup policies, plus the detail dispatch. The storage kinds' pages live in
+// storage-views.jsx.
 function VolumeDetail({o: v, nav}) {
   const nref = (r, label) => r ? [label, <Ref onClick={() => nav.openNode(v.clusterId, r.uuid)} label={r.hostname} />] : [label, null];
   const primaryIp = v.nodes.primary && REG[v.nodes.primary.uuid] ? REG[v.nodes.primary.uuid].ip : (v.nodes.primary ? v.nodes.primary.hostname : "—");
@@ -343,4 +294,4 @@ const Detail = ({obj, nav}) => {
   return C ? <C o={obj} nav={nav} /> : null;
 };
 
-Object.assign(window, {PoolDetail, VolumeDetail, VolumeReplicationCard, SnapshotDetail, BackupDetail, PolicyDetail, Detail});
+Object.assign(window, {VolumeDetail, VolumeReplicationCard, SnapshotDetail, BackupDetail, PolicyDetail, Detail});

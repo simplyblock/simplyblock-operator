@@ -34,17 +34,20 @@ go run . --serve-ui ..                             # + serve the console itself:
 go test ./...
 ```
 
-| Flag | Default | Meaning |
-|---|---|---|
-| `--listen` | `:8080` | listen address |
-| `--dataset` | `auto` | `small-healthy`, `medium-degraded`, `large-scale`, `dr-failover`, `chaos`, or `auto` (seeded random pick) |
-| `--seed` | random | same seed + dataset = byte-identical world |
-| `--namespace` | `simplyblock` | the control-plane (system) namespace; storage objects live in `sb-sc-<cluster>`, not here (design name: `simplyblock-system`) |
-| `--sim-interval` | `4s` | simulator tick; `0` disables it (drive ticks via `/mockctl/advance`) |
-| `--fail-rate` | `0.1` | probability a simulated operation ends `Failed` |
-| `--viewer` | `global` | authorization stand-in for the impersonated user: `global`, `none`, or `<sb:role>@<namespace>[,...]` — see PARADIGM.md |
-| `--serve-ui` | — | directory with the console's `index.html`; also mounts `/k8s`, `/operator`, `/prometheus` and generates `/config.js` |
-| `--operator-fixtures` | — | JSON fixtures for the operator API (below) |
+| Flag                    | Default                           | Meaning                                                                                                                                                                                                      |
+|-------------------------|-----------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `--listen`              | `:8080`                           | listen address                                                                                                                                                                                               |
+| `--dataset`             | `auto`                            | `small-healthy`, `medium-degraded`, `large-scale`, `dr-failover`, `chaos`, or `auto` (seeded random pick)                                                                                                    |
+| `--seed`                | random                            | same seed + dataset = byte-identical world                                                                                                                                                                   |
+| `--contexts`            | —                                 | several Kubernetes contexts in one process, `name=dataset[:label=value;...]` separated by commas, each served under `/k8s/<name>/` and named in `/config.js`; the first is also the local context at `/k8s/` |
+| `--namespace`           | `simplyblock`                     | the control-plane (system) namespace; storage objects live in `sb-sc-<cluster>`, not here (design name: `simplyblock-system`)                                                                                |
+| `--sim-interval`        | `4s`                              | simulator tick; `0` disables it (drive ticks via `/mockctl/advance`)                                                                                                                                         |
+| `--fail-rate`           | `0.1`                             | probability a simulated operation ends `Failed`                                                                                                                                                              |
+| `--viewer`              | `global`                          | authorization stand-in for the impersonated user: `global`, `none`, or `<sb:role>@<namespace>[,...]` — see PARADIGM.md                                                                                       |
+| `--crd-dir`             | `../../operator/config/crd/bases` | directory with the operator's CRD YAMLs, served as `apiextensions.k8s.io/v1` objects; empty or missing serves none                                                                                           |
+| `--crd-reload-interval` | `2s`                              | how often `--crd-dir` is polled; a changed, added, or removed file updates, creates, or deletes its CRD (with the watch event) without a restart; `0` loads once                                             |
+| `--serve-ui`            | —                                 | directory with the console's `index.html`; also mounts `/k8s`, `/operator`, `/prometheus` and generates `/config.js`                                                                                         |
+| `--operator-fixtures`   | —                                 | JSON fixtures for the operator API (below)                                                                                                                                                                   |
 
 ### Access / authorization endpoints
 
@@ -81,6 +84,11 @@ deploys the mock next to the console and wires those overrides automatically.
   overflow so clients relist), label selectors (equality, existence, set-based)
   and dotted-path field selectors
 - `/status` subresources (writes apply to the object) and `pods/{name}/log`
+- the operator pod's log (`app=simplyblock-operator`) is what the simulator
+  wrote about the operations it drove, one reconcile line per move in the
+  shape controller-runtime's console encoder gives it, the object's key
+  included, so the console's activity view filters it as on a cluster
+  (`operatorlog.go`); every other pod's log is a generic tail
 - `metadata.generation` bumps only on spec changes; UI-created objects get
   fresh `uid`/`creationTimestamp`
 
@@ -101,18 +109,18 @@ its logged `dataset=… seed=…` line.
 
 ## The admin API
 
-| Endpoint | Purpose |
-|---|---|
-| `GET /mockctl/info` | dataset, seed, object counts, and **unmocked operator-API requests** |
-| `POST /mockctl/reset?dataset=chaos&seed=7` | rebuild the world (watches are closed so clients relist) |
-| `POST /mockctl/advance?ticks=5` | run simulator ticks on demand — run with `--sim-interval=0` for fully deterministic e2e tests |
+| Endpoint                                   | Purpose                                                                                       |
+|--------------------------------------------|-----------------------------------------------------------------------------------------------|
+| `GET /mockctl/info`                        | dataset, seed, object counts, and **unmocked operator-API requests**                          |
+| `POST /mockctl/reset?dataset=chaos&seed=7` | rebuild the world (watches are closed so clients relist)                                      |
+| `POST /mockctl/advance?ticks=5`            | run simulator ticks on demand — run with `--sim-interval=0` for fully deterministic e2e tests |
 
 ## Operator-API fixtures
 
 The `/operator/v1/*` surface is still settling, so it is fixture-driven: a
 request for `GET /v1/foo/bar` serves `<fixtures>/v1/foo/bar.json` (then
 `bar/index.json`; writes first try `bar.post.json` etc.). Anything unmatched
-answers `{"status":"success","data":[]}` and is recorded — check
+answers `{"results":[]}`, which the console reads as an empty collection, and is recorded — check
 `/mockctl/info`'s `unmockedOperatorRequests` after clicking through the UI to
 see exactly which endpoints still need fixture files. That list is the to-do
 list.

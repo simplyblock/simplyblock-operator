@@ -386,8 +386,8 @@ func TestGroupsMergedByAnEditKeepTheirHiddenSettings(t *testing.T) {
 	b := fixture(t, nil)
 	g := b.CDC.Spec.NodeSets[0].Groups[0]
 	first, second := *g.DeepCopy(), *g.DeepCopy()
-	first.Name, first.Workers, first.SpdkSystemMemory = "group-a", []string{"worker-01"}, "8G"
-	second.Name, second.Workers, second.SpdkSystemMemory = "group-b", []string{"worker-02", "worker-03"}, "8G"
+	first.Name, first.Workers, first.ReservedSystemCPU = "group-a", []string{"worker-01"}, "0,1"
+	second.Name, second.Workers, second.ReservedSystemCPU = "group-b", []string{"worker-02", "worker-03"}, "0,1"
 	b.CDC.Spec.NodeSets[0].Groups = []simplyblockv1alpha2.NodeGroup{first, second}
 
 	built, err := Build(b, Prefill(b))
@@ -395,20 +395,20 @@ func TestGroupsMergedByAnEditKeepTheirHiddenSettings(t *testing.T) {
 		t.Fatalf("build: %v", err)
 	}
 	groups := built.Spec.NodeSets[0].Groups
-	if len(groups) != 1 || groups[0].SpdkSystemMemory != "8G" {
+	if len(groups) != 1 || groups[0].ReservedSystemCPU != "0,1" {
 		t.Errorf("two groups with the same choices and settings came back as %+v", groups)
 	}
 
-	b.CDC.Spec.NodeSets[0].Groups[1].SpdkSystemMemory = "16G"
+	b.CDC.Spec.NodeSets[0].Groups[1].ReservedSystemCPU = "0-3"
 	built, err = Build(b, Prefill(b))
 	if err != nil {
 		t.Fatalf("build: %v", err)
 	}
-	memory := map[string]bool{}
+	reserved := map[string]bool{}
 	for _, g := range built.Spec.NodeSets[0].Groups {
-		memory[g.SpdkSystemMemory] = true
+		reserved[g.ReservedSystemCPU] = true
 	}
-	if !memory["8G"] || !memory["16G"] {
+	if !reserved["0,1"] || !reserved["0-3"] {
 		t.Errorf("groups with different settings were merged: %+v", built.Spec.NodeSets[0].Groups)
 	}
 }

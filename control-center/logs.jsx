@@ -171,13 +171,12 @@ function LogsView({nav}) {
     window.addEventListener("sb-logs-query", h);
     return () => window.removeEventListener("sb-logs-query", h);
   }, []);
-  // keep the URL in step: the address bar is the permalink of what is shown
+  // keep the URL in step: the address bar is the permalink of what is shown.
+  // The filter rewrites the explorer's own history entry; leaving the explorer
+  // leaves that entry as it is, so Back returns to the same query.
   useEffect(() => {
     try { window.history.replaceState(null, "", window.location.pathname + window.location.search + hashOfFilter(f)); } catch (e) {}
   }, [f]);
-  useEffect(() => () => {
-    try { if (/^#logs\b/.test(window.location.hash)) window.history.replaceState(null, "", window.location.pathname + window.location.search); } catch (e) {}
-  }, []);
   const store = graylogOn();
   return (
     <div className="scroll">
