@@ -117,9 +117,11 @@ func fastOptions() Options {
 		Poll: time.Millisecond, Timeout: 50 * time.Millisecond, Settle: time.Nanosecond}
 }
 
-func localControlPlane(image string) *simplyblockv1alpha2.ControlPlane {
+// sourceControlPlane is a local control plane still on the source release.
+func sourceControlPlane() *simplyblockv1alpha2.ControlPlane {
+	const image crdtypes.ImageReference = "quay.io/simplyblock-io/simplyblock:26.4.0-beta6.1"
 	cp := &simplyblockv1alpha2.ControlPlane{ObjectMeta: metav1.ObjectMeta{Name: controlPlaneName, Namespace: ns}}
-	cp.Spec.Source.Local = &simplyblockv1alpha2.LocalControlPlane{Image: crdtypes.ImageReference("quay.io/simplyblock-io/simplyblock:" + image)}
+	cp.Spec.Source.Local = &simplyblockv1alpha2.LocalControlPlane{Image: image}
 	return cp
 }
 
@@ -128,7 +130,7 @@ func localControlPlane(image string) *simplyblockv1alpha2.ControlPlane {
 func TestTheControlPlaneUpgradeIsCreatedOnceAndThenSkipped(t *testing.T) {
 	target := MustVersion("26.4.0-beta7")
 	st := upgradeControlPlane(target, fastOptions())
-	s := scopeWith(t, localControlPlane("26.4.0-beta6.1"))
+	s := scopeWith(t, sourceControlPlane())
 
 	action, err := st.Describe(context.Background(), s, upgrade.TheUpgrade(ns))
 	if err != nil || action == nil || action.Verb != upgrade.VerbCreate {
@@ -137,7 +139,7 @@ func TestTheControlPlaneUpgradeIsCreatedOnceAndThenSkipped(t *testing.T) {
 
 	done := &simplyblockv1alpha2.ControlPlaneOps{ObjectMeta: metav1.ObjectMeta{Name: OperationName(target), Namespace: ns}}
 	done.Status.Phase = simplyblockv1alpha2.ControlPlaneOpsPhaseSucceeded
-	s = scopeWith(t, localControlPlane("26.4.0-beta6.1"), done)
+	s = scopeWith(t, sourceControlPlane(), done)
 	if action, err := st.Describe(context.Background(), s, upgrade.TheUpgrade(ns)); err != nil || action != nil {
 		t.Errorf("action = %+v, %v; a succeeded upgrade is skipped on a rerun", action, err)
 	}
@@ -149,7 +151,7 @@ func TestAFailedOperationStopsTheRollout(t *testing.T) {
 	failed := &simplyblockv1alpha2.ControlPlaneOps{ObjectMeta: metav1.ObjectMeta{Name: OperationName(target), Namespace: ns}}
 	failed.Status.Phase = simplyblockv1alpha2.ControlPlaneOpsPhaseFailed
 	failed.Status.Message = "the control plane did not come up"
-	s := scopeWith(t, localControlPlane("26.4.0-beta6.1"), failed)
+	s := scopeWith(t, sourceControlPlane(), failed)
 
 	err := upgradeControlPlane(target, fastOptions()).Apply(context.Background(), s, upgrade.TheUpgrade(ns))
 	if err == nil || !strings.Contains(err.Error(), "did not come up") {
@@ -159,7 +161,7 @@ func TestAFailedOperationStopsTheRollout(t *testing.T) {
 
 // The control-plane step refuses to run without the target image.
 func TestTheControlPlaneUpgradeNeedsTheTargetImage(t *testing.T) {
-	s := scopeWith(t, localControlPlane("26.4.0-beta6.1"))
+	s := scopeWith(t, sourceControlPlane())
 	err := upgradeControlPlane(MustVersion("26.4.0-beta7"), Options{}).Validate(context.Background(), s, upgrade.TheUpgrade(ns))
 	if err == nil || !strings.Contains(err.Error(), "--simplyblock-image") {
 		t.Errorf("err = %v, want the missing flag named", err)

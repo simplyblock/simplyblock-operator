@@ -118,7 +118,7 @@ func stepIDs(t *testing.T, c *upgrade.Catalog, stage upgrade.Stage) []upgrade.ID
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out []upgrade.ID
+	out := make([]upgrade.ID, 0, len(steps))
 	for _, s := range steps {
 		out = append(out, s.ID())
 	}
@@ -162,8 +162,9 @@ func TestModuleChecksRunInThePrepareStage(t *testing.T) {
 	c := Build(Selection{Source: MustVersion("1.0.0"), Target: MustVersion("1.1.0"),
 		Modules: []Module{{Release: MustVersion("1.1.0"), Checks: []upgrade.Check{check}}}}, Options{})
 
-	var ids []upgrade.ID
-	for _, ch := range c.ChecksFor(upgrade.StageReleasePrepare, upgrade.Options{}) {
+	checks := c.ChecksFor(upgrade.StageReleasePrepare, upgrade.Options{})
+	ids := make([]upgrade.ID, 0, len(checks))
+	for _, ch := range checks {
 		ids = append(ids, ch.ID())
 	}
 	if !slices.Contains(ids, "b7-check") || !slices.Contains(ids, IDNodesOnline) {

@@ -35,7 +35,7 @@ func Build(selection Selection, o Options) *upgrade.Catalog {
 		return out
 	}
 
-	var sequence []upgrade.Step
+	sequence := make([]upgrade.Step, 0, 6+len(selection.Modules)*len(HookPoints))
 	sequence = append(sequence, at(BeforeCRDs)...)
 	sequence = append(sequence, steps.ReleaseCRDs(IDApplyCRDs, upgrade.StageReleasePrepare))
 	sequence = append(sequence, at(AfterCRDs)...)

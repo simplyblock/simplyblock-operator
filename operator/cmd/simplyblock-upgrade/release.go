@@ -55,9 +55,11 @@ func newReleaseCommand(global *globalOptions) *cobra.Command {
 	flags.DurationVar(&opts.Timeout, "timeout", 24*time.Hour, "how long one wait lasts before the run fails")
 
 	cmd.AddCommand(
-		releaseSubcommand(global, &opts, "plan", "Report the selected releases, the checks, and every step, changing nothing", runPlan),
+		releaseSubcommand(global, &opts, "plan",
+			"Report the selected releases, the checks, and every step, changing nothing", runPlan),
 		releaseSubcommand(global, &opts, "preflight", "Run the checks, changing nothing", runPreflight),
-		releaseSubcommand(global, &opts, "prepare", "Run the checks, then the steps before the operator is upgraded", runPrepare),
+		releaseSubcommand(global, &opts, "prepare",
+			"Run the checks, then the steps before the operator is upgraded", runPrepare),
 		releaseSubcommand(global, &opts, "rollout", "Run the steps after the operator is upgraded", runRollout),
 	)
 	return cmd
