@@ -147,10 +147,13 @@ type ReplicationOpsForecast struct {
 	NotConvergingLVS []string `json:"notConvergingLVS,omitempty"`
 }
 
-// ReplicationOpsSpec defines the desired state of a ReplicationOps.
+// ReplicationOpsSpec defines the desired state of a ReplicationOps. A
+// ReplicationOps is a request, and its spec cannot change once it is created:
+// to ask for something else, delete it and create a new one.
+// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="the spec of a ReplicationOps is immutable: delete it and create a new one"
 // +kubebuilder:validation:XValidation:rule="self.action != 'snapshot' || self.scope != 'volume'",message="snapshot takes a consistency-group generation of a policy: use scope policy or target"
 type ReplicationOpsSpec struct {
-	// Action is the operation to perform. Immutable.
+	// Action is the operation to perform.
 	// failover is unplanned: it promotes the target's copy, and the source may be
 	// down. failback restores the source as primary after a failover. migration is
 	// a planned online cutover to the target cluster with both clusters up: every
@@ -166,7 +169,7 @@ type ReplicationOpsSpec struct {
 	// +kubebuilder:validation:Required
 	Action string `json:"action"`
 
-	// Scope controls which volumes are affected. Immutable.
+	// Scope controls which volumes are affected.
 	// target: all volumes across every policy that uses the named ReplicationPair.
 	// policy: all volumes managed by the named ReplicationPolicy CR.
 	// volume: a single ReplicationSlot (planned or unplanned per-volume operation).
@@ -181,7 +184,7 @@ type ReplicationOpsSpec struct {
 	// a ReplicationPair name for scope=target,
 	// a ReplicationPolicy name for scope=policy,
 	// a ReplicationSlot name for scope=volume,
-	// or a StorageCluster name (or the cluster's UUID) for scope=cluster. Immutable.
+	// or a StorageCluster name (or the cluster's UUID) for scope=cluster.
 	// +kubebuilder:validation:Required
 	Ref string `json:"ref"`
 
@@ -201,7 +204,6 @@ type ReplicationOpsSpec struct {
 	// already follows a different policy is reported as skipped, never
 	// re-enrolled.
 	// +optional
-	// +k8s:immutable
 	PolicyRef string `json:"policyRef,omitempty"`
 
 	// DryRun asks for the migration plan and its forecast only: which
@@ -210,7 +212,6 @@ type ReplicationOpsSpec struct {
 	// cut over, and the operation succeeds once the forecast is in status.
 	// Allowed for action=migration only.
 	// +optional
-	// +k8s:immutable
 	DryRun bool `json:"dryRun,omitempty"`
 }
 

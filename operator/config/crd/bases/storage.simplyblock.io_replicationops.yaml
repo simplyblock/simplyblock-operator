@@ -71,11 +71,14 @@ spec:
           metadata:
             type: object
           spec:
-            description: ReplicationOpsSpec defines the desired state of a ReplicationOps.
+            description: |-
+              ReplicationOpsSpec defines the desired state of a ReplicationOps. A
+              ReplicationOps is a request, and its spec cannot change once it is created:
+              to ask for something else, delete it and create a new one.
             properties:
               action:
                 description: |-
-                  Action is the operation to perform. Immutable.
+                  Action is the operation to perform.
                   failover is unplanned: it promotes the target's copy, and the source may be
                   down. failback restores the source as primary after a failover. migration is
                   a planned online cutover to the target cluster with both clusters up: every
@@ -108,9 +111,6 @@ spec:
                   cut over, and the operation succeeds once the forecast is in status.
                   Allowed for action=migration only.
                 type: boolean
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               policyRef:
                 description: |-
                   PolicyRef names the ReplicationPolicy, in mode migration, that a
@@ -119,20 +119,17 @@ spec:
                   already follows a different policy is reported as skipped, never
                   re-enrolled.
                 type: string
-                x-kubernetes-validations:
-                - message: field is immutable
-                  rule: self == oldSelf
               ref:
                 description: |-
                   Ref is the name of the resource identified by Scope:
                   a ReplicationPair name for scope=target,
                   a ReplicationPolicy name for scope=policy,
                   a ReplicationSlot name for scope=volume,
-                  or a StorageCluster name (or the cluster's UUID) for scope=cluster. Immutable.
+                  or a StorageCluster name (or the cluster's UUID) for scope=cluster.
                 type: string
               scope:
                 description: |-
-                  Scope controls which volumes are affected. Immutable.
+                  Scope controls which volumes are affected.
                   target: all volumes across every policy that uses the named ReplicationPair.
                   policy: all volumes managed by the named ReplicationPolicy CR.
                   volume: a single ReplicationSlot (planned or unplanned per-volume operation).
@@ -155,10 +152,9 @@ spec:
             - scope
             type: object
             x-kubernetes-validations:
-            - message: field policyRef is immutable once set
-              rule: '!has(oldSelf.policyRef) || has(self.policyRef)'
-            - message: field dryRun is immutable once set
-              rule: '!has(oldSelf.dryRun) || has(self.dryRun)'
+            - message: 'the spec of a ReplicationOps is immutable: delete it and create
+                a new one'
+              rule: self == oldSelf
             - message: 'snapshot takes a consistency-group generation of a policy:
                 use scope policy or target'
               rule: self.action != 'snapshot' || self.scope != 'volume'

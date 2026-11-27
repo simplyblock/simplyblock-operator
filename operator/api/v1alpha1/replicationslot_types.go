@@ -46,15 +46,19 @@ const (
 type ReplicationSlotSpec struct {
 	// PolicyRef names the ReplicationPolicy governing this slot: its name in the
 	// slot's own namespace, or "<namespace>/<name>" for a policy in another
-	// namespace, usually the StorageCluster's. Immutable.
+	// namespace, usually the StorageCluster's. It cannot change once set.
 	// +kubebuilder:validation:Required
+	// +k8s:immutable
 	PolicyRef string `json:"policyRef"`
 
-	// PVCRef is the name of the PVC being replicated. Immutable.
+	// PVCRef is the name of the PVC being replicated. It cannot change once set.
 	// +kubebuilder:validation:Required
+	// +k8s:immutable
 	PVCRef string `json:"pvcRef"`
 
-	// VolumeID is the backend lvol UUID of the source volume. Immutable.
+	// VolumeID is the backend volume handle of the source volume. The operator
+	// updates it when the volume has moved to another cluster, for example after
+	// a completed migration, so that replication attaches where the data is.
 	// Format: "<clusterUUID>:<poolUUID>:<volumeUUID>"
 	// +kubebuilder:validation:Required
 	VolumeID string `json:"volumeID"`

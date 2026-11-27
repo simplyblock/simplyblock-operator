@@ -23,7 +23,9 @@ import (
 // ReplicationPairSpec defines the source and target clusters for a replication relationship.
 type ReplicationPairSpec struct {
 	// SourceCluster is the name of the local StorageCluster (the replication source).
+	// It cannot change once set.
 	// +kubebuilder:validation:Required
+	// +k8s:immutable
 	SourceCluster string `json:"sourceCluster"`
 
 	// TargetCluster is the name or UUID of the remote cluster (the replication target).

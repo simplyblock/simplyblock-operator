@@ -92,7 +92,7 @@ LABEL name="simplyblock-operator" \
       version="${VERSION}" \
       release="${RELEASE}" \
       summary="Simplyblock Operator manages the lifecycle of Simplyblock storage clusters on Kubernetes." \
-      description="The Simplyblock Operator reconciles StorageCluster, StorageNode, Pool, Device, Lvol, Task, SnapshotReplication, and StorageBackup custom resources against the Simplyblock control-plane API."
+      description="The Simplyblock Operator reconciles StorageCluster, StorageNode, Pool, Device, Lvol, Task, and StorageBackup custom resources against the Simplyblock control-plane API."
 
 WORKDIR /
 COPY --from=builder /workspace/manager .
