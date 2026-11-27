@@ -37,6 +37,14 @@ func (s *session) Close() error { return s.Reporter.Close() }
 // for the preflight, which promises that nothing changed, and for a dry run of
 // the other two.
 func newSession(global *globalOptions, stage upgrade.Stage, dryRun bool) (*session, error) {
+	return newSessionWith(global, stage, dryRun, catalog.Default())
+}
+
+// newSessionWith is newSession over a catalog the command built, which is what
+// the release commands run: one assembled for a source and a target.
+func newSessionWith(
+	global *globalOptions, stage upgrade.Stage, dryRun bool, cat *upgrade.Catalog,
+) (*session, error) {
 	if err := mustNamespace(global); err != nil {
 		return nil, err
 	}
@@ -60,7 +68,7 @@ func newSession(global *globalOptions, stage upgrade.Stage, dryRun bool) (*sessi
 	}
 
 	return &session{
-		Runner:   upgrade.NewRunner(catalog.Default(), scope),
+		Runner:   upgrade.NewRunner(cat, scope),
 		Reporter: reporter,
 		Client:   c,
 	}, nil

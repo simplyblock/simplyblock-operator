@@ -1769,3 +1769,33 @@ tls:
   mutual_enabled: true
 
 
+
+# The release upgrade (operator/docs/designs/design-release-upgrade.md §7). On an
+# upgrade, a pre-upgrade hook Job runs `simplyblock-upgrade release prepare`
+# (checks and CRDs) before Helm changes anything, and a Job named for the target
+# release runs `simplyblock-upgrade release rollout` (control plane, then every
+# storage cluster). Neither is rendered on install.
+upgrade:
+  # -- Runs the release upgrade from the chart. Off until the `simplyblock-upgrade` image is
+  # published for every release; with it off, `helm upgrade` behaves as before and the upgrade
+  # is run by hand (`simplyblock-upgrade release prepare`, `helm upgrade`, `release rollout`).
+  # With it on, the chart no longer moves the control-plane image on an upgrade: the rollout
+  # Job does, through a `ControlPlaneOps` of the action `Upgrade`.
+  enabled: false
+  image:
+    # -- The `simplyblock-upgrade` image.
+    repository: quay.io/simplyblock-io/simplyblock-upgrade
+    # -- Its tag. Empty is the chart's `appVersion`, which is the release the tool upgrades to.
+    tag: ""
+    # -- Its pull policy.
+    pullPolicy: IfNotPresent
+  # -- Rule identities passed to `--skip`, for a check the operator has accepted.
+  skip: []
+  # -- The SPDK image the target control plane reports as its default. Set, the storage plane
+  # waits for every cluster to report exactly it before the rolling restart; empty, it waits a
+  # settle period after the control-plane upgrade instead.
+  spdkImage: ""
+  rollout:
+    # -- Runs the rollout Job. Off runs only the pre-upgrade hook, for a deployment that rolls
+    # the control plane and the storage plane in its own maintenance window.
+    enabled: true

@@ -267,3 +267,34 @@ func TestDeployed_ReadsTheValuesTheReleaseWasInstalledWith(t *testing.T) {
 		t.Errorf("the deployed value was not read: %v", node)
 	}
 }
+
+// The chart version is the release the deployment runs, which a release upgrade
+// selects its modules from (design-release-upgrade.md §6.1).
+func TestDeployed_ReadsTheChartVersion(t *testing.T) {
+	secret := secretFor(t, "simplyblock-operator", 1, true)
+	payload, err := json.Marshal(map[string]any{
+		"name": "simplyblock-operator", "namespace": "simplyblock", "version": 1,
+		"manifest": manifest,
+		"chart":    map[string]any{"metadata": map[string]any{"name": "simplyblock-operator", "version": "26.4.0-beta6.2"}},
+	})
+	if err != nil {
+		t.Fatalf("encoding: %v", err)
+	}
+	var buf bytes.Buffer
+	w := gzip.NewWriter(&buf)
+	if _, err := w.Write(payload); err != nil {
+		t.Fatalf("compressing: %v", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatalf("closing: %v", err)
+	}
+	secret.Data["release"] = []byte(base64.StdEncoding.EncodeToString(buf.Bytes()))
+
+	deployed, found, err := Deployed(t.Context(), clusterWith(t, secret), "simplyblock")
+	if err != nil || !found {
+		t.Fatalf("Deployed: %v, found=%v", err, found)
+	}
+	if deployed.ChartVersion != "26.4.0-beta6.2" {
+		t.Errorf("chart version = %q, want the deployed chart's", deployed.ChartVersion)
+	}
+}

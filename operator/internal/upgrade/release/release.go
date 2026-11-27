@@ -66,6 +66,10 @@ type Release struct {
 	// than the chart's defaults merged over them, which is what Helm records
 	// here.
 	Values map[string]any
+
+	// ChartVersion is the version of the chart the release installed, which is
+	// the release the deployment runs (design-release-upgrade.md §6.1).
+	ChartVersion string
 }
 
 // ObjectRef names one object a release manifest declares.
@@ -128,6 +132,11 @@ type stored struct {
 	Version   int            `json:"version"`
 	Manifest  string         `json:"manifest"`
 	Config    map[string]any `json:"config"`
+	Chart     struct {
+		Metadata struct {
+			Version string `json:"version"`
+		} `json:"metadata"`
+	} `json:"chart"`
 }
 
 // decode unwraps one release Secret.
@@ -162,6 +171,8 @@ func decode(secret *corev1.Secret) (*Release, error) {
 		Version:   held2.Version,
 		Objects:   objects,
 		Values:    held2.Config,
+
+		ChartVersion: held2.Chart.Metadata.Version,
 	}, nil
 }
 

@@ -3,6 +3,29 @@
   "type": "object",
   "additionalProperties": true,
   "properties": {
+    "upgrade": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string" },
+            "tag": { "type": "string" },
+            "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "skip": { "type": "array", "items": { "type": "string" } },
+        "spdkImage": { "type": "string" },
+        "rollout": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "enabled": { "type": "boolean" } }
+        }
+      }
+    },
     "tls": {
       "type": "object",
       "additionalProperties": false,
@@ -504,6 +527,8 @@
               "type": "object",
               "additionalProperties": false,
               "properties": {
+                "stateSize": { "type": "string", "deprecated": true, "description": "Removed in 26.4.0-beta7, where the metadata server keeps its state on a volume of its own. Accepted and ignored for one release so a values file carried over does not fail the upgrade." },
+                "stateStorageClassName": { "type": "string", "deprecated": true, "description": "Removed in 26.4.0-beta7. Accepted and ignored for one release, like stateSize." },
                 "enabled": {
                   "type": "boolean"
                 },

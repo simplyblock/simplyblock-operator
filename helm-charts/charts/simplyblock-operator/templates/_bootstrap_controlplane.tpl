@@ -49,7 +49,19 @@ spec:
 {{- if eq .Values.deployment.profile "standalone" }}
     # This cluster hosts its own control plane, and the operator installs it.
     local:
-      image: "{{ .Values.image.simplyblock.repository }}:{{ .Values.image.simplyblock.tag }}"
+      {{- /*
+      With the release upgrade on, an upgrade keeps the image the live
+      ControlPlane has: the rollout Job moves it through a ControlPlaneOps
+      Upgrade, which drains and verifies, and a chart value must not move it
+      first or move it back (design-release-upgrade.md §7.4). lookup answers
+      nothing during a dry run or a template render, which renders the value.
+      */}}
+      {{- $live := dict }}
+      {{- if and .Values.upgrade.enabled .Release.IsUpgrade }}
+      {{- $live = lookup "storage.simplyblock.io/v1alpha2" "ControlPlane" .Release.Namespace "simplyblock" }}
+      {{- end }}
+      {{- $liveImage := dig "spec" "source" "local" "image" "" ($live | default dict) }}
+      image: {{ $liveImage | default (printf "%s:%s" .Values.image.simplyblock.repository .Values.image.simplyblock.tag) | quote }}
       imagePullPolicy: "{{ .Values.image.simplyblock.pullPolicy }}"
       foundationDB:
         # The chart states the redundancy mode and the operator states the

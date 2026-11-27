@@ -1,0 +1,27 @@
+# The simplyblock-upgrade image, which the chart's release-upgrade Jobs run
+# (docs/designs/design-release-upgrade.md §7). It is an image of its own rather
+# than part of the operator's: the pre-upgrade hook runs it before the
+# operator it upgrades, and a tool behind the pull it precedes could not.
+# Built from the repository root, like the operator image, so atlas-lib is in
+# the context. VERSION is the chart version, which the tool takes as the
+# release it upgrades to.
+FROM --platform=$BUILDPLATFORM golang:1.26 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+ARG VERSION=dev
+
+WORKDIR /workspace
+COPY atlas-lib/go.mod atlas-lib/go.sum /atlas-lib/
+COPY operator/go.mod operator/go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod go mod download
+COPY atlas-lib/ /atlas-lib/
+COPY operator/ .
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=cache,target=/go/pkg/mod \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} \
+    go build -ldflags "-X main.version=${VERSION}" -o simplyblock-upgrade ./cmd/simplyblock-upgrade
+
+FROM gcr.io/distroless/static:nonroot
+COPY --from=builder /workspace/simplyblock-upgrade /simplyblock-upgrade
+USER 65532:65532
+ENTRYPOINT ["/simplyblock-upgrade"]

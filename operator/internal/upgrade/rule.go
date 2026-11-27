@@ -49,6 +49,19 @@ const (
 	StageMigrate Stage = "migrate"
 )
 
+// The release upgrade's stages (design-release-upgrade.md §7.1). They run a
+// catalog the release modules assemble for one source and target, apart from
+// the API migration's three, and the same check may belong to both of them.
+const (
+	// StageReleasePrepare runs before the operator is upgraded: the checks,
+	// the CRDs, and the steps the release modules place around them.
+	StageReleasePrepare Stage = "release-prepare"
+
+	// StageReleaseRollout runs once the operator is upgraded: the control
+	// plane, the storage plane, and the steps placed between them.
+	StageReleaseRollout Stage = "release-rollout"
+)
+
 // Stages is every stage, in the order they are run in.
 var Stages = []Stage{StagePreflight, StageUpgrade, StageMigrate}
 
@@ -63,6 +76,10 @@ func (s Stage) Describe() string {
 		return "Preparing the cluster for the new operator"
 	case StageMigrate:
 		return "Migrating the resource model"
+	case StageReleasePrepare:
+		return "Preparing the cluster for the new release"
+	case StageReleaseRollout:
+		return "Rolling the new release out"
 	default:
 		return string(s)
 	}
