@@ -4,6 +4,7 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.source.local.image"]}'
   name: controlplanes.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -202,6 +203,12 @@ spec:
                             Left unset, the service accounts this operator creates carry no such
                             annotation, which is correct off Amazon EKS and on an EKS cluster whose
                             pods authenticate another way.
+
+                            The webhook injects the role when a pod is admitted, so a changed role
+                            reaches only new pods. The control plane's own workloads roll out on
+                            the change. Storage-node pods are not restarted, since a restart
+                            interrupts the data path: each StorageCluster records an EKSRoleChanged
+                            event, and a StorageClusterOps rolling restart applies the new role.
                           pattern: ^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$
                           type: string
                         foundationDB:
@@ -355,6 +362,12 @@ spec:
                             Any registry is accepted, mirrors included, as long as the value is a
                             well-formed reference carrying a tag, a digest, or both. Digest pinning
                             (@sha256:...) is recommended.
+
+                            It is set when the ControlPlane is created. Afterward, the operator writes
+                            it: a ControlPlaneOps of action Upgrade, which checks the control plane is
+                            Available and drains before it applies the image, or the chart's
+                            bootstrap apply of a changed image value. An edit by anyone else would
+                            skip that check and that drain, so it is refused.
                           pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                           type: string
                         imagePullPolicy:
@@ -620,6 +633,9 @@ spec:
                       required:
                         - image
                       type: object
+                      x-kubernetes-validations:
+                        - message: 'spec.source.local.foundationDB.storageClassName is immutable: it is in the claim templates of the control plane''s StatefulSets, which the API server refuses to change, so a new class would fail every later apply'
+                          rule: (has(self.foundationDB) && has(self.foundationDB.storageClassName)) == (has(oldSelf.foundationDB) && has(oldSelf.foundationDB.storageClassName)) && (!(has(self.foundationDB) && has(self.foundationDB.storageClassName)) || self.foundationDB.storageClassName == oldSelf.foundationDB.storageClassName)
                     managed:
                       description: Managed is a control plane that already exists.
                       properties:
@@ -828,7 +844,7 @@ spec:
                     plane's volumes (FoundationDB, the object store, and Prometheus) when
                     spec.source.local.foundationDB.storageClassName names none: on Amazon
                     EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
-                    database is first applied, and never changed afterwards, because the
+                    database is first applied, and never changed afterward, because the
                     volumes cannot move to another class.
                   type: string
                 version:

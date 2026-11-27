@@ -209,12 +209,20 @@ func (l *LocalControlPlane) TLSProvider() ControlPlaneTLSProvider {
 // LocalControlPlane is a control plane this cluster hosts, installed and owned
 // by the operator. Its objects carry a controller reference to the ControlPlane,
 // so the ownership spine starts at a real edge rather than at a Helm release.
+// +kubebuilder:validation:XValidation:rule="(has(self.foundationDB) && has(self.foundationDB.storageClassName)) == (has(oldSelf.foundationDB) && has(oldSelf.foundationDB.storageClassName)) && (!(has(self.foundationDB) && has(self.foundationDB.storageClassName)) || self.foundationDB.storageClassName == oldSelf.foundationDB.storageClassName)",message="spec.source.local.foundationDB.storageClassName is immutable: it is in the claim templates of the control plane's StatefulSets, which the API server refuses to change, so a new class would fail every later apply"
 type LocalControlPlane struct {
 	// Image is the management API and control-plane image.
 	// Any registry is accepted, mirrors included, as long as the value is a
 	// well-formed reference carrying a tag, a digest, or both. Digest pinning
 	// (@sha256:...) is recommended.
+	//
+	// It is set when the ControlPlane is created. Afterward, the operator writes
+	// it: a ControlPlaneOps of action Upgrade, which checks the control plane is
+	// Available and drains before it applies the image, or the chart's
+	// bootstrap apply of a changed image value. An edit by anyone else would
+	// skip that check and that drain, so it is refused.
 	// +kubebuilder:validation:Required
+	// +simplyblock:operatorManaged
 	Image crdtypes.ImageReference `json:"image"`
 
 	// ImagePullPolicy controls when that image is pulled.
@@ -304,6 +312,12 @@ type LocalControlPlane struct {
 	// Left unset, the service accounts this operator creates carry no such
 	// annotation, which is correct off Amazon EKS and on an EKS cluster whose
 	// pods authenticate another way.
+	//
+	// The webhook injects the role when a pod is admitted, so a changed role
+	// reaches only new pods. The control plane's own workloads roll out on
+	// the change. Storage-node pods are not restarted, since a restart
+	// interrupts the data path: each StorageCluster records an EKSRoleChanged
+	// event, and a StorageClusterOps rolling restart applies the new role.
 	// +kubebuilder:validation:Pattern=`^arn:aws[a-zA-Z0-9-]*:iam::[0-9]{12}:role/.+$`
 	// +optional
 	EKSRoleARN string `json:"eksRoleARN,omitempty"`
@@ -498,8 +512,8 @@ type ManagedControlPlane struct {
 // two modes siblings rather than two unrelated top-level fields.
 //
 // Which member it is cannot change afterward, while the members themselves stay
-// editable: changing spec.source.local.image is an ordinary edit, and it is what
-// a ControlPlaneOps upgrade performs.
+// editable: changing spec.source.local.image is what a ControlPlaneOps upgrade
+// performs, so the image is operator-managed rather than frozen.
 // +kubebuilder:validation:XValidation:rule="(has(self.local) ? 1 : 0) + (has(self.managed) ? 1 : 0) == 1",message="set exactly one of local or managed"
 // +kubebuilder:validation:XValidation:rule="has(self.local) == has(oldSelf.local) && has(self.managed) == has(oldSelf.managed)",message="spec.source is immutable: a control plane the operator installed and one it did not are different deployments, and the clusters and their volumes live in the FoundationDB behind the old one"
 type ControlPlaneSource struct {
@@ -584,7 +598,7 @@ type ControlPlaneStatus struct {
 	// plane's volumes (FoundationDB, the object store, and Prometheus) when
 	// spec.source.local.foundationDB.storageClassName names none: on Amazon
 	// EKS, a gp3 class of the EBS CSI driver. It is chosen once, before the
-	// database is first applied, and never changed afterwards, because the
+	// database is first applied, and never changed afterward, because the
 	// volumes cannot move to another class.
 	// +optional
 	StorageClassName string `json:"storageClassName,omitempty"`

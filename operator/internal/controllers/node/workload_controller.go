@@ -131,6 +131,12 @@ func (r *StorageNodeWorkloadReconciler) SetupWithManager(mgr ctrl.Manager) error
 		Watches(&corev1.Pod{},
 			handler.EnqueueRequestsFromMapFunc(r.clusterOfAgentPod),
 			builder.WithPredicates(isAgentPod())).
+		// Every cluster's storage-node ServiceAccount, in whichever namespace,
+		// carries the singleton ControlPlane's EKS role, so a changed role is
+		// applied right away rather than on the next unrelated event.
+		Watches(&simplyblockv1alpha2.ControlPlane{},
+			handler.EnqueueRequestsFromMapFunc(r.everyCluster),
+			builder.WithPredicates(eksRoleChanged())).
 		Complete(r)
 }
 
@@ -198,9 +204,27 @@ func (r *StorageNodeWorkloadReconciler) clusterOfProxyPod(
 	if !ok || pod.Labels["role"] != utils.LabelSpdkProxyRole {
 		return nil
 	}
+	return r.clustersInNamespace(ctx, pod)
+}
 
+// clustersInNamespace enqueues every StorageCluster in object's namespace.
+func (r *StorageNodeWorkloadReconciler) clustersInNamespace(
+	ctx context.Context, object client.Object,
+) []reconcile.Request {
+	return r.clustersMatching(ctx, client.InNamespace(object.GetNamespace()))
+}
+
+// everyCluster enqueues every StorageCluster, whatever the event.
+func (r *StorageNodeWorkloadReconciler) everyCluster(ctx context.Context, _ client.Object) []reconcile.Request {
+	return r.clustersMatching(ctx)
+}
+
+// clustersMatching enqueues the StorageClusters the list options select.
+func (r *StorageNodeWorkloadReconciler) clustersMatching(
+	ctx context.Context, opts ...client.ListOption,
+) []reconcile.Request {
 	var clusters simplyblockv1alpha2.StorageClusterList
-	if err := r.List(ctx, &clusters, client.InNamespace(pod.Namespace)); err != nil {
+	if err := r.List(ctx, &clusters, opts...); err != nil {
 		return nil
 	}
 
@@ -490,6 +514,64 @@ func (r *StorageNodeWorkloadReconciler) eksRoleARN(ctx context.Context) (string,
 	return "", nil
 }
 
+// eksRoleChangedReason is the event a changed EKS role leaves on each cluster.
+const eksRoleChangedReason = "EKSRoleChanged"
+
+// eksRoleChanged admits a ControlPlane singleton event that can change the
+// storage-node ServiceAccount's EKS role: its creation, its deletion, and an
+// edit of spec.source.local.eksRoleARN. Any other edit leaves the account as
+// it is and wakes nothing here.
+func eksRoleChanged() predicate.Predicate {
+	return predicate.Funcs{
+		CreateFunc: func(e event.CreateEvent) bool { return e.Object.GetName() == SingletonControlPlaneName },
+		DeleteFunc: func(e event.DeleteEvent) bool { return e.Object.GetName() == SingletonControlPlaneName },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectNew.GetName() != SingletonControlPlaneName {
+				return false
+			}
+			return controlPlaneEKSRole(e.ObjectOld) != controlPlaneEKSRole(e.ObjectNew)
+		},
+		GenericFunc: func(event.GenericEvent) bool { return false },
+	}
+}
+
+// controlPlaneEKSRole is the role a ControlPlane states, empty when it states
+// none or its control plane is managed elsewhere.
+func controlPlaneEKSRole(object client.Object) string {
+	cp, ok := object.(*simplyblockv1alpha2.ControlPlane)
+	if !ok || cp.Spec.Source.Local == nil {
+		return ""
+	}
+	return cp.Spec.Source.Local.EKSRoleARN
+}
+
+// warnEKSRoleChanged reports a changed role on every cluster in namespace.
+// Amazon EKS's pod-identity webhook injects the role when a pod is admitted,
+// and restarting storage-node pods interrupts the data path, so the operator
+// leaves that to a rolling restart and says so here.
+func (r *StorageNodeWorkloadReconciler) warnEKSRoleChanged(ctx context.Context, namespace, roleARN string) error {
+	if r.Recorder == nil {
+		return nil
+	}
+	var clusters simplyblockv1alpha2.StorageClusterList
+	if err := r.List(ctx, &clusters, client.InNamespace(namespace)); err != nil {
+		return err
+	}
+	assumes := "now assumes IAM role " + roleARN
+	if roleARN == "" {
+		assumes = "no longer assumes an IAM role"
+	}
+	for i := range clusters.Items {
+		if clusters.Items[i].Spec.Supercluster != nil {
+			continue
+		}
+		r.Recorder.Eventf(&clusters.Items[i], nil, corev1.EventTypeWarning, eksRoleChangedReason, eksRoleChangedReason,
+			"the storage-node service account %s; running storage-node pods keep the role they were admitted "+
+				"with until they restart, which a StorageClusterOps rollingRestart does", assumes)
+	}
+	return nil
+}
+
 // tlsSecretVersion is what a certificate rotation is noticed by.
 func (r *StorageNodeWorkloadReconciler) tlsSecretVersion(
 	ctx context.Context, cluster *simplyblockv1alpha2.StorageCluster,
@@ -703,7 +785,9 @@ func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 		return err
 	}
 	account := utils.BuildStorageNodeSetServiceAccount(cluster.Namespace, roleARN)
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+	roleChanged := false
+	err = retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		roleChanged = false
 		var existing corev1.ServiceAccount
 		err := r.Get(ctx, client.ObjectKeyFromObject(account), &existing)
 		if apierrors.IsNotFound(err) {
@@ -728,8 +812,16 @@ func (r *StorageNodeWorkloadReconciler) shareServiceAccount(
 		if len(existing.OwnerReferences) == before && !controlled && !annotationChanged {
 			return nil
 		}
-		return r.Update(ctx, &existing)
+		if err := r.Update(ctx, &existing); err != nil {
+			return err
+		}
+		roleChanged = annotationChanged
+		return nil
 	})
+	if err != nil || !roleChanged {
+		return err
+	}
+	return r.warnEKSRoleChanged(ctx, cluster.Namespace, roleARN)
 }
 
 // setEKSRoleARNAnnotation keeps sa's EKS role annotation equal to roleARN,

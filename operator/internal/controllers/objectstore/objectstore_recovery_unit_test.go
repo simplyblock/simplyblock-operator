@@ -93,6 +93,25 @@ func TestDegradedObjectStoreRecoversWhenItsCertificateIsReady(t *testing.T) {
 	}
 }
 
+// A Degraded ObjectStore whose spec changed since it degraded returns to
+// Provisioning: the edit may be the fix, such as a corrected image, and
+// before this only deleting and recreating the object let it take effect.
+func TestDegradedObjectStoreRecoversWhenItsSpecChanges(t *testing.T) {
+	degradedAt := time.Now().Add(-time.Minute)
+	store := degradedStore(degradedAt, conditionDeploymentAvailable, "DeploymentNotAvailable",
+		func(o *simplyblockv1alpha2.ObjectStore) {
+			o.Generation = 3
+			o.Status.ObservedGeneration = 2
+		})
+	cli := newTestClient(t, store, availableDeployment(store, false, 0), envSecret(degradedAt.Add(-time.Hour)))
+
+	got := reconcileStore(t, cli, store)
+
+	if got.Status.Phase != osPhaseProvisioning {
+		t.Errorf("phase = %q, want Provisioning", got.Status.Phase)
+	}
+}
+
 // U-23: an event on a Secret or ConfigMap enqueues every ObjectStore in its
 // namespace whose envFrom names it, and no other.
 func TestEnvFromReferenceEnqueuesTheObjectStoresNamingIt(t *testing.T) {

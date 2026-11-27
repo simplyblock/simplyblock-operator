@@ -144,7 +144,6 @@ metadata:
 spec:
   approved: true
   environment: OpenShift
-  edgeCluster: false
   images:
     nodeAgent:
       image: public.ecr.aws/simply-block/simplyblock:main
@@ -259,11 +258,6 @@ NVMe layout are written once rather than ten times. A worker is a hostname.
 
 The middle level is `groups` rather than `members`, because an entry is several
 workers sharing one configuration rather than one of anything.
-
-`spec.edgeCluster` names a fact about the deployment rather than switching a
-capability on, which is the class
-[`design-crd-model.md`](design-crd-model.md) §7.5 leaves outside the `enableXyz`
-and `disableXyz` rule, alongside `ubuntuHost`.
 
 **`spec.environment` is a shorthand, and the expansion is where it is spent.** A
 distribution decides whether the kubelet is reconfigured and whether CPU topology
@@ -1517,12 +1511,6 @@ type NodeGroup struct {
 	// +optional
 	FailureDomain string `json:"failureDomain,omitempty"`
 
-	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
-	// nodes.
-	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
-	// +optional
-	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
-
 	// ReservedSystemCPU is the CPU set held back from SPDK for the system on
 	// these nodes, as a core list such as 0,1 or 0-3.
 	//
@@ -1854,12 +1842,6 @@ type ClusterDeploymentConfigSpec struct {
 	// carries the family for the reviewer reading the document.
 	// +optional
 	HostOS *HostOSSpec `json:"hostOS,omitempty"`
-
-	// EdgeCluster states that this is an edge deployment. An edge deployment
-	// differs from a datacenter one in topology and scale rather than in kind,
-	// so it is the same StorageCluster with fewer, smaller nodes.
-	// +optional
-	EdgeCluster *bool `json:"edgeCluster,omitempty"`
 
 	// ClusterRef names an existing StorageCluster this document adds nodes to.
 	// Absent means the document creates the cluster in Cluster. Setting it to a

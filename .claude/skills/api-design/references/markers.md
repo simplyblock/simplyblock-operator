@@ -71,6 +71,76 @@ A doc comment reading `// Immutable.` is the spelling that enforces nothing.
 and `check-crds.py` reports every field that claims immutability in prose without
 backing it.
 
+## The simplyblock field markers
+
+Three markers of this repository's own describe a field to the Control Center.
+controller-gen ignores them. `make manifests` runs `hack/fieldmarkers` after it,
+which resolves each marked field to its path per API version and writes the
+list onto the CRD as an annotation. An annotation is the carrier because the API
+server drops any schema key it does not know, and an annotation on the CRD
+object survives into the cluster, where the console reads it.
+
+| Marker                         | CRD annotation                           | In the Control Center                                            |
+|--------------------------------|------------------------------------------|------------------------------------------------------------------|
+| `+simplyblock:operatorManaged` | `simplyblock.io/operator-managed-fields` | Locked as an immutable field is; refused at admission (below)    |
+| `+simplyblock:advanced`        | `simplyblock.io/advanced-fields`         | Left out of Essentials, shown in Everything                      |
+| `+simplyblock:invisible`       | `simplyblock.io/invisible-fields`        | Left out of Essentials and the Everything tree, kept in the YAML |
+
+```go
+// Owner is the StorageCluster this record belongs to. The operator sets it.
+// +simplyblock:operatorManaged
+// +optional
+Owner string `json:"owner,omitempty"`
+```
+
+A marker applies to the field and everything below it, and to every kind and
+version that reaches the field, through a pointer, a list, a map, or an inline
+embed. The annotation value is JSON keyed by version,
+`{"v1alpha2":["spec.owner"]}`. A misspelled `+simplyblock:` marker fails
+`make manifests` instead of being skipped.
+
+**What Essentials lists.** The kind's curated headlines in
+`control-center/cr-headlines.jsx` come first, for their order, labels, and
+formats, then every other spec field the CRD has: a scalar, a list of scalars,
+or a string map, whether it is set or not. A field inside a list of objects is not listed,
+because its path names a field of every element. A headline the CRD no longer
+has is dropped. So a new field reaches Essentials without an edit to the
+console, and keeping it out is a marker on the field: `advanced` for a setting
+few need, `invisible` for one nobody should see. The Everything tree shows only
+what the object holds, so an advanced field that is not set appears nowhere
+until it is set some other way.
+
+**`operatorManaged` is enforced at admission.** `make manifests` also writes
+`internal/webhook/zz_generated.operatormanaged.go`: the marked spec paths of
+every kind, and a webhook registration per kind for UPDATE. The
+operator-managed-fields validator (`internal/webhook/operatormanaged_validator.go`)
+refuses an update that changes one of those fields unless it comes from the
+operator's own service account, matched by its exact username. A create is
+admitted, because it states the field for the first time. Status paths are not
+guarded: status is written through its own subresource.
+
+A field another identity also writes names it, `writers=<name>;<name>`. The
+list holds the writers *besides* the operator, which is always admitted and is
+not a name the list accepts; `;` separates names, as in every kubebuilder marker
+list, so `writers=hub,operator` is one unknown name and fails `make manifests`:
+
+```go
+// +simplyblock:operatorManaged:writers=hub
+Role StretchedRole `json:"role"`
+```
+
+The known writers are `knownWriters` in `hack/fieldmarkers/main.go`; the
+operator maps each to usernames at run time. `hub` is the
+`--hub-work-agent-username` flag. `csi` is the CSI controller's service account
+of every SimplyblockDriver, resolved per request (`csiControllerWriter` in
+`cmd/main.go`), because the account is named after the driver. A new writer is a
+`knownWriters` entry plus its mapping there. An unknown writer fails `make manifests`. The
+marker sits on a type, so a writer named there is admitted wherever the type is
+embedded.
+
+`advanced` and `invisible` are not enforced, and hide nothing from anyone who
+can read the object.
+
 ## Cross-field rules worth writing
 
 CEL runs at admission, which is the cheapest place to say no:

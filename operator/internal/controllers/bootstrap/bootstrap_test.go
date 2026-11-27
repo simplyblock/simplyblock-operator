@@ -306,3 +306,41 @@ func TestEmptyKeyIsSettled(t *testing.T) {
 		t.Fatal("an empty key was not recorded")
 	}
 }
+
+// Regression: a values change re-applied spec.discover onto an existing
+// discovery run. A finished run never acts on it, so its spec stopped saying
+// what produced its draft, and once the field is immutable the refused apply
+// was retried forever.
+func TestAnExistingDiscoveryRunIsNotRewritten(t *testing.T) {
+	c := fake.NewClientBuilder().WithScheme(newScheme(t)).WithObjects(configMap(map[string]string{
+		"initial-discovery.yaml": discoveryYAML,
+	}, nil)).Build()
+	r := &Reconciler{Client: c, Namespace: ns}
+	if err := reconcileOnce(t, r); err != nil {
+		t.Fatal(err)
+	}
+
+	var cm corev1.ConfigMap
+	if err := c.Get(context.Background(), types.NamespacedName{Namespace: ns, Name: ConfigMapName}, &cm); err != nil {
+		t.Fatal(err)
+	}
+	changed := discoveryYAML + "    forceJournalDevice: true\n"
+	cm.Data["initial-discovery.yaml"] = changed
+	if err := c.Update(context.Background(), &cm); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconcileOnce(t, r); err != nil {
+		t.Fatal(err)
+	}
+
+	var run simplyblockv1alpha2.OperatorOps
+	if !exists(t, c, &run, "initial-discovery") {
+		t.Fatal("the discovery run is gone")
+	}
+	if run.Spec.Discover.ForceJournalDevice != nil && *run.Spec.Discover.ForceJournalDevice {
+		t.Fatal("the changed values were applied onto the existing run")
+	}
+	if rec := appliedRecord(t, c); rec["initial-discovery.yaml"] != digestOf(changed) {
+		t.Fatalf("the skipped key should be recorded as settled: %v", rec)
+	}
+}

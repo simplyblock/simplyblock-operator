@@ -256,6 +256,7 @@ type StorageBackupSpec struct {
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Cluster Ref"
 	// +optional
 	// +k8s:immutable
+	// +simplyblock:operatorManaged
 	ClusterRef string `json:"clusterRef,omitempty"`
 
 	// Source asks for a new backup of a claim, the way a VolumeSnapshot asks

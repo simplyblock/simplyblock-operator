@@ -8,8 +8,9 @@ it writes; the rest are accepted and unused.
 
 Rendered into the simplyblock-bootstrap-objects ConfigMap rather than as a
 release resource, for the reason _bootstrap_controlplane.tpl gives. The
-operator applies it once and does not create it again while its key is
-unchanged, so a finished run is not repeated on an upgrade. In the release
+operator creates it once and never rewrites it: a run's discover block is
+immutable, so an upgrade that changes the values here keeps the existing run,
+and a new discovery.name is what starts another. In the release
 namespace it is owned by that ConfigMap, so `helm uninstall` still removes it;
 one written to discovery.namespace is left for the cleanup script.
 

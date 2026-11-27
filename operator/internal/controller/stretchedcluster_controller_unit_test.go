@@ -456,30 +456,6 @@ func TestTheLostSiteIsProjectedOnTheRequest(t *testing.T) {
 	}
 }
 
-// U-94: a changed discovery on one site starts another discovery on that site
-// only.
-func TestAChangedDiscoveryReRunsThatSiteOnly(t *testing.T) {
-	sc := newStretched(nil)
-	r, cl, _ := newStretchedReconciler(t, sc)
-	got := reconcileStretched(t, r, cl, 2)
-	name := func(mc, site string) any {
-		return workManifests(t, siteWork(t, cl, got, mc, site))["OperatorOps"]["metadata"].(map[string]any)["name"]
-	}
-	leaderBefore, followerBefore := name(strLeaderMC, strLeaderSite), name(strFollowerMC, strFollowerSit)
-
-	got.Spec.Sites[1].Discover.NodeSelector = map[string]string{"storage": "only-these"}
-	if err := cl.Update(context.Background(), got); err != nil {
-		t.Fatalf("update: %v", err)
-	}
-	got = reconcileStretched(t, r, cl, 1)
-	if name(strLeaderMC, strLeaderSite) != leaderBefore {
-		t.Error("a change to the follower's discovery re-ran the leader's")
-	}
-	if name(strFollowerMC, strFollowerSit) == followerBefore {
-		t.Error("the follower's changed discovery did not start a new run")
-	}
-}
-
 // Deleting the request releases both works and every view, and orphans what
 // the sites built.
 func TestDeletingTheRequestReleasesBothSites(t *testing.T) {

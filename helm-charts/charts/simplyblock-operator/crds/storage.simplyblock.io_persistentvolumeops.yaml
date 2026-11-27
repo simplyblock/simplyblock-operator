@@ -89,6 +89,8 @@ spec:
                   expressible from Validating and Migrating and not from Verifying, which
                   the action's graph declares rather than this field: once the copy has
                   finished, the volume has moved and there is nothing to undo.
+                  Setting it is final: an unwind withdrawn midway would resume the forward
+                  steps against a partly undone operation, so it cannot be withdrawn.
                 type: boolean
               action:
                 description: |-
@@ -109,6 +111,7 @@ spec:
                   operation written by hand, which has no creator to cascade from.
                   Immutable, because an operation changing whose fan-out it belongs to
                   would change who cascades over it.
+                  Left unset at creation, it cannot be set later.
                 properties:
                   kind:
                     description: Kind is the creating object's kind, which is StorageNodeOps
@@ -246,6 +249,15 @@ spec:
                 and must be absent otherwise
               rule: 'self.action == ''JoinConsistencyGroup'' ? has(self.joinConsistencyGroup)
                 : !has(self.joinConsistencyGroup)'
+            - message: 'spec.abort cannot be withdrawn: the operation may already
+                be unwinding, and resuming it would run the forward steps against
+                a partly undone operation'
+              rule: '!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) &&
+                self.abort)'
+            - message: 'spec.creatorRef cannot be set after creation: a creator names
+                itself when it creates the operation, and one added later would cascade
+                a hand-written operation as its fan-out'
+              rule: has(self.creatorRef) == has(oldSelf.creatorRef)
           status:
             description: PersistentVolumeOpsStatus is the observed state of one volume
               operation.

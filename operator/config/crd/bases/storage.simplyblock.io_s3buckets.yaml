@@ -75,6 +75,7 @@ spec:
                   reconciles to a PVC expansion. A decrease is rejected, the same
                   restriction the PVC it wraps already carries.
                 format: int64
+                minimum: 1
                 type: integer
                 x-kubernetes-validations:
                 - message: capacityBytes cannot decrease

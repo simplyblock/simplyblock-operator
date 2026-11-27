@@ -270,6 +270,11 @@ func main() {
 		"The fleet agent's namespace, where it publishes the CA it serves with.")
 	flag.StringVar(&siteLinkTokenPath, "site-link-token-path", "/var/run/secrets/simplyblock/site-link/token",
 		"The projected ServiceAccount token, with the site link's audience, the agent verifies.")
+	var hubWorkAgentUsername string
+	flag.StringVar(&hubWorkAgentUsername, "hub-work-agent-username",
+		"system:serviceaccount:open-cluster-management-agent:klusterlet-work-sa",
+		"The username the hub's ManifestWorks are applied under on this cluster, the \"hub\" writer "+
+			"a +simplyblock:operatorManaged:writers=hub field admits besides the operator.")
 	flag.StringVar(&csiLinkClientCAFile, "csi-link-client-ca-file", "",
 		"The CA bundle that verifies the CSI peers' client certificates. Set, the link requires "+
 			"mutual TLS, admitting only the CSI node and controller client certificates.")
@@ -336,6 +341,13 @@ func main() {
 		os.Exit(1)
 	}
 	operatorNamespace := strings.TrimSpace(string(nsBytes))
+	// The operator-managed-fields validator admits the operator by its exact
+	// username, because other workloads share its namespace.
+	operatorUsername, err := internalwebhook.ServiceAccountUsername(internalwebhook.ServiceAccountTokenPath)
+	if err != nil {
+		setupLog.Error(err, "unable to determine the operator's service-account username")
+		os.Exit(1)
+	}
 
 	if latencyPercentile != "p50" && latencyPercentile != "p99" {
 		setupLog.Error(nil, "invalid --latency-percentile (must be \"p50\" or \"p99\")",
@@ -1517,6 +1529,15 @@ func main() {
 			}})
 		setupLog.Info("registered storagenode validating webhook")
 
+		mgr.GetWebhookServer().Register("/validate-operator-managed-fields",
+			&webhook.Admission{Handler: &internalwebhook.OperatorManagedValidator{
+				Scheme:           mgr.GetScheme(),
+				OperatorUsername: operatorUsername,
+				Writers:          map[string][]string{"hub": {hubWorkAgentUsername}},
+				ResolveWriter:    csiControllerWriter(mgr.GetClient()),
+			}})
+		setupLog.Info("registered operator-managed-fields validating webhook", "operator", operatorUsername)
+
 		mgr.GetWebhookServer().Register("/validate-storage-simplyblock-io-v1alpha1-replicationops",
 			&webhook.Admission{Handler: &internalwebhook.ReplicationOpsValidator{Client: mgr.GetClient()}})
 		setupLog.Info("registered replicationops validating webhook")
@@ -1716,4 +1737,26 @@ func newSwitchoverServer(mgr ctrl.Manager, namespace string) *atlasswitchover.Se
 		}
 	}
 	return server
+}
+
+// csiControllerWriter resolves the `csi` writer of the operator-managed-fields
+// webhook: the CSI controller's service account of every SimplyblockDriver. It
+// is resolved per request because the account is named after the driver.
+func csiControllerWriter(reader client.Reader) func(context.Context, string) ([]string, error) {
+	return func(ctx context.Context, writer string) ([]string, error) {
+		if writer != "csi" {
+			return nil, nil
+		}
+		var drivers simplyblockv1alpha2.SimplyblockDriverList
+		if err := reader.List(ctx, &drivers); err != nil {
+			return nil, err
+		}
+		usernames := make([]string, 0, len(drivers.Items))
+		for i := range drivers.Items {
+			d := &drivers.Items[i]
+			usernames = append(usernames,
+				"system:serviceaccount:"+d.Namespace+":"+driver.ControllerServiceAccountName(d))
+		}
+		return usernames, nil
+	}
 }

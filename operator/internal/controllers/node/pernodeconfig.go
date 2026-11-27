@@ -202,9 +202,10 @@ func renderNodeConfig(
 	fmt.Fprintf(&entry, "MAX_HUGE_PAGES_SIZE=%s\n", utils.ShellQuote(config.Sizing.MinHugePagesSize))
 	fmt.Fprintf(&entry, "VCPU_COUNT=%s\n", ptr.StringOrDefault(config.Sizing.VCPUCount, ""))
 	addresses, names := splitDeviceNames(config.DeviceNames)
+	// The PCI addresses among the device names are the node's whole allow list:
+	// a node states its devices in spec.config.deviceNames and nowhere else.
 	fmt.Fprintf(&entry, "PCI_ALLOWED=%s\n",
-		utils.ShellQuote(strings.Join(mergePCIAddresses(config.PcieAllowList, addresses), ",")))
-	fmt.Fprintf(&entry, "PCI_BLOCKED=%s\n", utils.ShellQuote(strings.Join(config.PcieDenyList, ",")))
+		utils.ShellQuote(strings.Join(mergePCIAddresses(nil, addresses), ",")))
 
 	// Which channel the device names leave through is the cluster's class, not
 	// the spelling of the names. Both classes name a device by a string the
@@ -239,7 +240,7 @@ func renderNodeConfig(
 			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
 			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
 		}
-		// By default the configure carves each node's journal partition from
+		// By default, the configure carves each node's journal partition from
 		// its smallest device (the journal split). enableJournalDevice asks for
 		// the smallest device to be dedicated to the journal instead.
 		if workload := cluster.Spec.StorageNodes; workload != nil &&
@@ -255,8 +256,6 @@ func renderNodeConfig(
 	if config.ReservedSystemCPU != "" {
 		fmt.Fprintf(&entry, "RESERVED_SYSTEM_CPUS=%s\n", utils.ShellQuote(config.ReservedSystemCPU))
 	}
-	fmt.Fprintf(&entry, "DEVICE_MODEL=%s\n", utils.ShellQuote(config.PcieModel))
-	fmt.Fprintf(&entry, "SIZE_RANGE=%s\n", utils.ShellQuote(config.DriveSizeRange))
 	// The journal share leaves through the variable its class is read by, for
 	// the reason the device names do. --jm-percent is passed from
 	// LBLK_JM_PERCENT, and the block branch of the init script never looks at
@@ -308,7 +307,7 @@ func splitDeviceNames(devices []string) (addresses, names []string) {
 // a migration is binding on the target host.
 //
 // It edits the rendered text rather than re-rendering from the node, because the
-// node's spec.config.pcieAllowList has not been rewritten yet: that happens after
+// node's spec.config.deviceNames has not been rewritten yet: that happens after
 // the promote, and this runs before the relocation.
 func mergeAllowedIntoEntry(entry string, added []string) string {
 	if len(added) == 0 {

@@ -126,6 +126,9 @@ type CancelTaskSpec struct {
 }
 
 // StorageClusterOpsSpec is one operation to perform against one StorageCluster.
+// +kubebuilder:validation:XValidation:rule="has(self.rollingRestart) == has(oldSelf.rollingRestart) && (!has(self.rollingRestart) || self.rollingRestart == oldSelf.rollingRestart)",message="spec.rollingRestart is immutable: each node's step re-reads it, so a change mid-walk restarts the remaining nodes under other parameters than the first"
+// +kubebuilder:validation:XValidation:rule="has(self.cancelTask) == has(oldSelf.cancelTask) && (!has(self.cancelTask) || self.cancelTask == oldSelf.cancelTask)",message="spec.cancelTask is immutable: Awaiting reads the task it cancels on every pass, so removing or replacing the block mid-operation waits on no task or on another"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type StorageClusterOpsSpec struct {
 	// ClusterRef names the StorageCluster this operation acts on. The operation
 	// never owns its target, because deleting the record of an operation must
@@ -146,6 +149,8 @@ type StorageClusterOpsSpec struct {
 	// Abort asks a running operation to stop at its next step and unwind.
 	// Whether an abort is expressible from the current step is declared by that
 	// action's graph rather than checked here.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 

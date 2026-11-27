@@ -315,16 +315,15 @@ Phase 1 uses only endpoints that exist. The one mutating call the controller may
 
 ## 9. Configuration
 
-| Field                  | Type   | Default               | Description                                                                                                                                            |
-|------------------------|--------|-----------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `spec.sourceCluster`   | string | (required)            | The OCM `ManagedCluster` the source runs on. Immutable                                                                                                 |
-| `spec.sourceNamespace` | string | (required for Volume) | The namespace of the source PVC. Immutable                                                                                                             |
-| `spec.sourceRef`       | string | (required)            | The source PVC (Volume) or consistency group (Group) on `sourceCluster`. Immutable                                                                     |
-| `spec.bubbleCluster`   | string | (required)            | The OCM `ManagedCluster` to recover onto. Must differ from `sourceCluster`. Immutable                                                                  |
-| `spec.bubbleNamespace` | string | `bubble`              | Namespace on the bubble cluster the recovered PVCs are created in. Immutable                                                                           |
-| `spec.ttlSeconds`      | int    | unset                 | Optional maximum lifetime. When set, the drill is torn down after the deadline even without a delete, so a forgotten drill cannot hold a clone forever |
+| Field                  | Type   | Default               | Description                                                                           |
+|------------------------|--------|-----------------------|---------------------------------------------------------------------------------------|
+| `spec.sourceCluster`   | string | (required)            | The OCM `ManagedCluster` the source runs on. Immutable                                |
+| `spec.sourceNamespace` | string | (required for Volume) | The namespace of the source PVC. Immutable                                            |
+| `spec.sourceRef`       | string | (required)            | The source PVC (Volume) or consistency group (Group) on `sourceCluster`. Immutable    |
+| `spec.bubbleCluster`   | string | (required)            | The OCM `ManagedCluster` to recover onto. Must differ from `sourceCluster`. Immutable |
+| `spec.bubbleNamespace` | string | `bubble`              | Namespace on the bubble cluster the recovered PVCs are created in. Immutable          |
 
-`ttlSeconds` is the only runtime-relevant knob and it is advisory: the controller reads it once at `Ready` and schedules a teardown. Changing the rest of the spec after creation is refused by immutability, because a drill whose target moved mid-flight has no coherent meaning.
+A drill has no lifetime limit: it holds its clones until it is deleted. Changing the spec after creation is refused by immutability, because a drill whose target moved mid-flight has no coherent meaning.
 
 ---
 
@@ -490,12 +489,6 @@ type TestFailoverSpec struct {
 	// +optional
 	// +k8s:immutable
 	BubbleNamespace string `json:"bubbleNamespace,omitempty"`
-
-	// TTLSeconds is an optional maximum lifetime: the drill is torn down after it
-	// even without a delete, so a forgotten drill cannot hold a clone forever.
-	// +optional
-	// +kubebuilder:validation:Minimum=0
-	TTLSeconds *int64 `json:"ttlSeconds,omitempty"`
 }
 
 // TestFailoverClone is one recovered volume: the source it came from, the

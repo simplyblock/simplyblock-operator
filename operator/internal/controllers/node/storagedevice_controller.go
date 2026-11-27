@@ -448,16 +448,23 @@ func (r *StorageDeviceReconciler) upsert(
 		case err != nil:
 			return err
 		default:
-			// The spec and the labels are both the mirror's output, so both are
-			// written back when they drift. A label the mirror does not own is
-			// left where it is: the object is the operator's to describe and
-			// somebody else's to annotate.
-			changed := applyLabels(&sd, labels)
+			// An object whose spec differs from the discovered device was
+			// written by hand under the mirror's name. Its spec cannot be
+			// corrected, since both fields are immutable from creation, and
+			// mirroring the device's status onto it would pair that health with
+			// a different identity: a StorageDeviceOps addresses spec.deviceID.
+			// It is left untouched, and the event says why.
 			if sd.Spec != spec {
-				sd.Spec = spec
-				changed = true
+				r.Recorder.Eventf(&sd, node, corev1.EventTypeWarning, "DeviceSpecMismatch", "Mirror",
+					"device %s is not mirrored: the object names node %q and device %q, the discovered device is node %q and device %q; delete the object to let the mirror recreate it",
+					dto.ID, sd.Spec.NodeRef, sd.Spec.DeviceID, spec.NodeRef, spec.DeviceID)
+				return nil
 			}
-			if changed {
+			// The labels are the mirror's output and are written back when they
+			// drift. A label the mirror does not own is left where it is: the
+			// object is the operator's to describe and somebody else's to
+			// annotate.
+			if applyLabels(&sd, labels) {
 				if err := r.Update(ctx, &sd); err != nil {
 					return err
 				}

@@ -13,9 +13,7 @@ import (
 )
 
 // TestStorageClusterCELValidatesArbitration covers spec.arbitration's schema:
-// holdMs must stay below the hosts' keep-alive (≤ 4500 ms), a lease must be
-// shorter than the hold it guards, and arbitration is only valid on a Dual
-// cluster.
+// arbitration is only valid on a Dual cluster.
 func TestStorageClusterCELValidatesArbitration(t *testing.T) {
 	apiClient := apiServer(t)
 	const onlyDual = "only valid when clusterMode is Dual"
@@ -30,22 +28,15 @@ func TestStorageClusterCELValidatesArbitration(t *testing.T) {
 		{name: "unset"},
 		{name: "dual without arbitration", mode: simplyblockv1alpha2.ClusterModeDual},
 		{name: "arbitration with defaults", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true)},
-		{name: "lease shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
-			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500)), LeaseTtlMs: ptr.To(int32(1500))}},
-		{name: "lease not shorter than hold", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
-			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(1500)), LeaseTtlMs: ptr.To(int32(1500))},
-			wantDenied:  "leaseTtlMs must be shorter than holdMs"},
-		{name: "hold above the keep-alive", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
-			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(5000))}, wantDenied: "holdMs"},
-		{name: "hold below the floor", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
-			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(100))}, wantDenied: "holdMs"},
+		{name: "arbitration settings on a dual cluster", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)}},
 		{name: "arbitration on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
 			enable: ptr.To(true), wantDenied: onlyDual},
 		{name: "arbitration on a cluster of unstated mode", enable: ptr.To(true), wantDenied: onlyDual},
 		{name: "arbitration on a single cluster", mode: simplyblockv1alpha2.ClusterModeSingle,
 			enable: ptr.To(true), wantDenied: onlyDual},
 		{name: "arbitration settings on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
-			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: onlyDual},
+			arbitration: &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)}, wantDenied: onlyDual},
 		{name: "arbitration off on a standard cluster", mode: simplyblockv1alpha2.ClusterModeStandard,
 			enable: ptr.To(false)},
 	} {

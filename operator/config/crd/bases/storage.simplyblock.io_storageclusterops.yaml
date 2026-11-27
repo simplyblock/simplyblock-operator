@@ -208,6 +208,8 @@ spec:
                     Abort asks a running operation to stop at its next step and unwind.
                     Whether an abort is expressible from the current step is declared by that
                     action's graph rather than checked here.
+                    Setting it is final: an unwind withdrawn midway would resume the forward
+                    steps against a partly undone operation, so it cannot be withdrawn.
                   type: boolean
                 action:
                   description: Action is the operation to perform.
@@ -268,6 +270,13 @@ spec:
                 - action
                 - clusterRef
               type: object
+              x-kubernetes-validations:
+                - message: 'spec.rollingRestart is immutable: each node''s step re-reads it, so a change mid-walk restarts the remaining nodes under other parameters than the first'
+                  rule: has(self.rollingRestart) == has(oldSelf.rollingRestart) && (!has(self.rollingRestart) || self.rollingRestart == oldSelf.rollingRestart)
+                - message: 'spec.cancelTask is immutable: Awaiting reads the task it cancels on every pass, so removing or replacing the block mid-operation waits on no task or on another'
+                  rule: has(self.cancelTask) == has(oldSelf.cancelTask) && (!has(self.cancelTask) || self.cancelTask == oldSelf.cancelTask)
+                - message: 'spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation'
+                  rule: '!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)'
             status:
               description: StorageClusterOpsStatus is the observed state of one cluster operation.
               properties:

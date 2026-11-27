@@ -90,6 +90,9 @@ type ObjectStoreSpec struct {
 
 	// TLSProvider selects how the Service's serving certificate is issued.
 	// Always issued: an S3 gateway is assumed to always serve over TLS.
+	// Changing it deletes the previous issuer's Certificate and Secret and
+	// waits in Provisioning for the new issuer's certificate. Running
+	// gateway pods keep serving the old certificate until then.
 	// +kubebuilder:validation:Enum=OpenShift;cert-manager
 	// +kubebuilder:default=OpenShift
 	// +optional
@@ -131,7 +134,7 @@ type ObjectStoreStatus struct {
 
 	// Conditions carries why an ObjectStore is Degraded, which a phase
 	// alone cannot express. Expected types: DeploymentAvailable,
-	// CertificateReady.
+	// DeploymentProgressing, CertificateReady.
 	// +optional
 	// +patchStrategy=merge
 	// +listType=map

@@ -299,8 +299,8 @@ func TestStretchedClusterClustersAndSitesAreImmutable(t *testing.T) {
 	}
 }
 
-// U-93 and U-94: approval is one-way, and an approved request's discovery is
-// fixed; before approval, a site's discovery may change.
+// U-93 and U-94: approval is one-way, and a site's discovery is fixed from
+// creation, before approval as after it.
 func TestStretchedClusterApprovalIsOneWayAndFreezesDiscovery(t *testing.T) {
 	c := apiServer(t)
 	ctx := context.Background()
@@ -319,12 +319,10 @@ func TestStretchedClusterApprovalIsOneWayAndFreezesDiscovery(t *testing.T) {
 	}
 
 	get()
-	fresh.Spec.Sites[1].Discover.NodeSelector = map[string]string{"storage": "yes"}
-	if err := c.Update(ctx, &fresh); err != nil {
-		t.Fatalf("a discovery change before approval must be admitted: %v", err)
-	}
+	underReview := fresh.DeepCopy()
+	underReview.Spec.Sites[1].Discover.NodeSelector = map[string]string{"storage": "yes"}
+	expectDenied(t, c.Update(ctx, underReview), "a site's discover is immutable")
 
-	get()
 	fresh.Spec.Approved = true
 	if err := c.Update(ctx, &fresh); err != nil {
 		t.Fatalf("approve: %v", err)
@@ -337,5 +335,5 @@ func TestStretchedClusterApprovalIsOneWayAndFreezesDiscovery(t *testing.T) {
 
 	rediscovered := fresh.DeepCopy()
 	rediscovered.Spec.Sites[1].Discover.NodeSelector = map[string]string{"storage": "no"}
-	expectDenied(t, c.Update(ctx, rediscovered), "discover cannot change once the stretched cluster is approved")
+	expectDenied(t, c.Update(ctx, rediscovered), "a site's discover is immutable")
 }

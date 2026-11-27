@@ -548,7 +548,7 @@ func nodeSetsOf(
 		}
 		set := strings.SplitN(key, "|", 2)[0]
 		g := &sets[setIndex[set]].Groups[groupIndex[key]]
-		g.SpdkSystemMemory, g.ReservedSystemCPU = src.SpdkSystemMemory, src.ReservedSystemCPU
+		g.ReservedSystemCPU = src.ReservedSystemCPU
 		g.JournalManager = src.JournalManager
 	}
 	return sets
@@ -561,10 +561,9 @@ func hiddenSettings(g *simplyblockv1alpha2.NodeGroup) string {
 		return ""
 	}
 	out, _ := json.Marshal(struct {
-		SpdkSystemMemory  string
 		ReservedSystemCPU string
 		JournalManager    *simplyblockv1alpha2.JournalManagerSpec
-	}{g.SpdkSystemMemory, g.ReservedSystemCPU, g.JournalManager})
+	}{g.ReservedSystemCPU, g.JournalManager})
 	return string(out)
 }
 

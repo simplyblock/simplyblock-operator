@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -411,11 +412,11 @@ func TestATemplateTakesArbitrationOnlyWhenDual(t *testing.T) {
 		wantDenied bool
 	}{
 		{name: "dual with arbitration", mode: simplyblockv1alpha2.ClusterModeDual, enable: ptr.To(true),
-			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}},
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)}},
 		{name: "standard with arbitration", mode: simplyblockv1alpha2.ClusterModeStandard,
 			enable: ptr.To(true), wantDenied: true},
 		{name: "unstated mode with arbitration settings",
-			settings: &simplyblockv1alpha2.ArbitrationSpec{HoldMs: ptr.To(int32(2500))}, wantDenied: true},
+			settings: &simplyblockv1alpha2.ArbitrationSpec{HostFencing: ptr.To(true)}, wantDenied: true},
 		{name: "single without arbitration", mode: simplyblockv1alpha2.ClusterModeSingle},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -614,5 +615,87 @@ func TestADocumentMixingHostNetworkingAndAttachmentsIsRefused(t *testing.T) {
 	err := apiClient.Update(context.Background(), doc, client.FieldValidation("Strict"))
 	if err == nil || !strings.Contains(err.Error(), "host networking") {
 		t.Errorf("a document mixing host networking and attachments was admitted, or refused for another reason: %v", err)
+	}
+}
+
+// Regression: the cluster template embeds the StorageCluster's block types, and
+// their update rules froze backup, network, openshift, and stretched settings
+// on a draft nobody had approved yet, so a reviewer's correction meant deleting
+// the draft and discovering again. A document is frozen by its approval, which
+// is the webhook's (TestEditingAnApprovedDocumentIsRefused), and by nothing
+// before it.
+func TestAnUnapprovedDocumentTakesAnyEdit(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name   string
+		set    func(*simplyblockv1alpha2.ClusterDeploymentConfig)
+		change func(*simplyblockv1alpha2.ClusterDeploymentConfig)
+	}{
+		{
+			name: "network",
+			set: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.Network = &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true}
+			},
+			change: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.Network = &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}
+			},
+		},
+		{
+			name: "backup",
+			set: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.Backup = &simplyblockv1alpha2.BackupStoreSpec{
+					Endpoint: "https://s3.example.com", Bucket: "backups", Region: "eu-1",
+					Credentials: &simplyblockv1alpha2.BackupCredentials{
+						Source:    simplyblockv1alpha2.BackupCredentialsSourceSecret,
+						SecretRef: &corev1.LocalObjectReference{Name: "s3"},
+					},
+				}
+			},
+			change: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.Backup = &simplyblockv1alpha2.BackupStoreSpec{
+					Endpoint: "https://s3.other.example.com", Bucket: "other",
+					Credentials: &simplyblockv1alpha2.BackupCredentials{
+						Source: simplyblockv1alpha2.BackupCredentialsSourceProviderChain,
+					},
+				}
+			},
+		},
+		{
+			name: "openshift",
+			set: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Environment = simplyblockv1alpha2.KubernetesEnvironmentOpenShift
+				c.Spec.Cluster.OpenShift = &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"}
+			},
+			change: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.OpenShift.MachineConfigPool = "storage"
+			},
+		},
+		{
+			name: "stretched",
+			set: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.EnableSyncReplication = ptr.To(true)
+				c.Spec.Cluster.Stretched = &simplyblockv1alpha2.StretchedSpec{
+					Site: "a", PeerSite: "b", Role: simplyblockv1alpha2.StretchedRoleLeader,
+				}
+			},
+			change: func(c *simplyblockv1alpha2.ClusterDeploymentConfig) {
+				c.Spec.Cluster.Stretched.Site = "c"
+				c.Spec.Cluster.Stretched.PeerSite = "d"
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			config := aStoredDocument(t, apiClient, "draft-"+tc.name)
+			tc.set(config)
+			if err := apiClient.Update(ctx, config); err != nil {
+				t.Fatalf("setting the block on a draft: %v", err)
+			}
+			tc.change(config)
+			if err := apiClient.Update(ctx, config); err != nil {
+				t.Fatalf("changing the block on a draft nobody approved: %v", err)
+			}
+		})
 	}
 }

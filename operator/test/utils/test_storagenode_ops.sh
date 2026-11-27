@@ -431,14 +431,6 @@ EOF
     && pass "Per-node ConfigMap updated with entry for manual worker $EXPAND_WORKER" \
     || fail "Per-node ConfigMap did not include $EXPAND_WORKER within 60s"
 
-  # 3. Overrides merged with fleet defaults in ConfigMap entry
-  size_range=$(kubectl -n "$NAMESPACE" get configmap "${STORAGENODESET}-per-node-config" \
-    -o jsonpath="{.data['$EXPAND_WORKER']}" 2>/dev/null | \
-    grep "^SIZE_RANGE=" | cut -d= -f2 | tr -d "'" || true)
-  [[ "$size_range" == "50G-2T" ]] \
-    && pass "Override driveSizeRange=50G-2T reflected in ConfigMap" \
-    || fail "Expected SIZE_RANGE='50G-2T' in ConfigMap, got '$size_range'"
-
   # 3b. Cluster-scoped sizing comes from the StorageCluster, not the node/set, and
   #     must be identical in every entry — there is no per-node override for it.
   cluster_name=$(kubectl -n "$NAMESPACE" get storagenodeset "$STORAGENODESET" \

@@ -317,13 +317,6 @@ type NodeGroup struct {
 	// +optional
 	Site string `json:"site,omitempty"`
 
-	// SpdkSystemMemory is the memory the control plane starts SPDK with on these
-	// nodes.
-	// +kubebuilder:validation:Pattern=`^[0-9]+(G|GI|GB|GiB|M|MI|MB|MiB|g|gi|gb|gib|m|mi|mb|mib)?$`
-	// +kubebuilder:validation:MaxLength=32
-	// +optional
-	SpdkSystemMemory string `json:"spdkSystemMemory,omitempty"`
-
 	// ReservedSystemCPU is the CPU set held back from SPDK for the system on
 	// these nodes, as a core list such as 0,1 or 0-3.
 	//
@@ -731,6 +724,7 @@ type ClusterTemplate struct {
 	// StorageCluster. Requires enableSyncReplication; every node group's site
 	// must equal stretched.site.
 	// +optional
+	// +simplyblock:invisible
 	Stretched *StretchedSpec `json:"stretched,omitempty"`
 
 	// EnableNodeAffinity has the data plane serve an erasure-coded volume's I/O
@@ -916,12 +910,6 @@ type ClusterDeploymentConfigSpec struct {
 	// carries the family for the reviewer reading the document.
 	// +optional
 	HostOS *HostOSSpec `json:"hostOS,omitempty"`
-
-	// EdgeCluster states that this is an edge deployment. An edge deployment
-	// differs from a datacenter one in topology and scale rather than in kind,
-	// so it is the same StorageCluster with fewer, smaller nodes.
-	// +optional
-	EdgeCluster *bool `json:"edgeCluster,omitempty"`
 
 	// ClusterRef names an existing StorageCluster this document adds to: the
 	// nodes of every node set to a standalone cluster or a member, and one new

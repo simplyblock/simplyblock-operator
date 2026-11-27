@@ -150,7 +150,7 @@ var csiAddonsRoleRules = []rbacv1.PolicyRule{
 func csiAddonsRole(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.Role {
 	n := names(d)
 	return &rbacv1.Role{
-		ObjectMeta: metav1.ObjectMeta{Name: n.role(csiAddonsComponent), Namespace: d.Namespace},
+		ObjectMeta: metav1.ObjectMeta{Name: n.csiAddonsRole, Namespace: d.Namespace},
 		Rules:      csiAddonsRoleRules,
 	}
 }
@@ -167,7 +167,7 @@ func csiAddonsRoleBinding(d *simplyblockv1alpha2.SimplyblockDriver) *rbacv1.Role
 		RoleRef: rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
 			Kind:     "Role",
-			Name:     n.role(csiAddonsComponent),
+			Name:     n.csiAddonsRole,
 		},
 	}
 }

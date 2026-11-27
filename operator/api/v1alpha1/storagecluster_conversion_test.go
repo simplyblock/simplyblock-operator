@@ -193,50 +193,15 @@ func TestStorageClusterAnEmptySpecGainsNoBlocks(t *testing.T) {
 	}
 }
 
-// The metrics backend recases (design-property-renames.md §2.5). It is one
-// field under both spellings, so a wrong mapping silently selects a different
-// source of truth for every placement decision.
-func TestStorageClusterMetricsBackendConvertsBothWays(t *testing.T) {
-	assertEnumConvertsBothWays(t,
-		[]enumPair{
-			{"controlplane", string(v1alpha2.MetricsBackendControlPlane)},
-			{"prometheus", string(v1alpha2.MetricsBackendPrometheus)},
-			{"uniform", string(v1alpha2.MetricsBackendUniform)},
-		},
-		func(t *testing.T, backend string) string {
-			src := &StorageCluster{Spec: StorageClusterSpec{
-				VolumeAutoPlacement: &VolumeAutoPlacementSettings{
-					MetricsBackend: ptr.To(MetricsBackend(backend)),
-				},
-			}}
-			var hub v1alpha2.StorageCluster
-			if err := src.ConvertTo(&hub); err != nil {
-				t.Fatalf("ConvertTo: %v", err)
-			}
-			return string(*hub.Spec.VolumeAutoPlacement.MetricsBackend)
-		},
-		func(t *testing.T, backend string) string {
-			src := &v1alpha2.StorageCluster{Spec: v1alpha2.StorageClusterSpec{
-				VolumeAutoPlacement: &v1alpha2.VolumeAutoPlacementSettings{
-					MetricsBackend: ptr.To(v1alpha2.MetricsBackend(backend)),
-				},
-			}}
-			var back StorageCluster
-			if err := back.ConvertFrom(src); err != nil {
-				t.Fatalf("ConvertFrom: %v", err)
-			}
-			return string(*back.Spec.VolumeAutoPlacement.MetricsBackend)
-		},
-	)
-}
-
-// The four removals of design-property-renames.md §2.3. Each has nowhere to go
-// on the hub, so round-tripping a v1alpha1 object through the API server has to
-// return what was applied rather than silently dropping it.
+// The removals of design-property-renames.md §2.3, and the rebalancer's metrics
+// source, which v1alpha2 dropped later. Each has nowhere to go on the hub, so
+// round-tripping a v1alpha1 object through the API server has to return what
+// was applied rather than silently dropping it.
 func TestStorageClusterRemovedFieldsSurviveTheHub(t *testing.T) {
 	src := &StorageCluster{
 		Spec: StorageClusterSpec{
 			VolumeMigrationSettings: &VolumeMigrationSettings{Enabled: ptr.To(false)},
+			VolumeAutoPlacement:     &VolumeAutoPlacementSettings{MetricsBackend: ptr.To(MetricsBackendPrometheus)},
 			Backup: &BackupSpec{
 				LocalEndpoint:        "https://s3.example.com",
 				CredentialsSecretRef: BackupCredentialsSecretRef{Name: "creds"},
@@ -262,6 +227,9 @@ func TestStorageClusterRemovedFieldsSurviveTheHub(t *testing.T) {
 	}
 	if e := back.Spec.VolumeMigrationSettings.Enabled; e == nil || *e {
 		t.Errorf("volumeMigrationSettings.enabled = %v, want false", e)
+	}
+	if ap := back.Spec.VolumeAutoPlacement; ap == nil || ap.MetricsBackend == nil || *ap.MetricsBackend != MetricsBackendPrometheus {
+		t.Errorf("volumeAutoPlacement.metricsBackend did not survive the hub: %+v", ap)
 	}
 }
 

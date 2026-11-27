@@ -128,9 +128,6 @@ func TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse(t *testing.T) {
 		{"spec.workerNode", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.WorkerNode = "worker-4"
 		}},
-		{"spec.config.pcieAllowList", func(n *simplyblockv1alpha2.StorageNode) {
-			n.Spec.Config.PcieAllowList = []string{"0000:5e:00.0"}
-		}},
 		{"spec.config.sizing", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.Config.Sizing.VCPUCount = ptr.To(int32(16))
 		}},
@@ -149,9 +146,6 @@ func TestTheOperatorOnlyFieldsAreRefusedToEveryoneElse(t *testing.T) {
 		// or on the wire.
 		{"spec.config.deviceNames", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.Config.DeviceNames = []string{"nvme3n1"}
-		}},
-		{"spec.config.spdkSystemMemory", func(n *simplyblockv1alpha2.StorageNode) {
-			n.Spec.Config.SpdkSystemMemory = "8G"
 		}},
 		{"spec.config.reservedSystemCPU", func(n *simplyblockv1alpha2.StorageNode) {
 			n.Spec.Config.ReservedSystemCPU = "0-3"
@@ -206,15 +200,15 @@ func TestTheRefusalNamesEveryConfigFieldTheUpdateTouched(t *testing.T) {
 	validator := validatorFor(t, nodeTestCluster(nil))
 	before := testNode(nil)
 	after := testNode(func(n *simplyblockv1alpha2.StorageNode) {
-		n.Spec.Config.SpdkSystemMemory = "8G"
-		n.Spec.Config.PcieModel = "SAMSUNG MZQL2"
+		n.Spec.Config.ReservedSystemCPU = "0-3"
+		n.Spec.Config.SpdkImage = "spdk:rebuilt"
 	})
 
 	response := validator.Handle(context.Background(), updateReq(t, before, after, someoneElse))
 	if response.Allowed {
 		t.Fatal("two guarded fields were admitted from a user")
 	}
-	for _, field := range []string{"spec.config.spdkSystemMemory", "spec.config.pcieModel"} {
+	for _, field := range []string{"spec.config.reservedSystemCPU", "spec.config.spdkImage"} {
 		if !strings.Contains(response.Result.Message, field) {
 			t.Errorf("the refusal does not name %s: %s", field, response.Result.Message)
 		}
@@ -298,37 +292,6 @@ func TestDeviceNamesOfTheClusterSClassAreAdmitted(t *testing.T) {
 		response := validator.Handle(context.Background(), createReq(t, node, someoneElse))
 		if !response.Allowed {
 			t.Errorf("%v was refused on a %s cluster: %s", devices, class, response.Result.Message)
-		}
-	}
-}
-
-// The PCI filters match on something a logical block device does not have, so they
-// are refused rather than ignored: a filter that silently selects nothing is a node
-// that comes up with no devices and no reason given.
-func TestThePCIFiltersAreRefusedOnALogicalBlockCluster(t *testing.T) {
-	validator := validatorFor(t, nodeTestCluster(func(c *simplyblockv1alpha2.StorageCluster) {
-		c.Spec.DeviceClass = simplyblockv1alpha2.StorageClusterDeviceClassLogicalBlock
-	}))
-
-	for field, mutate := range map[string]func(*simplyblockv1alpha2.StorageNode){
-		"spec.config.pcieAllowList": func(n *simplyblockv1alpha2.StorageNode) {
-			n.Spec.Config.PcieAllowList = []string{"0000:5e:00.0"}
-		},
-		"spec.config.pcieDenyList": func(n *simplyblockv1alpha2.StorageNode) {
-			n.Spec.Config.PcieDenyList = []string{"0000:5e:00.0"}
-		},
-		"spec.config.pcieModel": func(n *simplyblockv1alpha2.StorageNode) {
-			n.Spec.Config.PcieModel = "Samsung"
-		},
-	} {
-		response := validator.Handle(context.Background(),
-			createReq(t, testNode(mutate), someoneElse))
-		if response.Allowed {
-			t.Errorf("%s was admitted on a logical-block cluster", field)
-			continue
-		}
-		if !strings.Contains(response.Result.Message, field) {
-			t.Errorf("the refusal does not name %s: %s", field, response.Result.Message)
 		}
 	}
 }

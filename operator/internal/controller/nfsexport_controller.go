@@ -648,8 +648,12 @@ func (r *NFSExportReconciler) writeStatus(
 		}
 		mutate(&fresh.Status)
 		// On every write: a lagging observedGeneration is indistinguishable
-		// from an uninteresting one.
-		fresh.Status.ObservedGeneration = fresh.Generation
+		// from an uninteresting one. The generation stamped is the one this
+		// pass read, not the fresh one: a spec write that landed since, such
+		// as the CSI controller's size, has not been acted on, and marking it
+		// observed would skip the re-assembly that grows the filesystem. A
+		// later pass may already have observed more, which is kept.
+		fresh.Status.ObservedGeneration = max(fresh.Status.ObservedGeneration, export.Generation)
 		if err := r.Status().Update(ctx, &fresh); err != nil {
 			return err
 		}

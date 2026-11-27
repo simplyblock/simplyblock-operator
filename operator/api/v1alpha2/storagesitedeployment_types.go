@@ -109,6 +109,8 @@ type StorageSiteSizing struct {
 
 // StorageSiteDeploymentSpec is the request for one site's storage cluster.
 // +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || self.approved",message="approval is one-way: an approved deployment cannot be un-approved"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.approved) || !oldSelf.approved || (has(self.sizing) == has(oldSelf.sizing) && (!has(self.sizing) || self.sizing == oldSelf.sizing))",message="sizing cannot change once the deployment is approved: the site's approved draft refuses the re-apply, and the request would report Failed for a running cluster"
+// +kubebuilder:validation:XValidation:rule="has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover)",message="discover is immutable: another discovery does not rewrite the draft already written, so a different discovery is a new deployment"
 type StorageSiteDeploymentSpec struct {
 	// Cluster is the OCM ManagedCluster the storage is deployed on. The request's
 	// ManifestWork and views live in its namespace on the hub. Immutable.
@@ -120,6 +122,7 @@ type StorageSiteDeploymentSpec struct {
 
 	// SiteNamespace is the simplyblock operator's namespace on the site, where
 	// the discovery and the draft live.
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="siteNamespace is immutable: the views that project the site back are not re-pointed, so a new namespace splits the request between two namespaces and fails it"
 	// +kubebuilder:default=simplyblock
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
@@ -133,8 +136,12 @@ type StorageSiteDeploymentSpec struct {
 	// +optional
 	DraftName string `json:"draftName,omitempty"`
 
-	// Discover is the discovery the site runs first. Changing it runs another
-	// discovery, which rewrites the draft.
+	// Discover is the discovery the site runs first. Immutable: another
+	// discovery would not rewrite the draft already written, so a different
+	// discovery is a new deployment.
+	// The block defaults to empty, so a manifest without it and a typed
+	// write, which always carries it, store the same value.
+	// +kubebuilder:default={}
 	// +optional
 	Discover StorageSiteDiscovery `json:"discover,omitempty"`
 

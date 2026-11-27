@@ -136,6 +136,7 @@ const (
 )
 
 // StorageDeviceOpsSpec is one operation to perform against one StorageDevice.
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type StorageDeviceOpsSpec struct {
 	// DeviceRef names the StorageDevice this operation acts on, in this
 	// operation's own namespace. The operation never owns its target, because
@@ -158,6 +159,8 @@ type StorageDeviceOpsSpec struct {
 	// device a failure has already removed is one this operator has no call to
 	// put back. The graph declares where the edge exists rather than this field
 	// promising one.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 }

@@ -6,6 +6,7 @@ package node
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -400,13 +401,13 @@ func TestStorageDeviceStatusUpdateRetriesOnConflict(t *testing.T) {
 	}
 }
 
-// The spec write races the same way the status write does: the mirror owns the
-// whole creation path, so a device whose object exists but carries no spec yet
-// is written on the next reconcile, and that write can be rejected too.
-func TestStorageDeviceSpecUpdateRetriesOnConflict(t *testing.T) {
-	// No spec: the mirror must fill it in, which is the write that conflicts.
+// The label write races the same way the status write does: the mirror writes
+// back the labels it owns when they drift, and that write can be rejected too.
+func TestStorageDeviceLabelUpdateRetriesOnConflict(t *testing.T) {
+	// No labels: the mirror must write its own, which is the write that conflicts.
 	existing := &simplyblockv1alpha2.StorageDevice{
 		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: sdDevice},
 	}
 
 	updates := 0
@@ -423,16 +424,53 @@ func TestStorageDeviceSpecUpdateRetriesOnConflict(t *testing.T) {
 	}, sdNodeObject(), existing)
 
 	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
-		t.Fatalf("a 409 on the spec write must be retried, not surfaced: %v", err)
+		t.Fatalf("a 409 on the label write must be retried, not surfaced: %v", err)
 	}
 	if updates < 2 {
-		t.Fatalf("expected the spec write to be retried, got %d attempt(s)", updates)
+		t.Fatalf("expected the label write to be retried, got %d attempt(s)", updates)
 	}
 	sd, err := getSD(t, r.Client)
 	if err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if sd.Spec.NodeRef != sdNodeCR || sd.Spec.DeviceID != sdDevice {
-		t.Errorf("spec lost after the conflict retry: %+v", sd.Spec)
+	if len(sd.Labels) == 0 {
+		t.Errorf("labels lost after the conflict retry: %+v", sd.Labels)
+	}
+}
+
+// A device object whose spec differs from what the mirror computes was written
+// by hand under the mirror's name. Its spec cannot be corrected, since both
+// fields are immutable from creation, and mirroring the discovered device's
+// status onto it would pair that health with a different device identity: a
+// StorageDeviceOps restart addresses spec.deviceID. The mirror leaves it
+// untouched and says so in a Warning event.
+func TestAMismatchedDeviceSpecIsRefused(t *testing.T) {
+	existing := &simplyblockv1alpha2.StorageDevice{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "sb", Name: sdName()},
+		Spec:       simplyblockv1alpha2.StorageDeviceSpec{NodeRef: sdNodeCR, DeviceID: "hand-written"},
+	}
+	r := sdReconcilerWithInterceptor(t, sdOnlineCache(), interceptor.Funcs{}, sdNodeObject(), existing)
+
+	if _, err := r.Reconcile(context.Background(), sdReq()); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	sd, err := getSD(t, r.Client)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if sd.Status.Phase != "" {
+		t.Errorf("the discovered device's status was mirrored onto a different identity: %+v", sd.Status)
+	}
+	if len(sd.Labels) != 0 {
+		t.Errorf("labels written onto a mismatched object: %+v", sd.Labels)
+	}
+	recorder := r.Recorder.(*events.FakeRecorder)
+	select {
+	case e := <-recorder.Events:
+		if !strings.Contains(e, "Warning") || !strings.Contains(e, "DeviceSpecMismatch") {
+			t.Errorf("event = %q, want a DeviceSpecMismatch Warning", e)
+		}
+	default:
+		t.Error("no event says why the device object is not mirrored")
 	}
 }

@@ -82,6 +82,7 @@ spec:
                 description: |-
                   Restore carries the parameters of the Restore action. Ignored for any
                   other action.
+                  Left unset at creation, it cannot be set later.
                 properties:
                   consistencyGroup:
                     description: |-
@@ -149,6 +150,10 @@ spec:
             x-kubernetes-validations:
             - message: field restore is immutable once set
               rule: '!has(oldSelf.restore) || has(self.restore)'
+            - message: 'spec.restore cannot be set after creation: a restore reads
+                it for every claim it builds, so parameters added midway would split
+                one restored group across settings'
+              rule: has(self.restore) == has(oldSelf.restore)
           status:
             description: VolumeGroupSnapshotOpsStatus holds the observed state of
               the operation.

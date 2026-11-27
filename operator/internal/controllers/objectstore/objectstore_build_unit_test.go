@@ -327,6 +327,27 @@ func TestBuildDeploymentPassesTheRegionToTheGateway(t *testing.T) {
 	}
 }
 
+// The Service and the container port follow spec.port, so the gateway has to
+// listen there too: it binds VGW_PORT, and left unset that is :9000, which no
+// Service port pointed at when spec.port named another.
+func TestBuildDeploymentTellsTheGatewayWhichPortToListenOn(t *testing.T) {
+	store := testObjectStoreSpec(func(s *simplyblockv1alpha2.ObjectStore) {
+		s.Spec.Port = 9443
+	})
+	container := buildDeployment(store).Spec.Template.Spec.Containers[0]
+
+	env := map[string]string{}
+	for _, e := range container.Env {
+		env[e.Name] = e.Value
+	}
+	if got, ok := env["VGW_PORT"]; !ok || got != ":9443" {
+		t.Errorf("VGW_PORT = %q (set: %v), want :9443", got, ok)
+	}
+	if got := container.Ports[0].ContainerPort; got != 9443 {
+		t.Errorf("containerPort = %d, want 9443", got)
+	}
+}
+
 // The gateway serves the certificate mounted from the TLS Secret, for either
 // provider: cert-manager and OpenShift's service CA both write tls.crt and
 // tls.key, so the paths are the same.

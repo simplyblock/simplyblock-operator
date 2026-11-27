@@ -31,9 +31,13 @@
 // the ControlPlane must not take the database behind every volume with it, so
 // deleting one of these objects stays a deliberate `kubectl delete`.
 //
-// The one exception is the discovery run, which carries an owner reference to
-// the ConfigMap when it lives in the same namespace, so `helm uninstall` (which
-// deletes the ConfigMap) still removes it as it did when Helm owned it.
+// The discovery run is the exception twice over. It is only ever created: a
+// changed key finds the existing run and leaves it alone, because its
+// spec.discover is immutable and a finished run would not act on new values
+// anyway; a new discovery.name is what asks for another discovery. And it carries
+// an owner reference to the ConfigMap when it lives in the same namespace, so
+// `helm uninstall` (which deletes the ConfigMap) still removes it as it did
+// when Helm owned it.
 package bootstrap
 
 import (
@@ -202,18 +206,26 @@ func (r *Reconciler) applyKey(
 		obj.SetNamespace(cm.Namespace)
 	}
 	if obj.GetKind() == "OperatorOps" {
-		if migrating {
-			var live unstructured.Unstructured
-			live.SetGroupVersionKind(obj.GroupVersionKind())
-			err := r.Client.Get(ctx, client.ObjectKeyFromObject(obj), &live)
-			if apierrors.IsNotFound(err) {
-				log.FromContext(ctx).Info("not recreating the discovery run an upgraded release had already",
-					"key", key, "name", obj.GetName())
-				return true, nil
-			}
-			if err != nil && !meta.IsNoMatchError(err) {
-				return false, err
-			}
+		var live unstructured.Unstructured
+		live.SetGroupVersionKind(obj.GroupVersionKind())
+		err := r.Client.Get(ctx, client.ObjectKeyFromObject(obj), &live)
+		switch {
+		case err == nil:
+			// A run's spec.discover is immutable: the run is the record of what
+			// produced its draft. Changed values are left for a new run.
+			log.FromContext(ctx).Info("not rewriting an existing discovery run",
+				"key", key, "name", obj.GetName())
+			r.emit(&live, corev1.EventTypeNormal, "DiscoveryRunKept",
+				fmt.Sprintf("the chart's discovery values changed, and discovery run %s already exists "+
+					"and is kept; set discovery.name to a new name to discover again with the new values",
+					obj.GetName()))
+			return true, nil
+		case apierrors.IsNotFound(err) && migrating:
+			log.FromContext(ctx).Info("not recreating the discovery run an upgraded release had already",
+				"key", key, "name", obj.GetName())
+			return true, nil
+		case err != nil && !apierrors.IsNotFound(err) && !meta.IsNoMatchError(err):
+			return false, err
 		}
 		if obj.GetNamespace() == cm.Namespace {
 			obj.SetOwnerReferences([]metav1.OwnerReference{{

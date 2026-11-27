@@ -341,6 +341,9 @@ type DiscoverSpec struct {
 // It carries no target reference. Every other Ops kind in this group names the
 // entity it acts on; this one acts on the operator process, which is not a
 // resource in this API group, and the absent field is the signal.
+//
+// +kubebuilder:validation:XValidation:rule="has(self.discover) == has(oldSelf.discover) && (!has(self.discover) || self.discover == oldSelf.discover)",message="spec.discover is immutable: the run reads it again at every step, so a change would mix two discoveries into one draft, and a finished run is the record of what produced its draft; create a new run instead"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type OperatorOpsSpec struct {
 	// Action is the operation to perform.
 	// +kubebuilder:validation:Required
@@ -351,10 +354,13 @@ type OperatorOpsSpec struct {
 	// Whether an abort is expressible from the current step is declared by that
 	// action's graph rather than checked here. Discovery changes nothing, so an
 	// aborted run leaves behind at most the config it had already written.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 
-	// Discover parameterizes action Discover.
+	// Discover parameterizes action Discover. Immutable: a different discovery
+	// is a new run.
 	// +optional
 	Discover *DiscoverSpec `json:"discover,omitempty"`
 }

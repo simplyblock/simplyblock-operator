@@ -10,6 +10,7 @@
 package v1alpha1
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -219,6 +220,45 @@ func TestStorageNodeDeadPerNodeFieldsSurviveTheRoundTrip(t *testing.T) {
 		!ptr.BoolFromOrFalse(got.EnableCpuTopology) ||
 		got.ReservedSystemCPU != "0-1" {
 		t.Errorf("the four fields did not survive: %+v", got)
+	}
+}
+
+// The node's own device selectors and memory budget left the hub (a v1alpha2
+// node states its devices in spec.config.deviceNames), so they stash on the way
+// up and a node converted back down carries what it carried.
+func TestStorageNodeRemovedDeviceSelectorsSurviveTheRoundTrip(t *testing.T) {
+	stored := &StorageNode{
+		ObjectMeta: metav1.ObjectMeta{Name: "n", Namespace: "sb"},
+		Spec: StorageNodeSpec{
+			WorkerNode: "worker-3",
+			Overrides: &StorageNodeOverrides{
+				SpdkSystemMemory: "4G",
+				PcieAllowList:    []string{"0000:5e:00.0", "0000:5f:00.0"},
+				PcieDenyList:     []string{"0000:60:00.0"},
+				PcieModel:        "Samsung PM1733",
+				DriveSizeRange:   "1T-4T",
+			},
+		},
+	}
+
+	var hub v1alpha2.StorageNode
+	if err := stored.ConvertTo(&hub); err != nil {
+		t.Fatalf("ConvertTo: %v", err)
+	}
+	var back StorageNode
+	if err := back.ConvertFrom(&hub); err != nil {
+		t.Fatalf("ConvertFrom: %v", err)
+	}
+
+	want := stored.Spec.Overrides
+	got := back.Spec.Overrides
+	if got == nil || got.SpdkSystemMemory != want.SpdkSystemMemory || got.PcieModel != want.PcieModel ||
+		got.DriveSizeRange != want.DriveSizeRange ||
+		!slices.Equal(got.PcieAllowList, want.PcieAllowList) || !slices.Equal(got.PcieDenyList, want.PcieDenyList) {
+		t.Errorf("the five fields did not survive the hub: %+v", got)
+	}
+	if len(back.Annotations) != 0 {
+		t.Errorf("the notes outlived the fields they carried: %v", back.Annotations)
 	}
 }
 

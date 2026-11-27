@@ -242,6 +242,7 @@ type HostMaintenanceSpec struct {
 // +kubebuilder:validation:XValidation:rule="has(self.backup) == has(oldSelf.backup) && (!has(self.backup) || self.backup == oldSelf.backup)",message="spec.backup is immutable: the destination is what Requesting created the FoundationDBBackup against"
 // +kubebuilder:validation:XValidation:rule="has(self.hostMaintenance) == has(oldSelf.hostMaintenance) && (!has(self.hostMaintenance) || self.hostMaintenance == oldSelf.hostMaintenance)",message="spec.hostMaintenance is immutable: the budget and the maintenance zone were raised for the worker the operation was admitted with"
 // +kubebuilder:validation:XValidation:rule="self.action != 'HostMaintenance' || has(self.hostMaintenance)",message="action HostMaintenance needs spec.hostMaintenance, which names the worker"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type ControlPlaneOpsSpec struct {
 	// ControlPlaneRef names the ControlPlane this operation acts on, in this
 	// object's own namespace. The operation never owns its target, because
@@ -262,6 +263,8 @@ type ControlPlaneOpsSpec struct {
 	// is meant to be set after the operation started. Whether an abort is
 	// expressible from the current step is declared by that action's graph rather
 	// than checked here.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 

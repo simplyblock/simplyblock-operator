@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -592,7 +593,7 @@ func TestStorageClusterClusterModeRules(t *testing.T) {
 	if err := apiClient.Create(context.Background(), same); err != nil {
 		t.Fatalf("creating a single-node cluster: %v", err)
 	}
-	same.Spec.MaxSubsystemCount = ptr.To(int32(12))
+	same.Spec.MaxConcurrentWorkerRestarts = ptr.To(int32(2))
 	if err := apiClient.Update(context.Background(), same); err != nil {
 		t.Errorf("an unrelated update of a single-node cluster was refused: %v", err)
 	}
@@ -637,6 +638,126 @@ func TestStorageClusterMetadataJournalDefaultsOn(t *testing.T) {
 			}
 			if *got != tc.want {
 				t.Errorf("enableMetadataJournal = %v, want %v", *got, tc.want)
+			}
+		})
+	}
+}
+
+// The settings a StorageCluster freezes inside the block types it shares with
+// a ClusterDeploymentConfig's template. The rules live on the StorageCluster
+// rather than on the shared types, so that a draft nobody approved yet stays
+// editable; this pins that the StorageCluster still refuses every one of them.
+// It passed before the rules moved, which is its point: it guards the move.
+func TestTheSharedBlocksStayFrozenOnAStorageCluster(t *testing.T) {
+	apiClient := apiServer(t)
+	ctx := context.Background()
+
+	secretStore := func() *simplyblockv1alpha2.BackupStoreSpec {
+		return &simplyblockv1alpha2.BackupStoreSpec{
+			Endpoint: "https://s3.example.com", Bucket: "backups", Region: "eu-1",
+			Credentials: &simplyblockv1alpha2.BackupCredentials{
+				Source:    simplyblockv1alpha2.BackupCredentialsSourceSecret,
+				SecretRef: &corev1.LocalObjectReference{Name: "s3"},
+			},
+		}
+	}
+	withBackup := func() *simplyblockv1alpha2.StorageCluster { return clusterWithBackup(secretStore()) }
+	withDeprecatedRef := func() *simplyblockv1alpha2.StorageCluster {
+		return clusterWithBackup(&simplyblockv1alpha2.BackupStoreSpec{
+			Endpoint: "https://s3.example.com", Bucket: "backups",
+			//nolint:staticcheck // SA1019: the deprecated field's own update rule
+			CredentialsSecretRef: &corev1.LocalObjectReference{Name: "s3"},
+		})
+	}
+	withOpenShift := func() *simplyblockv1alpha2.StorageCluster {
+		c := clusterWithBackup(nil)
+		c.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
+			OpenShift: &simplyblockv1alpha2.OpenShiftSpec{MachineConfigPool: "infra"},
+		}
+		return c
+	}
+	withPodNetwork := func() *simplyblockv1alpha2.StorageCluster {
+		c := clusterWithBackup(nil)
+		c.Spec.StorageNodes = &simplyblockv1alpha2.StorageNodesSpec{
+			Network: &simplyblockv1alpha2.StorageNetworkSpec{PodNetwork: true},
+		}
+		return c
+	}
+	withStretched := func() *simplyblockv1alpha2.StorageCluster {
+		return stretchedCluster(leaderWithPeer(siteB), ptr.To(true))
+	}
+
+	for _, tc := range []struct {
+		name   string
+		create func() *simplyblockv1alpha2.StorageCluster
+		mutate func(*simplyblockv1alpha2.StorageClusterSpec)
+		denied bool
+	}{
+		{name: "moving the storage nodes off the pod network", create: withPodNetwork, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				s.StorageNodes.Network = &simplyblockv1alpha2.StorageNetworkSpec{SpdkOnHostNetwork: true}
+			}},
+		{name: "changing the backup endpoint", create: withBackup, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup.Endpoint = "https://other.example.com" }},
+		{name: "changing the backup bucket", create: withBackup, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup.Bucket = "other" }},
+		{name: "changing the backup region", create: withBackup, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup.Region = "us-1" }},
+		{name: "removing the backup region", create: withBackup, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup.Region = "" }},
+		{name: "changing the credentials source", create: withBackup, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				s.Backup.Credentials = &simplyblockv1alpha2.BackupCredentials{
+					Source: simplyblockv1alpha2.BackupCredentialsSourceProviderChain}
+			}},
+		{name: "naming another credentials Secret", create: withBackup, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				s.Backup.Credentials.SecretRef = &corev1.LocalObjectReference{Name: "other"}
+			}},
+		{name: "naming another deprecated credentials Secret", create: withDeprecatedRef, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				//nolint:staticcheck // SA1019: the deprecated field's own update rule
+				s.Backup.CredentialsSecretRef = &corev1.LocalObjectReference{Name: "other"}
+			}},
+		{name: "moving off the deprecated credentials field", create: withDeprecatedRef, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				//nolint:staticcheck // SA1019: the deprecated field's own update rule
+				s.Backup.CredentialsSecretRef = nil
+				s.Backup.Credentials = &simplyblockv1alpha2.BackupCredentials{
+					Source:    simplyblockv1alpha2.BackupCredentialsSourceSecret,
+					SecretRef: &corev1.LocalObjectReference{Name: "s3"},
+				}
+			}},
+		{name: "adding a region to a store created without one", create: withDeprecatedRef,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup.Region = "eu-1" }},
+		{name: "removing the whole store", create: withBackup,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup = nil }},
+		{name: "giving a cluster a store later", create: func() *simplyblockv1alpha2.StorageCluster { return clusterWithBackup(nil) },
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Backup = secretStore() }},
+		{name: "changing the machine config pool", create: withOpenShift, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) {
+				s.StorageNodes.OpenShift.MachineConfigPool = "storage"
+			}},
+		{name: "removing the machine config pool", create: withOpenShift, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.StorageNodes.OpenShift.MachineConfigPool = "" }},
+		{name: "changing the site", create: withStretched, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Stretched.Site = "c" }},
+		{name: "changing the peer site", create: withStretched, denied: true,
+			mutate: func(s *simplyblockv1alpha2.StorageClusterSpec) { s.Stretched.PeerSite = "c" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cluster := tc.create()
+			if err := apiClient.Create(ctx, cluster); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			cleanup(t, apiClient, cluster)
+			tc.mutate(&cluster.Spec)
+			err := apiClient.Update(ctx, cluster)
+			switch {
+			case tc.denied:
+				expectDenied(t, err, "immutable")
+			case err != nil:
+				t.Fatalf("update refused, want it admitted: %v", err)
 			}
 		})
 	}

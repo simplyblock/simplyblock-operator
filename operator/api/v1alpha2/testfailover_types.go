@@ -84,6 +84,7 @@ const (
 // required for a Volume drill, where the source is a PVC, and unused for a Group
 // drill, where SourceRef names a consistency group.
 // +kubebuilder:validation:XValidation:rule="self.scope != 'Volume' || has(self.sourceNamespace)",message="sourceNamespace is required for scope=Volume"
+// +kubebuilder:validation:XValidation:rule="has(self.sourceStorageCluster) == has(oldSelf.sourceStorageCluster)",message="spec.sourceStorageCluster cannot be set after creation: the steps already run resolved the source without it, and later steps would resolve against a different storage cluster"
 type TestFailoverSpec struct {
 	// Scope selects what the drill recovers. Immutable.
 	// +kubebuilder:validation:Required
@@ -100,6 +101,7 @@ type TestFailoverSpec struct {
 	// source lives on. A Group drill resolves the group there. Without it the
 	// UUID comes from a local StorageCluster named like SourceCluster, which a
 	// hub apart from the sites does not have; the DR hub sets it. Immutable.
+	// Left unset at creation, it cannot be set later.
 	// +kubebuilder:validation:Pattern=`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`
 	// +optional
 	// +k8s:immutable
@@ -131,12 +133,6 @@ type TestFailoverSpec struct {
 	// +optional
 	// +k8s:immutable
 	BubbleNamespace string `json:"bubbleNamespace,omitempty"`
-
-	// TTLSeconds is an optional maximum lifetime: the drill is torn down after it
-	// even without a delete, so a forgotten drill cannot hold a clone forever.
-	// +kubebuilder:validation:Minimum=0
-	// +optional
-	TTLSeconds *int64 `json:"ttlSeconds,omitempty"`
 }
 
 // TestFailoverClone is one recovered volume: the source it came from, the

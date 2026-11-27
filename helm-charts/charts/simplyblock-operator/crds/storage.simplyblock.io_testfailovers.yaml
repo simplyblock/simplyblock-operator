@@ -137,18 +137,12 @@ spec:
                   source lives on. A Group drill resolves the group there. Without it the
                   UUID comes from a local StorageCluster named like SourceCluster, which a
                   hub apart from the sites does not have; the DR hub sets it. Immutable.
+                  Left unset at creation, it cannot be set later.
                 pattern: ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$
                 type: string
                 x-kubernetes-validations:
                 - message: field is immutable
                   rule: self == oldSelf
-              ttlSeconds:
-                description: |-
-                  TTLSeconds is an optional maximum lifetime: the drill is torn down after it
-                  even without a delete, so a forgotten drill cannot hold a clone forever.
-                format: int64
-                minimum: 0
-                type: integer
             required:
             - bubbleCluster
             - scope
@@ -164,6 +158,10 @@ spec:
               rule: '!has(oldSelf.bubbleNamespace) || has(self.bubbleNamespace)'
             - message: sourceNamespace is required for scope=Volume
               rule: self.scope != 'Volume' || has(self.sourceNamespace)
+            - message: 'spec.sourceStorageCluster cannot be set after creation: the
+                steps already run resolved the source without it, and later steps
+                would resolve against a different storage cluster'
+              rule: has(self.sourceStorageCluster) == has(oldSelf.sourceStorageCluster)
           status:
             description: TestFailoverStatus is the observed state of one drill.
             properties:

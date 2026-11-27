@@ -92,6 +92,15 @@ manifests: controller-gen yq ## Generate WebhookConfiguration, ClusterRole and C
 	@# back after every regeneration. The upgrade tool embeds these files through
 	@# config/crd/bases/bases.go, so the stanza reaches its binary too.
 	@bash hack/apply-conversion-webhook.sh config/crd/bases "$(YQ)"
+	@# The +simplyblock: field markers become CRD annotations the Control Center
+	@# reads; controller-gen cannot carry a custom marker into a CRD itself.
+	@bash hack/apply-field-markers.sh config/crd/bases "$(YQ)"
+	@# The operatorManaged markers are also the table the operator-managed-fields
+	@# validator reads, with a webhook marker per kind. The file is written from
+	@# the CRDs just generated, so controller-gen's webhook pass runs once more to
+	@# register what it declares.
+	@go run ./hack/fieldmarkers -webhook internal/webhook/zz_generated.operatormanaged.go config/crd/bases
+	"$(CONTROLLER_GEN)" webhook paths="./..."
 
 .PHONY: generate
 generate: controller-gen openapi ## Generate code containing DeepCopy, DeepCopyInto, and DeepCopyObject method implementations.

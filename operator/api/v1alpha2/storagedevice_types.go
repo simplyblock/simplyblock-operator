@@ -321,14 +321,18 @@ type DeviceHealth struct {
 type StorageDeviceSpec struct {
 	// NodeRef names the StorageNode this device belongs to. The node owns this
 	// object by controller reference, so deleting the node deletes its devices.
+	// The operator's device mirror writes it when it creates the object.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
+	// +simplyblock:operatorManaged
 	NodeRef string `json:"nodeRef"`
 
 	// DeviceID is the control plane's identifier for the device. With NodeRef it
-	// is the whole of this object's identity.
+	// is the whole of this object's identity, and the device mirror writes it the
+	// same way.
 	// +kubebuilder:validation:Required
 	// +k8s:immutable
+	// +simplyblock:operatorManaged
 	DeviceID string `json:"deviceID"`
 }
 

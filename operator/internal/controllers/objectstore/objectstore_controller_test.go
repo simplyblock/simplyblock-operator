@@ -83,6 +83,19 @@ func markDeploymentAvailable(t *testing.T, cli client.Client, key client.ObjectK
 	}
 }
 
+// writeServiceCASecret creates the serving Secret the way OpenShift's service
+// CA writes it, the simplification envtest's lack of a service CA requires.
+func writeServiceCASecret(t *testing.T, cli client.Client, key client.ObjectKey) {
+	t.Helper()
+	secret := &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: tlsSecretName(key.Name), Namespace: key.Namespace,
+		Annotations: map[string]string{serviceCAOriginatingServiceAnnotation: key.Name},
+	}}
+	if err := cli.Create(context.Background(), secret); err != nil {
+		t.Fatalf("writing the service CA's Secret: %v", err)
+	}
+}
+
 // markCertificateReady writes the cert-manager Certificate's status
 // directly, the simplification envtest's lack of a cert-manager controller
 // requires.
@@ -192,6 +205,62 @@ func TestObjectStoreReachesReadyOnceDeploymentAndCertificateAreReady(t *testing.
 	expectEvent(t, recorder, "ObjectStoreReady")
 }
 
+// I-09: a Ready cert-manager store switched to OpenShift deletes its
+// Certificate and the Secret cert-manager wrote, waits in Provisioning, and
+// returns to Ready once the service CA has written the Secret.
+func TestObjectStoreSwitchedToOpenShiftReissuesItsCertificate(t *testing.T) {
+	cli := apiServer(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	store := testObjectStoreFixture("os-i09-store", func(o *simplyblockv1alpha2.ObjectStore) {
+		o.Spec.TLSProvider = utils.TLSProviderCertManager
+	})
+	if err := cli.Create(ctx, store); err != nil {
+		t.Fatalf("creating the ObjectStore: %v", err)
+	}
+	recorder := events.NewFakeRecorder(16)
+	r := &ObjectStoreReconciler{Client: cli, Scheme: cli.Scheme(), Recorder: recorder}
+	key := client.ObjectKeyFromObject(store)
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
+		return o.Status.Phase == osPhaseProvisioning
+	})
+	markDeploymentAvailable(t, cli, key, true, 1)
+	markCertificateReady(t, cli, key, true)
+	if err := cli.Create(ctx, &corev1.Secret{ObjectMeta: metav1.ObjectMeta{
+		Name: tlsSecretName(key.Name), Namespace: key.Namespace,
+		Annotations: map[string]string{certManagerCertificateNameAnnotation: key.Name},
+	}}); err != nil {
+		t.Fatalf("writing cert-manager's Secret: %v", err)
+	}
+	got := reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
+		return o.Status.Phase == osPhaseReady
+	})
+
+	got.Spec.TLSProvider = "OpenShift"
+	if err := cli.Update(ctx, got); err != nil {
+		t.Fatalf("switching spec.tlsProvider: %v", err)
+	}
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
+		return o.Status.Phase == osPhaseProvisioning
+	})
+	expectEvent(t, recorder, "TLSProviderChanged")
+
+	var cert unstructured.Unstructured
+	cert.SetGroupVersionKind(certificateGVK)
+	if err := cli.Get(ctx, key, &cert); !apierrorsIsNotFound(err) {
+		t.Errorf("reading the Certificate after the switch: %v, want NotFound", err)
+	}
+	if err := cli.Get(ctx, key, &corev1.Secret{}); !apierrorsIsNotFound(err) {
+		t.Errorf("reading cert-manager's Secret after the switch: %v, want NotFound", err)
+	}
+
+	writeServiceCASecret(t, cli, key)
+	reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
+		return o.Status.Phase == osPhaseReady
+	})
+}
+
 // I-03: spec.replicas updated on an existing (Ready) ObjectStore updates the
 // Deployment's own replica count, without touching the Service.
 func TestObjectStoreReplicaChangeUpdatesTheDeploymentInPlace(t *testing.T) {
@@ -210,6 +279,7 @@ func TestObjectStoreReplicaChangeUpdatesTheDeploymentInPlace(t *testing.T) {
 		return o.Status.Phase == osPhaseProvisioning
 	})
 	markDeploymentAvailable(t, cli, key, true, 1)
+	writeServiceCASecret(t, cli, key)
 	got := reconcileStoreUntil(t, r, key, func(o *simplyblockv1alpha2.ObjectStore) bool {
 		return o.Status.Phase == osPhaseReady
 	})

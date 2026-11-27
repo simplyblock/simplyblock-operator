@@ -4,6 +4,9 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.21.0
+    simplyblock.io/advanced-fields: '{"v1alpha2":["spec.clientDataIfname","spec.disableDataRealignment","spec.disablePlacement","spec.enableChecksumValidation","spec.enableVolumeAutoPlacement","spec.nvmfBasePort","spec.rpcBasePort","spec.serviceClasses.classes","spec.serviceClasses.defaultWeight","spec.serviceClasses.replicationShare","spec.snodeApiPort","spec.storageNodes.enableFormat4K","spec.storageNodes.enableKubeletConfiguration","spec.storageNodes.image","spec.storageNodes.imagePullPolicy","spec.storageNodes.network.podNetwork","spec.storageNodes.network.spdkOnHostNetwork","spec.storageNodes.nodesPerSocket","spec.storageNodes.openshift.machineConfigPool","spec.storageNodes.reservedSystemCPU","spec.storageNodes.socketsToUse","spec.storageNodes.talos","spec.storageNodes.talosMachineConfig","spec.storageNodes.talosctlImage","spec.storageNodes.ubuntuHost","spec.supercluster.placement.strategy","spec.superclusterRef","spec.volumeAutoPlacement.baselineColdStart","spec.volumeAutoPlacement.baselineMinSamples","spec.volumeAutoPlacement.baselineOutlierK","spec.volumeAutoPlacement.baselineStrategy","spec.volumeAutoPlacement.baselineWindow","spec.volumeAutoPlacement.defaultCoolDownSeconds","spec.volumeAutoPlacement.disableMigration","spec.volumeAutoPlacement.enableLatencyBenchmark","spec.volumeAutoPlacement.evaluationInterval","spec.volumeAutoPlacement.imbalanceThreshold","spec.volumeAutoPlacement.iopsWeight","spec.volumeAutoPlacement.latencyBenchmarkInterval","spec.volumeAutoPlacement.maxVolumeMigrationsPerCycle","spec.volumeAutoPlacement.minHotColdDifferencePct","spec.volumeAutoPlacement.prometheusURL","spec.volumeAutoPlacement.storageNodeCandidateCount","spec.volumeAutoPlacement.throughputWeight","spec.volumeMigrationSettings.dataRealignment.interval","spec.volumeMigrationSettings.dataRealignment.minMoves","spec.volumeMigrationSettings.rebalancerImage"]}'
+    simplyblock.io/invisible-fields: '{"v1alpha2":["spec.enableArbitration","spec.enableAtomicity4K","spec.enableMetadataJournal","spec.storageNodes.enableCpuTopology","spec.storageNodes.enableJournalDevice","spec.stretched","status.stretched"]}'
+    simplyblock.io/operator-managed-fields: '{"v1alpha2":["spec.stretched.peerCluster","spec.stretched.role"]}'
   name: storageclusters.storage.simplyblock.io
 spec:
   group: storage.simplyblock.io
@@ -675,15 +678,6 @@ spec:
                     on. Omitted values take the arbiter's defaults. Only valid when
                     clusterMode is Dual.
                   properties:
-                    holdMs:
-                      description: |-
-                        HoldMs is how long a node holds writes after losing its peer before it
-                        acts on its own. It must stay below the hosts' NVMe keep-alive timeout
-                        (5000 ms), or clients fail I/O before the verdict arrives.
-                      format: int32
-                      maximum: 4500
-                      minimum: 500
-                      type: integer
                     hostFencing:
                       description: |-
                         HostFencing lets Kubernetes follow the arbiter's fence of a node whose
@@ -695,19 +689,7 @@ spec:
                         winner instead of stopping I/O on both nodes. Requires the NodeHealthCheck
                         operator.
                       type: boolean
-                    leaseTtlMs:
-                      description: |-
-                        LeaseTtlMs is how long a lease from the arbiter stays valid. It only
-                        matters while a node is holding; a healthy pair is never fenced by a
-                        late renewal.
-                      format: int32
-                      maximum: 10000
-                      minimum: 500
-                      type: integer
                   type: object
-                  x-kubernetes-validations:
-                    - message: leaseTtlMs must be shorter than holdMs
-                      rule: '!has(self.holdMs) || !has(self.leaseTtlMs) || self.leaseTtlMs < self.holdMs'
                 backup:
                   description: |-
                     Backup is the S3 location this cluster's backups live in, and it is both
@@ -806,6 +788,9 @@ spec:
                     once at cluster-add, so an edit moves the next attach onto the named
                     interface.
                   type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 clusterMode:
                   default: Standard
                   description: |-
@@ -1050,6 +1035,9 @@ spec:
                   maximum: 500
                   minimum: 10
                   type: integer
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 minHugePagesSize:
                   description: |-
                     MinHugePagesSize is the smallest huge-page allocation each storage node
@@ -1059,6 +1047,9 @@ spec:
                     count requires, so simplyblock takes more when it needs more. Omitted,
                     the computed minimum is used.
                   type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 nvmfBasePort:
                   default: 4420
                   description: |-
@@ -1233,6 +1224,9 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                           type: object
                       type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     dataInterfaces:
                       description: DataInterfaces are the data-plane network interfaces.
                       items:
@@ -1290,12 +1284,18 @@ spec:
                         configuration changes it needs. Off by default, which is the behavior the
                         retired skipKubeletConfiguration expressed by being set.
                       type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     image:
                       description: |-
                         Image is the storage-node container image. Defaults to the ControlPlane
                         singleton's spec.image when unset, so a deployment states the version once.
                       pattern: ^($|(([a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*|\[[a-fA-F0-9:]+\])(:[0-9]+)?/)?[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*(:[a-zA-Z0-9_][a-zA-Z0-9_.-]{0,127}(@sha256:[a-f0-9]{64})?|@sha256:[a-f0-9]{64}))$
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     imagePullPolicy:
                       default: Always
                       description: |-
@@ -1310,6 +1310,9 @@ spec:
                         - Never
                         - IfNotPresent
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     initContainerResources:
                       description: InitContainerResources does the same for the init container.
                       properties:
@@ -1369,6 +1372,9 @@ spec:
                             More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                           type: object
                       type: object
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     mgmtInterface:
                       description: MgmtInterface is the management network interface storage nodes bind.
                       type: string
@@ -1491,6 +1497,9 @@ spec:
                       format: int32
                       minimum: 1
                       type: integer
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     nodesPerSocket:
                       default: 1
                       description: NodesPerSocket is how many storage nodes run per NUMA socket.
@@ -1526,6 +1535,9 @@ spec:
                     reservedSystemCPU:
                       description: ReservedSystemCPU is the CPU set held back from SPDK for system workloads.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     socketsToUse:
                       description: |-
                         SocketsToUse restricts deployment to selected NUMA sockets. Empty means
@@ -1533,6 +1545,9 @@ spec:
                       items:
                         type: string
                       type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     talos:
                       description: |-
                         Talos states that the workers run Talos Linux: an immutable host with no
@@ -1542,6 +1557,9 @@ spec:
                         sets it from spec.environment, as it sets OpenShift; the node agent reads
                         it as TALOS_CLUSTER.
                       type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     talosMachineConfig:
                       description: |-
                         TalosMachineConfig is who writes a Talos worker's machine config: the
@@ -1557,6 +1575,9 @@ spec:
                         - Preprovisioned
                         - Managed
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     talosctlImage:
                       description: |-
                         TalosctlImage is the talosctl image the node runs as a Job on a Talos
@@ -1564,6 +1585,9 @@ spec:
                         a deployment pins it to the cluster's Talos minor, or to a mirror on an
                         air-gapped site. It is spec.images.talosctl on the deployment config.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     tolerations:
                       description: Tolerations are applied to the storage-node pods.
                       items:
@@ -1604,29 +1628,63 @@ spec:
                             type: string
                         type: object
                       type: array
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                     ubuntuHost:
                       description: |-
                         UbuntuHost states that the worker's host OS is Ubuntu, which changes how
                         the node configures huge pages and the kernel modules it loads.
                       type: boolean
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                   type: object
                   x-kubernetes-validations:
+                    - message: field image is immutable once set
+                      rule: '!has(oldSelf.image) || has(self.image)'
+                    - message: field imagePullPolicy is immutable once set
+                      rule: '!has(oldSelf.imagePullPolicy) || has(self.imagePullPolicy)'
                     - message: field mgmtInterface is immutable once set
                       rule: '!has(oldSelf.mgmtInterface) || has(self.mgmtInterface)'
                     - message: field dataInterfaces is immutable once set
                       rule: '!has(oldSelf.dataInterfaces) || has(self.dataInterfaces)'
                     - message: field network is immutable once set
                       rule: '!has(oldSelf.network) || has(self.network)'
+                    - message: field socketsToUse is immutable once set
+                      rule: '!has(oldSelf.socketsToUse) || has(self.socketsToUse)'
                     - message: field nodesPerSocket is immutable once set
                       rule: '!has(oldSelf.nodesPerSocket) || has(self.nodesPerSocket)'
+                    - message: field nodeProvisioningBudget is immutable once set
+                      rule: '!has(oldSelf.nodeProvisioningBudget) || has(self.nodeProvisioningBudget)'
                     - message: field enableJournalDevice is immutable once set
                       rule: '!has(oldSelf.enableJournalDevice) || has(self.enableJournalDevice)'
                     - message: field enableFormat4K is immutable once set
                       rule: '!has(oldSelf.enableFormat4K) || has(self.enableFormat4K)'
                     - message: field enableBlockFormat is immutable once set
                       rule: '!has(oldSelf.enableBlockFormat) || has(self.enableBlockFormat)'
+                    - message: field reservedSystemCPU is immutable once set
+                      rule: '!has(oldSelf.reservedSystemCPU) || has(self.reservedSystemCPU)'
+                    - message: field enableKubeletConfiguration is immutable once set
+                      rule: '!has(oldSelf.enableKubeletConfiguration) || has(self.enableKubeletConfiguration)'
+                    - message: field ubuntuHost is immutable once set
+                      rule: '!has(oldSelf.ubuntuHost) || has(self.ubuntuHost)'
+                    - message: field talos is immutable once set
+                      rule: '!has(oldSelf.talos) || has(self.talos)'
+                    - message: field talosctlImage is immutable once set
+                      rule: '!has(oldSelf.talosctlImage) || has(self.talosctlImage)'
+                    - message: field talosMachineConfig is immutable once set
+                      rule: '!has(oldSelf.talosMachineConfig) || has(self.talosMachineConfig)'
+                    - message: field tolerations is immutable once set
+                      rule: '!has(oldSelf.tolerations) || has(self.tolerations)'
+                    - message: field containerResources is immutable once set
+                      rule: '!has(oldSelf.containerResources) || has(self.containerResources)'
+                    - message: field initContainerResources is immutable once set
+                      rule: '!has(oldSelf.initContainerResources) || has(self.initContainerResources)'
                     - message: dataInterfaces are allowed only with network.spdkOnHostNetwork
                       rule: '!has(self.dataInterfaces) || !has(self.network) || (has(self.network.spdkOnHostNetwork) && self.network.spdkOnHostNetwork)'
+                    - message: spec.storageNodes.openshift.machineConfigPool is immutable once set
+                      rule: '!has(oldSelf.openshift) || !has(self.openshift) || !has(oldSelf.openshift.machineConfigPool) || (has(self.openshift.machineConfigPool) && self.openshift.machineConfigPool == oldSelf.openshift.machineConfigPool)'
                 stretched:
                   description: |-
                     Stretched marks this StorageCluster as one site of a synchronously
@@ -1642,24 +1700,27 @@ spec:
                         PeerCluster is the other site's managed cluster: the name the hub knows
                         it by, and the one the site link reaches that site's operator by. Empty
                         means the same as peerSite.
+
+                        The operator writes it on a StorageCluster, and the hub's work agent on a
+                        site's ClusterDeploymentConfig, which embeds this type.
                       maxLength: 63
                       type: string
                     peerSite:
                       description: |-
                         PeerSite is the other site's backend name. Nodes the control plane reports
-                        on it are listed here as remote StorageNodes. Immutable.
+                        on it are listed here as remote StorageNodes. Immutable on a
+                        StorageCluster.
                       maxLength: 63
                       pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                       type: string
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
                     role:
                       description: |-
                         Role is Leader or Follower. A leader creates and activates the backend
                         cluster and runs every cluster-wide operation; a follower adopts the
                         cluster and manages only its own site's nodes. A change is a role swap,
-                        delivered from the hub.
+                        delivered from the hub: the hub's work agent re-delivers a site's
+                        ClusterDeploymentConfig with the new role, and the operator carries it onto
+                        the StorageCluster.
                       enum:
                         - Leader
                         - Follower
@@ -1667,13 +1728,10 @@ spec:
                     site:
                       description: |-
                         Site is the backend site every node this StorageCluster adds belongs to.
-                        Immutable: a site is a property of the installation.
+                        Immutable on a StorageCluster: a site is a property of the installation.
                       maxLength: 63
                       pattern: ^[A-Za-z0-9][A-Za-z0-9._-]{0,62}$
                       type: string
-                      x-kubernetes-validations:
-                        - message: field is immutable
-                          rule: self == oldSelf
                   required:
                     - peerSite
                     - role
@@ -1728,7 +1786,13 @@ spec:
                             - LeastProvisioned
                             - LeastVolumes
                           type: string
+                          x-kubernetes-validations:
+                            - message: field is immutable
+                              rule: self == oldSelf
                       type: object
+                      x-kubernetes-validations:
+                        - message: field strategy is immutable once set
+                          rule: '!has(oldSelf.strategy) || has(self.strategy)'
                   type: object
                 superclusterRef:
                   description: |-
@@ -1737,6 +1801,9 @@ spec:
                     created. Set at creation and never changed.
                   maxLength: 63
                   type: string
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 vcpuCount:
                   description: |-
                     VCPUCount is the number of vCPUs allocated to SPDK on each storage node,
@@ -1753,6 +1820,9 @@ spec:
                   format: int32
                   minimum: 4
                   type: integer
+                  x-kubernetes-validations:
+                    - message: field is immutable
+                      rule: self == oldSelf
                 volumeAutoPlacement:
                   description: VolumeAutoPlacement configures automatic, latency-driven rebalancing.
                   properties:
@@ -1841,13 +1911,6 @@ spec:
                         Defaults to 10.
                       format: int32
                       type: integer
-                    metricsBackend:
-                      description: MetricsBackend selects the source of I/O metrics. Defaults to Prometheus.
-                      enum:
-                        - ControlPlane
-                        - Prometheus
-                        - Uniform
-                      type: string
                     minHotColdDifferencePct:
                       description: |-
                         MinHotColdDifferencePct is how far below the hot source, in percentage
@@ -1882,6 +1945,7 @@ spec:
                       description: DataRealignment tunes the post-migration realignment.
                       properties:
                         interval:
+                          default: 10m
                           description: |-
                             Interval is a floor on the spacing between realignment requests, and not
                             a ceiling on how long one takes: a realignment blocks every volume
@@ -1890,6 +1954,7 @@ spec:
                             to 10m.
                           type: string
                         minMoves:
+                          default: 1
                           description: |-
                             MinMoves is how many volume moves accumulate before a realignment is
                             requested. It defaults to 1, which makes migration and realignment
@@ -1906,7 +1971,13 @@ spec:
                         and the rebalancer's latency and baseline Jobs run. It must carry
                         nvme-cli, and for rebalancing also fio and jq.
                       type: string
+                      x-kubernetes-validations:
+                        - message: field is immutable
+                          rule: self == oldSelf
                   type: object
+                  x-kubernetes-validations:
+                    - message: field rebalancerImage is immutable once set
+                      rule: '!has(oldSelf.rebalancerImage) || has(self.rebalancerImage)'
                 warningThreshold:
                   description: WarningThreshold is the capacity level at which the cluster warns.
                   properties:
@@ -1921,10 +1992,18 @@ spec:
                   type: object
               type: object
               x-kubernetes-validations:
+                - message: field maxSubsystemCount is immutable once set
+                  rule: '!has(oldSelf.maxSubsystemCount) || has(self.maxSubsystemCount)'
+                - message: field vcpuCount is immutable once set
+                  rule: '!has(oldSelf.vcpuCount) || has(self.vcpuCount)'
+                - message: field minHugePagesSize is immutable once set
+                  rule: '!has(oldSelf.minHugePagesSize) || has(self.minHugePagesSize)'
                 - message: field stripe is immutable once set
                   rule: '!has(oldSelf.stripe) || has(self.stripe)'
                 - message: field fabricType is immutable once set
                   rule: '!has(oldSelf.fabricType) || has(self.fabricType)'
+                - message: field clientDataIfname is immutable once set
+                  rule: '!has(oldSelf.clientDataIfname) || has(self.clientDataIfname)'
                 - message: field nvmfBasePort is immutable once set
                   rule: '!has(oldSelf.nvmfBasePort) || has(self.nvmfBasePort)'
                 - message: field rpcBasePort is immutable once set
@@ -1945,6 +2024,8 @@ spec:
                   rule: '!has(oldSelf.enableMetadataJournal) || has(self.enableMetadataJournal)'
                 - message: field deviceClass is immutable once set
                   rule: '!has(oldSelf.deviceClass) || has(self.deviceClass)'
+                - message: field superclusterRef is immutable once set
+                  rule: '!has(oldSelf.superclusterRef) || has(self.superclusterRef)'
                 - message: kms is immutable once set
                   rule: '!has(oldSelf.kms) || self.kms == oldSelf.kms'
                 - message: enableArbitration and arbitration are only valid when clusterMode is Dual
@@ -1971,6 +2052,22 @@ spec:
                   rule: has(self.superclusterRef) || !has(self.disablePlacement)
                 - message: a data network attached through a NetworkAttachmentDefinition serves NVMe/TCP only
                   rule: '!has(self.storageNodes) || !has(self.storageNodes.network) || !has(self.storageNodes.network.data) || self.storageNodes.network.data.size() == 0 || !has(self.fabricType) || self.fabricType == ''tcp'''
+                - message: spec.backup.endpoint is immutable
+                  rule: '!has(oldSelf.backup) || !has(self.backup) || self.backup.endpoint == oldSelf.backup.endpoint'
+                - message: spec.backup.bucket is immutable
+                  rule: '!has(oldSelf.backup) || !has(self.backup) || self.backup.bucket == oldSelf.backup.bucket'
+                - message: spec.backup.region is immutable once set
+                  rule: '!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.region) || (has(self.backup.region) && self.backup.region == oldSelf.backup.region)'
+                - message: spec.backup.credentialsSecretRef is immutable once set
+                  rule: '!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.credentialsSecretRef) || (has(self.backup.credentialsSecretRef) && self.backup.credentialsSecretRef == oldSelf.backup.credentialsSecretRef)'
+                - message: spec.backup.credentials.source is immutable
+                  rule: '!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.credentials) || !has(self.backup.credentials) || self.backup.credentials.source == oldSelf.backup.credentials.source'
+                - message: spec.backup.credentials.secretRef is immutable once set
+                  rule: '!has(oldSelf.backup) || !has(self.backup) || !has(oldSelf.backup.credentials) || !has(self.backup.credentials) || !has(oldSelf.backup.credentials.secretRef) || (has(self.backup.credentials.secretRef) && self.backup.credentials.secretRef == oldSelf.backup.credentials.secretRef)'
+                - message: 'spec.stretched.site is immutable: a site is a property of the installation'
+                  rule: '!has(oldSelf.stretched) || !has(self.stretched) || self.stretched.site == oldSelf.stretched.site'
+                - message: spec.stretched.peerSite is immutable
+                  rule: '!has(oldSelf.stretched) || !has(self.stretched) || self.stretched.peerSite == oldSelf.stretched.peerSite'
             status:
               properties:
                 activeOpsRef:

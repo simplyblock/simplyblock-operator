@@ -19,8 +19,10 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,6 +69,9 @@ const (
 	reasonAdoptionRefused   = "AdoptionRefused"
 	reasonNoImage           = "NoImage"
 	reasonSnapshotsEnabled  = "SnapshotsEnabled"
+	// reasonSnapshotClassRemoved records the class pruned when snapshots
+	// are turned off.
+	reasonSnapshotClassRemoved = "SnapshotClassRemoved"
 	// The same reasons the export reconciler records for the same update.
 	reasonMDSUpdated          = "MDSUpdated"
 	reasonMDSResourcesInvalid = "MDSResourcesInvalid"
@@ -235,6 +240,12 @@ func (r *SimplyblockDriverReconciler) Reconcile(ctx context.Context, req ctrl.Re
 
 	met, err := r.apply(ctx, effective)
 	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.pruneCSIAddons(ctx, effective); err != nil {
+		return ctrl.Result{}, err
+	}
+	if err := r.pruneSnapshotClass(ctx, effective); err != nil {
 		return ctrl.Result{}, err
 	}
 	logger.V(1).Info("applied the driver deployment", "driver", names(&d).csiDriver, "adopted", met)
@@ -674,7 +685,8 @@ func (r *SimplyblockDriverReconciler) recordOrigin(
 // when it changes.
 //
 // Missing is revised to Detected once the cluster serves the API, so the field
-// tells an administrator that the fix worked.
+// tells an administrator that the fix worked. Turning volume snapshots off
+// clears it: the class goes with the toggle, so no origin is left to report.
 func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) error {
@@ -682,8 +694,13 @@ func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 	if err != nil {
 		return err
 	}
-	if origin == "" || origin == d.Status.SnapshotSupport {
+	if origin == d.Status.SnapshotSupport {
 		return nil
+	}
+	if origin == "" {
+		return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+			status.SnapshotSupport = ""
+		})
 	}
 
 	if origin == simplyblockv1alpha2.SnapshotSupportOriginMissing {
@@ -781,6 +798,72 @@ func (r *SimplyblockDriverReconciler) finalize(ctx context.Context, d *simplyblo
 
 	controllerutil.RemoveFinalizer(d, driverFinalizer)
 	return r.Update(ctx, d)
+}
+
+// pruneCSIAddons removes the csi-addons Role and bindings once the sidecar is
+// turned off. desired stops applying them, but an apply never deletes, and left
+// behind they grant the controller's account permissions for a sidecar that no
+// longer runs. Only objects this deployment controls, or labeled as its own for
+// the cluster-scoped binding, are removed.
+func (r *SimplyblockDriverReconciler) pruneCSIAddons(ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver) error {
+	if csiAddonsEnabled(d) {
+		return nil
+	}
+	n := names(d)
+	if err := r.deleteOwned(ctx, d, &rbacv1.RoleBinding{}, n.roleBinding(csiAddonsComponent)); err != nil {
+		return err
+	}
+	if err := r.deleteOwned(ctx, d, &rbacv1.Role{}, n.csiAddonsRole); err != nil {
+		return err
+	}
+	binding := &rbacv1.ClusterRoleBinding{}
+	key := client.ObjectKey{Name: n.clusterRoleBinding("csi-addons-auth-delegator")}
+	if err := r.Get(ctx, key, binding); err != nil {
+		if errors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("read ClusterRoleBinding %s: %w", key.Name, err)
+	}
+	if !mayDelete(binding) {
+		return nil
+	}
+	if err := r.Delete(ctx, binding); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete ClusterRoleBinding %s: %w", key.Name, err)
+	}
+	return nil
+}
+
+// pruneSnapshotClass removes the snapshot class once snapshots are turned off.
+// desired stops applying it, but an apply never deletes, and left behind it
+// keeps taking new VolumeSnapshots for a deployment that no longer offers them.
+// Existing snapshots do not need it: their content carries the driver and the
+// deletion policy itself. The class is cluster-scoped, so only one labeled as
+// this deployment's own is removed, and a cluster serving no snapshot API has
+// none to remove.
+func (r *SimplyblockDriverReconciler) pruneSnapshotClass(
+	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
+) error {
+	if snapshotsEnabled(d) {
+		return nil
+	}
+	class := &unstructured.Unstructured{}
+	class.SetGroupVersionKind(volumeSnapshotClassGVK)
+	name := names(d).snapshotClass
+	if err := r.Get(ctx, client.ObjectKey{Name: name}, class); err != nil {
+		if errors.IsNotFound(err) || meta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("read VolumeSnapshotClass %s: %w", name, err)
+	}
+	if !mayDelete(class) {
+		return nil
+	}
+	if err := r.Delete(ctx, class); err != nil && !errors.IsNotFound(err) {
+		return fmt.Errorf("delete VolumeSnapshotClass %s: %w", name, err)
+	}
+	r.event(d, corev1.EventTypeNormal, reasonSnapshotClassRemoved,
+		fmt.Sprintf("removed %s with volume snapshots turned off; existing snapshots are kept", name))
+	return nil
 }
 
 // ownedClusterScoped is everything the finalizer has to consider: the

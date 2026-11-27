@@ -66,7 +66,6 @@ type StorageNodeSetAddParams struct {
 	CRNameSpace         string   `json:"cr_namespace,omitempty"`
 	CRPlural            string   `json:"cr_plural,omitempty"`
 	Format4K            bool     `json:"format_4k,omitempty"`
-	SpdkSystemMemory    string   `json:"spdk_sys_mem,omitempty"`
 	// FailureDomain assigns this node to a failure-domain group (integer ≥ 0).
 	// Required when the cluster has EnableFailureDomain=true; nil (never sent)
 	// otherwise. A pointer, not a plain int: domain 0 is a valid group index

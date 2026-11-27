@@ -157,7 +157,9 @@ type RestoreSpec struct {
 }
 
 // StorageBackupOpsSpec is one operation to perform against a backup.
+// +kubebuilder:validation:XValidation:rule="has(self.restore) == has(oldSelf.restore) && (!has(self.restore) || self.restore == oldSelf.restore)",message="spec.restore is immutable: the steps after Validating read it without the check Validating made, and the claim is built from it at the last step, so a block removed, or a field added, mid-restore is dereferenced as missing or applied unvalidated"
 // +kubebuilder:validation:XValidation:rule="(has(self.backupRef) ? 1 : 0) + (has(self.groupBackupID) ? 1 : 0) + (has(self.groupBackupRef) ? 1 : 0) == 1",message="set exactly one of backupRef, groupBackupRef and groupBackupID: an operation acts on a single backup or on one whole group backup"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.abort) || !oldSelf.abort || (has(self.abort) && self.abort)",message="spec.abort cannot be withdrawn: the operation may already be unwinding, and resuming it would run the forward steps against a partly undone operation"
 type StorageBackupOpsSpec struct {
 	// ClusterRef names the StorageCluster the operation runs against. Its
 	// namespace defaults to this operation's. The cluster's StoragePool, which
@@ -227,6 +229,8 @@ type StorageBackupOpsSpec struct {
 	// action's graph declares that rather than this field: an abort arriving
 	// later is reported as an illegal transition while the operation runs on,
 	// rather than leaving the work half undone.
+	// Setting it is final: an unwind withdrawn midway would resume the forward
+	// steps against a partly undone operation, so it cannot be withdrawn.
 	// +optional
 	Abort bool `json:"abort,omitempty"`
 
