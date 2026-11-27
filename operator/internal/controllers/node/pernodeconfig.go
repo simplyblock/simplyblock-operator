@@ -240,7 +240,7 @@ func renderNodeConfig(
 			ptr.BoolFromOrFalse(workload.EnableBlockFormat) {
 			entry.WriteString("LBLK_FORCE_FORMAT=true\n")
 		}
-		// By default the configure carves each node's journal partition from
+		// By default, the configure carves each node's journal partition from
 		// its smallest device (the journal split). enableJournalDevice asks for
 		// the smallest device to be dedicated to the journal instead.
 		if workload := cluster.Spec.StorageNodes; workload != nil &&
@@ -307,7 +307,7 @@ func splitDeviceNames(devices []string) (addresses, names []string) {
 // a migration is binding on the target host.
 //
 // It edits the rendered text rather than re-rendering from the node, because the
-// node's spec.config.pcieAllowList has not been rewritten yet: that happens after
+// node's spec.config.deviceNames has not been rewritten yet: that happens after
 // the promote, and this runs before the relocation.
 func mergeAllowedIntoEntry(entry string, added []string) string {
 	if len(added) == 0 {
