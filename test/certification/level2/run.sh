@@ -16,7 +16,8 @@
 #     another class is refused rather than changed: that is somebody's choice.
 #   - Every DataImportCron has to be up to date. The checkup fails on one that is
 #     not, and skips every VM test when there is no golden image at all, so the
-#     script waits for them first.
+#     script waits for at least one, all up to date, and stops when they are not
+#     by GOLDEN_IMAGE_WAIT.
 #
 # The checkup image is the one the installed OpenShift Virtualization operator
 # ships, so the test always matches the version under test.
@@ -103,11 +104,19 @@ case "$virt_defaults" in
     ;;
 esac
 
-# Golden images, in every namespace, up to date before the checkup looks.
+# Golden images, in every namespace, up to date before the checkup looks. No
+# DataImportCron at all is not "all up to date": without a golden image the
+# checkup skips every VM test, so a run that has none, or still has a stale one
+# at the deadline, stops rather than producing a result that tested no VM.
 stale_golden_images() {
-  oc get dataimportcron -A \
-    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.conditions[?(@.type=="UpToDate")].status}{"\n"}{end}' |
-    awk '$2 != "True" {print $1}'
+  local crons
+  crons="$(oc get dataimportcron -A \
+    -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name} {.status.conditions[?(@.type=="UpToDate")].status}{"\n"}{end}')"
+  if [[ -z "$crons" ]]; then
+    echo "(no DataImportCron yet)"
+    return 0
+  fi
+  awk '$2 != "True" {print $1}' <<<"$crons"
 }
 deadline=$((SECONDS + GOLDEN_IMAGE_WAIT))
 stale="$(stale_golden_images)"
@@ -116,6 +125,11 @@ while [[ -n "$stale" && $SECONDS -lt $deadline ]]; do
   sleep "$POLL_SECONDS"
   stale="$(stale_golden_images)"
 done
+if [[ -n "$stale" ]]; then
+  echo "golden images not ready after ${GOLDEN_IMAGE_WAIT}s: $(tr '\n' ' ' <<<"$stale")" >&2
+  echo "the checkup would skip its VM tests; not running it" >&2
+  exit 2
+fi
 
 VERSION="$(oc get clusterversion version -o jsonpath='{.status.desired.version}')"
 CNV_VERSION="$(oc get -n openshift-cnv "$CNV_CSV" -o jsonpath='{.spec.version}')"
@@ -127,7 +141,7 @@ mkdir -p "$RUN_DIR"
   echo "checkup image:     $CHECKUP_IMAGE"
   echo "storage class:     $STORAGE_CLASS"
   echo "virt default:      $VIRT_DEFAULT_STATE"
-  echo "golden images:     ${stale:+not up to date: $(tr '\n' ' ' <<<"$stale")}${stale:-all up to date}"
+  echo "golden images:     all up to date"
   echo "checkup timeout:   $CHECKUP_TIMEOUT (VM operations $VMI_TIMEOUT)"
 } | tee "$RUN_DIR/run-info.txt"
 
