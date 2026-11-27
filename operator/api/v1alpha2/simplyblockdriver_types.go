@@ -491,7 +491,7 @@ type SimplyblockDriverStatus struct {
 
 	// SnapshotSupport is whether the cluster already had snapshot support or the
 	// operator installed it, which is what says whether other drivers depend on
-	// what this one applied.
+	// what this one applied. Empty while volume snapshots are turned off.
 	// +optional
 	SnapshotSupport SnapshotSupportOrigin `json:"snapshotSupport,omitempty"`
 

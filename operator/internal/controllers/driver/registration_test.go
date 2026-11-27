@@ -361,3 +361,30 @@ func TestReconcileSucceedsOnAClusterWithNoSnapshotAPI(t *testing.T) {
 			got.Status.SnapshotSupport)
 	}
 }
+
+// U-117: turning volume snapshots off clears status.snapshotSupport. The class
+// is removed with the toggle (U-115), so a status still reading Detected would
+// report snapshot support the deployment no longer offers.
+func TestTurningSnapshotsOffClearsSnapshotSupport(t *testing.T) {
+	scheme := reconcilerScheme(t)
+	d := testDriver("simplyblock")
+	d.Spec.EnableVolumeSnapshots = ptr.To(false)
+	d.Status.SnapshotSupport = simplyblockv1alpha2.SnapshotSupportOriginDetected
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(d).WithStatusSubresource(d).Build()
+	r := &SimplyblockDriverReconciler{
+		Client: c, Scheme: scheme, Snapshots: fixedSnapshotAPI{served: true},
+	}
+
+	if _, err := r.Reconcile(t.Context(), requestFor(d)); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+
+	var got simplyblockv1alpha2.SimplyblockDriver
+	if err := c.Get(t.Context(), client.ObjectKeyFromObject(d), &got); err != nil {
+		t.Fatalf("re-read: %v", err)
+	}
+	if got.Status.SnapshotSupport != "" {
+		t.Errorf("status.snapshotSupport = %q with volume snapshots off, want it cleared",
+			got.Status.SnapshotSupport)
+	}
+}

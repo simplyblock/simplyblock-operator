@@ -52,6 +52,7 @@ File: `operator/internal/controllers/driver/simplyblockdriver_controller_unit_te
 | U-37  | The `VolumeSnapshotClass` for `spec.driverName` is applied in both cases             | Positive | `TestSnapshotClassFollowsTheToggle`                    |
 | U-115 | `enableVolumeSnapshots` turned false: the class this deployment applied is removed   | Positive | `TestTurningSnapshotsOffRemovesTheSnapshotClass`       |
 | U-116 | Turned false: a class of the same name without this deployment's label is kept       | Negative | `TestTurningSnapshotsOffKeepsAClassNotItsOwn`          |
+| U-117 | Turned false: `status.snapshotSupport` is cleared                                    | Positive | `TestTurningSnapshotsOffClearsSnapshotSupport`         |
 | U-38  | An installed CRD and controller carry no controller reference                        | Negative | —                                                      |
 | U-39  | `status.snapshotSupport` is `Detected` where the API was already served              | Positive | —                                                      |
 | U-40  | `status.snapshotSupport` is `Installed` where the operator applied them              | Positive | —                                                      |

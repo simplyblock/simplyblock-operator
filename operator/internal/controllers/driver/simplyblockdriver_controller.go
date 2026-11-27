@@ -685,7 +685,8 @@ func (r *SimplyblockDriverReconciler) recordOrigin(
 // when it changes.
 //
 // Missing is revised to Detected once the cluster serves the API, so the field
-// tells an administrator that the fix worked.
+// tells an administrator that the fix worked. Turning volume snapshots off
+// clears it: the class goes with the toggle, so no origin is left to report.
 func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 	ctx context.Context, d *simplyblockv1alpha2.SimplyblockDriver,
 ) error {
@@ -693,8 +694,13 @@ func (r *SimplyblockDriverReconciler) recordSnapshotSupport(
 	if err != nil {
 		return err
 	}
-	if origin == "" || origin == d.Status.SnapshotSupport {
+	if origin == d.Status.SnapshotSupport {
 		return nil
+	}
+	if origin == "" {
+		return r.writeStatus(ctx, d, func(status *simplyblockv1alpha2.SimplyblockDriverStatus) {
+			status.SnapshotSupport = ""
+		})
 	}
 
 	if origin == simplyblockv1alpha2.SnapshotSupportOriginMissing {
