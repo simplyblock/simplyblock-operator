@@ -86,6 +86,9 @@ func (ns *Server) NodeStageVolume(
 		}
 		return &csi.NodeStageVolumeResponse{}, nil
 	}
+	if err := refuseReadOnlyManyFilesystem(req.GetVolumeCapability()); err != nil {
+		return nil, err
+	}
 
 	isStaged, err := ns.mounter.IsMounted(stagingTargetPath)
 	if err != nil {

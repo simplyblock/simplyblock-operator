@@ -99,3 +99,49 @@ func TestTheReadWriteOncePodModesAreCreated(t *testing.T) {
 		}
 	}
 }
+
+// Regression: #989 review (ValidateVolumeCapabilities). Advertising
+// ReadOnlyMany made ValidateVolumeCapabilities confirm it for a filesystem,
+// because the check looked only at the advertised modes. A static or
+// pre-existing volume never passes CreateVolume's refusal, so the confirmation
+// was what let a ReadOnlyMany filesystem reach a node that cannot stage one.
+// A raw-block ReadOnlyMany capability stays confirmed.
+func TestValidateVolumeCapabilitiesAppliesTheReadOnlyManyRules(t *testing.T) {
+	mock := newMockSBCLI()
+	defer mock.Close()
+	cs := newTestControllerServer(t, mock)
+	cs.Driver.AddVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{
+		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
+	})
+	ctx := context.Background()
+	created, err := cs.CreateVolume(ctx, basicCreateVolumeRequest("pvc-validate-rox"))
+	if err != nil {
+		t.Fatalf("CreateVolume: %v", err)
+	}
+	validate := func(c *csi.VolumeCapability) *csi.ValidateVolumeCapabilitiesResponse {
+		t.Helper()
+		resp, err := cs.ValidateVolumeCapabilities(ctx, &csi.ValidateVolumeCapabilitiesRequest{
+			VolumeId:           created.GetVolume().GetVolumeId(),
+			VolumeCapabilities: []*csi.VolumeCapability{c},
+		})
+		if err != nil {
+			t.Fatalf("ValidateVolumeCapabilities: %v", err)
+		}
+		return resp
+	}
+	rox := &csi.VolumeCapability_AccessMode{Mode: csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY}
+
+	filesystem := validate(&csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Mount{Mount: &csi.VolumeCapability_MountVolume{}}, AccessMode: rox})
+	if filesystem.GetConfirmed() != nil {
+		t.Error("a ReadOnlyMany filesystem was confirmed, which no node can stage")
+	}
+	if filesystem.GetMessage() == "" {
+		t.Error("the refusal carries no message saying why")
+	}
+	block := validate(&csi.VolumeCapability{
+		AccessType: &csi.VolumeCapability_Block{Block: &csi.VolumeCapability_BlockVolume{}}, AccessMode: rox})
+	if block.GetConfirmed() == nil {
+		t.Errorf("ReadOnlyMany raw block was not confirmed: %q", block.GetMessage())
+	}
+}

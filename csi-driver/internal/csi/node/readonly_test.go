@@ -7,8 +7,8 @@ import (
 	"testing"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"github.com/simplyblock/atlas/volstack/plans"
+	csicommon "github.com/simplyblock/csi-driver/internal/csi/common"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -62,5 +62,25 @@ func TestAStripedReadOnlyManyBlockVolumeIsRefused(t *testing.T) {
 		blockCapabilityIn(csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY))
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("attachPlan = %v, want FailedPrecondition before anything attaches", err)
+	}
+}
+
+// Regression: #989 review (node admission). A ReadOnlyMany filesystem on a
+// block volume reached the node whenever CreateVolume had not seen it (a static
+// or pre-existing volume), and the node staged it: the read-only mount CRI-O
+// then cannot relabel. The node refuses it before it attaches anything.
+func TestAReadOnlyManyFilesystemIsRefusedAtStage(t *testing.T) {
+	runner := newRecordingRunner()
+	ns, _ := newStackedServer(t, runner)
+	req := stageRequest(t)
+	req.VolumeCapability.AccessMode.Mode = csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY
+
+	_, err := ns.NodeStageVolume(context.Background(), req)
+
+	if status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("NodeStageVolume = %v, want InvalidArgument for a ReadOnlyMany filesystem", err)
+	}
+	if len(runner.calls) != 0 {
+		t.Errorf("the stage ran %v before refusing", runner.calls)
 	}
 }
