@@ -788,3 +788,26 @@ func TestAnInstalledControlPlaneReportsInstalled(t *testing.T) {
 		t.Errorf("the terminal step carries a deadline %v, want none", got.Status.Step.Deadline)
 	}
 }
+
+// Regression: 2026-11-27-ocp-scrapeconfig-crd. A step that outlived its
+// deadline reported so and returned without performing the step again, so the
+// install stayed in that step for good once whatever had held it was fixed: on
+// OpenShift the ApplyingAPI step stopped retrying after its budget ran out, and
+// the missing CRD added afterward changed nothing.
+func TestAStepPastItsDeadlineIsStillPerformed(t *testing.T) {
+	cp := localControlPlane()
+	past := metav1.NewTime(time.Now().Add(-time.Hour))
+	cp.Status.Phase = simplyblockv1alpha2.ControlPlanePhaseInstalling
+	cp.Status.Step = statemachine.KubeSnapshot{State: string(stepApplyingAPI), Deadline: &past}
+	c := newClient(t, cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if _, err := r.install(context.Background(), cp); err != nil {
+		t.Fatalf("install: %v", err)
+	}
+	var api appsv1.Deployment
+	key := client.ObjectKey{Namespace: testNamespace, Name: ComponentWebAPI}
+	if err := c.Get(context.Background(), key, &api); err != nil {
+		t.Errorf("the ApplyingAPI step was not performed once past its deadline: %v", err)
+	}
+}

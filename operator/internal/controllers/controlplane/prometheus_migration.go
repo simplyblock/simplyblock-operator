@@ -16,6 +16,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -36,19 +37,29 @@ const (
 )
 
 // prometheusGated drops what cannot be applied yet: every prometheus-operator
-// object when its kinds are not served, and the Prometheus resource until the
-// old Prometheus's data is copied.
+// object when the Prometheus kind is not served, each one whose own kind is not
+// served, and the Prometheus resource until the old Prometheus's data is copied.
+//
+// The kinds are checked one by one because serving Prometheus does not mean
+// serving the rest: OpenShift's monitoring stack serves Prometheus,
+// ServiceMonitor, and PodMonitor, and not ScrapeConfig. An object of a kind the
+// cluster does not serve fails its apply on every pass, and the objects after it
+// in the step are never written.
 func (r *ControlPlaneReconciler) prometheusGated(
 	ctx context.Context, cp *simplyblockv1alpha2.ControlPlane, objects []client.Object,
 ) ([]client.Object, error) {
-	if _, err := r.RESTMapper().RESTMapping(prometheusGVK.GroupKind(), prometheusGVK.Version); err != nil {
-		if meta.IsNoMatchError(err) {
-			return without(objects, func(u *unstructured.Unstructured) bool {
-				return u.GroupVersionKind().Group == prometheusGVK.Group
-			}), nil
-		}
+	served, err := r.servedPrometheusKinds(objects)
+	if err != nil {
 		return nil, err
 	}
+	if !served[prometheusGVK] {
+		return without(objects, func(u *unstructured.Unstructured) bool {
+			return u.GroupVersionKind().Group == prometheusGVK.Group
+		}), nil
+	}
+	objects = without(objects, func(u *unstructured.Unstructured) bool {
+		return u.GroupVersionKind().Group == prometheusGVK.Group && !served[u.GroupVersionKind()]
+	})
 	copied, err := r.prometheusDataCopied(ctx, cp)
 	if err != nil || copied {
 		return objects, err
@@ -56,6 +67,36 @@ func (r *ControlPlaneReconciler) prometheusGated(
 	return without(objects, func(u *unstructured.Unstructured) bool {
 		return u.GroupVersionKind() == prometheusGVK
 	}), nil
+}
+
+// servedPrometheusKinds reports, for the Prometheus kind and every
+// prometheus-operator kind among objects, whether the cluster serves it.
+func (r *ControlPlaneReconciler) servedPrometheusKinds(
+	objects []client.Object,
+) (map[schema.GroupVersionKind]bool, error) {
+	served := map[schema.GroupVersionKind]bool{}
+	check := func(gvk schema.GroupVersionKind) error {
+		if _, known := served[gvk]; known {
+			return nil
+		}
+		_, err := r.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+		if err != nil && !meta.IsNoMatchError(err) {
+			return err
+		}
+		served[gvk] = err == nil
+		return nil
+	}
+	if err := check(prometheusGVK); err != nil {
+		return nil, err
+	}
+	for _, o := range objects {
+		if u, ok := o.(*unstructured.Unstructured); ok && u.GroupVersionKind().Group == prometheusGVK.Group {
+			if err := check(u.GroupVersionKind()); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return served, nil
 }
 
 func without(objects []client.Object, drop func(*unstructured.Unstructured) bool) []client.Object {
