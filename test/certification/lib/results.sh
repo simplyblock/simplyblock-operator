@@ -25,7 +25,12 @@ fetch_results() {
   for attempt in 1 2 3; do
     oc -n "$ns" exec "$pod" -c "$container" -- cat "$scratch/results.tar.gz" >"$dest/.results.tar.gz" || true
     if [[ "$(sha256_of "$dest/.results.tar.gz")" == "$want" ]]; then
-      tar xzf "$dest/.results.tar.gz" -C "$dest"
+      # Checked explicitly: the callers run this under `if !`, which turns
+      # errexit off inside it, and a failure here has to keep the pod.
+      if ! tar xzf "$dest/.results.tar.gz" -C "$dest"; then
+        echo "the results archive matched its checksum and did not unpack; it stays at $dest/.results.tar.gz" >&2
+        return 1
+      fi
       rm -f "$dest/.results.tar.gz"
       return 0
     fi
