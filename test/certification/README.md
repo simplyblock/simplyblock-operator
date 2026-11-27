@@ -195,6 +195,10 @@ draft's 30 per node stopped it at 90 on three nodes. The count is fixed when the
 cluster is created. `APPROVE_DRAFT=false` stops at the draft for a review
 instead.
 
+`uninstall-simplyblock` removes simplyblock, its storage cluster, and its
+volumes with the chart's cleanup script, so that `install-simplyblock` can build
+the storage cluster again, for example with another `MAX_SUBSYSTEM_COUNT`.
+
 Two operator defects are worked around in the step, so that it runs without a
 person: a discovery run that has not appeared within five minutes is applied
 from the chart's bootstrap ConfigMap, and when the draft fails because its

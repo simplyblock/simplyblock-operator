@@ -11,6 +11,7 @@
 #   ./cluster.sh wait                 wait for an install that timed out to finish
 #   ./cluster.sh install-virt         OpenShift Virtualization from the Red Hat catalog
 #   ./cluster.sh install-simplyblock  simplyblock from helm-charts/charts/simplyblock-operator
+#   ./cluster.sh uninstall-simplyblock  remove simplyblock and its storage cluster, for a rebuild
 #   ./cluster.sh status               the cluster's version, nodes, and operators
 #   ./cluster.sh kubeconfig           print the path of the cluster's kubeconfig
 #   ./cluster.sh destroy              remove the cluster and everything the installer created
@@ -537,6 +538,15 @@ spec:
 EOF
 }
 
+# Everything simplyblock put on the cluster, through the chart's own cleanup
+# script, which also removes the storage MachineConfigs of a pool with no nodes
+# left. The volumes go with it.
+cmd_uninstall_simplyblock() {
+  require_cluster
+  KUBECONFIG="$KUBECONFIG_PATH" PATH="$(tools_dir):$PATH" \
+    "$REPO_ROOT/helm-charts/scripts/cleanup-simplyblock.sh" --force simplyblock
+}
+
 cmd_status() {
   require_cluster
   oc_ get clusterversion
@@ -559,7 +569,7 @@ case "$step" in
     start_log "$step"
     trap keep_installer_log EXIT
     ;;
-  install-virt | install-simplyblock) start_log "$step" ;;
+  install-virt | install-simplyblock | uninstall-simplyblock) start_log "$step" ;;
 esac
 
 case "$step" in
@@ -567,6 +577,7 @@ case "$step" in
   wait) cmd_wait ;;
   install-virt) cmd_install_virt ;;
   install-simplyblock) cmd_install_simplyblock ;;
+  uninstall-simplyblock) cmd_uninstall_simplyblock ;;
   status) cmd_status ;;
   kubeconfig) require_cluster && echo "$KUBECONFIG_PATH" ;;
   destroy) cmd_destroy ;;
