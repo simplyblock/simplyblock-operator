@@ -197,7 +197,8 @@ instead.
 
 `uninstall-simplyblock` removes simplyblock, its storage cluster, and its
 volumes with the chart's cleanup script, so that `install-simplyblock` can build
-the storage cluster again, for example with another `MAX_SUBSYSTEM_COUNT`.
+the storage cluster again with settings fixed at creation, such as
+`MAX_SUBSYSTEM_COUNT`.
 
 Two operator defects are worked around in the step, so that it runs without a
 person: a discovery run that has not appeared within five minutes is applied
