@@ -9,13 +9,13 @@
 
 ## Phasing Overview
 
-| Phase       | Status                                                                           | Scope                                                                                                | Sections    |
-|-------------|----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|-------------|
-| **Phase 1** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998)) | A storage-node restart carries the SPDK images, and the control plane reports the images a node runs | §5, Phase 0 |
-| **Phase 2** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998)) | `RollingRestart` converges the fleet on the desired images and resumes where it stopped              | §4.3, §5.4  |
-| **Phase 3** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998)) | `SwitchWriteProtection` as a `StorageClusterOps` action                                              | §4.4        |
-| **Phase 4** | Planned                                                                          | Release modules in `simplyblock-upgrade`, selected by source and target release                      | §6          |
-| **Phase 5** | Planned                                                                          | The upgrade runs from the chart as a pre-upgrade hook Job and a rollout Job                          | §7          |
+| Phase       | Status                                                                             | Scope                                                                                                | Sections    |
+|-------------|------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------|-------------|
+| **Phase 1** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998))   | A storage-node restart carries the SPDK images, and the control plane reports the images a node runs | §5, Phase 0 |
+| **Phase 2** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998))   | `RollingRestart` converges the fleet on the desired images and resumes where it stopped              | §4.3, §5.4  |
+| **Phase 3** | In review ([#998](https://github.com/simplyblock/simplyblock-operator/pull/998))   | `SwitchWriteProtection` as a `StorageClusterOps` action                                              | §4.4        |
+| **Phase 4** | In review ([#1002](https://github.com/simplyblock/simplyblock-operator/pull/1002)) | Release modules in `simplyblock-upgrade`, selected by source and target release                      | §6          |
+| **Phase 5** | In review ([#1002](https://github.com/simplyblock/simplyblock-operator/pull/1002)) | The upgrade runs from the chart as a pre-upgrade hook Job and a rollout Job                          | §7          |
 
 Each phase is useful on its own. Phases 1 and 2 already remove the manual image
 handling from a rolling upgrade, phase 3 removes the last step that needs `sbctl`,
@@ -42,8 +42,9 @@ reports the image as unknown instead of failing. Without P0-3 a cluster that
 leaves its SPDK image unset keeps whatever each node was added with, and the
 upgrade Job has to set the image on the cluster explicitly (§5.1). Without P0-4
 the write-protection switch stays a manual `sbctl` step of the documented
-sequence. Without P0-5 the capability check of §6.6 compares image tags against
-a table the release module carries, which is weaker but sufficient.
+sequence. Nothing depends on P0-5 since every restart carries the target's
+images (§6.6), and it stays listed for a later release whose module needs to
+refuse an image outright.
 
 ---
 
@@ -464,9 +465,14 @@ Checks and steps are the framework's existing units (`design-api-upgrade.md`
 §29.5 and §29.6), so a release module's step has the same five-question contract
 as a migration step: described, skipped when its effect is already present,
 validated, applied, and verified. A module is registered in
-`operator/internal/upgrade/releases/releases.go`, one line per release in
-release order, which is the list somebody reads to find out what any upgrade
-does.
+`operator/internal/upgrade/releases/registry/registry.go`, one line per release
+in release order, which is the list somebody reads to find out what any upgrade
+does. The list is a package of its own because every module imports `releases`
+for its types, and the list imports every module.
+
+A module step does not choose its stage or its position. The catalog builder
+wraps it with the stage of its hook point and a requirement on the step before
+it, so the framework's ordering runs it where the hook point is.
 
 ### 6.3 Hook Points
 
@@ -518,21 +524,23 @@ Steps 1 to 3 are the pre-upgrade hook, and steps 4 to 7 the rollout Job.
 ### 6.6 Example: Upgrading from 26.4.0-beta6
 
 The analysis of an upgrade from `26.4.0-beta6.2` to the current `main` found five
-things the generic sequence does not do. They become the module of the first
-release after `26.4.0-beta6` (named here `r26_4_0_beta7`, see §15):
+things the generic sequence does not do. Four become the module of the first
+release after `26.4.0-beta6` (named here `r26_4_0_beta7`, see §15), with a
+minimum source of `26.4.0-beta6`:
 
-| Rule                         | Kind  | Hook point          | What it does                                                                                                                                                                                                                                                                    |
-|------------------------------|-------|---------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `reweight-pending-clear`     | Check |                     | Refuses while any lblk cluster reports a pending reweight, and names `cluster grow-devices` on the source release as the fix, because the target no longer completes one                                                                                                        |
-| `spdk-image-supports-sizing` | Check |                     | Refuses a target SPDK image that predates the hugepage and system-memory budgets of the target control plane (ultra #241, #245, #247), read from P0-5 or from a table in the module                                                                                             |
-| `pnfs-mds-legacy-state`      | Step  | `AfterCRDs`         | Where the MDS StatefulSet still has its `state` volume claim template: deletes the StatefulSet with orphaned pods, the `*-pnfs-mds-state` claims, the derived StorageClass, and the admission policy and its binding, so the target operator recreates the MDS with its standby |
-| `write-protection-v2`        | Step  | `AfterStoragePlane` | For each cluster reporting `V1`: a `StorageClusterOps` `SwitchWriteProtection`                                                                                                                                                                                                  |
-| `helm-values-removed-keys`   | Check |                     | Reports `driver.pnfs.mds.stateSize` and `stateStorageClassName` in the release's values as a warning, because the target chart ignores them (§7.4)                                                                                                                              |
+| Rule                       | Kind            | Hook point          | What it does                                                                                                                                                                                                                                                                                                                                                                               |
+|----------------------------|-----------------|---------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `reweight-pending`         | Check (warning) |                     | Names every lblk cluster, with `sbctl cluster get` and `cluster grow-devices` on the source release as the check and the fix, because the target no longer completes a pending reweight. A warning rather than a refusal, because whether a reweight is pending is recorded in the control plane, which the tool does not read                                                             |
+| `pnfs-mds-legacy-state`    | Step            | `AfterOperator`     | Where the MDS StatefulSet still has its `state` volume claim template: deletes the StatefulSet, its `*-pnfs-mds-state` claims, the derived StorageClass, and the admission policy and its binding, so the target operator recreates the MDS with its standby. After the operator rather than after the CRDs, because the beta6 operator recreates the StatefulSet the moment it is deleted |
+| `write-protection-v2`      | Step            | `AfterStoragePlane` | For each cluster reporting `V1`: a `StorageClusterOps` `SwitchWriteProtection`                                                                                                                                                                                                                                                                                                             |
+| `helm-values-removed-keys` | Check           |                     | Reports `driver.pnfs.mds.stateSize` and `stateStorageClassName` in the release's values as a warning, because the target chart ignores them (§7.4)                                                                                                                                                                                                                                         |
 
-Ordering the rolling restart before the write-protection switch is what makes
-every node run the target's SPDK image before the switch reaches it, and the
-target control plane's sizing is applied only through restarts that carry the
-target image, which is what the analysis required of this upgrade.
+The fifth, a check refusing an SPDK image too old for the target control
+plane's memory sizing, is not needed. The analysis feared a node restarted by
+the upgraded control plane on its old image, and every restart now carries the
+node's desired image, which follows the control plane's default (§5.1). Ordering
+the rolling restart before the write-protection switch makes every node run the
+target's images before the switch reaches it.
 
 ---
 
@@ -567,13 +575,15 @@ ServiceAccount, ClusterRole, and ClusterRoleBinding are hooks too, with a lower
 `helm.sh/hook-weight` and the same delete policy. The role grants `get`, `list`,
 and `watch` on every kind the checks read, `create` and `patch` on
 `customresourcedefinitions`, and the writes the selected modules' `BeforeCRDs` and
-`AfterCRDs` steps declare. The hook is not rendered on `helm install`.
+`AfterCRDs` steps declare. The hook is not rendered on `helm install`. Its Job
+is `simplyblock-upgrade-prepare` with `backoffLimit: 0`, because a refusal is an
+answer to read rather than a fault to retry.
 
 ### 7.3 The Rollout Job
 
 The rollout is long: a twenty-node rolling restart takes hours, which is beyond
 what a Helm hook is meant to hold. So the rollout Job is an ordinary object of
-the release, named `simplyblock-upgrade-<target>`, rendered only on an upgrade
+the release, named `simplyblock-upgrade-<chart version>`, rendered only on an upgrade
 (`.Release.IsUpgrade`). The name carries the target, so every release creates a
 new Job and the next `helm upgrade` to the same release leaves the running one
 alone. `helm upgrade` returns once the operator is upgraded, and the rollout
@@ -587,9 +597,10 @@ successful upgrade.
 
 ### 7.4 What the Chart Changes
 
-**The chart stops moving the control plane after install.** `_bootstrap_controlplane.tpl`
-renders `spec.source.local.image` from the live `ControlPlane` when one exists
-(`lookup`), and from `image.simplyblock` only when none does. After install, the
+**The chart stops moving the control plane after install.** With
+`upgrade.enabled` on, `_bootstrap_controlplane.tpl` renders
+`spec.source.local.image` on an upgrade from the live `ControlPlane` (`lookup`),
+and from `image.simplyblock` on an install. After install, the
 control plane moves only through a `ControlPlaneOps` `Upgrade`, which is the
 rollout Job's step 5, and a `helm upgrade` can no longer roll the management API
 behind the operator's back or move it back with a stale value.
@@ -665,13 +676,14 @@ effect is present.
 
 ## 10. Configuration
 
-| Value                      | Type           | Default                                      | Description                                                                                             |
-|----------------------------|----------------|----------------------------------------------|---------------------------------------------------------------------------------------------------------|
-| `upgrade.enabled`          | bool           | `true`                                       | Renders the pre-upgrade hook and the rollout Job. `false` leaves the upgrade to §7.5                    |
-| `upgrade.image.repository` | string         | `quay.io/simplyblock-io/simplyblock-upgrade` | The tool's image                                                                                        |
-| `upgrade.image.tag`        | string         | The chart's `appVersion`                     | Pinned per release like every other image                                                               |
-| `upgrade.skip`             | list of string | `[]`                                         | Rule identities passed to `--skip`, for a check the user has accepted                                   |
-| `upgrade.rollout.enabled`  | bool           | `true`                                       | `false` runs the hook only, for a deployment that rolls the storage plane in its own maintenance window |
+| Value                      | Type           | Default                                      | Description                                                                                                                                                                                                                                                             |
+|----------------------------|----------------|----------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `upgrade.enabled`          | bool           | `false`                                      | Renders the pre-upgrade hook and the rollout Job, and keeps the live control-plane image on an upgrade. Off until the tool's image is published for every release, because a hook whose image is missing fails every `helm upgrade`. `false` leaves the upgrade to §7.5 |
+| `upgrade.image.repository` | string         | `quay.io/simplyblock-io/simplyblock-upgrade` | The tool's image                                                                                                                                                                                                                                                        |
+| `upgrade.image.tag`        | string         | The chart's `appVersion`                     | Pinned per release like every other image                                                                                                                                                                                                                               |
+| `upgrade.skip`             | list of string | `[]`                                         | Rule identities passed to `--skip`, for a check the user has accepted                                                                                                                                                                                                   |
+| `upgrade.rollout.enabled`  | bool           | `true`                                       | `false` runs the hook only, for a deployment that rolls the storage plane in its own maintenance window                                                                                                                                                                 |
+| `upgrade.spdkImage`        | string         | `""`                                         | The SPDK image the target control plane reports as its default. Set, the storage plane waits for every cluster to report exactly it. Empty, it waits a settle period after the control-plane upgrade                                                                    |
 
 The new `StorageCluster` fields of §4.1 are reconfigurable at any time. Changing
 them changes the nodes' desired images, which marks them out of date and takes
@@ -789,13 +801,13 @@ control plane is replaced by the rollout Job's description.
 
 ## 15. Open Questions
 
-| #   | Question                                                                                                                                                                             | Owner              |
-|-----|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
-| 1   | **The release after `26.4.0-beta6`:** its version decides the module name of §6.6 and the upgrade-notes page in the documentation                                                    | Release management |
-| 2   | **SPDK capability metadata (P0-5):** a label or an RPC that states which sizing an SPDK image supports, so §6.6's check needs no table                                               | SPDK/Backend team  |
-| 3   | ~~**Restart after the write-protection switch**~~ **Resolved.** The switch converts online nodes at runtime and stores v2 for offline ones, so no restart follows it (§4.4)          | Resolved           |
-| 4   | **Clusters in parallel:** §6.5 rolls one `StorageCluster` after the other. A deployment with many small clusters may want them in parallel, which the operator's locks already allow | —                  |
-| 5   | **The tool's image:** `simplyblock-upgrade` is built as binaries and published nowhere today. The hook needs it as a container image per release                                     | —                  |
+| #   | Question                                                                                                                                                                                                  | Owner              |
+|-----|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|--------------------|
+| 1   | **The release after `26.4.0-beta6`:** its version decides the module name of §6.6 and the upgrade-notes page in the documentation                                                                         | Release management |
+| 2   | ~~**SPDK capability metadata (P0-5)**~~ **Resolved for this release.** The check it served is not needed, because every restart carries the target image (§6.6)                                           | Resolved           |
+| 3   | ~~**Restart after the write-protection switch**~~ **Resolved.** The switch converts online nodes at runtime and stores v2 for offline ones, so no restart follows it (§4.4)                               | Resolved           |
+| 4   | **Clusters in parallel:** §6.5 rolls one `StorageCluster` after the other. A deployment with many small clusters may want them in parallel, which the operator's locks already allow                      | —                  |
+| 5   | **The tool's image:** `operator/Dockerfile.simplyblock-upgrade` builds it, stamped with the chart version. The release workflow does not publish it yet, which is why `upgrade.enabled` is off by default | —                  |
 
 ---
 
