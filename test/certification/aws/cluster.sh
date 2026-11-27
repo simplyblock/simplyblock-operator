@@ -27,13 +27,16 @@
 # downloaded once per OpenShift version, into bin/<version>/.
 #
 # AWS credentials come from the environment or ~/.aws, as for the AWS CLI. The
-# Route 53 public zone of BASE_DOMAIN has to exist in the account.
+# Route 53 public zone of BASE_DOMAIN has to exist in the account, and the
+# parent domain has to delegate to it: the installer reaches the new cluster's
+# API by its public name, so a zone nobody delegates to ends the install at
+# "no such host".
 #
 # Environment:
 #   PULL_SECRET_FILE        Red Hat pull secret, JSON (required by create)
 #   CLUSTER_NAME            default sb-cert
 #   OCP_VERSION             a release (4.20.26, 5.0.1) or a channel (stable-4.22); default stable-4.22
-#   BASE_DOMAIN             default api.simplyblock.io
+#   BASE_DOMAIN             default api.ocp.cert.simplyblock.ai
 #   REGION, ZONE            default us-east-1, us-east-1a
 #   CONTROL_PLANE_TYPE      default m6i.2xlarge (Level 3 asks for 8 vCPU and 32 GB)
 #   CONTROL_PLANE_REPLICAS  default 3
@@ -52,7 +55,7 @@ REPO_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
 
 CLUSTER_NAME="${CLUSTER_NAME:-sb-cert}"
 OCP_VERSION="${OCP_VERSION:-stable-4.22}"
-BASE_DOMAIN="${BASE_DOMAIN:-api.simplyblock.io}"
+BASE_DOMAIN="${BASE_DOMAIN:-api.ocp.cert.simplyblock.ai}"
 REGION="${REGION:-us-east-1}"
 ZONE="${ZONE:-us-east-1a}"
 CONTROL_PLANE_TYPE="${CONTROL_PLANE_TYPE:-m6i.2xlarge}"
@@ -190,9 +193,23 @@ EOF
   )
 }
 
+# Refuses a base domain that public DNS does not delegate. Route 53 answers for
+# a zone only through the name servers the parent's NS records name, and the
+# installer finds out an hour later, as "no such host" for the API.
+check_delegation() {
+  if ! command -v dig >/dev/null; then
+    echo "dig is not on PATH; not checking that $BASE_DOMAIN is delegated" >&2
+    return 0
+  fi
+  [[ -n "$(dig +short NS "$BASE_DOMAIN" @1.1.1.1)" ]] ||
+    die "public DNS resolves no NS records for $BASE_DOMAIN: the parent has to delegate it," \
+      "and its Route 53 zone has to exist on the name servers the delegation names"
+}
+
 cmd_create() {
   [[ -e "$INSTALL_DIR/metadata.json" ]] &&
     die "$STATE_DIR already holds cluster $CLUSTER_NAME; destroy it first, or set CLUSTER_NAME"
+  check_delegation
   [[ -x "$(tools_dir)/openshift-install" ]] || download_tools
   render_config
   echo "creating $CLUSTER_NAME.$BASE_DOMAIN: OpenShift $(cat "$STATE_DIR/ocp-version")," \
