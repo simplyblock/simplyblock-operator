@@ -1,0 +1,11 @@
+# The two clusters of the move, both served by one control plane.
+# site-a holds the volumes today, and site-b receives them.
+# A pair already written for DR between the same two clusters can be reused.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPair
+metadata:
+  name: site-a-to-site-b
+  namespace: simplyblock
+spec:
+  sourceCluster: site-a
+  targetCluster: site-b

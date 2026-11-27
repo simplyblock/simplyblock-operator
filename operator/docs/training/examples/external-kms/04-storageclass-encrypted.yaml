@@ -1,0 +1,18 @@
+# An encrypted StorageClass for the cluster's default pool. The labels assign
+# it to the pool, and encryption is a quoted string.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-secure-encrypted
+  labels:
+    storage.simplyblock.io/namespace: simplyblock
+    storage.simplyblock.io/cluster: secure
+    storage.simplyblock.io/pool: secure-default
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 4b8e2f1a-9c3d-4e7f-a1b2-6d5c4e3f2a10
+  pool_name: secure-default
+  encryption: "true"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

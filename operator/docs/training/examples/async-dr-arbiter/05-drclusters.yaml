@@ -1,0 +1,17 @@
+# The two DRClusters, written on the hub, one per DR site and named after its
+# managed cluster. The regions differ, which makes the pair asynchronous.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRCluster
+metadata:
+  name: site-a
+spec:
+  region: east
+  s3ProfileName: site-a-s3
+---
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRCluster
+metadata:
+  name: site-b
+spec:
+  region: west
+  s3ProfileName: site-b-s3

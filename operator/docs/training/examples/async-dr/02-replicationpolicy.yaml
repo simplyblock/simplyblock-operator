@@ -1,0 +1,13 @@
+# The DR schedule on the pair: a snapshot of every enrolled volume every five
+# minutes, the last three kept on site-b. In failover mode, site-b holds the
+# snapshots until a ReplicationOps fails the volumes over.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPolicy
+metadata:
+  name: dr-policy
+  namespace: shop
+spec:
+  pairRef: site-a-to-site-b
+  mode: failover
+  interval: 5m
+  snapshotRetention: 3

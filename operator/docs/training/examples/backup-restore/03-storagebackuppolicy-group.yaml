@@ -1,0 +1,14 @@
+# An hourly backup of one consistency group as a unit. Each copy is one
+# generation of the group, and the newest 24 generations are kept. The policy
+# may be applied before the group's first claim exists.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupPolicy
+metadata:
+  name: orders-hourly
+  namespace: simplyblock
+spec:
+  clusterRef: prod
+  consistencyGroupName: orders
+  schedule: 60m,24
+  maxVersions: 24
+  maxAge: 2d

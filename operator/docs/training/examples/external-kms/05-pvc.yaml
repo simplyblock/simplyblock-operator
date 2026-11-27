@@ -1,0 +1,13 @@
+# A claim against the encrypted class. It names no key and no Secret.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-db-data
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-secure-encrypted
+  resources:
+    requests:
+      storage: 20Gi

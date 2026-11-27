@@ -1,0 +1,12 @@
+# Moves one volume, with every volume sharing its NVMe-oF subsystem,
+# to the placement group prod-fast-mzt of the same supercluster.
+# Cluster-scoped, like the PersistentVolume. No pair or policy is needed.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: relocate-orders-db
+spec:
+  persistentVolumeName: pvc-4b1d2e7a-9c3f-4a85-b6d0-2e1f7c9a3b58
+  action: Relocate
+  relocate:
+    targetClusterRef: prod-fast-mzt

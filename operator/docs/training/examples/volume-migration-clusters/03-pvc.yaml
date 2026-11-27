@@ -1,0 +1,19 @@
+# A claim enrolled in the move by its annotation.
+# It lives beside the policy, because scopes policy, volume, and target
+# only see claims in the namespace of the operation.
+# Once the claim is Bound, the operator creates the ReplicationSlot
+# move-to-site-b-ledger-db beside it.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ledger-db
+  namespace: simplyblock
+  annotations:
+    storage.simplyblock.io/replication-policy: move-to-site-b
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-site-a
+  resources:
+    requests:
+      storage: 100Gi

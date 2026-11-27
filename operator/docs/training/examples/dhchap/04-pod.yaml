@@ -1,0 +1,23 @@
+# The first pod using the claim, pinned to an allowed node by the pool's
+# label. Later pods follow the PersistentVolume's node affinity.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: ledger
+  namespace: payments
+spec:
+  nodeSelector:
+    storage.simplyblock.io/storage-pool.3f9a1c2e-7b4d-4e8a-9c61-2d5f0a7b8e14: allowed
+  containers:
+    - name: app
+      image: registry.access.redhat.com/ubi9/ubi-minimal:9.4
+      command:
+        - sleep
+        - infinity
+      volumeMounts:
+        - name: data
+          mountPath: /data
+  volumes:
+    - name: data
+      persistentVolumeClaim:
+        claimName: ledger

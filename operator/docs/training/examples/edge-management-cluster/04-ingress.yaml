@@ -1,0 +1,25 @@
+# Exposes the management API to the edges over plain HTTP. Reachable only from
+# the VPN or private link that connects the sites.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: simplyblock-management-api
+  namespace: simplyblock
+  annotations:
+    # ingress-nginx: accept requests only from the address range of the VPN.
+    nginx.ingress.kubernetes.io/whitelist-source-range: 10.20.0.0/16
+spec:
+  ingressClassName: nginx
+  rules:
+    # The name the edges use in their endpoint.
+    - host: control.central.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # The ClusterIP Service the operator creates, port 5000.
+                name: simplyblock-webappapi
+                port:
+                  name: http

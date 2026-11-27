@@ -1,0 +1,12 @@
+# A removal of one storage node, written by hand. The name follows the
+# <node>-remove pattern the finalizer uses. A later delete of the Removed
+# StorageNode then finds this record and raises no second removal. Without
+# spec.remove, the system-volume pattern is ^sb-fio-baseline-.*.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: production-worker-5-0-remove
+  namespace: simplyblock
+spec:
+  nodeRef: production-worker-5-0
+  action: Remove

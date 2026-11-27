@@ -1,0 +1,16 @@
+# A daily backup of the labeled claims in the cluster's namespace. One copy
+# every 24 hours, the newest seven kept, and nothing older than eight days.
+# The control plane runs the schedule and the retention.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupPolicy
+metadata:
+  name: daily
+  namespace: simplyblock
+spec:
+  clusterRef: prod
+  claimSelector:
+    matchLabels:
+      backup: daily
+  schedule: 24h,7
+  maxVersions: 7
+  maxAge: 8d

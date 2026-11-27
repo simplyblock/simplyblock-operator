@@ -1,0 +1,306 @@
+// Chapter 7: failure domains. Six OpenShift workers in three cabinets are
+// labeled, discovered, and deployed as one cluster in failure-domain mode. The
+// chapter explains what the control plane spreads across the domains, why a
+// protected stripe needs at least three of them, and what the operator writes
+// and checks along the way. Six workers in two cabinets is the worked refusal.
+TRAINING.register({
+  id: 'failure-domains',
+  title: 'Failure domains: a six-node cluster in three cabinets',
+  summary: 'Six OpenShift workers in three cabinets, labeled, discovered, and deployed in failure-domain mode, so that a whole cabinet can fail without taking data offline. Includes why two cabinets are refused.',
+  goal: 'you can explain what simplyblock spreads across failure domains, work out how many domains a stripe needs, label a fleet and write a discovery run that reads the labels, review the draft before approving it, and grow or shrink the cluster without breaking the balance rules.',
+
+  sections: [
+    {
+      heading: 'What a failure domain protects',
+      body: [
+        'A **failure domain** is a group of nodes that can fail together. Examples are a cabinet, a rack, a power feed, or a cloud zone.',
+        'Without failure domains, simplyblock puts each chunk of a stripe on a different node. It does not know which nodes share a power feed. One feed can then take out two chunks of the same stripe, and a `1+1` stripe survives only one.',
+        'In **failure-domain mode**, you tell simplyblock each node\'s domain. The control plane then spreads three things across the domains:',
+        { table: { head: ['What', 'How it is spread', 'Effect when one domain fails'], rows: [
+          ['Data and parity chunks', 'Each chunk of a stripe in a different domain', 'Each stripe loses at most one chunk'],
+          ['Journal copies', 'Four copies per node, never two on one host, spread over the domains', 'At least two copies remain'],
+          ['Failover paths', 'Hosts ordered round-robin by domain at activation', 'Every volume keeps a standby path in another domain'],
+        ] } },
+        'Worked example: a `1+1` stripe in three cabinets. Copy one is in cabinet A, copy two in cabinet B. Cabinet A loses power. Every volume keeps running on its copy in B or C.',
+        { callout: 'You choose failure-domain mode when you create the cluster. You cannot turn it on or off later.', kind: 'warn' },
+      ],
+    },
+    {
+      heading: 'How many domains a stripe needs',
+      body: [
+        'The control plane activates a new failure-domain cluster only when both rules hold:',
+        { list: [
+          '**Enough domains:** at least parity + 2, and at least data + parity. The higher number applies.',
+          '**Equal domains:** every domain has the same number of hosts.',
+        ] },
+        'Why parity + 2? With parity + 1 domains, a stripe fits, but no domain is spare. After one domain fails, the next add or remove has nowhere to move its standby paths. So two domains are never enough.',
+        { table: { head: ['Stripe', 'Domains needed', 'Nodes needed', 'Whole domains it survives'], rows: [
+          ['`1+1`', '3', '3', '1'],
+          ['`2+1`', '3', '4', '1'],
+          ['`4+1`', '5', '6', '1'],
+          ['`1+2`', '4', '5', '2'],
+          ['`2+2`', '4', '6', '2'],
+          ['`4+2`', '6', '8', '2'],
+        ] } },
+        { code: '4+1:  parity + 2 = 1 + 2 = 3\n      data + parity = 4 + 1 = 5\n      needed = max(3, 5) = 5 domains', title: 'Worked number for 4+1' },
+        'Plan two hosts per domain. Once the cluster holds data, no domain may drop below two hosts.',
+        { callout: 'Before approval, the operator checks parity + 2 and equal sizes. It does not check data + parity. For `4+1` and `4+2`, count the domains yourself. Otherwise the draft passes and the activation fails.', kind: 'warn' },
+        'This chapter uses `1+1` on six workers in three cabinets of two.',
+      ],
+    },
+    {
+      heading: 'A failure domain is a label value',
+      body: [
+        'A failure domain is the value of a label on the Kubernetes Node. You choose the key. Discovery reads `topology.kubernetes.io/zone` unless you name another key.',
+        'A value has up to 63 letters, digits, `-`, `_`, or `.`. It starts and ends with a letter or digit.',
+        { code: 'oc label node worker-0 worker-1 cabinet=cabinet-a\noc label node worker-2 worker-3 cabinet=cabinet-b\noc label node worker-4 worker-5 cabinet=cabinet-c\noc get nodes -L cabinet\n\nNAME       STATUS   ROLES    AGE   VERSION   CABINET\nworker-0   Ready    worker   9d    v1.31.6   cabinet-a\nworker-1   Ready    worker   9d    v1.31.6   cabinet-a\nworker-2   Ready    worker   9d    v1.31.6   cabinet-b\nworker-3   Ready    worker   9d    v1.31.6   cabinet-b\nworker-4   Ready    worker   9d    v1.31.6   cabinet-c\nworker-5   Ready    worker   9d    v1.31.6   cabinet-c', title: 'Labeling the six workers, and what you see' },
+        'Label by physical layout. Same cabinet, same value. A worker with two storage nodes, one per socket, counts as one host in its domain.',
+        'The control plane knows domains by number. The operator keeps the mapping:',
+        { table: { head: ['Field', 'Holds', 'Written by'], rows: [
+          ['Node label `cabinet`', '`cabinet-a`', 'You'],
+          ['`ClusterDeploymentConfig` `nodeSets[].groups[].failureDomain`', 'The group\'s domain', 'Discovery, then you'],
+          ['`ClusterDeploymentConfig` `cluster.enableFailureDomains`', 'The mode', 'Discovery, or you'],
+          ['`StorageCluster` `spec.enableFailureDomains`', 'The mode, immutable', 'The operator'],
+          ['`StorageCluster` `status.failureDomains[]`', 'Each label and its number', 'The operator'],
+          ['`StorageNode` `spec.config.failureDomain`', 'The node\'s label, immutable once set', 'The operator'],
+          ['`StorageNode` `status.failureDomain`', 'The assigned number', 'The operator, from the control plane'],
+        ] } },
+        'New labels get numbers in name order, from the lowest free number. A label that is a number keeps that number if it is free. A mapping entry never changes.',
+        { code: 'cabinet-a -> 0\ncabinet-b -> 1\ncabinet-c -> 2', title: 'The mapping for this chapter' },
+      ],
+    },
+    {
+      heading: 'Discovery: reading the label',
+      body: [
+        'Use chapter 1\'s discovery run with two more fields under `spec.discover`:',
+        { table: { head: ['Field', 'Value here', 'Effect'], rows: [
+          ['`failureDomainLabel`', '`cabinet`', 'The Node label to read. Default: `topology.kubernetes.io/zone`'],
+          ['`enableFailureDomains`', '`true`', 'Mode on in the draft, even if the layout would be refused'],
+          ['`enableFailureDomains`', '`false`', 'Mode off. No labels are read'],
+          ['`enableFailureDomains`', 'unset', 'Mode on only if every worker has a domain and the layout passes'],
+        ] } },
+        'The Helm chart\'s own run reads only the zone label. Turn it off and write your own run.',
+        { code: 'oc apply -f 02-operatorops-discover.yaml\noc get oops cabinets -n simplyblock -w\noc get events -n simplyblock --field-selector involvedObject.name=cabinets', title: 'Starting and following the run' },
+        'The run reports label problems as events on itself:',
+        { table: { head: ['Event', 'Meaning', 'Result'], rows: [
+          ['`TopologyIncomplete`', 'Some workers have the label, others do not', 'Unlabeled workers get no domain. Mode stays off'],
+          ['`FailureDomainInvalid`', 'A value is not valid, for example `cabinet a`', 'That worker gets no domain'],
+        ] } },
+        'Fix the labels and start a new run. A finished run does not run again.',
+        'Workers in different domains never share a group. Six identical machines in three cabinets give three groups of two.',
+      ],
+      examples: [
+        { title: 'Helm values with the chart\'s discovery run turned off', file: 'examples/failure-domains/01-helm-values.yaml', notes: [
+          { at: 'enabled: false', text: 'The chart\'s run would read `topology.kubernetes.io/zone`, which these workers do not have.' },
+        ] },
+        { title: 'The discovery run', file: 'examples/failure-domains/02-operatorops-discover.yaml', notes: [
+          { at: 'failureDomainLabel: cabinet', text: 'The Node label to read. Its value is copied into each group\'s `failureDomain`.' },
+          { at: 'enableFailureDomains: true', text: 'Turns the mode on in the draft.' },
+          { at: 'name: cabinets', text: 'The draft is named `discovered-cabinets`.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Reviewing the draft: one group per cabinet',
+      body: [
+        'The draft has one node set with three groups, one per cabinet. Keep one node set. Each node set becomes its own cluster, so three node sets would make three clusters with one domain each.',
+        'The operator checks the draft on every change. Each finding is a `Warning` event. The first one is in `status.message`.',
+        { table: { head: ['Reason', 'When', 'Fix'], rows: [
+          ['`FailureDomainLayout`', 'Too few domains, or unequal domains', 'Fix the cabinets or labels, then the draft'],
+          ['`DeviceNotFound`, message `declares none`', 'A group has no `failureDomain`', 'Set `failureDomain` on the group'],
+          ['`TooManyFailureDomains`', 'More than 256 domains on one cluster', 'Use fewer labels'],
+        ] } },
+        { code: 'oc get cdc discovered-cabinets -n simplyblock -o jsonpath=\'{.status.message}\'\n\nthe document is valid and is waiting for spec.approved', title: 'A draft with no findings' },
+        'Workers are counted per domain across all groups. Two groups with the same `failureDomain` are one domain.',
+        { steps: [
+          'Read `status.message`.',
+          'Check that every group has a `failureDomain`, and the workers are split 2, 2, 2.',
+          'Check the stripe against the table of domains needed.',
+          'Leave `journalManager.count` unset, or set it to 4 or more. The control plane refuses fewer journal copies here.',
+          'Rename the groups if you like, set `cluster.name`, and set `approved: true`.',
+        ] },
+        'A draft with findings waits in `Draft`. Do not approve it yet. An approved document cannot change, so the operator marks it `Failed`.',
+      ],
+      examples: [
+        { title: 'The reviewed draft', file: 'examples/failure-domains/03-clusterdeploymentconfig.yaml', notes: [
+          { at: 'enableFailureDomains: true', text: 'The mode. It becomes an immutable field of the StorageCluster.' },
+          { at: 'parityChunks: 1', text: 'One parity chunk: three domains needed, one domain survived.' },
+          { at: 'nodeProvisioningBudget: 2', text: 'Two workers added at once, picked from different cabinets.' },
+          { at: '- name: cabinets', text: 'One node set for the whole cluster. The cabinets are groups inside it.' },
+          { at: 'name: cabinet-a', text: 'The group name. Discovery named it after its hardware. You can rename it.' },
+          { at: 'failureDomain: cabinet-a', text: 'The domain of every worker in this group.' },
+          { at: 'worker-0', text: 'Two workers per cabinet keeps the domains equal.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Worked example: two cabinets are refused',
+      body: [
+        'Your six workers stand in two cabinets of three. You run discovery with `enableFailureDomains: true`. The draft has two groups and a `1+1` stripe. The API accepts it. Validation refuses it:',
+        { code: 'oc get cdc discovered-two-cabinets -n simplyblock -o jsonpath=\'{.status.message}\'\n\nfailure-domain mode with 1+1 needs at least 3 distinct failure domains (the stripe\'s parity plus two), and the workers are in 2 (cabinet-a: 3, cabinet-b: 3)', title: 'The refusal' },
+        { code: '1+1:  parity + 2 = 3, data + parity = 2\n      needed = 3 domains, present = 2  ->  refused', title: 'Worked number' },
+        'Why: `1+1` fits in two cabinets, one copy each. If one cabinet fails, every volume runs on its last copy. No third domain is left to rebuild into or to move paths to.',
+        'With `enableFailureDomains` unset, the run leaves the mode off. Its `ConfigWritten` event quotes the same refusal.',
+        'Unequal domains are refused too:',
+        { code: 'failure-domain mode needs an equal number of workers in every failure domain when the cluster is activated, and the domains hold cabinet-a: 3, cabinet-b: 2, cabinet-c: 1', title: 'Three cabinets of 3, 2, and 1 workers' },
+        'Your options:',
+        { table: { head: ['Option', 'Result'], rows: [
+          ['Make a third domain: two workers per cabinet, or a third power feed', 'Keeps `1+1`. Survives a whole cabinet'],
+          ['Set `enableFailureDomains: false`', 'Survives one node, not a whole cabinet'],
+          ['Use `1+0`', 'Passes the count. Survives nothing. Do not use'],
+        ] } },
+        'A cluster stretched over two sites uses each site as a domain, under different rules. It is not covered here.',
+      ],
+      examples: [
+        { title: 'The two-cabinet document, as refused', file: 'examples/failure-domains/04-two-cabinets-refused.yaml', notes: [
+          { at: 'approved: false', text: 'Left unapproved. Approved with a finding, it would be marked `Failed`.' },
+          { at: 'parityChunks: 1', text: 'One parity chunk: three domains needed, two present.' },
+          { at: 'failureDomain: cabinet-b', text: 'The second and last domain.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What the operator does after approval',
+      body: [
+        'The phases are as in chapter 1. Failure-domain mode adds four things:',
+        { steps: [
+          '**Maps the labels.** Before any StorageNode exists, the operator writes the labels into `status.failureDomains`.',
+          '**Gives each node its domain.** Each StorageNode gets its group\'s label in `spec.config.failureDomain`. A node without one waits in `CheckingConfig` with `FailureDomainMissing`. Set the field and it continues.',
+          '**Adds nodes across the domains.** The control plane refuses an add that puts two domains more than one host apart, even before activation. The operator adds from the smallest domain first.',
+          '**Waits for the layout before activation.** The `StorageClusterOps` raises `FailureDomainNotReady` until enough equal domains have reported. This is normal while nodes are still being added.',
+        ] },
+        { code: 'oc get events -n simplyblock --field-selector reason=FailureDomainNotReady\n\nLAST SEEN   TYPE      REASON                  OBJECT                                MESSAGE\n40s         Warning   FailureDomainNotReady   storageclusterops/cabinets-activate   The activation is waiting on failure-domain readiness: failure domains must hold an equal number of hosts at activation; current split: map[0:2 1:2 2:1]', title: 'Activation waiting for the last node' },
+        'Then the pool `cabinets-default` and the class `simplyblock-cabinets` appear, as in chapter 1.',
+        { code: 'oc get stc cabinets -n simplyblock -o jsonpath=\'{.status.failureDomains}\'\n\n[{"index":0,"name":"cabinet-a"},{"index":1,"name":"cabinet-b"},{"index":2,"name":"cabinet-c"}]\n\noc get sn -n simplyblock -o custom-columns=NAME:.metadata.name,DOMAIN:.spec.config.failureDomain,ASSIGNED:.status.failureDomain,PHASE:.status.phase\n\nNAME                  DOMAIN      ASSIGNED   PHASE\ncabinets-worker-0-0   cabinet-a   0          Online\ncabinets-worker-1-0   cabinet-a   0          Online\ncabinets-worker-2-0   cabinet-b   1          Online\ncabinets-worker-3-0   cabinet-b   1          Online\ncabinets-worker-4-0   cabinet-c   2          Online\ncabinets-worker-5-0   cabinet-c   2          Online', title: 'Checking that it worked' },
+      ],
+    },
+    {
+      heading: 'Growing and shrinking a cluster with domains',
+      body: [
+        'If one cabinet loses power, the cluster reports degraded and keeps serving. When the cabinet returns, its nodes restart in parallel.',
+        'New volumes need at least data + parity domains online. Worked numbers, three cabinets, one down:',
+        { table: { head: ['Stripe', 'Domains online', 'Needed for new volumes', 'New volumes'], rows: [
+          ['`1+1`', '2', '2', 'Allowed'],
+          ['`2+1`', '2', '3', 'Refused until the cabinet returns'],
+        ] } },
+        'After activation, three balance rules apply:',
+        { list: [
+          'Two domains may differ by at most one host.',
+          'Once the cluster holds data, every domain keeps at least two hosts.',
+          'A node\'s domain never changes. To move a worker, remove it, rebalance, and add it again.',
+        ] },
+        '**Growing.** Write a growth document with `clusterRef`. Every group needs a `failureDomain`. Add one worker per cabinet. A new cabinet starts with one host, so it can join only while the others hold two or fewer.',
+        { code: 'cabinets now:   A=3  B=3  C=3\nadd cabinet D:  A=3  B=3  C=3  D=1   ->  3 - 1 = 2 > 1  ->  refused', title: 'Worked number: a new cabinet too late' },
+        '**Shrinking.** A `StorageNodeOps` with action `Remove` checks both rules before it touches the node. If a rule would break, it waits in `Validating` with `RemovalNotAdmitted`.',
+        { code: 'oc apply -f 06-storagenodeops-remove.yaml\noc get snops -n simplyblock\n\nNAME              NODE                  ACTION   PHASE     STEP         AGE\nremove-worker-3   cabinets-worker-3-0   Remove   Running   Validating   2m', title: 'A removal that waits' },
+        { callout: 'In the six-node cluster each cabinet has two hosts, so no node can be removed. Grow to three per cabinet first. Remove a failed host promptly: it still counts toward its cabinet.', kind: 'warn' },
+      ],
+      examples: [
+        { title: 'A growth document, one worker per cabinet', file: 'examples/failure-domains/05-growth-clusterdeploymentconfig.yaml', notes: [
+          { at: 'clusterRef: cabinets', text: 'The cluster to grow, in place of `cluster`. Every group still needs a `failureDomain`.' },
+          { at: 'failureDomain: cabinet-c', text: 'A mapped label keeps its number, `2`.' },
+          { at: 'worker-6', text: 'One worker per cabinet: every cabinet goes from two hosts to three.' },
+        ] },
+        { title: 'Removing a node after the growth', file: 'examples/failure-domains/06-storagenodeops-remove.yaml', notes: [
+          { at: 'action: Remove', text: 'Checks the balance and the two-host floor before anything happens to the node.' },
+          { at: 'nodeRef: cabinets-worker-3-0', text: 'The StorageNode of `worker-3`, named `<cluster>-<worker>-<slot>`.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What goes wrong',
+      body: [
+        { pitfalls: [
+          { symptom: 'The draft waits with `needs at least 3 distinct failure domains`.', cause: 'The workers are in two domains.', fix: 'Make a third domain with equal workers. Then edit the draft or run discovery again.' },
+          { symptom: 'The draft waits with `needs an equal number of workers in every failure domain`.', cause: 'The domains have different worker counts.', fix: 'Balance the cabinets. Add a leftover worker later with a growth document.' },
+          { symptom: 'Every node set reports `FailureDomainLayout` with one domain each.', cause: 'Each cabinet is its own node set, so each became its own cluster.', fix: 'Put all cabinets in one node set, as groups.' },
+          { symptom: 'The draft has `enableFailureDomains: false`, but the workers are labeled.', cause: '`failureDomainLabel` was not set, some workers lack the label, or the layout would be refused.', fix: 'Read the run\'s events. Fix the cause and start a new run.' },
+          { symptom: 'A `4+1` cluster on three cabinets passed review but does not activate.', cause: '`4+1` needs five domains. The operator checks only parity + 2.', fix: 'Write a new document with five equal domains, or use `2+1`.' },
+          { symptom: 'A StorageNode waits in `Provisioning` with `FailureDomainMissing`.', cause: 'Its `spec.config.failureDomain` is empty.', fix: 'Set the field on the node. It continues on its own.' },
+          { symptom: 'The `StorageClusterOps` raises `FailureDomainNotReady`.', cause: 'Some nodes have not been added yet.', fix: 'Wait. It continues once every node reports its domain.' },
+          { symptom: 'A `Remove` waits in `Validating` with `RemovalNotAdmitted`.', cause: 'A domain would drop below two hosts, or two domains would differ by more than one.', fix: 'Add one worker per cabinet first, then remove.' },
+        ] },
+      ],
+    },
+  ],
+
+  questions: [
+    { topic: 'Placement', cat: 'concept', text: 'Which of these does the control plane spread across failure domains?', options: ['The data and parity chunks of each stripe', 'The copies of each node\'s write journal', 'Each volume\'s standby failover paths', 'The FoundationDB coordinators', 'The CSI controller pods'], correct: [0, 1, 2], explain: 'Chunks, journal copies, and failover paths are placed with the domains in mind. FoundationDB and the CSI pods are scheduled by Kubernetes, not by the storage control plane.' },
+    { topic: 'Placement', cat: 'concept', text: 'A cluster with a `1+1` stripe runs on three cabinets of two in failure-domain mode. One cabinet loses power. Which statements are true?', options: ['The cluster keeps serving in a degraded state', 'New volumes can still be created', 'The cluster suspends until the cabinet returns', 'Volumes whose primary was in that cabinet are lost', 'The operator removes the cabinet\'s nodes'], correct: [0, 1], explain: 'Each stripe loses at most one chunk, and every volume keeps a standby path in another cabinet, so I/O continues. Two domains stay online, as many as a `1+1` stripe has chunks, so new volumes are still accepted.' },
+    { topic: 'Placement', cat: 'concept', text: 'How many journal copies does the control plane keep per node on a failure-domain cluster?', options: ['Two', 'Three', 'Four', 'One per domain, however many domains there are', 'As many as the cluster has nodes'], correct: [2], explain: 'Four, spread so that losing any one domain leaves at least two. Without failure domains and with one parity chunk, the default is three.' },
+    { topic: 'Placement', cat: 'action', text: 'A group in a failure-domain draft sets `journalManager.count: 3`. What should you do before approving?', options: ['Remove the field or set it to at least 4', 'Nothing, 3 is the minimum', 'Set it to 2', 'Set it on the StorageCluster instead', 'Turn failure-domain mode off'], correct: [0], explain: 'The control plane refuses to add a node with fewer than four journal copies on a failure-domain cluster. Left unset, it uses four.' },
+    { topic: 'Placement', cat: 'concept', text: 'With two parity chunks and enough domains, how many whole domains can fail at once?', options: ['Two', 'One', 'None', 'Three', 'All but one'], correct: [0], explain: 'Each domain holds at most one chunk of a stripe, so two parity chunks cover two whole domains.' },
+    { topic: 'Placement', cat: 'field', text: 'Which of these can you change on a running cluster in failure-domain mode?', options: ['`StorageCluster.spec.enableFailureDomains`', 'A StorageNode\'s `spec.config.failureDomain` that is already set', 'An entry of `status.failureDomains`', 'The stripe', 'An approved document\'s groups'], correct: [], explain: 'None of them. The mode and the stripe are fixed at creation, a set domain is frozen on the node, mapping entries never change, and an approved document is immutable.' },
+    { topic: 'Domain count', cat: 'concept', text: 'Which stripes can activate on three equal failure domains?', options: ['`1+1`', '`2+1`', '`4+1`', '`2+2`', '`4+2`'], correct: [0, 1], explain: 'The control plane needs at least parity plus two and at least data plus parity domains. `1+1` and `2+1` need three. `4+1` needs five, `2+2` four, and `4+2` six.' },
+    { topic: 'Domain count', cat: 'concept', text: 'Why are two failure domains never enough for a protected stripe?', options: ['After one domain fails no domain is spare, so the next add or remove has nowhere to move standby paths', 'The control plane counts the management node as a domain', 'Two domains make the label mapping ambiguous', 'Kubernetes needs three zones', 'Two domains cannot hold four journal copies'], correct: [0], explain: 'Parity plus one domains can hold a stripe but leave no room. One more domain keeps a place to move paths and rebuild into.' },
+    { topic: 'Domain count', cat: 'concept', text: 'How many failure domains does a `4+1` cluster need to activate?', options: ['Five', 'Three', 'Four', 'Six', 'Two'], correct: [0], explain: 'Data plus parity is five, higher than parity plus two, which is three. The higher one applies.' },
+    { topic: 'Domain count', cat: 'concept', text: 'Which of these layouts can activate with a `1+1` stripe?', options: ['Three domains of two workers', 'Three domains of three, two, and one worker', 'Two domains of three workers', 'Four domains of two workers', 'One domain of six workers'], correct: [0, 3], explain: 'At least three domains, all the same size. Three of two and four of two pass. Unequal sizes, two domains, or one domain do not.' },
+    { topic: 'Domain count', cat: 'concept', text: 'A `4+2` draft on four equal domains of two workers passes the operator\'s review. What happens at activation?', options: ['The control plane refuses it, because `4+2` needs six domains', 'It activates and survives two domains', 'It activates and survives one domain', 'The operator changes the stripe to `2+2`', 'The operator adds two more domains'], correct: [0], explain: 'The operator checks parity plus two, which is four. The control plane also needs data plus parity, which is six, and refuses the activation.' },
+    { topic: 'Domain count', cat: 'concept', text: 'Which statements about a `1+0` stripe on a two-cabinet fleet are true?', options: ['It passes the domain count', 'It survives no failure', 'It survives the loss of one cabinet', 'It needs four domains', 'It keeps one copy in each cabinet'], correct: [0, 1], explain: 'Zero parity plus two is two, so the count passes. A stripe with no parity survives no failure, so failure domains add nothing.' },
+    { topic: 'Domain count', cat: 'concept', text: 'Which statements about domain balance are true?', options: ['At activation every domain must hold the same number of hosts', 'After activation domains may differ by one host', 'Once the cluster holds data, no domain may drop below two hosts', 'Balance is counted in storage nodes, so a two-socket worker counts twice', 'Domains must stay exactly equal for the life of the cluster'], correct: [0, 1, 2], explain: 'Equal at activation, then within one host, with a floor of two. Balance counts hosts, so a two-socket worker counts once.' },
+    { topic: 'Labels', cat: 'field', text: 'Which of these are valid values for `failureDomain`?', options: ['`cabinet-a`', '`rack_b.east`', '`1`', '`cabinet a`', '`-cabinet`'], correct: [0, 1, 2], explain: 'A domain has the shape of a label value: letters, digits, `-`, `_`, and `.`, starting and ending with a letter or digit, at most 63 characters. A space or a leading hyphen is refused.' },
+    { topic: 'Labels', cat: 'concept', text: 'Which of these can serve as a failure domain?', options: ['A cabinet', 'A rack', 'A power feed', 'A cloud availability zone', 'A single NVMe device'], correct: [0, 1, 2, 3], explain: 'A domain is anything that fails together and holds whole hosts. You name it with a Node label value. A device is part of one host, and the control plane already keeps the chunks of a stripe on different nodes.' },
+    { topic: 'Labels', cat: 'field', text: 'Which fields hold a failure-domain label rather than a number?', options: ['`nodeSets[].groups[].failureDomain` on a deployment config', '`StorageNode.spec.config.failureDomain`', '`StorageCluster.status.failureDomains[].name`', '`StorageNode.status.failureDomain`', '`StorageCluster.status.failureDomains[].index`'], correct: [0, 1, 2], explain: 'The label goes from the group to the node and into the mapping\'s `name`. The node\'s `status.failureDomain` and the mapping\'s `index` are numbers.' },
+    { topic: 'Labels', cat: 'concept', text: 'Which numbers do `cabinet-a`, `cabinet-b`, and `cabinet-c` get on a new cluster?', options: ['`0`, `1`, `2`, in name order', 'The order of the groups in the document', 'Random numbers from the control plane', '`1`, `2`, `3`, in name order', 'A hash of each label'], correct: [0], explain: 'New labels are sorted by name and take the lowest free number, starting at zero.' },
+    { topic: 'Labels', cat: 'field', text: 'Which statements about `StorageNode.spec.config.failureDomain` are true?', options: ['It is immutable once set', 'It can be filled in while empty', 'The control plane receives it as text', 'A node without it on a cluster with the mode on waits instead of failing', 'Every StorageNode must have it'], correct: [0, 1, 3], explain: 'The field can be filled once and is then frozen, so a missing value is a hold you can fix. The control plane receives a number, and the field is required only when the cluster has the mode on.' },
+    { topic: 'Discovery', cat: 'field', text: 'What does `spec.discover.failureDomainLabel` do?', options: ['Names the Node label the run reads each worker\'s domain from', 'Sets the same domain for every worker', 'Turns failure-domain mode on', 'Selects which workers the run inspects', 'Renames the groups after their domains'], correct: [0], explain: 'It replaces `topology.kubernetes.io/zone` as the source of each worker\'s domain. The mode is `enableFailureDomains`.' },
+    { topic: 'Discovery', cat: 'concept', text: 'A run with `enableFailureDomains` unset inspects six labeled workers in two cabinets. What does the draft contain?', options: ['The mode off, with a `ConfigWritten` event quoting the refusal', 'The mode on, with a `FailureDomainLayout` finding', 'No draft, the run fails', 'The two cabinets merged into one domain', 'A `1+0` stripe'], correct: [0], explain: 'Unset lets the run decide, and it turns the mode on only for a layout that passes. With `enableFailureDomains: true` you would get the mode on and the finding.' },
+    { topic: 'Discovery', cat: 'concept', text: 'What does a run with `enableFailureDomains: false` do?', options: ['Reads no failure-domain label', 'Groups workers by hardware alone', 'Writes the mode off in the draft', 'Refuses workers that carry a domain label', 'Fails on a fleet in one zone'], correct: [0, 1, 2], explain: 'The mode is off and no domains are read, so identical workers in different cabinets share a group. Nothing is refused.' },
+    { topic: 'Discovery', cat: 'concept', text: 'Four of six workers carry `cabinet=...` and two do not. What does the run report?', options: ['`TopologyIncomplete`, naming the two, and the mode stays off', '`FailureDomainInvalid`, naming the two', 'Nothing, the two go to domain `0`', 'The two are left out of the draft', 'The run fails before writing a draft'], correct: [0], explain: 'Partly labeled fleets are reported under `TopologyIncomplete`. `FailureDomainInvalid` is for a value the field cannot hold.' },
+    { topic: 'Discovery', cat: 'concept', text: 'Six identical machines in three cabinets are discovered with failure domains on. How many groups does the draft have?', options: ['One', 'Three, one per cabinet', 'Six', 'Two', 'It depends on the node selector'], correct: [1], explain: 'Workers in different domains never share a group, so identical hardware in three cabinets makes three groups.' },
+    { topic: 'Discovery', cat: 'action', text: 'Your fleet labels cabinets with `cabinet`. Which of these give you a discovery run that reads the cabinets?', options: ['Turn off the chart\'s run with `discovery.enabled: false` and write an `OperatorOps` with `failureDomainLabel: cabinet`', 'Set `discovery.failureDomainLabel` in the Helm values', 'Put each worker\'s cabinet into `topology.kubernetes.io/zone` and use the chart\'s run', 'Set `failureDomain` on each StorageNode by hand', 'Add the label key to the StorageCluster'], correct: [0, 2], explain: 'The chart\'s run reads only the zone label, and the chart has no value for another key. Either write your own run or put the cabinet into the zone label.' },
+    { topic: 'Review', cat: 'concept', text: 'A draft for one failure-domain cluster has three node sets, one per cabinet. What happens?', options: ['Each node set becomes its own cluster with one domain, and each is refused with `FailureDomainLayout`', 'The three node sets become three domains of one cluster', 'The operator merges them into one node set', 'The draft is accepted and activation waits', 'The operator ignores the node sets'], correct: [0], explain: 'A node set becomes a cluster of its own. Put the cabinets in one node set, as groups.' },
+    { topic: 'Review', cat: 'concept', text: 'Which statements about the layout check before approval are true?', options: ['Workers are counted per `failureDomain` across all groups', 'A growth document with `clusterRef` is not held to it', 'Each node set counts as one domain', 'Labels are read off the Node objects again', 'Devices are counted per domain'], correct: [0, 1], explain: 'Two groups with the same domain are one domain. The activation rules apply only to a new cluster, so growth is not checked against them.' },
+    { topic: 'Review', cat: 'action', text: 'You set `approved: true` on a draft that still has a `FailureDomainLayout` finding. What happens?', options: ['The document is marked `Failed`', 'It waits in `Draft` until you fix the layout', 'The cluster is created and activation waits', 'The webhook refuses the approval', 'The operator fixes the layout'], correct: [0], explain: 'An approved document cannot be edited, so the operator fails it instead of waiting forever. Write a new document with the layout fixed.' },
+    { topic: 'Review', cat: 'field', text: 'Which statements about the limit on failure domains per cluster are true?', options: ['A cluster maps at most 256 domains', 'Labels the cluster already maps count toward the limit', 'A document over the limit is refused before approval with `TooManyFailureDomains`', 'A cluster maps at most 64 domains', 'The limit applies only to growth documents'], correct: [0, 1, 2], explain: 'The operator counts the document\'s new labels together with the ones already mapped, and refuses a document that would pass 256 while it can still be edited.' },
+    { topic: 'After approval', cat: 'action', text: 'In what order does the operator do these?', options: ['Write the labels into `status.failureDomains`, then create the StorageNodes', 'Create the StorageNodes, then map their labels', 'Activate the cluster, then map the labels', 'Map each label when its first node is added', 'Ask the control plane to map the labels'], correct: [0], explain: 'The mapping is written before any node exists, so every node add can send its number.' },
+    { topic: 'After approval', cat: 'concept', text: 'With `nodeProvisioningBudget: 2` on this chapter\'s cluster, which two workers are added first?', options: ['Two workers from different cabinets', 'The two workers of cabinet A', 'The first two by name, whatever their cabinet', 'Only one, because failure domains force a budget of one', 'The two with the most devices'], correct: [0], explain: 'The control plane refuses an add that leaves domains more than one host apart, so the operator picks workers from the domains with the fewest hosts first.' },
+    { topic: 'After approval', cat: 'action', text: 'The cluster waits in `Activating` and the `StorageClusterOps` raises `FailureDomainNotReady` while nodes are still being added. Which of these should you do?', options: ['Delete and re-create the `StorageClusterOps`', 'Edit `enableFailureDomains` on the cluster', 'Approve the document again', 'Relabel the Node objects', 'Set `spec.config.failureDomain` on every node again'], correct: [], explain: 'None of them. The hold lifts on its own once every node has reported its domain and the domains are equal.' },
+    { topic: 'After approval', cat: 'concept', text: 'Which statements about `status.failureDomain` on a StorageNode are true?', options: ['It is the number the control plane assigned', 'The operator counts hosts per domain from it before activation', 'It is empty until the node has been added', 'It is the label copied from the group', 'You set it by hand'], correct: [0, 1, 2], explain: 'The operator writes the control plane\'s number there once the node is added, and the activation gate counts from it.' },
+    { topic: 'Growth and removal', cat: 'concept', text: 'Which of these apply to a growth document against a cluster in failure-domain mode?', options: ['Every group needs a `failureDomain`', 'The 256-domain limit, counting labels already mapped', 'Each add must keep domains within one host of each other', 'Equal worker counts across the document\'s groups', 'At least parity plus two domains in the document'], correct: [0, 1, 2], explain: 'Growth needs domains on every group, stays within the mapping limit, and is held to the one-host balance. The activation rules do not apply.' },
+    { topic: 'Growth and removal', cat: 'concept', text: 'The cluster has three cabinets of three hosts. You add a fourth cabinet with one worker. What happens?', options: ['The control plane refuses the add, because the new cabinet would be two hosts behind', 'The worker joins as a new domain', 'The operator moves workers into the new cabinet', 'The cluster leaves failure-domain mode', 'The worker joins cabinet A'], correct: [0], explain: 'Domains may differ by at most one host. A new cabinet starts with one host, so it can join only while the others hold at most two.' },
+    { topic: 'Growth and removal', cat: 'concept', text: 'You write a `Remove` for `worker-3` in this chapter\'s cluster of three cabinets of two. What happens?', options: ['It waits in `Validating` with `RemovalNotAdmitted`, because cabinet B would drop to one host', 'The node is removed and cabinet B runs on one host', 'The cluster is rebalanced to two cabinets', 'The operation fails at once', 'The node is shut down, then the control plane refuses'], correct: [0], explain: 'Every domain must keep two hosts once the cluster holds data. The check runs before anything is done to the node.' },
+    { topic: 'Growth and removal', cat: 'action', text: 'A worker must move from cabinet A to cabinet B. Which steps are needed?', options: ['Remove its storage node', 'Restore the balance between the cabinets', 'Add it again with the new label', 'Edit `spec.config.failureDomain` on the StorageNode', 'Change the Node label and wait'], correct: [0, 1, 2], explain: 'A node\'s domain cannot change while it is in the cluster. Remove it, keep the domains within one host, and add it back in the new cabinet.' },
+    { topic: 'Growth and removal', cat: 'concept', text: 'A `2+1` cluster runs on three cabinets of two, and one cabinet is down. Which statements are true?', options: ['Existing volumes keep working', 'New volumes are refused until the cabinet is back', 'The cluster reports degraded', 'Data is lost', 'The operator removes the cabinet\'s nodes'], correct: [0, 1, 2], explain: 'Each stripe has lost one chunk and still serves. The control plane refuses new volumes while fewer domains are online than the stripe has chunks, three for `2+1`.' },
+  ],
+
+  tasks: [
+    {
+      title: 'A discovery run over labeled cabinets',
+      scenario: 'The six workers carry `cabinet=cabinet-a`, `cabinet=cabinet-b`, or `cabinet=cabinet-c`. Write the run that reads that label and turns failure-domain mode on.',
+      yaml: 'apiVersion: storage.simplyblock.io/v1alpha2\nkind: {{kind}}\nmetadata:\n  name: cabinets\n  namespace: simplyblock\nspec:\n  action: {{action}}\n  discover:\n    {{labelField}}: cabinet\n    enableFailureDomains: {{mode}}\n    enablePartitionedDevices: true\n',
+      blanks: {
+        kind: { accept: ['OperatorOps'], hint: 'the operator-level operation kind, short name `oops`' },
+        action: { accept: ['Discover'], hint: 'the action that writes a draft' },
+        labelField: { accept: ['failureDomainLabel'], hint: 'names the Node label to read instead of the zone label' },
+        mode: { accept: ['true'], hint: 'turn the mode on instead of letting the run decide' },
+      },
+      explain: 'An `OperatorOps` with `action: Discover` writes the draft. `failureDomainLabel` makes the run read `cabinet` instead of `topology.kubernetes.io/zone`, and `enableFailureDomains: true` turns the mode on.',
+    },
+    {
+      title: 'The reviewed three-cabinet draft',
+      scenario: 'Complete the draft so that it creates a cluster named `cabinets` in failure-domain mode with a `1+1` stripe and six workers in three cabinets of two.',
+      yaml: 'apiVersion: storage.simplyblock.io/v1alpha2\nkind: ClusterDeploymentConfig\nmetadata:\n  name: discovered-cabinets\n  namespace: simplyblock\nspec:\n  approved: true\n  environment: OpenShift\n  cluster:\n    name: cabinets\n    maxSubsystemCount: 50\n    vcpuCount: 8\n    stripe:\n      dataChunks: 1\n      parityChunks: {{parity}}\n    {{modeField}}: true\n  nodeSets:\n    - name: cabinets\n      groups:\n        - name: cabinet-a\n          {{domainField}}: cabinet-a\n          workers: [worker-0, worker-1]\n          mgmtInterface: br-ex\n          dataInterfaces: [br-ex]\n          devices:\n            nvme: ["0000:c1:00.0"]\n        - name: cabinet-b\n          failureDomain: {{domainB}}\n          workers: [worker-2, worker-3]\n          mgmtInterface: br-ex\n          dataInterfaces: [br-ex]\n          devices:\n            nvme: ["0000:c1:00.0"]\n        - name: cabinet-c\n          failureDomain: cabinet-c\n          workers: [{{workersC}}]\n          mgmtInterface: br-ex\n          dataInterfaces: [br-ex]\n          devices:\n            nvme: ["0000:c1:00.0"]\n',
+      blanks: {
+        parity: { accept: ['1'], hint: 'the parity of a `1+1` stripe' },
+        modeField: { accept: ['enableFailureDomains'], hint: 'the template field that becomes the cluster\'s immutable mode' },
+        domainField: { accept: ['failureDomain'], hint: 'one domain per group' },
+        domainB: { accept: ['cabinet-b'], hint: 'the label the two workers of cabinet B carry' },
+        workersC: { accept: ['worker-4, worker-5', '/worker-4\\s*,\\s*worker-5/', '/worker-5\\s*,\\s*worker-4/'], hint: 'the remaining two workers, so every cabinet holds two' },
+      },
+      explain: '`1+1` needs three domains of equal size. `enableFailureDomains` turns the mode on for the new cluster, every group names its domain in `failureDomain`, and two workers in cabinet C keep the domains equal.',
+    },
+    {
+      title: 'A growth document, one worker per cabinet',
+      scenario: 'Three more workers, `worker-6` in cabinet A, `worker-7` in cabinet B, and `worker-8` in cabinet C, join the cluster `cabinets`. Write the document that adds them without unbalancing the domains.',
+      yaml: 'apiVersion: storage.simplyblock.io/v1alpha2\nkind: ClusterDeploymentConfig\nmetadata:\n  name: cabinets-growth\n  namespace: simplyblock\nspec:\n  approved: true\n  environment: OpenShift\n  {{refField}}: {{cluster}}\n  nodeSets:\n    - name: cabinets-growth\n      groups:\n        - name: cabinet-a\n          failureDomain: cabinet-a\n          workers: [worker-6]\n          mgmtInterface: br-ex\n          dataInterfaces: [br-ex]\n          devices:\n            nvme: ["0000:c1:00.0"]\n        - name: cabinet-b\n          failureDomain: {{domainB}}\n          workers: [worker-7]\n          mgmtInterface: br-ex\n          dataInterfaces: [br-ex]\n          devices:\n            nvme: ["0000:c1:00.0"]\n        - name: cabinet-c\n          failureDomain: cabinet-c\n          workers: [{{workerC}}]\n          mgmtInterface: br-ex\n          dataInterfaces: [br-ex]\n          devices:\n            nvme: ["0000:c1:00.0"]\n',
+      blanks: {
+        refField: { accept: ['clusterRef'], hint: 'names an existing cluster, in place of `cluster`' },
+        cluster: { accept: ['cabinets'], hint: 'the cluster this chapter created' },
+        domainB: { accept: ['cabinet-b'], hint: 'a label the cluster already maps' },
+        workerC: { accept: ['worker-8'], hint: 'the worker that keeps cabinet C level with the others' },
+      },
+      explain: '`clusterRef` grows an existing cluster. The cluster has the mode on, so every group still needs a `failureDomain`. One worker per cabinet keeps the domains within one host of each other, which the control plane requires of every add.',
+    },
+  ],
+});

@@ -1,0 +1,24 @@
+# The control plane of a 96-node OpenShift deployment. FoundationDB runs on
+# the three infrastructure nodes, which have no NVMe devices and never become
+# storage nodes. Storage-node reboots then never touch the database.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+        nodeSelector:
+          node-role.kubernetes.io/infra: ""
+        tolerations:
+          - key: node-role.kubernetes.io/infra
+            operator: Exists
+            effect: NoSchedule
+      tls:
+        enableTLS: true
+        enableMutualTLS: false
+        provider: OpenShift

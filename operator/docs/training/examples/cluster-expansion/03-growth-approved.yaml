@@ -1,0 +1,51 @@
+# The same document after review. The node set is renamed, so each new node
+# records which growth made it. approved is true, so the operator creates the
+# nodes. From now on the spec cannot change.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: prod-growth-1
+  namespace: simplyblock
+  labels:
+    storage.simplyblock.io/component: nodeprobe
+    storage.simplyblock.io/nodeprobe-run: prod-grow-1
+spec:
+  approved: true
+  environment: OpenShift
+  clusterRef: prod
+  nodeSets:
+    - name: growth-2026-11
+      groups:
+        - name: zone-a
+          failureDomain: zone-a
+          workers:
+            - worker-07
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: zone-b
+          failureDomain: zone-b
+          workers:
+            - worker-08
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: zone-c
+          failureDomain: zone-c
+          workers:
+            - worker-09
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

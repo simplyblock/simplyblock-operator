@@ -1,0 +1,20 @@
+# The control plane of a compact OpenShift cluster. After an OperatorHub install
+# you apply this yourself. The Helm standalone profile creates the same object.
+#
+#   oc apply -f 03-controlplane.yaml
+#   oc get controlplane simplyblock -n simplyblock -w
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+      tls:
+        enableTLS: true
+        enableMutualTLS: false
+        provider: OpenShift

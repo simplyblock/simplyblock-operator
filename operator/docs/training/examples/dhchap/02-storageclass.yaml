@@ -1,0 +1,20 @@
+# The StorageClass for the DHCHAP pool, written by hand after the pool is
+# Ready. dhchap_node_selector carries the pool's status.uuid and keeps the
+# volumes on the allowed nodes. cluster_id is the cluster's status.uuid.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-production-payments
+  labels:
+    storage.simplyblock.io/namespace: simplyblock
+    storage.simplyblock.io/cluster: production
+    storage.simplyblock.io/pool: payments
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: b2d4e6f8-1a3c-4e5f-8a9b-0c1d2e3f4a5b
+  pool_name: payments
+  csi.storage.k8s.io/fstype: xfs
+  dhchap_node_selector: storage.simplyblock.io/storage-pool.3f9a1c2e-7b4d-4e8a-9c61-2d5f0a7b8e14
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

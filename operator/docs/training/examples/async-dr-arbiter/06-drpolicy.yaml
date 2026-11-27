@@ -1,0 +1,15 @@
+# The DRPolicy, written on the hub: the two DRClusters, the interval, and the
+# label that selects the VolumeReplicationClasses. All three cannot be changed
+# later, so a different interval is a new DRPolicy.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPolicy
+metadata:
+  name: dr-5m
+spec:
+  drClusters:
+    - site-a
+    - site-b
+  schedulingInterval: 5m
+  replicationClassSelector:
+    matchLabels:
+      dr.example.com/class: simplyblock-dr

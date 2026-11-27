@@ -1,0 +1,24 @@
+# The control plane of a three-node EKS cluster. The chart's standalone profile
+# writes this object. Without the chart, apply it yourself.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      eksRoleARN: arn:aws:iam::123456789012:role/simplyblock-storage
+      foundationDB:
+        replicas: 3
+      prerequisites:
+        installFoundationDBCRDs: true
+        installCertManager: true
+        installEBSCSIDriver: true
+        installEBSStorageClass: true
+        installSnapshotController: true
+      tls:
+        enableTLS: true
+        enableMutualTLS: true
+        provider: cert-manager

@@ -1,0 +1,13 @@
+# The same removal with its own system-volume pattern. Matching volumes are
+# deleted in Verifying, not migrated. The field replaces the default, so the
+# pattern keeps sb-fio-baseline- next to the site's perf-baseline-.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: production-worker-5-0-remove
+  namespace: simplyblock
+spec:
+  nodeRef: production-worker-5-0
+  action: Remove
+  remove:
+    systemVolumeFilterRegex: '^(sb-fio-baseline-|perf-baseline-).*'

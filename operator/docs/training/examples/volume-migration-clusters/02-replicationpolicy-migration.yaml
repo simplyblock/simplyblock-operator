@@ -1,0 +1,13 @@
+# Replication that ends in a planned cutover to site-b.
+# A one-minute interval keeps the copy close behind the source.
+# A retention of 2 is the lowest value the CRD accepts.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPolicy
+metadata:
+  name: move-to-site-b
+  namespace: simplyblock
+spec:
+  pairRef: site-a-to-site-b
+  mode: migration
+  interval: 1m
+  snapshotRetention: 2

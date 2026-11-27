@@ -1,0 +1,27 @@
+# A discovery run over a tainted storage tier. The selector limits it to the
+# tier, the toleration lets the probes run there, and the filter keeps the boot
+# disk out. The draft copies the toleration for the storage-node pods.
+#
+#   oc apply -f 03-operatorops-discover.yaml
+#   oc get oops tier -n simplyblock -w
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: tier
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    configName: discovered-tier
+    nodeSelector:
+      node-role.kubernetes.io/storage: ""
+    tolerations:
+      - key: storage.simplyblock.io/dedicated
+        operator: Equal
+        value: "true"
+        effect: NoSchedule
+    enablePartitionedDevices: true
+    deviceFilter:
+      pcieDenyList:
+        - "0000:01:00.0"
+      driveSizeRange: 3T-16T

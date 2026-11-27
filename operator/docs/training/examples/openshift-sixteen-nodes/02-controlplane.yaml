@@ -1,0 +1,29 @@
+# The control plane of the tier, with FoundationDB on three labeled workers.
+# A worker that runs FoundationDB is added alone, so keeping the database on
+# three workers lets the other thirteen be added in parallel.
+#
+#   oc apply -f 02-controlplane.yaml
+#   oc get pods -n simplyblock -o wide | grep fdb
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      replicas: 2
+      foundationDB:
+        replicas: 3
+        nodeSelector:
+          storage.simplyblock.io/foundationdb: ""
+        tolerations:
+          - key: storage.simplyblock.io/dedicated
+            operator: Equal
+            value: "true"
+            effect: NoSchedule
+      tls:
+        enableTLS: true
+        enableMutualTLS: false
+        provider: OpenShift

@@ -1,0 +1,16 @@
+# Restarts the management API so it reads a changed admin token Secret.
+#
+#   kubectl apply -f 10-controlplaneops-restart.yaml
+#   kubectl -n simplyblock get controlplaneops restart-api -w
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlaneOps
+metadata:
+  name: restart-api
+  namespace: simplyblock
+spec:
+  controlPlaneRef: simplyblock
+  action: Restart
+  restart:
+    # Only the management API.
+    components:
+      - simplyblock-webappapi

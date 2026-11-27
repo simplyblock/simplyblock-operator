@@ -1,0 +1,13 @@
+# A move to the node the volume is already on. It ends Succeeded with the
+# event TargetNodeIsSource, and nothing moves.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: pg-data-to-worker-2
+spec:
+  persistentVolumeName: pvc-5b8e2f31-7c4d-4a9e-8f12-3d6b0a1c9e47
+  action: Migrate
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: prod-worker-2-0

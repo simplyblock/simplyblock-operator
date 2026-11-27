@@ -1,0 +1,56 @@
+# A test client that writes one small object every two seconds and prints ok
+# or FAILED with the time. Run it while the node of the active metadata server
+# is drained, to see how long writes stall during a takeover. It creates the
+# bucket probe with the ObjectStore's default size. Delete the pod and the
+# bucket after the test.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: s3-probe
+  namespace: simplyblock
+spec:
+  restartPolicy: Never
+  containers:
+    - name: probe
+      image: docker.io/amazon/aws-cli:2.17.0
+      command: ["/bin/sh", "-c"]
+      args:
+        - |
+          aws configure set default.s3.addressing_style path
+          aws s3api create-bucket --bucket probe > /dev/null 2>&1
+          while true; do
+            if date | aws s3 cp - s3://probe/tick > /dev/null 2>&1; then
+              echo "$(date +%T) ok"
+            else
+              echo "$(date +%T) FAILED"
+            fi
+            sleep 2
+          done
+      env:
+        - name: AWS_ENDPOINT_URL
+          value: https://s3-ha.simplyblock.svc:9000
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_CA_BUNDLE
+          value: /ca/ca.crt
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: s3-ha-credentials
+              key: ROOT_ACCESS_KEY_ID
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: s3-ha-credentials
+              key: ROOT_SECRET_ACCESS_KEY
+      volumeMounts:
+        - name: ca
+          mountPath: /ca
+          readOnly: true
+  volumes:
+    - name: ca
+      secret:
+        secretName: s3-ha
+        items:
+          - key: ca.crt
+            path: ca.crt

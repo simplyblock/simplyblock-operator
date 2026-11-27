@@ -1,0 +1,17 @@
+# Helm values for a standalone install on OpenShift, with the chart's own
+# discovery run turned off. The chart's run reads failure domains only from
+# topology.kubernetes.io/zone, and these workers are labeled by cabinet, so
+# the run is written by hand (02-operatorops-discover.yaml).
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
+deployment:
+  profile: standalone
+
+tls:
+  enabled: true
+  provider: openshift
+  mutual_enabled: false
+
+discovery:
+  enabled: false

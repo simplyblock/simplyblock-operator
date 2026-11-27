@@ -1,0 +1,29 @@
+# Helm values for a standalone install on Amazon EKS. Install cert-manager
+# first: with TLS on, the chart stops rendering when cert-manager.io/v1 is not
+# served.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
+deployment:
+  profile: standalone
+
+tls:
+  enabled: true
+  provider: cert-manager
+  mutual_enabled: true
+
+controlplane:
+  local:
+    # Annotates the control plane and storage-node ServiceAccounts with this role.
+    eksRoleARN: arn:aws:iam::123456789012:role/simplyblock-storage
+
+discovery:
+  enabled: true
+  name: eks
+  # Probes only the nodes of the managed node group named storage.
+  nodeSelector:
+    eks.amazonaws.com/nodegroup: storage
+  enablePartitionedDevices: true
+  # Keeps attached EBS volumes out of the draft.
+  deviceFilter:
+    pcieModel: Instance Storage

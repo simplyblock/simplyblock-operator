@@ -1,0 +1,15 @@
+# The same move with the abort set. Honored in Validating and Migrating.
+# Usually applied as a patch:
+#   kubectl patch pvops pg-data-to-worker-4 --type merge -p '{"spec":{"abort":true}}'
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: pg-data-to-worker-4
+spec:
+  persistentVolumeName: pvc-5b8e2f31-7c4d-4a9e-8f12-3d6b0a1c9e47
+  action: Migrate
+  abort: true
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: prod-worker-4-0

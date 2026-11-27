@@ -1,0 +1,10 @@
+# The direction of the move: from gen1 to gen2.
+# Each name resolves to the StorageCluster's status.uuid.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPair
+metadata:
+  name: gen1-to-gen2
+  namespace: simplyblock
+spec:
+  sourceCluster: gen1
+  targetCluster: gen2

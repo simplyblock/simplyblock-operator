@@ -1,0 +1,34 @@
+# Helm values of the DR site site-a. Site-b uses the same file. The managed
+# profile installs the operator and the CSI driver and no control plane: both
+# sites register with the control plane on the third site.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values-dr-site.yaml
+deployment:
+  profile: managed
+
+controlplane:
+  managed:
+    endpoint: https://control.dr-hub.example.com
+    credentialsSecretRef: hub-control-plane
+    storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+
+csiaddons:
+  create: true
+
+ramen:
+  drCluster:
+    enabled: true
+  s3StoreProfiles:
+    - s3ProfileName: site-a-s3
+      s3Bucket: ramen-site-a
+      s3CompatibleEndpoint: https://s3.offsite.example.com
+      s3Region: us-east-1
+      s3SecretRef:
+        name: ramen-s3
+    - s3ProfileName: site-b-s3
+      s3Bucket: ramen-site-b
+      s3CompatibleEndpoint: https://s3.offsite.example.com
+      s3Region: us-east-1
+      s3SecretRef:
+        name: ramen-s3

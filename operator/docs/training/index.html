@@ -1,0 +1,27 @@
+<!--
+The front page of the operator training program: what the program is, the CRD
+quiz as its prerequisite, and the list of chapters with each one's standing.
+
+Everything it shows comes from the chapter files under chapters/, loaded by
+training.js, so this page carries no content of its own. Serve the directory
+over HTTP (python3 -m http.server) to read it; training-host.sh sets up the
+public copy together with results-api.py, which keeps the anonymous statistics.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator training</title>
+<meta name="description" content="Use-case training on the simplyblock operator and its custom resources, one chapter per deployment or operation, each ending in a test.">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="training.css">
+</head>
+<body data-page="index">
+<header class="top"><div class="in"><a href="index.html"><img src="mark.svg" alt="" width="24" height="24">Operator training</a><span class="sub">simplyblock</span></div></header>
+<div class="wrap stack" id="app"><p class="note">Loading…</p></div>
+<script src="chapter-schema.js"></script>
+<script src="chapters/index.js"></script>
+<script src="training.js"></script>
+</body>
+</html>

@@ -1,0 +1,311 @@
+// Chapter 6: a 96-node deployment on OpenShift. A simplyblock cluster holds at
+// most 32 storage nodes, so 96 workers become three clusters, called placement
+// groups, joined into one supercluster that Kubernetes sees as a single
+// StorageCluster. The chapter labels the workers into placement groups, reviews
+// a draft with three node sets, follows what the operator creates, explains
+// where a new volume lands, and adds a fourth placement group.
+TRAINING.register({
+  id: 'openshift-placement-groups',
+  title: 'A 96-node deployment on OpenShift: placement groups and superclusters',
+  summary: 'Ninety-six OpenShift workers as one StorageCluster: three placement groups of 32 storage nodes each, drafted from the placement-group label, created as a supercluster, and served by one StorageClass whose volumes the operator places.',
+  goal: 'you can label a fleet into placement groups, review a draft with several node sets, name the objects the operator creates and the order it creates them in, say where a new volume lands and why, and add a placement group later.',
+
+  sections: [
+    {
+      heading: 'Placement groups are the members of a supercluster',
+      body: [
+        'A simplyblock cluster holds at most 32 storage nodes. The limit is about risk. A stripe survives a fixed number of failures, but more nodes mean a higher chance that several fail at once.',
+        'A larger fleet is split into several clusters. A **supercluster** joins them, so Kubernetes sees one `StorageCluster`. Each cluster inside it is a **placement group**, also called a **member**. Every new volume is placed in exactly one placement group.',
+        { table: { head: ['Object', 'Marked by', '`status.role`', 'What it has'], rows: [
+          ['Supercluster', '`spec.supercluster`', '`Supercluster`', 'No storage nodes. A name, a combined status, and the placement choice'],
+          ['Placement group', '`spec.superclusterRef`', '`PlacementGroup`', 'A full cluster: its own nodes, stripe, failure domains, and pools'],
+          ['Standalone cluster', 'neither', '`Standalone`', 'What chapters 1 and 5 deployed'],
+        ] } },
+        'A supercluster adds no data path. A volume stays in one placement group unless you move it. If a placement group fails, only its own volumes are affected.',
+        'The limit counts storage nodes, not workers. A worker runs one storage node per slot. The slots come from `socketsToUse` and `nodesPerSocket`.',
+        { code: '1 slot per worker:   32 / 1 = 32 workers per group   ->  96 workers = 3 groups\n2 slots per worker:  32 / 2 = 16 workers per group   ->  96 workers = 6 groups', title: 'Worked numbers for 96 workers' },
+        'This chapter uses one slot per worker: three placement groups of 32.',
+      ],
+    },
+    {
+      heading: 'Before discovery: the control plane and the labels',
+      body: [
+        'The SCCs, namespace, operator, and SimplyblockDriver are as in chapter 1. Two things change at this size.',
+        '**Keep FoundationDB off the storage workers.** FoundationDB is the control plane\'s database. Adding a storage node reboots its worker. A reboot of a FoundationDB worker takes a database process down, so the operator never adds two such workers at once. Put the database on the infrastructure nodes with `spec.source.local.foundationDB.nodeSelector`. Select at least as many nodes as `replicas`.',
+        '**Label the workers.** Workers with the same value of `storage.simplyblock.io/placement-group` become one node set and one placement group. The value must be a DNS label of at most 23 characters. Other values are reported as `PlacementGroupInvalid`.',
+        { code: 'for n in $(seq -f "worker-%03g" 1 32); do oc label node "$n" storage.simplyblock.io/placement-group=pg-a; done\nfor n in $(seq -f "worker-%03g" 33 64); do oc label node "$n" storage.simplyblock.io/placement-group=pg-b; done\nfor n in $(seq -f "worker-%03g" 65 96); do oc label node "$n" storage.simplyblock.io/placement-group=pg-c; done\n\noc get nodes -l storage.simplyblock.io/placement-group=pg-a --no-headers | wc -l\n32', title: 'Assigning the workers to three placement groups' },
+        'The label is optional. Without it, discovery splits the fleet into the fewest groups that fit. Group sizes differ by at most one worker. Workers are sorted by zone, then name, and dealt round-robin, so each zone spreads over every group.',
+        { table: { head: ['Workers', 'Slots per worker', 'Groups', 'Workers in each'], rows: [
+          ['32', '1', '1', '32'],
+          ['33', '1', '2', '17, 16'],
+          ['96', '1', '3', '32, 32, 32'],
+          ['97', '1', '4', '25, 24, 24, 24'],
+          ['40', '2', '3', '14, 13, 13'],
+        ] } },
+        'If only some workers are labeled, the rest are split by size. The draft reports `PlacementGroupLabelIncomplete` with their names.',
+      ],
+      examples: [
+        { title: 'The ControlPlane, with FoundationDB confined', file: 'examples/openshift-placement-groups/01-controlplane.yaml', notes: [
+          { at: 'replicas: 3', text: 'Three coordinators, the default. Select at least three nodes below.' },
+          { at: 'node-role.kubernetes.io/infra', text: 'Puts the database on the infrastructure nodes. The rest of the control plane is placed as usual.' },
+          { at: 'operator: Exists', text: 'Lets the database run on the tainted infrastructure nodes.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Discovery: one run, three node sets',
+      body: [
+        'Use chapter 1\'s `OperatorOps` run unchanged. It reads the placement-group labels from the workers. The infrastructure nodes have no NVMe devices, so they are left out.',
+        'Some workers can never share a placement group. The run separates workers with different regions, management interfaces, data interfaces, or device classes. A placement group never spans two regions, because every write goes to all its nodes at once.',
+        'If one label value covers two such partitions, each part becomes a numbered node set, for example `pg-a-1` and `pg-a-2`. The draft reports `PlacementGroupInvalid`.',
+        'This fleet has no zone labels, so the draft leaves failure domains off. They are covered in the [next chapter](chapter.html?c=failure-domains).',
+        { code: 'oc apply -f 02-operatorops-discover.yaml\noc get oops prod -n simplyblock -o jsonpath=\'{.status.message}\'\n\n96 workers with 192 NVMe devices, in 3 group(s) across 3 node set(s)', title: 'Running discovery, and what you see' },
+        'Look for three node sets. A draft with more than one node set creates a supercluster.',
+      ],
+      examples: [
+        { title: 'The discovery run', file: 'examples/openshift-placement-groups/02-operatorops-discover.yaml', notes: [
+          { at: 'action: Discover', text: 'The same run as in chapter 1. The placement groups come from the labels.' },
+          { at: 'configName: discovered-prod', text: 'The draft\'s name. Without it, the draft is named after the run\'s timestamp.' },
+          { at: 'enablePartitionedDevices: true', text: 'Includes disks with an old partition table, common on reused machines.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Reviewing the draft: one template, three node sets',
+      body: [
+        'The draft is one document. `spec.cluster` is the template for every placement group. Its `name` becomes the supercluster\'s name. `spec.nodeSets` has one node set per label value.',
+        'A node set with different hardware can override the template in `nodeSets[].cluster`:',
+        { code: 'nodeSets:\n  - name: pg-c\n    cluster:\n      vcpuCount: 16\n      stripe:\n        dataChunks: 2\n        parityChunks: 1\n    groups: [...]', title: 'A node set with its own sizing' },
+        'You can override `vcpuCount`, `maxSubsystemCount`, `minHugePagesSize`, `socketsToUse`, `nodesPerSocket`, and `stripe`. Overrides are allowed only with more than one node set, or with `clusterRef`.',
+        'Each node set becomes its own cluster, so cluster rules apply per node set:',
+        { table: { head: ['Finding', 'When', 'Fix'], rows: [
+          ['`MemberTooLarge`', 'Workers times slots is more than 32', 'Split the node set, or use fewer sockets'],
+          ['`MemberNameInvalid`', '`<cluster>-<nodeset>-<suffix>` is longer than 63 characters or not a DNS label', 'Shorten a name'],
+          ['`MemberSpansRegions`', 'Workers from two regions', 'Keep each node set in one region'],
+          ['`StripeBelowMinimumNodes`', 'Too few nodes for the stripe, for example under 8 for `4+2`', 'Add workers or use a narrower stripe'],
+          ['`WorkerNotFound`', 'Two groups in one node set use different interfaces', 'Make them agree, or split them'],
+        ] } },
+        { steps: [
+          'Read `status.message`. A valid draft says `the document is valid and is waiting for spec.approved`.',
+          'Count the node sets and workers: three node sets of 32.',
+          'Set `cluster.name`. With `prod` and `pg-a`, the group is named `prod-pg-a-<suffix>`.',
+          'Set `nodeProvisioningBudget`, the workers per group added at once. This chapter uses 4.',
+          'Set `approved: true`. The document cannot change after that.',
+        ] },
+      ],
+      examples: [
+        { title: 'The reviewed draft', file: 'examples/openshift-placement-groups/03-clusterdeploymentconfig.yaml', notes: [
+          { at: 'name: prod', text: 'The supercluster\'s name. The default pool is `prod-default` and the class `simplyblock-prod`.' },
+          { at: 'parityChunks: 2', text: '`4+2` needs eight storage nodes per node set. Each has 32.' },
+          { at: 'nodesPerSocket: 1', text: 'One storage node per worker, so 32 workers are 32 storage nodes.' },
+          { at: 'nodeProvisioningBudget: 4', text: 'Four workers of a group added at once.' },
+          { at: 'name: pg-a', text: 'One node set per label value, named after it.' },
+          { at: 'through worker-032', text: 'The real document lists every worker and every device.' },
+          { at: 'name: pg-b', text: 'The second group. It could use other interfaces or carry its own `cluster` block.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What the operator creates: the supercluster and its members',
+      body: [
+        'After approval the operator works through these steps:',
+        { table: { head: ['Step', 'What happens'], rows: [
+          ['`Validating`', 'The checks above, per node set'],
+          ['`CreatingCluster`', 'Creates the supercluster `prod`. Records three group names in `status.members`. Then creates the groups, each with `superclusterRef: prod`'],
+          ['`AwaitingCluster`', 'Waits until every group is registered with the control plane'],
+          ['`CreatingNodes`', 'Creates the StorageNodes, one group at a time'],
+          ['`Activating`', 'One `StorageClusterOps` per group, named `<group>-activate`'],
+        ] } },
+        'Each group gets a random three-letter suffix, different from every other group\'s. The names are recorded first, so an interrupted run creates the same groups.',
+        { code: 'oc get events -n simplyblock --field-selector involvedObject.name=discovered-prod,reason=ClusterCreated\n\nREASON           MESSAGE\nClusterCreated   Created supercluster prod\nClusterCreated   Created member prod-pg-a-kqv of supercluster prod from node set pg-a\nClusterCreated   Created member prod-pg-b-rtz of supercluster prod from node set pg-b\nClusterCreated   Created member prod-pg-c-hwd of supercluster prod from node set pg-c', title: 'The creation events (columns shortened)' },
+        'Why one group at a time? On OpenShift, a worker\'s first storage node moves it into the pool `storage-<cluster>`. OpenShift then reboots the worker. Each pool limits only its own reboots. Three groups at once would reboot workers in all three.',
+        'While it waits, the document raises `AwaitingNodes`. Inside a group, `nodeProvisioningBudget: 4` allows four workers at a time.',
+        'The supercluster\'s phase shows overall progress:',
+        { table: { head: ['Placement groups', 'Supercluster phase'], rows: [
+          ['Any still `Pending`, `Creating`, `Provisioning`, or `Activating`', '`Provisioning`'],
+          ['All `Online`', '`Online`'],
+          ['At least one serving, at least one not `Online`', '`Degraded`'],
+          ['None serving, at least one `Suspended`, none `Unavailable`', '`Suspended`'],
+          ['None serving, otherwise', '`Unavailable`'],
+        ] } },
+        'Serving means `Online`, `Degraded`, `Rebalancing`, or `Shrinking`.',
+        { code: 'oc get stc -n simplyblock -o custom-columns=NAME:.metadata.name,PHASE:.status.phase,ROLE:.status.role\n\nNAME            PHASE    ROLE\nprod            Online   Supercluster\nprod-pg-a-kqv   Online   PlacementGroup\nprod-pg-b-rtz   Online   PlacementGroup\nprod-pg-c-hwd   Online   PlacementGroup', title: 'Checking that it worked' },
+        'The supercluster\'s status also has `members[]`, `memberCount`, combined `capacity`, and `maxFaultTolerance`, the lowest of the groups. It raises `MemberAdded` for a new group, and `MemberPlacementChanged` when a group stops or starts taking volumes.',
+        'The groups share two Services, `sb-prod-node-api` and `sb-prod-spdk-proxy`, and one certificate. Each group has its own DaemonSet. A worker belongs to one group only.',
+      ],
+      examples: [
+        { title: 'The supercluster, as it reads after an administrator tuned it', file: 'examples/openshift-placement-groups/04-storagecluster-supercluster.yaml', notes: [
+          { at: 'supercluster:', text: 'The operator creates this block empty. Only this block and the two thresholds are allowed here.' },
+          { at: 'strategy: MostAvailableCapacity', text: 'The default. You can change it at any time.' },
+          { at: 'warningThreshold:', text: 'Applies to the combined capacity and raises `AggregateCapacityThreshold`.' },
+        ] },
+        { title: 'One member, as the operator writes it', file: 'examples/openshift-placement-groups/05-storagecluster-member.yaml', notes: [
+          { at: 'name: prod-pg-a-kqv', text: '`<cluster>-<nodeset>-<suffix>`. The suffix is random and never reused.' },
+          { at: 'superclusterRef: prod', text: 'Membership. Set at creation and immutable.' },
+          { at: 'maxSubsystemCount: 50', text: 'The template\'s sizing. The supercluster has none.' },
+          { at: 'nodeProvisioningBudget: 4', text: 'Four of this group\'s workers added at once.' },
+          { at: 'machineConfigPool: worker', text: 'The role the group\'s own machine-config pool inherits from.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Pools, classes, and where a volume lands',
+      body: [
+        'The supercluster gets the pool `prod-default` and the class `simplyblock-prod`. Each group also gets its own pool and class, for example `simplyblock-prod-pg-a-kqv`. A claim on a group\'s class goes straight to that group. A claim on `simplyblock-prod` is placed.',
+        'A pool on the supercluster exists in every group under the same name. Its `limits.capacity` is shared evenly by the groups that take volumes. `limits.iops` and `limits.throughput` are not supported on pools yet.',
+        { code: '300T / 3 groups = 100T each\n300T / 4 groups =  75T each   (after a fourth group joins)', title: 'Worked number for a 300T pool' },
+        'For a claim on the supercluster\'s class, the operator picks a group in this order:',
+        { steps: [
+          '**Earlier choice.** A group already recorded on the PVC, in `storage.simplyblock.io/placement-member`. A retried create goes back there.',
+          '**Consistency group.** The group that already holds the PVC\'s consistency group.',
+          '**Eligible groups.** Serving, without `disablePlacement`, and holding every pool.',
+          '**Topology.** Groups in the preferred region first, then any allowed region.',
+          '**Capacity.** Groups without room, or above their `criticalThreshold`, are dropped.',
+          '**Strategy.** The rest are ranked. Ties are broken at random.',
+        ] },
+        { table: { head: ['Strategy', 'Picks the group with'], rows: [
+          ['`MostAvailableCapacity`', 'the most free capacity (default)'],
+          ['`LeastProvisioned`', 'the lowest provisioned-to-physical ratio'],
+          ['`LeastVolumes`', 'the fewest volumes'],
+        ] } },
+        { code: 'oc apply -f 08-pvc.yaml\noc get pvc orders-db -n shop -o jsonpath=\'{.metadata.annotations.storage\\.simplyblock\\.io/placement-member}\'\n\nprod-pg-b-rtz', title: 'Where did the volume land?' },
+        'If no group is left, the create fails with `ResourceExhausted`. The supercluster raises `AggregateCapacityExhausted`.',
+        'After placement the volume stays in its group. Expansion, snapshots, and clones happen there. To move a volume, use a `PersistentVolumeOps` with action `Relocate`. Encrypted volumes and consistency-group members cannot move.',
+        { callout: 'Cluster operations do not run on the supercluster. A `StorageClusterOps` naming `prod` fails. Name a group, such as `prod-pg-a-kqv`.', kind: 'warn' },
+      ],
+      examples: [
+        { title: 'A pool on the supercluster', file: 'examples/openshift-placement-groups/06-storagepool.yaml', notes: [
+          { at: 'clusterRef: prod', text: 'Creates the pool in every group under this name.' },
+          { at: 'capacity: 300T', text: 'The ceiling across all groups: 100T each for three groups.' },
+          { at: 'filesystem: xfs', text: 'The same volume defaults in every group. They cannot change once set.' },
+        ] },
+        { title: 'A claim on the supercluster\'s class', file: 'examples/openshift-placement-groups/08-pvc.yaml', notes: [
+          { at: 'storageClassName: simplyblock-prod', text: 'The supercluster\'s class, so the operator chooses the group.' },
+        ] },
+        { title: 'Moving one volume to another group', file: 'examples/openshift-placement-groups/09-persistentvolumeops-relocate.yaml', notes: [
+          { at: 'action: Relocate', text: 'Moves the volume online. Pods keep running.' },
+          { at: 'targetClusterRef: prod-pg-a-kqv', text: 'Another group of the same supercluster that takes volumes.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Growing: a fourth placement group',
+      body: [
+        'To grow, write a second document with `spec.clusterRef`. What it names decides what grows:',
+        { table: { head: ['`clusterRef` names', 'The operator'], rows: [
+          ['A standalone cluster', 'Adds nodes to it, up to 32'],
+          ['The supercluster', 'Creates one new group per node set'],
+          ['A placement group', 'Adds nodes to that group, up to 32 in total'],
+        ] } },
+        'A document that adds groups needs sizing in `spec.cluster`. Without it, it is refused with `MemberSizingUnstated`. `cluster.name` is required but not used.',
+        { code: 'group prod-pg-a-kqv has 30 storage nodes\nadd 8 workers x 1 slot = 8\n30 + 8 = 38 > 32  ->  MemberTooLarge', title: 'Worked number: growing a group too far' },
+        'The new group gets every pool before it takes volumes. The supercluster raises `MemberAdded`, and pool shares are recalculated.',
+        '**Taking a group out of use.** simplyblock has no operation that empties and deletes a group. Set `disablePlacement: true`, then move volumes out one by one with `Relocate`. You cannot delete a supercluster while groups still name it.',
+      ],
+      examples: [
+        { title: 'The growth document', file: 'examples/openshift-placement-groups/07-clusterdeploymentconfig-growth.yaml', notes: [
+          { at: 'clusterRef: prod', text: 'Naming the supercluster makes each node set a new group.' },
+          { at: 'name: prod', text: 'Required and not used. The rest of the block is the new group\'s sizing.' },
+          { at: 'name: pg-d', text: 'The new group becomes `prod-pg-d-<suffix>`.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What goes wrong',
+      body: [
+        { pitfalls: [
+          { symptom: '`MemberTooLarge` on a node set of 32 workers.', cause: 'Two sockets per worker: 64 storage nodes.', fix: 'Split into two node sets of 16, or use one socket.' },
+          { symptom: 'Four node sets instead of three, with `PlacementGroupLabelIncomplete`.', cause: 'Some workers have no placement-group label.', fix: 'Label them and run discovery again, or fix the draft by hand.' },
+          { symptom: '`PlacementGroupInvalid`, and node sets `pg-a-1` and `pg-a-2`.', cause: 'Workers labeled `pg-a` are in two regions or on two networks.', fix: 'Relabel so each value stays in one region and network.' },
+          { symptom: '`MemberSpansRegions` on a hand-written document.', cause: 'A node set lists workers from two regions.', fix: 'Keep each node set in one region.' },
+          { symptom: 'The document stays in `CreatingNodes` with `AwaitingNodes`.', cause: 'A node of the previous group is stuck in `Provisioning`.', fix: 'Fix that node as in chapter 1.' },
+          { symptom: 'The supercluster is `Degraded`, but volumes work.', cause: 'One group is not `Online`.', fix: 'Check `status.members[]`. New volumes go to the other groups.' },
+          { symptom: 'A claim on `simplyblock-prod` fails with `ResourceExhausted`, though a group has room.', cause: 'That group does not take volumes. `MemberPlacementChanged` says why.', fix: 'Wait for its pool, or turn placement back on.' },
+          { symptom: 'A `StorageCluster` with `superclusterRef` is refused.', cause: 'The supercluster does not exist, or the name is a standalone cluster.', fix: 'Create the supercluster first, or let a deployment document create both.' },
+          { symptom: 'A growth document naming `prod` is refused with `MemberSizingUnstated`.', cause: 'It has no `spec.cluster`.', fix: 'Add `spec.cluster` with the sizing.' },
+        ] },
+      ],
+    },
+  ],
+
+  questions: [
+    { topic: 'Placement groups', cat: 'concept', text: 'What is a placement group?', options: ['A member StorageCluster of a supercluster', 'A Kubernetes topology zone', 'A group of workers inside one node set', 'A parameter of the generated StorageClass', 'A cluster whose `status.role` reads `PlacementGroup`'], correct: [0, 4], explain: 'A placement group is one of the clusters a supercluster places volumes into, and its role reads `PlacementGroup`. Zones are failure domains, and groups inside a node set share a configuration.' },
+    { topic: 'Placement groups', cat: 'concept', text: 'Why does a cluster hold at most 32 storage nodes?', options: ['Its fault tolerance is fixed by the stripe, while the chance of several failures at once grows with every node', 'FoundationDB holds at most 32 nodes per cluster', 'The volume handle has room for 32 nodes', 'An OpenShift machine-config pool holds at most 32 workers', 'NVMe-oF allows at most 32 paths'], correct: [0], explain: 'The limit bounds risk, not capacity. The operator refuses a node set above it with `MemberTooLarge`.' },
+    { topic: 'Placement groups', cat: 'concept', text: 'Which statements about a supercluster are true?', options: ['It is a StorageCluster with `spec.supercluster`', 'It has no storage nodes of its own', 'It stripes each volume across its placement groups', 'Its `status.uuid` is a control-plane cluster\'s UUID', 'Pools, StorageClasses, and backup policies can name it'], correct: [0, 1, 4], explain: 'A supercluster is a name and a status with no data path. A volume lives in one placement group, and the supercluster\'s `status.uuid` is its own `metadata.uid`.' },
+    { topic: 'Placement groups', cat: 'concept', text: 'Ninety-six workers use two sockets each, with one storage node per socket. How many placement groups are needed at least?', options: ['Six', 'Three', 'Two', 'One', 'Twelve'], correct: [0], explain: 'The limit counts storage nodes. Two slots per worker make 192 storage nodes, and a placement group holds 32, so six groups of 16 workers.' },
+    { topic: 'Placement groups', cat: 'action', text: 'Which of these can you use today to take a placement group out of use?', options: ['`disablePlacement: true`, which stops new volumes landing in it', '`PersistentVolumeOps` `Relocate`, which moves one volume to another group', 'A `StorageClusterOps` that empties and deletes the group', 'Deleting the supercluster together with its groups', 'Clearing `superclusterRef` on the group'], correct: [0, 1], explain: 'simplyblock has no operation that empties and deletes a placement group. Deleting a supercluster that groups still name is refused, and `superclusterRef` is immutable.' },
+    { topic: 'Placement groups', cat: 'field', text: 'Which values can `status.role` on a StorageCluster take?', options: ['`Standalone`', '`Supercluster`', '`PlacementGroup`', '`Member`', '`Aggregate`'], correct: [0, 1, 2], explain: 'There are three roles. `oc get stc` shows the role in the `Role` column.' },
+    { topic: 'Labels and discovery', cat: 'field', text: 'What does the label `storage.simplyblock.io/placement-group` do on a worker?', options: ['Workers with the same value become one node set named after the value', 'It sets the full name of the placement group StorageCluster', 'It limits which workers the run inspects', 'It sets the worker\'s failure domain', 'It takes those workers out of the automatic size split'], correct: [0, 4], explain: 'Labeled workers are grouped as you labeled them and are not split by size. The placement group is named `<cluster>-<value>-<suffix>`, and the failure domain comes from the zone label or `failureDomainLabel`.' },
+    { topic: 'Labels and discovery', cat: 'concept', text: 'Some workers carry the placement-group label and others on the same network do not. What happens?', options: ['The draft is refused', 'The unlabeled workers are split by size, and the draft reports `PlacementGroupLabelIncomplete` naming them', 'The unlabeled workers are left out of the draft', 'The labels are ignored for every worker', 'The run fails'], correct: [1], explain: 'Partial labeling is reported, not refused. Label the rest and run discovery again.' },
+    { topic: 'Labels and discovery', cat: 'field', text: 'Which of these placement-group values are reported as `PlacementGroupInvalid`?', options: ['`pg-a`', '`PG_A`', 'A value of 30 characters', '`rack7`', '`east-1`'], correct: [1, 2], explain: 'A value must be a DNS label of at most 23 characters. Uppercase letters and underscores are not allowed, and 30 characters are too many.' },
+    { topic: 'Labels and discovery', cat: 'concept', text: 'Without labels, how does discovery split 97 workers with one slot each?', options: ['One node set of 97', 'Four node sets of 25, 24, 24, and 24', 'Three node sets of 32 and one of 1', 'It refuses the run', 'Two node sets of 48 and 49'], correct: [1], explain: 'Ninety-seven workers need four placement groups of at most 32, and they are sized within one worker of each other.' },
+    { topic: 'Labels and discovery', cat: 'concept', text: 'Which of these keep workers out of the same placement group?', options: ['Different `topology.kubernetes.io/region` values', 'Different management interface names', 'Different data interfaces', 'Different device classes', 'Different `topology.kubernetes.io/zone` values'], correct: [0, 1, 2, 3], explain: 'A placement group stays in one region and on one network with one device class. Zones are failure domains, which are spread over every placement group.' },
+    { topic: 'Labels and discovery', cat: 'concept', text: 'Without labels, in what order are workers dealt into placement groups?', options: ['Sorted by failure domain, then by name, round-robin', 'By name only', 'By free capacity', 'By rack count', 'At random'], correct: [0], explain: 'Sorting by failure domain first and dealing round-robin spreads every zone over every placement group, so a zone outage weakens each group a little instead of taking one down.' },
+    { topic: 'Labels and discovery', cat: 'action', text: 'What does a discovery run need to produce a supercluster draft?', options: ['A field naming the supercluster', '`enableControlPlaneNodes: true`', 'One run per placement group', 'More than one node set after the split', 'An action other than `Discover`'], correct: [3], explain: 'Nothing in the run mentions superclusters. A draft with two or more node sets creates one, whether the node sets came from labels or from the size split.' },
+    { topic: 'Labels and discovery', cat: 'field', text: 'Why does this chapter set `foundationDB.nodeSelector` on the ControlPlane?', options: ['Adding a storage node reboots its worker, and the database should not lose a process on every such reboot', 'FoundationDB cannot run on a worker with NVMe devices', 'The discovery run refuses workers that run FoundationDB', 'The selector should match at least as many nodes as `replicas`', 'It makes the database faster'], correct: [0, 3], explain: 'Keeping the database on the infrastructure nodes keeps storage-node reboots away from it. The selector should cover at least `replicas` nodes, so that the processes are on different nodes.' },
+    { topic: 'The draft', cat: 'field', text: 'Which fields can a node set override in `nodeSets[].cluster`?', options: ['`vcpuCount`', '`maxSubsystemCount`', '`stripe`', '`mgmtInterface`', '`nodeProvisioningBudget`'], correct: [0, 1, 2], explain: 'The overrides are `vcpuCount`, `maxSubsystemCount`, `minHugePagesSize`, `socketsToUse`, `nodesPerSocket`, and `stripe`. Interfaces belong to a group, and the budget to the template.' },
+    { topic: 'The draft', cat: 'field', text: 'When may a node set carry a `cluster` override block?', options: ['When the document has more than one node set', 'When the document names a cluster in `clusterRef`', 'On any document', 'Never on a draft the run wrote', 'Only when `environment` is `OpenShift`'], correct: [0, 1], explain: 'A single standalone cluster\'s template already states its sizing, so overrides are allowed only where a node set becomes a placement group or grows a cluster.' },
+    { topic: 'The draft', cat: 'concept', text: 'A node set lists 33 workers with one slot each. What does validation report?', options: ['`MemberTooLarge`, naming the node set and how many workers fit', '`MemberNameInvalid`', '`MemberSpansRegions`', 'Nothing, the control plane checks the limit', 'Nothing, the node set is split automatically'], correct: [0], explain: 'Validation refuses a node set above 32 storage nodes and says how to split it. You do the split in the draft.' },
+    { topic: 'The draft', cat: 'concept', text: 'Which checks run per node set on a supercluster document?', options: ['The stripe\'s minimum node count', 'Groups agreeing on interfaces', 'The 32-node limit', 'The placement group name being a valid DNS label', 'The approval gate'], correct: [0, 1, 2, 3], explain: 'Each node set becomes a cluster, so cluster rules apply per node set. Approval is one field for the whole document.' },
+    { topic: 'The draft', cat: 'field', text: 'The template names the cluster `prod`, a node set is `pg-a`, and the suffix is `kqv`. What is the placement group called?', options: ['`prod-pg-a-kqv`', '`pg-a`', '`prod-1`', '`prod-pg-a`', '`kqv-pg-a-prod`'], correct: [0], explain: '`<cluster>-<nodeset>-<suffix>`. The suffix tells placement groups apart in node hostnames.' },
+    { topic: 'The draft', cat: 'concept', text: 'Which of these are findings that hold a document before approval?', options: ['A node set with workers in two regions', 'A worker without a region label', 'A `4+2` stripe on a node set of six workers', 'Two node sets with different management interfaces', 'Every worker carrying a zone label'], correct: [0, 2], explain: '`MemberSpansRegions` and the stripe minimum are findings. A worker without a region label matches any region, node sets may differ in interfaces, and zone labels are failure domains.' },
+    { topic: 'The draft', cat: 'field', text: 'What does `nodeProvisioningBudget` limit on a supercluster document?', options: ['How many workers of one placement group are added at once', 'How many placement groups are activated at once', 'How many placement groups add nodes at once', 'The number of storage nodes in the supercluster', 'How many reboots a machine-config pool allows'], correct: [0], explain: 'The budget is per cluster, so per placement group. The groups add their nodes one group at a time regardless.' },
+    { topic: 'Expansion', cat: 'concept', text: 'Which statements about creating a three-node-set document are true?', options: ['The supercluster is created before any placement group', 'All placement group names are recorded in `status.members` before any group is created', 'The supercluster gets the template\'s sizing', 'A removed group\'s suffix is reused by the next group', 'An interrupted run picks new names when it resumes'], correct: [0, 1], explain: 'A placement group names its supercluster in an immutable field, so the supercluster comes first. Names are recorded ahead so that a resumed run creates the same groups.' },
+    { topic: 'Expansion', cat: 'concept', text: 'Why do the placement groups add their first nodes one group at a time?', options: ['Each group\'s machine-config pool reboots its own workers without knowing about the other pools', 'FoundationDB admits one cluster at a time', 'The control plane creates one cluster at a time', 'The CSI driver needs one group online first', 'The budget is counted over the whole supercluster'], correct: [0], explain: 'Three groups starting together would reboot workers of all three at once. The next group starts once every node of the previous one is `Online`.' },
+    { topic: 'Expansion', cat: 'concept', text: 'Two placement groups are `Online` and the third is still `Provisioning`. What is the supercluster\'s phase?', options: ['`Provisioning`', '`Degraded`', '`Online`', '`Pending`', '`Unavailable`'], correct: [0], explain: 'Any group not yet activated keeps the supercluster in `Provisioning`. `Degraded` is for a group that was activated and is not `Online` now.' },
+    { topic: 'Expansion', cat: 'concept', text: 'Two placement groups are `Online` and the third is `Unavailable`. What is the supercluster\'s phase?', options: ['`Degraded`', '`Unavailable`', '`Online`', '`Suspended`', '`Provisioning`'], correct: [0], explain: 'At least one group serving and at least one not `Online` is `Degraded`. Volumes in the unavailable group are unavailable, and the others are not affected.' },
+    { topic: 'Expansion', cat: 'field', text: 'Which of these does a supercluster\'s status carry?', options: ['`members[]` with each group\'s phase and whether it accepts volumes', '`memberCount`', '`capacity` summed over the groups', '`maxFaultTolerance`, the lowest among the groups', '`uuid`, equal to its own `metadata.uid`'], correct: [0, 1, 2, 3, 4], explain: 'All five. The UUID is what the generated StorageClass names in `cluster_id`.' },
+    { topic: 'Expansion', cat: 'concept', text: 'Which objects do the placement groups of `prod` share?', options: ['The Services `sb-prod-node-api` and `sb-prod-spdk-proxy`', 'One serving certificate', 'One DaemonSet', 'One machine-config pool', 'One default pool'], correct: [0, 1], explain: 'The Services and the certificate belong to the supercluster. Each group has its own DaemonSet, machine-config pool, and default pool.' },
+    { topic: 'Expansion', cat: 'concept', text: 'Which events are raised on the supercluster?', options: ['`MemberAdded`', '`MemberPlacementChanged`', '`AggregateCapacityThreshold`', '`AggregateCapacityExhausted`', '`MemberRemoved`'], correct: [0, 1, 2, 3], explain: 'simplyblock has no operation that removes a placement group, so there is no `MemberRemoved`. `MemberPlacementChanged` says why a group stopped or started accepting volumes.' },
+    { topic: 'Pools and placement', cat: 'concept', text: 'A StoragePool names the supercluster in `clusterRef`. Which statements are true?', options: ['It is created in every placement group under its name', '`status.members[]` records each group\'s copy', 'It is `Ready` once every group that accepts volumes holds it', 'Its capacity limit is split evenly among the groups that accept volumes', 'Its IOPS limit is split among the groups'], correct: [0, 1, 2, 3], explain: 'The pool is copied to every group, and its capacity ceiling is shared. `limits.iops` and `limits.throughput` are not supported on pools yet.' },
+    { topic: 'Pools and placement', cat: 'field', text: 'Which placement strategies exist?', options: ['`MostAvailableCapacity`', '`LeastProvisioned`', '`LeastVolumes`', '`RoundRobin`', '`Nearest`'], correct: [0, 1, 2], explain: 'Three strategies, with `MostAvailableCapacity` the default. Ties are broken at random.' },
+    { topic: 'Pools and placement', cat: 'concept', text: 'Which of these stop a placement group from receiving new volumes?', options: ['`disablePlacement: true`', 'Not holding every pool of the supercluster yet', 'Phase `Suspended`', 'Phase `Degraded`', 'Holding fewer volumes than the others'], correct: [0, 1, 2], explain: 'A group accepts volumes when it is serving, has no `disablePlacement`, and holds every pool. `Degraded` still counts as serving, and the volume count is only used for ranking.' },
+    { topic: 'Pools and placement', cat: 'concept', text: 'A `CreateVolume` timed out and is retried. Where does the retry go?', options: ['To the placement group recorded on the PVC', 'Wherever a fresh ranking points', 'To the first group by name', 'To a random group', 'Nowhere, the retry fails'], correct: [0], explain: 'The choice is written to the PVC\'s `storage.simplyblock.io/placement-member` annotation before the first answer, so a retry never creates a second volume elsewhere.' },
+    { topic: 'Pools and placement', cat: 'concept', text: 'A claim uses `simplyblock-prod-pg-a-kqv`, a placement group\'s own class. What happens?', options: ['The volume lands in that group without placement', 'The claim is refused', 'The volume is placed by the strategy', 'The volume spreads across groups', 'The volume is relocated afterward'], correct: [0], explain: 'Each placement group is also an ordinary cluster with its own class. Only the supercluster\'s class goes through placement.' },
+    { topic: 'Pools and placement', cat: 'concept', text: 'Which operations stay inside the placement group a volume was placed in?', options: ['Expansion', 'Snapshots', 'Clones', '`Relocate`', 'Volume deletion'], correct: [0, 1, 2, 4], explain: 'The volume handle names the group, and every later call goes there. A clone lands in its source\'s group. `Relocate` is the one operation that moves a volume to another group.' },
+    { topic: 'Pools and placement', cat: 'action', text: 'Every placement group of `prod` is above its critical threshold and a claim arrives. Which of these does the operator do?', options: ['Place the volume in the group with the most volumes', 'Create a new placement group', 'Expand a group\'s capacity', 'Move volumes between groups to make room', 'Use the last capacity reading and place anyway'], correct: [], explain: 'None of them. The create fails with `ResourceExhausted`, naming why each group was dropped, and the supercluster raises `AggregateCapacityExhausted`.' },
+    { topic: 'Pools and placement', cat: 'action', text: 'A `StorageClusterOps` with action `RollingRestart` names `prod`, the supercluster. Which of these does it do?', options: ['Restarts the groups one at a time', 'Restarts the groups in parallel', 'Activates every group', 'Expands every group', 'Moves volumes between groups'], correct: [], explain: 'None of them. It fails at once, because cluster operations do not run on a supercluster. Write it against a placement group.' },
+    { topic: 'Growth', cat: 'concept', text: 'A growth document names the supercluster in `clusterRef`. What does the operator do?', options: ['Creates one new placement group per node set', 'Adds the nodes to the largest group', 'Refuses the document', 'Merges the node sets into the existing groups', 'Re-creates the supercluster'], correct: [0], explain: 'What `clusterRef` names decides what grows. A standalone cluster or a placement group gets nodes, and a supercluster gets new placement groups.' },
+    { topic: 'Growth', cat: 'field', text: 'The growth document naming `prod` has no `spec.cluster`. What happens?', options: ['It is refused with `MemberSizingUnstated`', 'The sizing is taken from the supercluster', 'The sizing is taken from the first placement group', 'The sizing is read from the original document', 'The schema refuses it'], correct: [0], explain: 'A new placement group needs sizing, and the supercluster has none to inherit. The schema accepts the document, and validation refuses it, naming the field.' },
+    { topic: 'Growth', cat: 'concept', text: 'Which statements about the fourth placement group are true?', options: ['Its suffix differs from every existing group\'s suffix', 'It receives every pool of the supercluster before it accepts volumes', 'It joins the shared certificate without a reissue', 'The supercluster raises `MemberAdded` for it', 'It takes new volumes before its pools exist'], correct: [0, 1, 2, 3], explain: 'A group without every pool does not accept volumes, so no volume lands where its pool is missing. The certificate names the Service, not the groups.' },
+    { topic: 'Growth', cat: 'concept', text: 'A document names placement group `prod-pg-a-kqv` in `clusterRef` and adds eight workers with one slot each. The group has thirty storage nodes. What happens?', options: ['It is refused with `MemberTooLarge`, naming both numbers', 'Two workers are added and six refused', 'A new placement group is created for the eight', 'The workers are added and the group exceeds 32', 'The limit does not apply to growth'], correct: [0], explain: 'Growth counts the nodes a cluster already has. To add a new group instead, name the supercluster in `clusterRef`.' },
+  ],
+
+  tasks: [
+    {
+      title: 'The supercluster, tuned',
+      scenario: 'Write the supercluster `prod` so that a new volume goes to the placement group holding the fewest volumes, and so that the combined capacity warns at 80 percent used.',
+      yaml: 'apiVersion: storage.simplyblock.io/v1alpha2\nkind: {{kind}}\nmetadata:\n  name: prod\n  namespace: simplyblock\nspec:\n  {{marker}}:\n    placement:\n      strategy: {{strategy}}\n  warningThreshold:\n    capacity: {{warn}}\n',
+      blanks: {
+        kind: { accept: ['StorageCluster'], hint: 'a supercluster is the same kind as its placement groups' },
+        marker: { accept: ['supercluster'], hint: 'the block that makes the cluster a supercluster' },
+        strategy: { accept: ['LeastVolumes'], hint: 'ranks by volume count' },
+        warn: { accept: ['80'], hint: 'applies to the combined capacity' },
+      },
+      explain: 'A supercluster is a `StorageCluster` with `spec.supercluster`, and only the two thresholds may sit beside it. `LeastVolumes` picks the group with the fewest volumes, and `warningThreshold` applies to the combined capacity.',
+    },
+    {
+      title: 'A placement group out of placement',
+      scenario: 'Placement group `prod-pg-c-hwd` is being emptied. Edit it so that no new volume lands in it while the volumes already there keep working.',
+      yaml: 'apiVersion: storage.simplyblock.io/v1alpha2\nkind: StorageCluster\nmetadata:\n  name: {{name}}\n  namespace: simplyblock\nspec:\n  superclusterRef: {{ref}}\n  disablePlacement: {{disable}}\n  maxSubsystemCount: 50\n  vcpuCount: 8\n',
+      blanks: {
+        name: { accept: ['prod-pg-c-hwd'], hint: 'the placement group, `<cluster>-<nodeset>-<suffix>`' },
+        ref: { accept: ['prod'], hint: 'the supercluster, immutable since creation' },
+        disable: { accept: ['true'], hint: 'allowed only on a placement group' },
+      },
+      explain: 'Placement is turned off on the placement group, never on the supercluster: `disablePlacement` is allowed only next to `superclusterRef`. The group keeps its volumes, its pools, and its share of each pool\'s ceiling. Move the volumes out with `Relocate`.',
+    },
+    {
+      title: 'A fourth placement group',
+      scenario: 'Thirty-two more workers were labeled `pg-d`. Write the document that adds them to the supercluster `prod` as a new placement group with the same sizing as the others.',
+      yaml: 'apiVersion: storage.simplyblock.io/v1alpha2\nkind: {{kind}}\nmetadata:\n  name: grow-prod-pg-d\n  namespace: simplyblock\nspec:\n  approved: {{approved}}\n  environment: OpenShift\n  clusterRef: {{ref}}\n  cluster:\n    name: prod\n    maxSubsystemCount: 50\n    vcpuCount: 8\n    stripe:\n      dataChunks: 4\n      parityChunks: 2\n  nodeSets:\n    - name: {{nodeset}}\n      groups:\n        - name: default\n          workers: [worker-097, worker-098, worker-099]\n          mgmtInterface: br-ex\n          dataInterfaces: [ens2f0]\n          devices:\n            nvme: ["0000:c1:00.0"]\n',
+      blanks: {
+        kind: { accept: ['ClusterDeploymentConfig'], hint: 'growth is a second document, short name `cdc`' },
+        approved: { accept: ['true'], hint: 'the review gate' },
+        ref: { accept: ['prod'], hint: 'naming the supercluster makes every node set a new placement group' },
+        nodeset: { accept: ['pg-d'], hint: 'the placement group is named after it' },
+      },
+      explain: 'A `ClusterDeploymentConfig` naming the supercluster in `clusterRef` creates one placement group per node set, sized by `spec.cluster`. Its `name` is required by the schema and not used. The node set `pg-d` makes the group `prod-pg-d-<suffix>`.',
+    },
+  ],
+});

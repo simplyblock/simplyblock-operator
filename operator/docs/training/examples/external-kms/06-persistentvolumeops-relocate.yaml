@@ -1,0 +1,11 @@
+# A request to move an encrypted volume to another member cluster. The
+# admission webhook refuses it with EncryptedVolumeNotMovable.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: relocate-orders-db-data
+spec:
+  persistentVolumeName: pvc-3f6b2a1e-8c4d-4e0f-9a7b-5d2c1e0f4a6b
+  action: Relocate
+  relocate:
+    targetClusterRef: secure-b

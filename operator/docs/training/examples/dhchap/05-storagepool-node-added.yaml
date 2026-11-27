@@ -1,0 +1,18 @@
+# The same pool with worker-3 added to allowedNodes. volumeDefaults is
+# repeated unchanged, because any change to it is refused.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: payments
+  namespace: simplyblock
+spec:
+  clusterRef: production
+  allowedNodes:
+    - worker-1
+    - worker-2
+    - worker-3
+  limits:
+    capacity: 20T
+  volumeDefaults:
+    enableDHCHAP: true
+    filesystem: xfs

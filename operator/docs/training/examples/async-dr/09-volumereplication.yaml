@@ -1,0 +1,27 @@
+# The other way to protect a claim: a VolumeReplicationClass that names the
+# replication policy, and a VolumeReplication per claim. A DR orchestrator such
+# as Ramen usually writes the VolumeReplication. The claim must not also carry
+# the replication-policy annotation.
+apiVersion: replication.storage.openshift.io/v1alpha1
+kind: VolumeReplicationClass
+metadata:
+  name: simplyblock-dr-5m
+spec:
+  provisioner: csi.simplyblock.io
+  parameters:
+    replicationPolicyID: 4f1c8a2e-9b3d-4e7f-a1c5-6d2e8f0b3a71
+    replication.storage.openshift.io/replication-secret-name: simplyblock-replication
+    replication.storage.openshift.io/replication-secret-namespace: simplyblock
+---
+apiVersion: replication.storage.openshift.io/v1alpha1
+kind: VolumeReplication
+metadata:
+  name: orders-logs
+  namespace: shop
+spec:
+  volumeReplicationClass: simplyblock-dr-5m
+  replicationState: primary
+  dataSource:
+    apiGroup: ""
+    kind: PersistentVolumeClaim
+    name: orders-logs

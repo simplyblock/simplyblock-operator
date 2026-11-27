@@ -1,0 +1,15 @@
+# Lists a target cluster whose control plane runs outside this Kubernetes
+# cluster, so the CSI driver can reach it after a move.
+# The Secret site-b-credentials holds the cluster secret under cluster_secret.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  remoteClusters:
+    - clusterID: 7c1e2f3a-4b5d-4e6f-8a9b-0c1d2e3f4a5b
+      endpoint: https://sb-mgmt.site-b.example.com
+      credentialsSecretRef:
+        name: site-b-credentials

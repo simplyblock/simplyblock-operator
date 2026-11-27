@@ -1,0 +1,12 @@
+# An Expand request. It asks the control plane to build a storage stack for
+# every online node that has none. Nodes added by a growth document carry the
+# expansion flag and get their stack when they join, so after a growth this
+# request finds nothing to do. The operator never raises one.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageClusterOps
+metadata:
+  name: prod-expand-1
+  namespace: simplyblock
+spec:
+  clusterRef: prod
+  action: Expand

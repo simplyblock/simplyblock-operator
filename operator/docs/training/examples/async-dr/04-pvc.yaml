@@ -1,0 +1,16 @@
+# A claim that enrolls itself through the cluster's plain default class. The
+# operator creates the slot dr-policy-orders-db beside it once it is Bound.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-db
+  namespace: shop
+  annotations:
+    storage.simplyblock.io/replication-policy: dr-policy
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-site-a
+  resources:
+    requests:
+      storage: 50Gi

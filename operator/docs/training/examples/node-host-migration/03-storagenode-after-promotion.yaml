@@ -1,0 +1,29 @@
+# The StorageNode after the second example's migration, as kubectl prints it.
+# Server-written metadata is left out. Only the operator writes these fields.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNode
+metadata:
+  name: production-worker-3-0
+  namespace: simplyblock
+spec:
+  clusterRef: production
+  nodeSet: rack-a
+  workerNode: worker-5
+  socketId: "0"
+  nodeIndex: 0
+  slot: 0
+  config:
+    sizing:
+      vcpuCount: 8
+    deviceNames:
+      - "0000:c1:00.0"
+      - "0000:c2:00.0"
+    mgmtInterface: eth0
+    pcieAllowList:
+      - "0000:88:00.0"
+      - "0000:89:00.0"
+status:
+  phase: Online
+  status: online
+  health: true
+  uuid: 4b1e8f0a-2c7d-4e59-9a3b-6f2d1c8e7a40

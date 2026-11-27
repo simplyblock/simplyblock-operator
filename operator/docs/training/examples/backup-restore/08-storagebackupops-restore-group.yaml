@@ -1,0 +1,17 @@
+# Restoring the group backup orders-now into a new group of claims, one claim
+# per member, named orders-restored-<member>.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupOps
+metadata:
+  name: restore-orders-now
+  namespace: app-a
+spec:
+  clusterRef:
+    name: prod
+    namespace: simplyblock
+  groupBackupRef:
+    name: orders-now
+  action: Restore
+  restore:
+    claimName: orders-restored
+    targetPool: prod-default

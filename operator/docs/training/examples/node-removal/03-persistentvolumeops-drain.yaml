@@ -1,0 +1,25 @@
+# One volume move that the operator creates in MigratingVolumes. There is one
+# per NVMe-oF subsystem on the node, named drain-<node UUID>-<PersistentVolume>.
+# You do not write it. It is shown so you recognize it in kubectl get pvops.
+# The kind is cluster-scoped, so spec.creatorRef names the removal instead of
+# an owner reference.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: PersistentVolumeOps
+metadata:
+  name: drain-5b1e7c42-9d3a-4f08-a6e2-1c7d9b0f4e21-pvc-8e2f61d4-0b7a-4c3e-9f52-a1d6e7c40b93
+  labels:
+    storage.simplyblock.io/drain-node: 5b1e7c42-9d3a-4f08-a6e2-1c7d9b0f4e21
+    storage.simplyblock.io/target-node: c0a4f8e1-2b7d-4e95-8f13-6d2a9e4b7c50
+    storage.simplyblock.io/managed-by: StorageNodeOps
+spec:
+  persistentVolumeName: pvc-8e2f61d4-0b7a-4c3e-9f52-a1d6e7c40b93
+  action: Migrate
+  migrate:
+    targetNodeRef:
+      namespace: simplyblock
+      name: production-worker-2-0
+  creatorRef:
+    kind: StorageNodeOps
+    namespace: simplyblock
+    name: production-worker-5-0-remove
+    uid: 3d8f0a62-71c4-4b9e-a5d0-2e6c9f81b47a

@@ -1,0 +1,11 @@
+# Takes a snapshot of every replicating volume under dr-policy now and ships
+# it to site-b, outside the five-minute interval.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: trigger-dr-policy
+  namespace: shop
+spec:
+  action: trigger
+  scope: policy
+  ref: dr-policy

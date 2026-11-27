@@ -1,0 +1,16 @@
+# A claim pinned to one storage node by its UUID. Only a change to the pin
+# moves the volume. Every other move fails with VolumePinned.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: pg-data
+  namespace: payments
+  annotations:
+    storage.simplyblock.io/selected-storage-node: 7d1c6a52-0b8e-4f3a-9c21-5e4f8a9b3c10
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-prod
+  resources:
+    requests:
+      storage: 100Gi

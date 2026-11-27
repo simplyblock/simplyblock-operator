@@ -1,0 +1,13 @@
+# A discovery run limited to the storage node pool. The chart creates one like
+# it on a fresh standalone install.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: gke
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    nodeSelector:
+      cloud.google.com/gke-nodepool: simplyblock-storage
+    enablePartitionedDevices: true

@@ -1,0 +1,15 @@
+# A discovery run on a Talos cluster whose control-plane machines are separate
+# from its workers. The Helm chart creates one like it on a fresh standalone
+# install. The run recognizes Talos from the talos.dev API group, the
+# talos.dev/ node labels, and the Talos OS image, and records it as
+# status.environment. It leaves out the control-plane machines, which carry the
+# control-plane role label and taint, and says so in its status.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: talos
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    enablePartitionedDevices: true

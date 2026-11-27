@@ -1,0 +1,12 @@
+# The template NodeHealthCheck copies into one StorageFenceRemediation per
+# fenced node. A change here reaches only remediations created afterward.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageFenceRemediationTemplate
+metadata:
+  name: storage-fence
+  namespace: simplyblock
+spec:
+  template:
+    spec:
+      # No out-of-service taint while another CSI driver's volume is attached.
+      allowForeignVolumes: false

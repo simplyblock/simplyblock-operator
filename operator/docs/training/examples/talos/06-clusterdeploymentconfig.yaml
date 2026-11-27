@@ -1,0 +1,51 @@
+# The draft the discovery run wrote, after review. The workers have two NUMA
+# nodes with 16 cores each and two NVMe devices on each NUMA node, so every
+# worker runs two storage nodes, one per NUMA node, with 8 SPDK cores each.
+# The huge-page and kubelet patches are already on the workers, so the mode is
+# Preprovisioned. minHugePagesSize is absent because the devices span two NUMA
+# nodes, and each storage node then uses the amount it computes.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-talos
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: Talos
+  hostOS:
+    distro: talos
+  images:
+    talosctl:
+      image: ghcr.io/siderolabs/talosctl:v1.14.3
+  cluster:
+    name: talos
+    maxSubsystemCount: 100
+    vcpuCount: 16
+    socketsToUse:
+      - "0"
+      - "1"
+    nodesPerSocket: 1
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    nodeProvisioningBudget: 1
+    talosMachineConfig: Preprovisioned
+  nodeSets:
+    - name: default
+      groups:
+        - name: default
+          workers:
+            - worker-0
+            - worker-1
+            - worker-2
+          mgmtInterface: eth0
+          dataInterfaces:
+            - eth0
+          reservedSystemCPU: "0,1"
+          devices:
+            nvme:
+              - "0000:01:00.0"
+              - "0000:02:00.0"
+              - "0000:81:00.0"
+              - "0000:82:00.0"

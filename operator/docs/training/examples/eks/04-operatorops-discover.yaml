@@ -1,0 +1,15 @@
+# A discovery run limited to the storage node group. The chart creates one
+# like it on a fresh standalone install.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: eks
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    nodeSelector:
+      eks.amazonaws.com/nodegroup: storage
+    enablePartitionedDevices: true
+    deviceFilter:
+      pcieModel: Instance Storage

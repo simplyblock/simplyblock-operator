@@ -1,0 +1,35 @@
+# A deployment document whose cluster keeps its volume keys in Vault. The key
+# store is set on the cluster template before approval, because the operator
+# sends it only when it creates the cluster. The endpoint is the whole Vault
+# setting.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: secure
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: Vanilla
+  cluster:
+    name: secure
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    kms:
+      vault:
+        endpoint: https://vault.corp.example.com:8200
+  nodeSets:
+    - name: secure
+      groups:
+        - name: default
+          workers:
+            - worker-1
+            - worker-2
+            - worker-3
+          mgmtInterface: eth0
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

@@ -1,0 +1,47 @@
+# Three claims forming the consistency group orders. The label is read when
+# each volume is created: the first claim creates the group, and the others
+# join it and are placed on the same node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-db
+  namespace: app-a
+  labels:
+    storage.simplyblock.io/consistency-group: orders
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-prod
+  resources:
+    requests:
+      storage: 50Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-wal
+  namespace: app-a
+  labels:
+    storage.simplyblock.io/consistency-group: orders
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-prod
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: orders-index
+  namespace: app-a
+  labels:
+    storage.simplyblock.io/consistency-group: orders
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-prod
+  resources:
+    requests:
+      storage: 20Gi

@@ -1,0 +1,14 @@
+# A StorageClass whose volumes share NVMe-oF subsystems, up to four per
+# subsystem. A move of one volume moves the other volumes of its subsystem.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-prod-shared
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: b2d4e6f8-1a3c-4e5f-8a9b-0c1d2e3f4a5b
+  pool_name: prod
+  max_namespace_per_subsys: "4"
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

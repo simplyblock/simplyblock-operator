@@ -1,0 +1,11 @@
+# A request for one copy of one claim, now. spec.source makes the object a
+# request rather than a record. It sits beside the claim, and the cluster is
+# found from the claim's volume.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackup
+metadata:
+  name: orders-db-before-upgrade
+  namespace: app-a
+spec:
+  source:
+    claimName: orders-db

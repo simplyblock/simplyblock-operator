@@ -1,0 +1,19 @@
+# Helm values for one edge. Every edge uses the same values, except for its
+# own token and the name of its StorageCluster.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --values 05-edge-helm-values.yaml
+deployment:
+  profile: managed
+
+controlplane:
+  managed:
+    # The Ingress of 04-ingress.yaml.
+    endpoint: http://control.central.example.com
+    # Holds this edge's token from 01-admin-token-secret.yaml, under token.
+    credentialsSecretRef: central-control-plane
+    storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+
+tls:
+  # The CSI driver keeps the plain HTTP endpoint.
+  enabled: false

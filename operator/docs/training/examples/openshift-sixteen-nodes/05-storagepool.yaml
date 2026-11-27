@@ -1,0 +1,35 @@
+# A second pool on the tier, next to tier-default. It has a capacity limit and a
+# largest volume, and formats every volume with ext4. The operator writes a
+# StorageClass only for the default pool, so this class is written by hand.
+# cluster_id is the cluster's status.uuid:
+#
+#   oc get stc tier -n simplyblock -o jsonpath='{.status.uuid}'
+#   oc apply -f 05-storagepool.yaml
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: databases
+  namespace: simplyblock
+spec:
+  clusterRef: tier
+  limits:
+    capacity: 200T
+    maxVolumeSize: 4T
+  volumeDefaults:
+    filesystem: ext4
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-tier-databases
+  labels:
+    storage.simplyblock.io/namespace: simplyblock
+    storage.simplyblock.io/cluster: tier
+    storage.simplyblock.io/pool: databases
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 7c1c0b2e-6a0e-4d0a-9e2b-2f4e1b3c5d6f
+  pool_name: databases
+volumeBindingMode: WaitForFirstConsumer
+reclaimPolicy: Delete
+allowVolumeExpansion: true

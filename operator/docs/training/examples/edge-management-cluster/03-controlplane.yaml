@@ -1,0 +1,25 @@
+# The ControlPlane the chart renders from 02-helm-values.yaml. The operator
+# installs FoundationDB, the object store, and the management API from it.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    local:
+      image: quay.io/simplyblock-io/simplyblock:26.4.0-beta4
+      foundationDB:
+        replicas: 3
+      # Fixed once the ControlPlane exists.
+      tls:
+        enableTLS: false
+        enableMutualTLS: false
+        provider: cert-manager
+      # Passed to the management API as SB_ADMIN_TOKENS.
+      adminTokenSecretRef:
+        name: edge-admin-token
+      observability:
+        enableMonitoring: true
+        secretRef:
+          name: simplyblock-grafana-secrets

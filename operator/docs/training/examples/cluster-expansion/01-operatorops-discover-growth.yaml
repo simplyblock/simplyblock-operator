@@ -1,0 +1,20 @@
+# A discovery run for three new workers of the running cluster prod.
+# discover.clusterRef makes it a growth run: the draft grows prod and has no
+# spec.cluster. discover.workers limits the probes to the new workers. Each
+# worker's zone is read from topology.kubernetes.io/zone, so label the workers
+# before the run.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: prod-grow-1
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    clusterRef: prod
+    configName: prod-growth-1
+    workers:
+      - worker-07
+      - worker-08
+      - worker-09
+    enablePartitionedDevices: true

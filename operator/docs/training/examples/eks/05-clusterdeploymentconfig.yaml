@@ -1,0 +1,47 @@
+# The draft the discovery run wrote, after review. The reviewer shortened the
+# cluster name, raised vcpuCount, added a backup store that uses the IAM role,
+# and set approved. The document cannot change after that.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-eks
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: EKS
+  hostOS:
+    distro: amzn
+    family: RedHat
+  cluster:
+    name: eks
+    network:
+      spdkOnHostNetwork: true
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    enableDriveFormat: true
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    enableFailureDomains: false
+    nodeProvisioningBudget: 1
+    backup:
+      endpoint: https://s3.us-east-1.amazonaws.com
+      bucket: simplyblock-eks-backups
+      region: us-east-1
+      credentials:
+        source: ProviderChain
+  nodeSets:
+    - name: discovered
+      groups:
+        - name: group-1-nvme-2x3.4T
+          workers:
+            - ip-10-0-1-11.ec2.internal
+            - ip-10-0-1-12.ec2.internal
+            - ip-10-0-1-13.ec2.internal
+          mgmtInterface: ens5
+          failureDomain: us-east-1a
+          devices:
+            nvme:
+              - "0000:00:1e.0"
+              - "0000:00:1f.0"

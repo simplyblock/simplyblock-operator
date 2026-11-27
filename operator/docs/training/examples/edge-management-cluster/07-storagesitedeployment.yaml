@@ -1,0 +1,30 @@
+# Written on the management cluster: a request for the storage of the edge
+# that Open Cluster Management knows as the ManagedCluster edge-north.
+# Nothing is deployed while approved is false.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageSiteDeployment
+metadata:
+  name: edge-north
+  namespace: simplyblock
+spec:
+  # The ManagedCluster. Cannot change.
+  cluster: edge-north
+  # The operator's namespace on the edge.
+  siteNamespace: simplyblock
+  # The draft the edge's discovery writes. Cannot change.
+  draftName: site-draft
+  discover:
+    # Three nodes, because 1+1 outside Dual mode needs three.
+    workers:
+      - edge-north-0
+      - edge-north-1
+      - edge-north-2
+  sizing:
+    # The StorageCluster's name on the edge. Unique across all edges.
+    name: edge-north
+    vcpuCount: 4
+    maxSubsystemCount: 50
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+  approved: false

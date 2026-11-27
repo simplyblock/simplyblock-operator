@@ -1,0 +1,18 @@
+# A serving certificate for Vault, issued by the simplyblock certificate
+# authority. The control plane trusts only certificates from this issuer.
+# Install tls.crt and tls.key from the Secret on the Vault server.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: vault-server-tls
+  namespace: simplyblock
+spec:
+  secretName: vault-server-tls
+  issuerRef:
+    name: simplyblock-certificate-authority-issuer
+    kind: ClusterIssuer
+  commonName: vault.corp.example.com
+  dnsNames:
+    - vault.corp.example.com
+  duration: 8760h
+  renewBefore: 720h

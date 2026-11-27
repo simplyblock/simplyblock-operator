@@ -1,0 +1,71 @@
+# The reviewed draft: one cluster template and three node sets of 32 workers,
+# one per label value. More than one node set creates a supercluster named
+# prod with one placement group per node set. Each group lists its first
+# workers, and a comment stands for the rest.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-prod
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  cluster:
+    name: prod
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    minHugePagesSize: 64G
+    stripe:
+      dataChunks: 4
+      parityChunks: 2
+    fabricType: tcp
+    socketsToUse:
+      - "0"
+    nodesPerSocket: 1
+    nodeProvisioningBudget: 4
+  nodeSets:
+    - name: pg-a
+      groups:
+        - name: default
+          workers:
+            - worker-001
+            - worker-002
+            - worker-003
+            # ... through worker-032, 32 workers in the real document
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - ens2f0
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+    - name: pg-b
+      groups:
+        - name: default
+          workers:
+            - worker-033
+            - worker-034
+            - worker-035
+            # ... through worker-064, 32 workers in the real document
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - ens2f0
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+    - name: pg-c
+      groups:
+        - name: default
+          workers:
+            - worker-065
+            - worker-066
+            - worker-067
+            # ... through worker-096, 32 workers in the real document
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - ens2f0
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

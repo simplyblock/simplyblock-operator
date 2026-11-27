@@ -1,0 +1,13 @@
+# The discovery run over the 96 storage workers. It reads the
+# storage.simplyblock.io/placement-group label from each worker. Workers with
+# the same value become one node set.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: OperatorOps
+metadata:
+  name: prod
+  namespace: simplyblock
+spec:
+  action: Discover
+  discover:
+    configName: discovered-prod
+    enablePartitionedDevices: true

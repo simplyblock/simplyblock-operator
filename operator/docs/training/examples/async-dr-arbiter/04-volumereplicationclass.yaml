@@ -1,0 +1,17 @@
+# The VolumeReplicationClass on site-a: it binds each VolumeReplication to the
+# replication policy toward site-b. Site-b has a class of the same name that
+# names its own policy toward site-a. Parameters cannot be changed later.
+apiVersion: replication.storage.openshift.io/v1alpha1
+kind: VolumeReplicationClass
+metadata:
+  name: simplyblock-dr-5m
+  labels:
+    ramendr.openshift.io/replicationid: simplyblock-site-a-site-b
+    dr.example.com/class: simplyblock-dr
+spec:
+  provisioner: csi.simplyblock.io
+  parameters:
+    replicationPolicyID: 4f1c8a2e-9b3d-4e7f-a1c5-6d2e8f0b3a71
+    schedulingInterval: 5m
+    replication.storage.openshift.io/replication-secret-name: simplyblock-replication
+    replication.storage.openshift.io/replication-secret-namespace: simplyblock

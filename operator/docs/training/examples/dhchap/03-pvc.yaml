@@ -1,0 +1,14 @@
+# A claim against the DHCHAP class. The class carries the restriction, so the
+# claim names no DHCHAP setting.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ledger
+  namespace: payments
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-production-payments
+  resources:
+    requests:
+      storage: 50Gi

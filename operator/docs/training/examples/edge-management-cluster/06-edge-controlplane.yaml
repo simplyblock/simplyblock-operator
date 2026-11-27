@@ -1,0 +1,14 @@
+# The ControlPlane the managed profile renders on an edge from
+# 05-edge-helm-values.yaml. The operator probes the endpoint and reports.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ControlPlane
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  source:
+    managed:
+      endpoint: http://control.central.example.com
+      credentialsSecretRef:
+        name: central-control-plane
+      storageNodeImage: quay.io/simplyblock-io/simplyblock:26.4.0-beta4

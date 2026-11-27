@@ -1,0 +1,18 @@
+# A storage pool whose volumes only two nodes may connect to, each with
+# DHCHAP authentication. volumeDefaults is fixed once set, and allowedNodes
+# stays editable.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StoragePool
+metadata:
+  name: payments
+  namespace: simplyblock
+spec:
+  clusterRef: production
+  allowedNodes:
+    - worker-1
+    - worker-2
+  limits:
+    capacity: 20T
+  volumeDefaults:
+    enableDHCHAP: true
+    filesystem: xfs

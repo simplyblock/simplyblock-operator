@@ -1,0 +1,26 @@
+# Helm values for the management cluster: a standalone install that edges on
+# other sites register with.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --values 02-helm-values.yaml
+deployment:
+  # There is no hub profile. A management cluster is a standalone install.
+  profile: standalone
+
+controlplane:
+  local:
+    # The Secret of 01-admin-token-secret.yaml.
+    adminTokenSecretRef: edge-admin-token
+  observability:
+    # Set up when the first cluster is created, so turn it on now.
+    enabled: true
+    secret: replace-with-the-monitoring-password
+
+tls:
+  # The control plane calls remote storage nodes over plain HTTP. Fixed once
+  # the ControlPlane exists.
+  enabled: false
+
+discovery:
+  # This cluster runs no storage nodes.
+  enabled: false

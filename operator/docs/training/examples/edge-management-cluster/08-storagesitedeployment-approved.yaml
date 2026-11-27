@@ -1,0 +1,24 @@
+# The same request after review of status.draft. Approval cannot be undone.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageSiteDeployment
+metadata:
+  name: edge-north
+  namespace: simplyblock
+spec:
+  cluster: edge-north
+  siteNamespace: simplyblock
+  draftName: site-draft
+  discover:
+    workers:
+      - edge-north-0
+      - edge-north-1
+      - edge-north-2
+  sizing:
+    name: edge-north
+    vcpuCount: 4
+    maxSubsystemCount: 50
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+  # The operator copies the approval to the draft on the edge.
+  approved: true

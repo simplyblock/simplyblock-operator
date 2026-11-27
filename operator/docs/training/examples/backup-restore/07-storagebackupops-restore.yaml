@@ -1,0 +1,21 @@
+# Restoring one copy into a new claim in the namespace app-a. The record of
+# the copy lives beside the cluster in simplyblock. Size, filesystem, and
+# volume mode come from the record.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageBackupOps
+metadata:
+  name: restore-orders-db
+  namespace: app-a
+spec:
+  clusterRef:
+    name: prod
+    namespace: simplyblock
+  backupRef:
+    name: 3f6c2a1e-9b0d-4c7e-8a21-5d4f0e6b7c90
+    namespace: simplyblock
+  action: Restore
+  restore:
+    claimName: orders-db-restored
+    targetPool: prod-default
+    claimLabels:
+      app: orders

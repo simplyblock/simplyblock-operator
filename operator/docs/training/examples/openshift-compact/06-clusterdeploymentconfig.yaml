@@ -1,0 +1,38 @@
+# The draft the discovery run wrote, after review. The reviewer shortened the
+# cluster name, checked the nodes and devices, and set approved. The spec cannot
+# change after that.
+#
+#   oc edit cdc discovered-compact -n simplyblock
+#   oc get cdc discovered-compact -n simplyblock -w
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-compact
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  cluster:
+    name: compact
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+    nodeProvisioningBudget: 1
+  nodeSets:
+    - name: control-plane
+      groups:
+        - name: group-1-nvme-2x3.49T
+          workers:
+            - master-0
+            - master-1
+            - master-2
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

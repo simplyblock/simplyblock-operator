@@ -1,0 +1,25 @@
+# A Talos machine-config patch, not a Kubernetes object. Apply it to every
+# storage worker with talosctl before you approve the draft. It is the patch a
+# Preprovisioned deployment needs, sized for the worker of this chapter: two
+# NUMA nodes, one storage node on each, 8 SPDK cores and 100 subsystems per
+# storage node. In Managed mode, apply only the kernel modules.
+#
+#   talosctl --nodes <worker ip> patch machineconfig --mode=no-reboot --patch @05-machine-config-patch.yaml
+#   talosctl --nodes <worker ip> service kubelet restart
+machine:
+  kernel:
+    modules:
+      - name: nbd
+      - name: uio_pci_generic
+      - name: vfio_pci
+      - name: vfio_iommu_type1
+  sysfs:
+    # (6,980,607,384 + 1,000,000,000) / 2,000,000 = 3990 pages per storage node.
+    devices.system.node.node0.hugepages.hugepages-2048kB.nr_hugepages: "3990"
+    devices.system.node.node1.hugepages.hugepages-2048kB.nr_hugepages: "3990"
+  kubelet:
+    extraConfig:
+      cpuManagerPolicy: static
+      reservedSystemCPUs: "0,1"
+      topologyManagerPolicy: single-numa-node
+      topologyManagerScope: pod

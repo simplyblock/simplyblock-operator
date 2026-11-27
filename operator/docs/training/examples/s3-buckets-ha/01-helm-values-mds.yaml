@@ -1,0 +1,25 @@
+# The Helm values that run the pNFS metadata server with one warm standby. The
+# chart renders them into spec.pnfs.mds of the SimplyblockDriver it hands the
+# operator, so on a Helm install this file, not the object, is where the
+# standby is configured. A Helm upgrade that changes the rendered object makes
+# the operator apply it again.
+#
+#   helm upgrade simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --reuse-values --values 01-helm-values-mds.yaml
+driver:
+  pnfs:
+    mds:
+      enabled: true
+      standbys: 1
+      resources:
+        limits:
+          cpu: "2"
+          memory: 2Gi
+        requests:
+          memory: 512Mi
+      nodeSelector: {}
+      tolerations: []
+      dataNetwork:
+        subnet: ""
+        rangeStart: ""
+        rangeEnd: ""

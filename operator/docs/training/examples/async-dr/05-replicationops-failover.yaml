@@ -1,0 +1,12 @@
+# The unplanned failover of every volume under dr-policy: each volume is
+# brought up on site-b from its newest replicated snapshot. Writes made on
+# site-a after that snapshot are lost.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: failover-dr-policy
+  namespace: shop
+spec:
+  action: failover
+  scope: policy
+  ref: dr-policy

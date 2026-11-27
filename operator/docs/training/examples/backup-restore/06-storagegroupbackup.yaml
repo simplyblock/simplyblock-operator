@@ -1,0 +1,11 @@
+# One backup of the whole consistency group orders, now: one generation of the
+# group, every member copied, and the group restorable once all are complete.
+# The member copies are recorded beside this object.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageGroupBackup
+metadata:
+  name: orders-now
+  namespace: app-a
+spec:
+  source:
+    consistencyGroupName: orders

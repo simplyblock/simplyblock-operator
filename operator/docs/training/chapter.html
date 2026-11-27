@@ -1,0 +1,26 @@
+<!--
+One chapter of the operator training program: the lesson with its annotated
+example manifests, then the test. Which chapter is the c query parameter,
+chapter.html?c=<id>, matching the id a file under chapters/ registers.
+
+The page is empty on its own: training.js loads every chapter file, draws the
+one asked for, fetches its examples from examples/<id>/, and runs the test.
+It has to be served over HTTP for the fetches to work.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Operator training</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="training.css">
+</head>
+<body data-page="chapter">
+<header class="top"><div class="in"><a href="index.html"><img src="mark.svg" alt="" width="24" height="24">Operator training</a><span class="sub">simplyblock</span></div></header>
+<div class="wrap stack" id="app"><p class="note">Loading…</p></div>
+<script src="chapter-schema.js"></script>
+<script src="chapters/index.js"></script>
+<script src="training.js"></script>
+</body>
+</html>

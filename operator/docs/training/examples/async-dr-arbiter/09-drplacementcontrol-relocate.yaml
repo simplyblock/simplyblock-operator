@@ -1,0 +1,19 @@
+# The planned move back to site-a after a failover, once the DRPlacementControl
+# reports PeerReady. A relocate goes to preferredCluster and loses no
+# acknowledged write.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPlacementControl
+metadata:
+  name: orders-drpc
+  namespace: shop
+spec:
+  action: Relocate
+  drPolicyRef:
+    name: dr-5m
+  placementRef:
+    kind: Placement
+    name: orders-placement
+  preferredCluster: site-a
+  pvcSelector:
+    matchLabels:
+      app: orders

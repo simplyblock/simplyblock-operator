@@ -1,0 +1,17 @@
+# The first volume. The operator created the pool compact-default and the
+# StorageClass simplyblock-compact, so you only write the claim.
+#
+#   oc apply -f 07-pvc.yaml
+#   oc get pvc first-volume
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: first-volume
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-compact
+  resources:
+    requests:
+      storage: 10Gi

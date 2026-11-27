@@ -1,0 +1,12 @@
+# The policy the cluster migration enrolls claims under.
+# A cluster-scoped migration requires mode migration.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPolicy
+metadata:
+  name: gen1-move
+  namespace: simplyblock
+spec:
+  pairRef: gen1-to-gen2
+  mode: migration
+  interval: 1m
+  snapshotRetention: 2

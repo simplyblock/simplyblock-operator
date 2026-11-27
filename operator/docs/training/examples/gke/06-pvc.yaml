@@ -1,0 +1,14 @@
+# The first simplyblock volume, from the class the cluster wrote for its
+# default pool.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: first-volume
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: simplyblock-gke
+  resources:
+    requests:
+      storage: 10Gi

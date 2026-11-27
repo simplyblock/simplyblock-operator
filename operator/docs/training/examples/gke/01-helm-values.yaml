@@ -1,0 +1,32 @@
+# Helm values for a standalone install on GKE. Install cert-manager first:
+# with TLS on, the chart stops rendering when cert-manager.io/v1 is not served.
+#
+#   helm repo add jetstack https://charts.jetstack.io
+#   helm install cert-manager jetstack/cert-manager \
+#     --namespace cert-manager --create-namespace --set crds.enabled=true
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 01-helm-values.yaml
+deployment:
+  profile: standalone
+
+tls:
+  enabled: true
+  provider: cert-manager
+  mutual_enabled: true
+  cert-manager:
+    createSelfSignedIssuer: true
+    cluster-issuer: selfsigned
+
+controlplane:
+  # The persistent-disk class for FoundationDB, the object store, and Prometheus.
+  storageclass:
+    name: standard-rwo
+
+discovery:
+  enabled: true
+  name: gke
+  # Probes only the nodes of the node pool named simplyblock-storage.
+  nodeSelector:
+    cloud.google.com/gke-nodepool: simplyblock-storage
+  enablePartitionedDevices: true

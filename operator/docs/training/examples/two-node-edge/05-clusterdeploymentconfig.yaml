@@ -1,0 +1,43 @@
+# The draft the run wrote, after review. The run proposed Dual and 1+1. The
+# reviewer added arbitration and host fencing, named the cluster, and approved.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: discovered-edge
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  # A record that this is an edge deployment. It changes no behavior.
+  edgeCluster: true
+  cluster:
+    name: edge
+    maxSubsystemCount: 50
+    vcpuCount: 8
+    minHugePagesSize: 32G
+    # Exactly two storage nodes.
+    clusterMode: Dual
+    # The central control plane decides which node continues.
+    enableArbitration: true
+    arbitration:
+      # Kubernetes restarts the losing node's workloads on the winner.
+      hostFencing: true
+    # One copy of every chunk on each node.
+    stripe:
+      dataChunks: 1
+      parityChunks: 1
+    fabricType: tcp
+  nodeSets:
+    - name: edge
+      groups:
+        - name: default
+          workers:
+            - edge-0
+            - edge-1
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"

@@ -1,0 +1,18 @@
+# A serving certificate for a KMIP appliance, issued by the simplyblock
+# certificate authority. Load tls.crt and tls.key into the appliance, and
+# ca.crt as the CA it trusts for client certificates.
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: kmip-server-tls
+  namespace: simplyblock
+spec:
+  secretName: kmip-server-tls
+  issuerRef:
+    name: simplyblock-certificate-authority-issuer
+    kind: ClusterIssuer
+  commonName: kmip.corp.example.com
+  dnsNames:
+    - kmip.corp.example.com
+  duration: 8760h
+  renewBefore: 720h

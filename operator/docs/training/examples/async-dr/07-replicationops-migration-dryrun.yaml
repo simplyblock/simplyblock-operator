@@ -1,0 +1,26 @@
+# A planned move, forecast before it runs: a migration policy on the same
+# pair, and a cluster-scoped migration with dryRun. The control plane reports
+# which volumes would move, how much data that is, and when it would finish.
+# Nothing is enrolled, copied, or cut over.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPolicy
+metadata:
+  name: move-policy
+  namespace: shop
+spec:
+  pairRef: site-a-to-site-b
+  mode: migration
+  interval: 5m
+  snapshotRetention: 2
+---
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: forecast-site-a-move
+  namespace: shop
+spec:
+  action: migration
+  scope: cluster
+  ref: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+  policyRef: move-policy
+  dryRun: true

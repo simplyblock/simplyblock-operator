@@ -1,0 +1,12 @@
+# Takes one drive out of service instead of the whole node. Fail removes the
+# drive from the data path and then fails it. The other nodes rebuild its
+# data from parity. The StorageDevice is named <node>-<first eight characters
+# of the device UUID>.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageDeviceOps
+metadata:
+  name: production-worker-5-0-3f9c2a1b-fail
+  namespace: simplyblock
+spec:
+  deviceRef: production-worker-5-0-3f9c2a1b
+  action: Fail

@@ -1,0 +1,16 @@
+# A StorageClass that enrolls every claim provisioned through it. A bare
+# policy name means a policy in the claim's own namespace, so a claim in shop
+# follows shop/dr-policy.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-site-a-dr
+  annotations:
+    storage.simplyblock.io/replication-policy: dr-policy
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+  pool_name: site-a-default
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

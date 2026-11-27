@@ -1,0 +1,13 @@
+# Asks the control plane for the plan and its forecast only.
+# Nothing is copied or cut over. The answer lands in status.results,
+# status.forecast, and status.warnings.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: forecast-move-to-site-b
+  namespace: simplyblock
+spec:
+  action: migration
+  scope: policy
+  ref: move-to-site-b
+  dryRun: true

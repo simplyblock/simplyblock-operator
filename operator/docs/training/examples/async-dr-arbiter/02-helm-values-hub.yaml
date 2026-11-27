@@ -1,0 +1,28 @@
+# Helm values of the third site. It hosts the control plane both sites
+# register with, runs no storage nodes, and runs Ramen's hub operator. Install
+# the OCM hub and register both sites before this release.
+#
+#   helm install simplyblock-operator simplyblock/simplyblock-operator \
+#     --namespace simplyblock --create-namespace --values 02-helm-values-hub.yaml
+deployment:
+  profile: standalone
+
+discovery:
+  enabled: false
+
+ramen:
+  hub:
+    enabled: true
+  s3StoreProfiles:
+    - s3ProfileName: site-a-s3
+      s3Bucket: ramen-site-a
+      s3CompatibleEndpoint: https://s3.offsite.example.com
+      s3Region: us-east-1
+      s3SecretRef:
+        name: ramen-s3
+    - s3ProfileName: site-b-s3
+      s3Bucket: ramen-site-b
+      s3CompatibleEndpoint: https://s3.offsite.example.com
+      s3Region: us-east-1
+      s3SecretRef:
+        name: ramen-s3

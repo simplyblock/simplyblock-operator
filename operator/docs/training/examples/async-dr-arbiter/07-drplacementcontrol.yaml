@@ -1,0 +1,18 @@
+# The DRPlacementControl, written on the hub in the application's namespace:
+# the DR intent for one application. With no action set, the application runs
+# on site-a and its selected claims are protected.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPlacementControl
+metadata:
+  name: orders-drpc
+  namespace: shop
+spec:
+  drPolicyRef:
+    name: dr-5m
+  placementRef:
+    kind: Placement
+    name: orders-placement
+  preferredCluster: site-a
+  pvcSelector:
+    matchLabels:
+      app: orders

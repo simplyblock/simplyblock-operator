@@ -1,0 +1,34 @@
+# Restoring a consistency group from a group snapshot in the cluster, with no
+# bucket involved. The class, the group snapshot, and the restore operation,
+# in the order they are applied.
+apiVersion: groupsnapshot.storage.k8s.io/v1beta1
+kind: VolumeGroupSnapshotClass
+metadata:
+  name: simplyblock-groups
+driver: csi.simplyblock.io
+deletionPolicy: Delete
+---
+apiVersion: groupsnapshot.storage.k8s.io/v1beta1
+kind: VolumeGroupSnapshot
+metadata:
+  name: orders-gen
+  namespace: app-a
+spec:
+  volumeGroupSnapshotClassName: simplyblock-groups
+  source:
+    selector:
+      matchLabels:
+        storage.simplyblock.io/consistency-group: orders
+---
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: VolumeGroupSnapshotOps
+metadata:
+  name: restore-orders-gen
+  namespace: app-a
+spec:
+  volumeGroupSnapshotRef: orders-gen
+  action: Restore
+  restore:
+    namePrefix: restored
+    consistencyGroup: orders-restored
+    enablePartialRestore: false

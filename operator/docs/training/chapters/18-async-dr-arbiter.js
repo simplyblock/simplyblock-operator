@@ -1,0 +1,311 @@
+// Chapter 18: disaster recovery between two sites with asynchronous
+// replication and a third site as the arbiter. The third site runs the Open
+// Cluster Management hub, Ramen's hub operator, and the shared simplyblock
+// control plane. It holds the DR intent for each application and drives the
+// CSI Addons VolumeReplication path on the two sites when a person sets an
+// action. Built by hand with the operator chart. simplyblock Disaster Recovery,
+// the packaged product for the same job, is pointed to rather than taught.
+TRAINING.register({
+  id: 'async-dr-arbiter',
+  title: 'DR with an arbiter across two sites with asynchronous replication',
+  summary: 'Two sites replicate asynchronously. A third site runs the OCM hub, Ramen\'s hub operator, and the shared control plane. You write the classes on each site and the DR objects on the hub, then relocate or fail over from there.',
+  goal: 'You can set up the three sites with the operator chart, write the classes on each site and the DR objects on the hub, start a relocate or a failover, and say what the third site decides.',
+
+  sections: [
+    {
+      heading: 'What the arbiter is here, and what it is not',
+      body: [
+        'Two sites, site-a and site-b, each run Kubernetes and a simplyblock storage cluster. Site-a\'s volumes replicate to site-b as in the [previous chapter](chapter.html?c=async-dr).',
+        'A third site runs three things:',
+        { list: [
+          'the Open Cluster Management (OCM) hub, which registers the two sites as managed clusters,',
+          'Ramen\'s hub operator, which holds the DR settings of each application,',
+          'the simplyblock control plane that manages both storage clusters.',
+        ] },
+        '**Ramen** is an open-source DR orchestrator for Kubernetes. It protects an application\'s claims and objects and moves the application between sites when asked.',
+        { table: { head: ['Site', 'What runs there', 'What you write there'], rows: [
+          ['site-a', 'the operator (`managed` profile), the CSI driver with its CSI Addons sidecar, the CSI Addons controller, Ramen\'s DR cluster operator', 'the pair and policy toward site-b, the StorageClass, the VolumeReplicationClass, and the application'],
+          ['site-b', 'the same', 'the reverse pair and policy, and classes with the same names'],
+          ['third site', 'the OCM hub, Ramen\'s hub operator, the control plane', 'two DRClusters, the DRPolicy, the Placement, and the DRPlacementControl'],
+        ] } },
+        'The third site carries out each move on both sites. It does not judge:',
+        { list: [
+          '**You decide every move.** Ramen moves an application only when you set `spec.action` on its DRPlacementControl.',
+          '**No witness, no quorum.** Nothing decides which site is alive.',
+          '**Volumes are fenced, sites are not.** On failover, the control plane fences each source volume whose node still answers.',
+          '**The control plane must survive either site.** Every promote calls it, so it runs on the third site.',
+        ] },
+        { callout: 'This chapter builds Ramen by hand with the operator chart. **simplyblock Disaster Recovery** is the packaged product for the same job. It installs OCM and Ramen, creates the pairs, policies, and classes for you, and adds readiness checks, hooks, and reports. See the [Disaster Recovery documentation](https://docs.simplyblock.io/latest/disaster-recovery/). The hand-built setup has not been tested end to end yet. Try it in a lab before you rely on it.', kind: 'info' },
+        'The ReplicationPair and ReplicationPolicy still create the replication policy. Ramen\'s `VolumeReplication` objects replace slots. Do not use the annotation, slots, or `ReplicationOps` for these claims.',
+      ],
+    },
+    {
+      heading: 'Two other arbiters, and why neither is this one',
+      body: [
+        'The `Dual` two-node cluster of [chapter two-node-edge](chapter.html?c=two-node-edge) has a witness. It picks which of two nodes on one site continues. It never decides between sites.',
+        'A StretchedCluster\'s hub does decide that a site is lost. It then fences that site and allows a forced promote. It works only with synchronous replication.',
+        { table: { head: ['Arbiter', 'Topology', 'What it decides', 'Asynchronous'], rows: [
+          ['`Dual` witness', 'two nodes on one site', 'which node continues', 'no'],
+          ['stretched hub', 'one storage cluster across two sites', 'that a site is lost', 'no'],
+          ['this chapter\'s hub', 'two storage clusters on two sites', 'nothing, it runs your action', 'yes'],
+        ] } },
+        { code: 'schedulingInterval: ""     # StretchedCluster: synchronous\nschedulingInterval: 5m     # this chapter: asynchronous', title: 'How a DRPolicy tells the two apart' },
+      ],
+    },
+    {
+      heading: 'Installing the three sites',
+      body: [
+        'Install in this order:',
+        { steps: [
+          'Install the OCM hub on the third site and register both sites. The operator chart does not install OCM.',
+          'Install the operator on the third site. It brings up the control plane.',
+          'Install the operator on each site. Each site then gets its StorageCluster through a discovery run and an approved draft, as in [chapter two-node-edge](chapter.html?c=two-node-edge).',
+        ] },
+        { table: { head: ['Value', 'Where', 'What it does'], rows: [
+          ['`deployment.profile: managed`', 'each site', 'Uses the third site\'s control plane.'],
+          ['`csiaddons.create: true`', 'each site', 'Installs the VolumeReplication CRDs, the CSI Addons controller, and the driver\'s sidecar. Off by default.'],
+          ['`ramen.drCluster.enabled: true`', 'each site', 'Runs Ramen\'s DR cluster operator in `ramen-system`.'],
+          ['`deployment.profile: standalone`', 'third site', 'Hosts the control plane.'],
+          ['`discovery.enabled: false`', 'third site', 'No storage nodes there.'],
+          ['`ramen.hub.enabled: true`', 'third site', 'Runs Ramen\'s hub operator. It needs OCM.'],
+          ['`ramen.installCRDs: false`', 'where Ramen exists', 'For clusters with Red Hat Advanced Cluster Management or OpenShift Data Foundation.'],
+        ] } },
+        'Ramen stores each claim\'s PersistentVolume metadata in S3, so the other site can restore it. List the stores in `ramen.s3StoreProfiles`. Put them where neither site\'s loss takes them down. Create the credentials Secret yourself on all three sites:',
+        { code: 'kubectl -n ramen-system create secret generic ramen-s3 \\\n  --from-literal=AWS_ACCESS_KEY_ID=<access key id> \\\n  --from-literal=AWS_SECRET_ACCESS_KEY=<secret access key>', title: 'The S3 credentials' },
+        'A PersistentVolume keeps its volume handle after a failover. The handle names site-a\'s cluster. Site-b\'s driver still reaches it, because each operator lists every cluster of the control plane in the driver secret `simplyblock-csi-secret-v2`. You do not edit that secret.',
+        { code: '$ kubectl get deploy -n ramen-system\nNAME                        READY   UP-TO-DATE   AVAILABLE   AGE\nramen-dr-cluster-operator   1/1     1            1           5m\n$ kubectl get csiaddonsnodes -A\n# one entry per CSI driver pod that runs the sidecar', title: 'Ramen and the CSI Addons sidecar on a site' },
+      ],
+      examples: [
+        { title: 'Helm values on a DR site', file: 'examples/async-dr-arbiter/01-helm-values-dr-site.yaml', notes: [
+          { at: 'profile: managed', text: 'No control plane on the site.' },
+          { at: 'endpoint: https://control.dr-hub.example.com', text: 'The third site\'s management API. The same on both sites.' },
+          { at: 'csiaddons:', text: 'Without it, Ramen cannot act on this site.' },
+          { at: 'drCluster:', text: 'Ramen\'s DR cluster operator.' },
+          { at: 's3ProfileName: site-a-s3', text: 'The name a DRCluster uses. List both profiles everywhere.' },
+          { at: 's3CompatibleEndpoint: https://s3.offsite.example.com', text: 'Outside both DR sites.' },
+        ] },
+        { title: 'Helm values on the hub', file: 'examples/async-dr-arbiter/02-helm-values-hub.yaml', notes: [
+          { at: 'profile: standalone', text: 'Hosts the control plane.' },
+          { at: 'enabled: false', text: 'No storage nodes on the third site.' },
+          { at: 'hub:', text: 'Ramen\'s hub operator. Needs OCM.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'The backend relationship and the classes on each site',
+      body: [
+        'Ramen does not create the replication relationship. Write a pair and a policy on each site, as in [chapter async-dr](chapter.html?c=async-dr). Name the peer cluster by UUID.',
+        { code: '# on site-b: the reverse direction\napiVersion: storage.simplyblock.io/v1alpha1\nkind: ReplicationPair\nmetadata:\n  name: site-b-to-site-a\n  namespace: simplyblock\nspec:\n  sourceCluster: site-b\n  targetCluster: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e\n---\napiVersion: storage.simplyblock.io/v1alpha1\nkind: ReplicationPolicy\nmetadata:\n  name: dr-policy\n  namespace: simplyblock\nspec:\n  pairRef: site-b-to-site-a\n  interval: 5m', title: 'The pair and policy on site-b' },
+        'The class needs the policy\'s backend id:',
+        { code: '$ kubectl get repl dr-policy -n simplyblock -o jsonpath=\'{.status.backendPolicyID}\'\n4f1c8a2e-9b3d-4e7f-a1c5-6d2e8f0b3a71', title: 'The backend policy id, on site-a' },
+        'The **StorageClass** has the same name on both sites. Ramen pairs the classes by name. Label each with `ramendr.openshift.io/storageid`, a different value per site. Different values tell Ramen the pair is asynchronous. Do not add the replication-policy annotation.',
+        'The **VolumeReplicationClass** links each `VolumeReplication` to a policy. The driver reads these parameters:',
+        { table: { head: ['Parameter', 'Value'], rows: [
+          ['`replicationPolicyID`', 'The policy\'s `status.backendPolicyID`. A name attaches nothing.'],
+          ['`sourceClusterID`', 'Optional. The cluster to resync to.'],
+          ['`replication.storage.openshift.io/replication-secret-name` and `-namespace`', 'A Secret the CSI Addons controller requires. The driver ignores its contents.'],
+        ] } },
+        { code: 'kubectl -n simplyblock create secret generic simplyblock-replication', title: 'An empty replication Secret, on each site' },
+        'Give both sites\' classes the same `ramendr.openshift.io/replicationid`. Site-b\'s class names site-b\'s policy. Class parameters cannot change, so a new policy id means a new class.',
+        'Three intervals exist. Keep them equal yourself:',
+        { table: { head: ['Field', 'Kind', 'What it does'], rows: [
+          ['`spec.interval`', 'ReplicationPolicy', 'Sets the real snapshot cadence.'],
+          ['`parameters.schedulingInterval`', 'VolumeReplicationClass', 'Lets Ramen pick the class.'],
+          ['`spec.schedulingInterval`', 'DRPolicy', 'Non-empty means asynchronous.'],
+        ] } },
+        'Use minutes or hours. `1d` works in a DRPolicy, but a ReplicationPolicy turns it into 5 minutes. `24h` works everywhere.',
+        'Striped volumes cannot be replicated. Give each claim one owner: a slot or a `VolumeReplication`, never both.',
+      ],
+      examples: [
+        { title: 'The StorageClass on site-a', file: 'examples/async-dr-arbiter/03-storageclass.yaml', notes: [
+          { at: 'name: simplyblock-dr', text: 'The same name on site-b.' },
+          { at: 'ramendr.openshift.io/storageid', text: 'Different on each site. Here the cluster UUID.' },
+          { at: 'cluster_id', text: 'Site-a\'s cluster. Site-b\'s class names its own.' },
+        ] },
+        { title: 'The VolumeReplicationClass on site-a', file: 'examples/async-dr-arbiter/04-volumereplicationclass.yaml', notes: [
+          { at: 'ramendr.openshift.io/replicationid', text: 'The same on both sites.' },
+          { at: 'dr.example.com/class', text: 'The label the DRPolicy selects.' },
+          { at: 'provisioner: csi.simplyblock.io', text: 'Must match the claims\' provisioner.' },
+          { at: 'replicationPolicyID: 4f1c', text: 'From `status.backendPolicyID`.' },
+          { at: 'schedulingInterval: 5m', text: 'Equal to the DRPolicy\'s.' },
+          { at: 'replication-secret-name: simplyblock-replication', text: 'Without it, every replication call is refused.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'The DR intent on the hub',
+      body: [
+        'Write four objects on the hub:',
+        { table: { head: ['Kind', 'Scope', 'Key fields'], rows: [
+          ['DRCluster', 'cluster', '`s3ProfileName` and `region`, both fixed. One per site, named after the managed cluster.'],
+          ['DRPolicy', 'cluster', 'exactly two `drClusters`, `schedulingInterval`, `replicationClassSelector`, all fixed'],
+          ['Placement', 'namespaced', 'the OCM object that places the application'],
+          ['DRPlacementControl', 'namespaced', '`drPolicyRef`, `placementRef`, `pvcSelector` (fixed), `preferredCluster`, `action`'],
+        ] } },
+        'Give the two DRClusters different regions. One region would make them a synchronous group. Leave out `cidrs` and `clusterFence`.',
+        'Ramen writes the class pairs it found into the DRPolicy. An empty list means the pairing failed:',
+        { code: '$ kubectl get drpolicy dr-5m -o jsonpath=\'{.status.async.peerClasses}\'\n[{"storageClassName":"simplyblock-dr","storageID":["7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e","2b7f3a9e-5c1d-4e8a-9f20-6d4c1b0a7e55"],"replicationID":"simplyblock-site-a-site-b"}]', title: 'What Ramen paired (fields shortened)' },
+        'With no `action`, the application runs on `preferredCluster` and is protected:',
+        { steps: [
+          'Ramen creates one `VolumeReplication` per selected claim on site-a.',
+          'The driver attaches each volume to the class\'s policy.',
+          'The `VolumeReplication` reports `lastSyncTime`, the time of the newest replicated snapshot.',
+          'The DRPlacementControl reports `PeerReady`, which a relocate needs.',
+        ] },
+        { code: '# on the hub\n$ kubectl get drpc -n shop\nNAME          AGE   PREFERREDCLUSTER   FAILOVERCLUSTER   DESIREDSTATE   CURRENTSTATE\norders-drpc   10m   site-a                                              Deployed\n# on site-a\n$ kubectl get volumereplication -n shop -o custom-columns=NAME:.metadata.name,STATE:.status.state,LASTSYNC:.status.lastSyncTime\nNAME        STATE     LASTSYNC\norders-db   Primary   2026-11-25T10:05:00Z', title: 'Following protection' },
+      ],
+      examples: [
+        { title: 'The two DRClusters', file: 'examples/async-dr-arbiter/05-drclusters.yaml', notes: [
+          { at: 'name: site-a', text: 'The managed cluster\'s name.' },
+          { at: 'region: east', text: 'Different on each DRCluster.' },
+          { at: 's3ProfileName: site-a-s3', text: 'A profile from the Helm values.' },
+        ] },
+        { title: 'The DRPolicy', file: 'examples/async-dr-arbiter/06-drpolicy.yaml', notes: [
+          { at: 'drClusters:', text: 'Exactly two.' },
+          { at: 'schedulingInterval: 5m', text: 'Asynchronous. Equal to the class and the ReplicationPolicy.' },
+          { at: 'replicationClassSelector:', text: 'Picks the classes by label.' },
+        ] },
+        { title: 'The DRPlacementControl', file: 'examples/async-dr-arbiter/07-drplacementcontrol.yaml', notes: [
+          { at: 'namespace: shop', text: 'The application\'s namespace on the hub.' },
+          { at: 'name: dr-5m', text: 'The DRPolicy. Fixed.' },
+          { at: 'kind: Placement', text: 'The application\'s OCM Placement.' },
+          { at: 'preferredCluster: site-a', text: 'Where the application runs with no action set.' },
+          { at: 'app: orders', text: 'The claims to protect.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'Relocate and failover: what you write and what follows',
+      body: [
+        'A **relocate** is a planned move with both sites up. Set `action: Relocate`. The application moves to `preferredCluster`.',
+        { steps: [
+          'Ramen stops the application on the source.',
+          'The control plane fences the source volume and ships one final snapshot.',
+          'The target is promoted with `force=false`, which waits for the final snapshot.',
+          'The control plane deletes the old primary.',
+        ] },
+        'No acknowledged write is lost.',
+        'A **failover** is an unplanned move. Decide that site-a is lost, then set `action: Failover` and `failoverCluster: site-b`.',
+        { steps: [
+          'The driver tries a planned promote. The control plane refuses it with `FAILED_PRECONDITION`, because the source is down.',
+          'The CSI Addons controller retries at once with a forced promote.',
+          'The control plane clones the newest replicated snapshot on site-b and fences the source volume if its node answers.',
+        ] },
+        { code: 'interval                  5 minutes\nreplication behind by     1 minute\nwrites lost, at most      6 minutes', title: 'Worked number: data lost in a failover' },
+        { table: { head: ['', 'Relocate', 'Failover'], rows: [
+          ['When', 'both sites up', 'source lost'],
+          ['Promote', '`force=false`, after the final snapshot', 'forced'],
+          ['Data lost', 'none', 'up to one interval plus lag'],
+        ] } },
+        'After a failover, site-b\'s volumes replicate nowhere until site-a returns. Ramen then resyncs: only changes since the failover ship back to site-a. A resync never moves the application. Relocate once `PeerReady` is true.',
+        { code: '$ kubectl patch drpc orders-drpc -n shop --type merge \\\n  -p \'{"spec":{"action":"Failover","failoverCluster":"site-b"}}\'\n$ kubectl get drpc -n shop\nNAME          AGE   PREFERREDCLUSTER   FAILOVERCLUSTER   DESIREDSTATE   CURRENTSTATE\norders-drpc   2d    site-a             site-b            Failover       FailedOver', title: 'The failover, on the hub' },
+        'To rehearse without moving anything, use a TestFailover. It clones onto another cluster and promotes nothing.',
+      ],
+      examples: [
+        { title: 'The DRPlacementControl, set to fail over', file: 'examples/async-dr-arbiter/08-drplacementcontrol-failover.yaml', notes: [
+          { at: 'action: Failover', text: 'Your decision.' },
+          { at: 'failoverCluster: site-b', text: 'The site to run on.' },
+          { at: 'preferredCluster: site-a', text: 'Unchanged. A relocate returns here.' },
+        ] },
+        { title: 'The DRPlacementControl, set to relocate back', file: 'examples/async-dr-arbiter/09-drplacementcontrol-relocate.yaml', notes: [
+          { at: 'action: Relocate', text: 'Planned. Wait for `PeerReady` first.' },
+          { at: 'preferredCluster: site-a', text: 'The relocate goes here.' },
+        ] },
+      ],
+    },
+    {
+      heading: 'What goes wrong',
+      body: [
+        { pitfalls: [
+          { symptom: 'VolumeReplications get no status. The CSI Addons controller logs `Failed to get secret`.', cause: 'The class names no replication Secret, or the Secret is missing.', fix: 'Create the Secret. Write a new class with the two secret parameters.' },
+          { symptom: 'A VolumeReplication reports `Completed` but never shows `lastSyncTime`.', cause: 'The class has the policy\'s name, or the key `replicationPolicy`, instead of `replicationPolicyID`.', fix: 'Write a new class with `replicationPolicyID` set to `status.backendPolicyID`.' },
+          { symptom: 'No VolumeReplication appears on site-a.', cause: 'No class matches the DRPolicy\'s interval, selector, or provisioner.', fix: 'Fix the class. A DRPolicy cannot change, so a new interval needs a new DRPolicy.' },
+          { symptom: '`status.async.peerClasses` is empty.', cause: 'The class names differ, a `storageid` label is missing, or the `replicationid` values differ.', fix: 'Use one class name and one `replicationid`. Give each site its own `storageid`.' },
+          { symptom: 'Snapshots ship at a different cadence than the DRPolicy says.', cause: 'The ReplicationPolicy\'s `interval` differs, or is `1d`, which becomes 5 minutes.', fix: 'Set the same interval, in minutes or hours.' },
+          { symptom: 'Ramen\'s hub operator does not start.', cause: 'OCM is missing on the third site.', fix: 'Install OCM and register both sites first.' },
+          { symptom: 'The release conflicts over Ramen CRDs.', cause: 'Ramen is already installed.', fix: 'Set `ramen.installCRDs: false`.' },
+          { symptom: '`clusterFence: Fenced` on a DRCluster does nothing.', cause: 'The driver fences only a site of a synchronous stretched cluster.', fix: 'Leave it unset. Keep the lost site isolated by other means until it is resynced.' },
+          { symptom: 'A replication call fails with `FAILED_PRECONDITION` for a striped volume.', cause: 'Striped volumes cannot be replicated.', fix: 'Use a class without `stripe_width`.' },
+          { symptom: 'A volume copies in full again and again.', cause: 'A slot and a VolumeReplication both own it.', fix: 'Remove the annotation, wait for the slot to go, then use Ramen only.' },
+          { symptom: 'Every promote on site-b fails with `UNAVAILABLE`.', cause: 'Site-b cannot reach the control plane, often because it ran on site-a.', fix: 'Run the control plane on the third site.' },
+        ] },
+      ],
+    },
+  ],
+
+  questions: [
+    { topic: 'The arbiter', cat: 'concept', text: 'In this chapter, what does the third site do?', options: ['Runs the OCM hub', 'Runs Ramen\'s hub operator, which holds the DR objects', 'Decides that a site is lost and fails over', 'Hosts the shared control plane', 'Acts as a quorum member'], correct: [0, 1, 3], explain: 'It holds the DR settings and hosts the control plane. It decides nothing.' },
+    { topic: 'The arbiter', cat: 'concept', text: 'Who decides that an application fails over?', options: ['Ramen\'s hub, when a DRCluster is unreachable', 'You, by setting `spec.action: Failover`', 'The CSI Addons controller', 'The operator', 'The control plane'], correct: [1], explain: 'Ramen never moves an application on its own.' },
+    { topic: 'The arbiter', cat: 'concept', text: 'Which of these are true of a failover here?', options: ['Nothing decides which site is alive', 'The control plane fences each source volume whose node answers', 'The hub fences the whole lost site', '`clusterFence` isolates the lost asynchronous site', 'The hub fails over after a timeout'], correct: [0, 1], explain: 'Volumes are fenced one by one. Nothing fences a whole asynchronous site.' },
+    { topic: 'The arbiter', cat: 'concept', text: 'Why does the control plane run on the third site?', options: ['Every promote calls it, so it must survive either site', 'Ramen requires it', 'OCM requires it', 'The driver runs only next to it', 'It makes replication synchronous'], correct: [0], explain: 'On site-a, losing site-a would block every promote on site-b.' },
+    { topic: 'The arbiter', cat: 'concept', text: 'Which objects from the async-dr chapter are used for a claim Ramen protects?', options: ['The ReplicationPair', 'The ReplicationPolicy', 'A ReplicationSlot', 'A ReplicationOps', 'The replication-policy annotation'], correct: [0, 1], explain: 'The pair and policy create the replication policy. The rest belong to the other path.' },
+    { topic: 'The arbiter', cat: 'concept', text: 'How does simplyblock Disaster Recovery differ from this setup?', options: ['It installs OCM and Ramen for you', 'It creates the pairs, policies, and classes itself', 'It adds readiness checks, hooks, and reports', 'It fails over on its own', 'It replicates synchronously between two clusters'], correct: [0, 1, 2], explain: 'It packages the same machinery. It never fails over on its own.' },
+    { topic: 'The arbiter', cat: 'action', text: 'Which of these does Ramen\'s hub write on its own?', options: ['`action: Failover`', '`failoverCluster`', 'A DRCluster for a new managed cluster', 'A DRPolicy', 'A ReplicationOps'], correct: [], explain: 'None. You write the DR objects.' },
+    { topic: 'Other arbiters', cat: 'concept', text: 'Which statements about the `Dual` witness are true?', options: ['It picks which of two nodes on one site continues', 'It is the central control plane', 'It decides between two asynchronous sites', 'It is turned on with `enableArbitration`', 'It needs Ramen'], correct: [0, 1, 3], explain: 'It decides between two nodes of one cluster.' },
+    { topic: 'Other arbiters', cat: 'concept', text: 'Which statements about a StretchedCluster\'s hub are true?', options: ['It works with synchronous replication only', 'It decides that a site is lost and allows a forced promote', 'It decides for an asynchronous pair', 'Its DRPolicy has an empty `schedulingInterval`', 'It uses a ReplicationPolicy cadence'], correct: [0, 1, 3], explain: 'An empty interval marks a synchronous policy.' },
+    { topic: 'Installation', cat: 'field', text: 'Which values go on a DR site?', options: ['`csiaddons.create: true`', '`ramen.drCluster.enabled: true`', '`ramen.hub.enabled: true`', '`deployment.profile: managed`', '`discovery.enabled: false`'], correct: [0, 1, 3], explain: 'The hub operator and disabled discovery belong to the third site.' },
+    { topic: 'Installation', cat: 'field', text: 'What does `csiaddons.create: true` install?', options: ['The VolumeReplication CRDs', 'The CSI Addons controller', 'The driver\'s CSI Addons sidecar', 'Ramen\'s DR cluster operator', 'A fence service for asynchronous sites'], correct: [0, 1, 2], explain: 'Ramen has its own values.' },
+    { topic: 'Installation', cat: 'concept', text: 'What must exist before Ramen\'s hub operator starts?', options: ['Open Cluster Management', 'The CSI Addons controller', 'Storage nodes', 'A VolumeReplicationClass', 'Velero'], correct: [0], explain: 'The hub operator places applications through OCM.' },
+    { topic: 'Installation', cat: 'field', text: 'Ramen is already installed by Red Hat Advanced Cluster Management. What do you set?', options: ['`ramen.installCRDs: false`', '`ramen.createNamespace: false` only', '`csiaddons.create: false`', '`ramen.hub.enabled: false`', 'Nothing'], correct: [0], explain: 'Do not redefine existing Ramen CRDs.' },
+    { topic: 'Installation', cat: 'concept', text: 'After a failover, how does site-b\'s driver act on a handle that names site-a\'s cluster?', options: ['Each operator lists every control plane cluster in the driver secret', 'You copy the entry by hand', 'Ramen rewrites the handle', 'The driver ignores the cluster in the handle', 'It cannot'], correct: [0], explain: 'The operator registers every cluster. The handle does not change.' },
+    { topic: 'Installation', cat: 'action', text: 'Which statements about the S3 stores are true?', options: ['Ramen keeps PersistentVolume metadata there', 'Each DRCluster names one profile', 'The chart creates the credentials Secret', 'The store should survive the loss of either site', 'There is one profile per StorageClass'], correct: [0, 1, 3], explain: 'You create the Secret in `ramen-system` yourself.' },
+    { topic: 'Classes', cat: 'field', text: 'What does `replicationPolicyID` carry?', options: ['`ReplicationPolicy.status.backendPolicyID`', 'The policy\'s name', 'The pair\'s `backendTargetID`', 'The StorageCluster UUID', 'The DRPolicy name'], correct: [0], explain: 'It is the backend id of the policy.' },
+    { topic: 'Classes', cat: 'field', text: 'A class has `replicationPolicy: dr-policy` and no `replicationPolicyID`. What happens?', options: ['Enabling succeeds but attaches nothing', 'Admission refuses the VolumeReplication', 'The driver resolves the name', 'It fails with `FAILED_PRECONDITION`', 'The CRD refuses the class'], correct: [0], explain: 'The driver reads only `replicationPolicyID`. Empty means nothing to attach.' },
+    { topic: 'Classes', cat: 'field', text: 'Why does the class name a replication Secret?', options: ['The CSI Addons controller refuses calls without it', 'The driver reads its token from it', 'Ramen stores S3 keys in it', 'It holds the policy id', 'It is optional'], correct: [0], explain: 'The controller requires it. An empty Secret is enough.' },
+    { topic: 'Classes', cat: 'field', text: 'Which of these are the same on both sites?', options: ['The StorageClass name', 'The `replicationid` label', 'The `storageid` label', 'The `cluster_id` parameter', 'The class\'s `schedulingInterval`'], correct: [0, 1, 4], explain: 'The storage id and the cluster differ per site.' },
+    { topic: 'Classes', cat: 'concept', text: 'Which statements about the intervals are true?', options: ['The ReplicationPolicy\'s interval sets the real cadence', 'The driver reads the class\'s `schedulingInterval`', 'The class\'s interval must equal the DRPolicy\'s', 'Nothing checks that the three match', '`1d` works in a ReplicationPolicy'], correct: [0, 2, 3], explain: '`1d` becomes 5 minutes in a ReplicationPolicy.' },
+    { topic: 'Classes', cat: 'action', text: 'The DRPolicy says `1d`. What do you write in the ReplicationPolicy?', options: ['`24h`', '`1d`', '`1440`', '`86400`', '`daily`'], correct: [0], explain: 'The operator cannot parse `1d`. `24h` is the same interval.' },
+    { topic: 'Classes', cat: 'concept', text: 'Which statements about protection through a VolumeReplication are true?', options: ['Striped volumes cannot be replicated', 'The driver refuses a volume a slot manages', 'An empty `replicationPolicyID` attaches nothing', 'Moving off the annotation path means removing the annotation first', 'A slot and a VolumeReplication on one claim attach it in turn'], correct: [0, 2, 3, 4], explain: 'Nothing refuses a second owner, so keep one yourself.' },
+    { topic: 'Hub objects', cat: 'field', text: 'Which DRPolicy rules does the CRD enforce?', options: ['Exactly two `drClusters`', '`drClusters` cannot change', '`schedulingInterval` is required', '`schedulingInterval` can change', '`replicationClassSelector` cannot change'], correct: [0, 1, 2, 4], explain: 'A new interval needs a new DRPolicy.' },
+    { topic: 'Hub objects', cat: 'field', text: 'Which statements about the DRClusters of an asynchronous pair are true?', options: ['Their regions differ', '`s3ProfileName` is required and fixed', '`cidrs` is needed', '`clusterFence: Fenced` fences the lost site', '`region` is fixed'], correct: [0, 1, 4], explain: 'One region would mean synchronous. CIDRs and fences serve synchronous DR.' },
+    { topic: 'Hub objects', cat: 'field', text: 'Which DRPlacementControl fields are required?', options: ['`drPolicyRef`', '`placementRef`', '`pvcSelector`', '`action`', '`failoverCluster`'], correct: [0, 1, 2], explain: 'You add the action when you move the application.' },
+    { topic: 'Hub objects', cat: 'concept', text: 'You create a DRPlacementControl without `action`. What follows?', options: ['A VolumeReplication per selected claim on the preferred site', 'The driver attaches each volume to the class\'s policy', '`lastSyncTime` shows the newest replicated snapshot', 'The DRPlacementControl reports `PeerReady`', 'A ReplicationSlot per claim'], correct: [0, 1, 2, 3], explain: 'Slots belong to the annotation path.' },
+    { topic: 'Failover and relocate', cat: 'action', text: 'Which of these happen in a relocate?', options: ['The source is fenced and one final snapshot ships', 'The target is promoted with `force=false`', 'The promote waits for the final snapshot', 'The last interval of writes is lost', 'The old primary is deleted'], correct: [0, 1, 2, 4], explain: 'A relocate loses nothing.' },
+    { topic: 'Failover and relocate', cat: 'action', text: 'Which statements about a failover are true?', options: ['You set `action: Failover`', 'Without `failoverCluster`, Ramen picks the other cluster', 'A refused planned promote is retried as forced', 'The forced promote clones the newest replicated snapshot', 'Writes after that snapshot are lost'], correct: [0, 1, 2, 3, 4], explain: 'All five.' },
+    { topic: 'Failover and relocate', cat: 'concept', text: 'The interval is 15 minutes and replication is 5 minutes behind. How much can a failover lose?', options: ['Up to 20 minutes of writes', 'Up to 15 minutes', 'Up to 5 minutes', 'Nothing', 'Exactly 10 minutes'], correct: [0], explain: 'One interval plus the lag: 15 + 5 = 20 minutes.' },
+    { topic: 'Failover and relocate', cat: 'concept', text: 'A failover promoted site-b. Which are true?', options: ['Site-b replicates nowhere until site-a returns', 'A resync ships only changes since the failover', 'The resync moves the application back', 'Moving back is a relocate', 'Site-a\'s volumes keep taking writes'], correct: [0, 1, 3], explain: 'A resync never moves the application.' },
+    { topic: 'Failover and relocate', cat: 'concept', text: 'The control plane ran on site-a, and site-a is lost. What is true?', options: ['Site-b cannot be promoted', 'Ramen moves the control plane', 'The driver promotes without it', 'The hub fences site-a', 'This is why it belongs on the third site'], correct: [0, 4], explain: 'Every promote calls the control plane.' },
+    { topic: 'Failover and relocate', cat: 'action', text: 'You set `action: Failover`. Which of these happen?', options: ['The operator writes a ReplicationOps', 'Slots go to `failed_over`', 'The DRPolicy interval shortens', 'The ReplicationPolicy is deleted', '`preferredCluster` changes to site-b'], correct: [], explain: 'None. Ramen drives the VolumeReplications, and you change only two fields.' },
+    { topic: 'Failover and relocate', cat: 'field', text: 'Which DRPlacementControl fields change for a failover?', options: ['`action`', '`failoverCluster`', '`preferredCluster`', '`pvcSelector`', '`drPolicyRef`'], correct: [0, 1], explain: '`preferredCluster` stays as the relocate target.' },
+  ],
+
+  tasks: [
+    {
+      title: 'The class on site-a',
+      scenario: 'The DRPolicy replicates every ten minutes. Site-a\'s policy reports `status.backendPolicyID: 4f1c8a2e-9b3d-4e7f-a1c5-6d2e8f0b3a71`. Write site-a\'s VolumeReplicationClass.',
+      yaml: 'apiVersion: replication.storage.openshift.io/v1alpha1\nkind: {{kind}}\nmetadata:\n  name: simplyblock-dr-10m\n  labels:\n    ramendr.openshift.io/{{label}}: simplyblock-site-a-site-b\n    dr.example.com/class: simplyblock-dr\nspec:\n  provisioner: {{provisioner}}\n  parameters:\n    {{param}}: 4f1c8a2e-9b3d-4e7f-a1c5-6d2e8f0b3a71\n    schedulingInterval: {{interval}}\n    replication.storage.openshift.io/replication-secret-name: simplyblock-replication\n    replication.storage.openshift.io/replication-secret-namespace: simplyblock\n',
+      blanks: {
+        kind: { accept: ['VolumeReplicationClass'], hint: 'the CSI Addons class kind' },
+        label: { accept: ['replicationid'], hint: 'the same on both sites' },
+        provisioner: { accept: ['csi.simplyblock.io'], hint: 'the driver\'s name' },
+        param: { accept: ['replicationPolicyID'], hint: 'the key the driver reads' },
+        interval: { accept: ['10m'], hint: 'equal to the DRPolicy\'s' },
+      },
+      explain: 'The `replicationid` pairs the classes. `replicationPolicyID` carries the backend id. The interval lets Ramen pick the class.',
+    },
+    {
+      title: 'The DRPolicy',
+      scenario: 'Write the hub\'s policy for site-a and site-b, asynchronous every ten minutes, selecting classes labeled `dr.example.com/class: simplyblock-dr`.',
+      yaml: 'apiVersion: ramendr.openshift.io/v1alpha1\nkind: {{kind}}\nmetadata:\n  name: dr-10m\nspec:\n  drClusters:\n    - site-a\n    - {{peer}}\n  schedulingInterval: {{interval}}\n  {{selector}}:\n    matchLabels:\n      dr.example.com/class: simplyblock-dr\n',
+      blanks: {
+        kind: { accept: ['DRPolicy'], hint: 'the hub kind with the interval' },
+        peer: { accept: ['site-b'], hint: 'exactly two DRClusters' },
+        interval: { accept: ['10m'], hint: 'non-empty is asynchronous' },
+        selector: { accept: ['replicationClassSelector'], hint: 'selects VolumeReplicationClasses' },
+      },
+      explain: 'Two DRClusters, a non-empty interval, and a class selector. None can change later.',
+    },
+    {
+      title: 'The failover',
+      scenario: 'You decided site-a is lost. Complete the DRPlacementControl so `orders` runs on site-b.',
+      yaml: 'apiVersion: ramendr.openshift.io/v1alpha1\nkind: {{kind}}\nmetadata:\n  name: orders-drpc\n  namespace: shop\nspec:\n  action: {{action}}\n  {{target}}: site-b\n  drPolicyRef:\n    name: {{policy}}\n  placementRef:\n    kind: Placement\n    name: orders-placement\n  preferredCluster: site-a\n  pvcSelector:\n    matchLabels:\n      app: orders\n',
+      blanks: {
+        kind: { accept: ['DRPlacementControl'], hint: 'short name `drpc`' },
+        action: { accept: ['Failover'], hint: 'the unplanned action' },
+        target: { accept: ['failoverCluster'], hint: 'the site to run on' },
+        policy: { accept: ['dr-5m'], hint: 'the chapter\'s DRPolicy, which cannot change' },
+      },
+      explain: 'Set `action: Failover` and `failoverCluster`. The policy reference stays `dr-5m`.',
+    },
+  ],
+});

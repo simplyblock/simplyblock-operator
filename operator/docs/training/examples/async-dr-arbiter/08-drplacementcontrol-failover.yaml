@@ -1,0 +1,20 @@
+# The same DRPlacementControl after you decided that site-a is lost. Only
+# action and failoverCluster change. The volumes on site-b come up from their
+# newest replicated snapshots.
+apiVersion: ramendr.openshift.io/v1alpha1
+kind: DRPlacementControl
+metadata:
+  name: orders-drpc
+  namespace: shop
+spec:
+  action: Failover
+  failoverCluster: site-b
+  drPolicyRef:
+    name: dr-5m
+  placementRef:
+    kind: Placement
+    name: orders-placement
+  preferredCluster: site-a
+  pvcSelector:
+    matchLabels:
+      app: orders

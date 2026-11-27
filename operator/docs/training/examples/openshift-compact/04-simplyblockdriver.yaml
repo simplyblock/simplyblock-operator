@@ -1,0 +1,13 @@
+# The CSI driver. It shows Unavailable until a storage cluster exists, which is
+# normal on a fresh install.
+#
+#   oc apply -f 04-simplyblockdriver.yaml
+#   oc get simplyblockdriver simplyblock -n simplyblock
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  enableVolumeSnapshots: true

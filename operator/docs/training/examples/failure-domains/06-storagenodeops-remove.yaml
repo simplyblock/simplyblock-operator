@@ -1,0 +1,13 @@
+# Removes the storage node of worker-3 after the growth document has taken
+# every cabinet to three hosts. Cabinet B drops from three hosts to two, which
+# keeps the two-host floor and the one-host balance, so the removal proceeds.
+# In the six-node cluster, before the growth, the same operation waits in
+# Validating with RemovalNotAdmitted.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: remove-worker-3
+  namespace: simplyblock
+spec:
+  nodeRef: cabinets-worker-3-0
+  action: Remove

@@ -1,0 +1,13 @@
+# The move: the same scope as the dry run, without dryRun.
+# deleteSource deletes each source volume after its cutover, and the
+# operator then marks the PersistentVolume with relocated-to.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationOps
+metadata:
+  name: move-to-site-b
+  namespace: simplyblock
+spec:
+  action: migration
+  scope: policy
+  ref: move-to-site-b
+  deleteSource: true

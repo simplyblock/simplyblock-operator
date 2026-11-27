@@ -1,0 +1,26 @@
+# The SimplyblockDriver with the metadata server block written out: one active
+# guest and one standby, each on its own KVM-capable node, attached to the
+# storage data network through a Multus macvlan. On a Helm install the chart
+# writes this object from the values in the previous file, so change the values
+# there.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: SimplyblockDriver
+metadata:
+  name: simplyblock
+  namespace: simplyblock
+spec:
+  driverName: csi.simplyblock.io
+  pnfs:
+    mds:
+      standbys: 1
+      resources:
+        limits:
+          cpu: "2"
+          memory: 2Gi
+        requests:
+          memory: 512Mi
+      dataNetwork:
+        subnet: 10.10.10.0/24
+        rangeStart: 10.10.10.240
+        rangeEnd: 10.10.10.243
+      unhealthyDeadline: 90s

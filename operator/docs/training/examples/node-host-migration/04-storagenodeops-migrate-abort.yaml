@@ -1,0 +1,12 @@
+# The first example with the abort set. The abort works only in Preparing.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: StorageNodeOps
+metadata:
+  name: move-production-worker-3-0
+  namespace: simplyblock
+spec:
+  nodeRef: production-worker-3-0
+  action: Migrate
+  abort: true
+  migrate:
+    targetWorkerNode: worker-5

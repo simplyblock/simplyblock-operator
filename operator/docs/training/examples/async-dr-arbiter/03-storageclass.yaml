@@ -1,0 +1,16 @@
+# The StorageClass on site-a. Site-b has a class of the same name for its own
+# cluster and pool. No replication-policy annotation: Ramen protects these
+# claims through VolumeReplication objects.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: simplyblock-dr
+  labels:
+    ramendr.openshift.io/storageid: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+provisioner: csi.simplyblock.io
+parameters:
+  cluster_id: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+  pool_name: site-a-default
+reclaimPolicy: Delete
+volumeBindingMode: Immediate
+allowVolumeExpansion: true

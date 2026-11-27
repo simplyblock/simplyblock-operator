@@ -1,0 +1,30 @@
+# The target cluster gen2 on three new workers, registered with the same
+# control plane as the source cluster gen1. Only the cluster name, the two
+# required sizing values, and one node group are set. The rest keeps its
+# defaults. Nothing is created until the document is approved.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: gen2
+  namespace: simplyblock
+spec:
+  approved: true
+  cluster:
+    name: gen2
+    maxSubsystemCount: 50
+    vcpuCount: 8
+  nodeSets:
+    - name: gen2
+      groups:
+        - name: default
+          workers:
+            - gen2-worker-0
+            - gen2-worker-1
+            - gen2-worker-2
+          mgmtInterface: eth0
+          dataInterfaces:
+            - eth0
+          devices:
+            nvme:
+              - "0000:01:00.0"
+              - "0000:02:00.0"

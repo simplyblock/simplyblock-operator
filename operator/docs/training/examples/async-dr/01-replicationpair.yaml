@@ -1,0 +1,13 @@
+# The two clusters of the replication relationship: site-a as the source and
+# site-b as the target. Both are named by UUID, because the pair lives in the
+# claims' namespace, where no StorageCluster object exists. One control plane
+# manages both clusters. Every policy between these two clusters can share the
+# pair.
+apiVersion: storage.simplyblock.io/v1alpha1
+kind: ReplicationPair
+metadata:
+  name: site-a-to-site-b
+  namespace: shop
+spec:
+  sourceCluster: 7c2e9d41-3b6f-4a0e-8d5c-1f9a2b3c4d5e
+  targetCluster: 2b7f3a9e-5c1d-4e8a-9f20-6d4c1b0a7e55

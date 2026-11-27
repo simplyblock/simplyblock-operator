@@ -1,0 +1,51 @@
+# A growth document: three more workers, one per cabinet, added to the cluster
+# cabinets. clusterRef names the cluster. The cluster has failure-domain mode
+# on, so every group needs a failureDomain. One worker per cabinet keeps the
+# domains within one host of each other, which the control plane requires of
+# every add. All three labels are already mapped, so status.failureDomains
+# gains no entry.
+apiVersion: storage.simplyblock.io/v1alpha2
+kind: ClusterDeploymentConfig
+metadata:
+  name: cabinets-growth
+  namespace: simplyblock
+spec:
+  approved: true
+  environment: OpenShift
+  clusterRef: cabinets
+  nodeSets:
+    - name: cabinets-growth
+      groups:
+        - name: cabinet-a
+          failureDomain: cabinet-a
+          workers:
+            - worker-6
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: cabinet-b
+          failureDomain: cabinet-b
+          workers:
+            - worker-7
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
+        - name: cabinet-c
+          failureDomain: cabinet-c
+          workers:
+            - worker-8
+          mgmtInterface: br-ex
+          dataInterfaces:
+            - br-ex
+          devices:
+            nvme:
+              - "0000:c1:00.0"
+              - "0000:c2:00.0"
