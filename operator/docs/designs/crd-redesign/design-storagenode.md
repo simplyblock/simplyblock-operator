@@ -1686,9 +1686,21 @@ more than one host, and none may drop below two. A worker that keeps another sto
 node of the cluster stays in its domain. The control plane's own admission, which
 also covers fault-tolerance headroom, replica relocation, and active tasks, is asked
 through `GET /storage-nodes/{node}/removal-admission`, which changes nothing. A
-control plane that does not offer it answers 404, and the admission then runs inside
-`prepare-removal` only. A refusal from either holds `Validating` with
-`RemovalNotAdmitted` and the reason, with nothing done to the node.
+refusal from either holds `Validating` with `RemovalNotAdmitted` and the reason,
+with nothing done to the node.
+
+**A control plane without the read-only check is a risk taken, and said.** The
+control plane serves no `removal-admission` today and answers 404, so its
+admission runs inside `prepare-removal` only, after the shutdown. No other call
+asks it without acting: `prepare-removal` on a running node admits it, marks it
+`pending_removal`, and shuts it down forced inside one request, which is the
+shutdown the next paragraph moves out of it. Part of the admission is still asked
+first: the graceful shutdown does not take down a node the cluster's fault
+tolerance cannot spare, and holds on active tasks, and the failure-domain balance is the operator's
+own. Replica relocation is not, and a refusal on it leaves the node offline with
+the operation `Failed`. `Validating` therefore finishes, and raises
+`RemovalAdmissionUnchecked` before the shutdown, naming what was not checked and
+that a `Restart` operation brings the node back after a refusal.
 
 **`Validating` holds rather than fails.** It has a deadline like every other step,
 but a blocked drain is a correct outcome waiting on a human, so the deadline is
@@ -2175,22 +2187,22 @@ block node operations directly is §16, Q5.
 
 ## 12. Backend API Requirements
 
-| Method   | Endpoint                                                             | Notes                                                                                                      |
-|----------|----------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------|
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes`                           | Adds every socket of one worker at once, and is not idempotent, which is why §4.2 claims first             |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/?watch=true`               | The node stream every status write and completion check reads (§4.4). Scoped per cluster                   |
-| `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed                         |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Used by `Suspend`. Must tolerate a repeat, because a step recorded without its call re-issues it           |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                           |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/removal-admission`  | The removal's admission without starting it, asked by `Validating`. Absent on an older control plane (404) |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step on a node already down: admits it and rebuilds its devices (§8.2)                 |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                                  |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)                       |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown`, `HostMaintenance`, and `Remove`                                                        |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions                |
-| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                            |
-| `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                                |
-| `DELETE` | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/`     | Deletes system volumes during verification. 404 is success                                                 |
+| Method   | Endpoint                                                             | Notes                                                                                                                                                     |
+|----------|----------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes`                           | Adds every socket of one worker at once, and is not idempotent, which is why §4.2 claims first                                                            |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/?watch=true`               | The node stream every status write and completion check reads (§4.4). Scoped per cluster                                                                  |
+| `DELETE` | `/api/v2/clusters/{cluster}/storage-nodes/{node}?force_remove=false` | The drain's last step. 404 is success, since a node already gone is a node removed                                                                        |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/suspend`            | Used by `Suspend`. Must tolerate a repeat, because a step recorded without its call re-issues it                                                          |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/resume`             | Used by `Resume`                                                                                                                                          |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/removal-admission`  | The removal's admission without starting it, asked by `Validating`. Not served by the control plane today (404), which raises `RemovalAdmissionUnchecked` |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The removal's first step on a node already down: admits it and rebuilds its devices (§8.2)                                                                |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-nodes/{node}/prepare-removal`    | The device rebuild's progress, read by `MigratingDevices`                                                                                                 |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/verify-drained`     | Whether the node still holds a volume or a snapshot, which closes `Verifying` (§8.2)                                                                      |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/shutdown`           | Used by `Shutdown`, `HostMaintenance`, and `Remove`                                                                                                       |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/restart`            | Takes `node_address`, `force`, `reattach_volume`, and `new_ssd_pcie`. Used by three actions                                                               |
+| `POST`   | `/api/v2/clusters/{cluster}/storage-nodes/{node}/promote`            | The migration's last control-plane call, and the one that cannot be undone (§9)                                                                           |
+| `GET`    | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/`           | Lists a node's volumes for the drain's classification and verification (§8)                                                                               |
+| `DELETE` | `/api/v2/clusters/{cluster}/storage-pools/{pool}/volumes/{vol}/`     | Deletes system volumes during verification. 404 is success                                                                                                |
 
 **The `?watch=true` row is a Server-Sent-Events subscription rather than a request
 that returns**, and it arrives with the control plane's SSE work rather than with
@@ -2234,33 +2246,34 @@ operation as its audit record. An operation's events are mirrored onto its targe
 node as well, because the node is where someone investigating a stuck cluster
 starts and the operation's name is not something they know yet.
 
-| Event                                                           | Type      | Reason                 | On               |
-|-----------------------------------------------------------------|-----------|------------------------|------------------|
-| Provisioning is held because the cluster has no UUID yet        | `Normal`  | `ClusterNotReady`      | `StorageNode`    |
-| Provisioning is held because no fault group is declared         | `Warning` | `FailureDomainMissing` | `StorageNode`    |
-| Provisioning is held because the worker's API does not answer   | `Warning` | `HostUnreachable`      | `StorageNode`    |
-| Provisioning is held because no node-add slot is free           | `Normal`  | `AwaitingSlot`         | `StorageNode`    |
-| The worker is not Ready or is cordoned, so the step is held     | `Warning` | `WorkerAway`           | `StorageNode`    |
-| The worker came back and provisioning starts again              | `Normal`  | `WorkerReturned`       | `StorageNode`    |
-| The node was adopted rather than added                          | `Normal`  | `NodeAdopted`          | `StorageNode`    |
-| The node came online                                            | `Normal`  | `NodeOnline`           | `StorageNode`    |
-| The node's pod reported a scheduling failure                    | `Warning` | `PodSchedulingFailed`  | `StorageNode`    |
-| The operation is waiting for another to release the node's lock | `Normal`  | `OperationQueued`      | `StorageNodeOps` |
-| The operation is holding because the cluster is not ready       | `Warning` | `ClusterNotReady`      | `StorageNodeOps` |
-| The operation acquired the lock and started                     | `Normal`  | `OperationStarted`     | `StorageNodeOps` |
-| The operation finished successfully                             | `Normal`  | `OperationSucceeded`   | `StorageNodeOps` |
-| The operation failed                                            | `Warning` | `OperationFailed`      | `StorageNodeOps` |
-| The operation was canceled                                      | `Normal`  | `OperationAborted`     | `StorageNodeOps` |
-| `spec.abort` arrived at a step that cannot be stopped           | `Warning` | `AbortRefused`         | `StorageNodeOps` |
-| A step's deadline expired                                       | `Warning` | `StepDeadlineExceeded` | `StorageNodeOps` |
-| A drain is blocked by pinned volumes                            | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
-| A drain is blocked by unmanaged volumes                         | `Warning` | `DrainBlocked`         | `StorageNodeOps` |
-| A drain has no online peer to migrate to                        | `Warning` | `NoMigrationTarget`    | `StorageNodeOps` |
-| A volume migration failed and is being retried                  | `Warning` | `MigrationRetried`     | `StorageNodeOps` |
-| A removal call or its shutdown was refused for now              | `Warning` | `RemovalDeferred`      | `StorageNodeOps` |
-| The removal's admission refused the node while it still serves  | `Warning` | `RemovalNotAdmitted`   | `StorageNodeOps` |
-| Every volume has been migrated off the node                     | `Normal`  | `DrainCompleted`       | `StorageNodeOps` |
-| The maintenance window is holding for another worker            | `Normal`  | `MaintenanceQueued`    | `StorageNodeOps` |
+| Event                                                           | Type      | Reason                      | On               |
+|-----------------------------------------------------------------|-----------|-----------------------------|------------------|
+| Provisioning is held because the cluster has no UUID yet        | `Normal`  | `ClusterNotReady`           | `StorageNode`    |
+| Provisioning is held because no fault group is declared         | `Warning` | `FailureDomainMissing`      | `StorageNode`    |
+| Provisioning is held because the worker's API does not answer   | `Warning` | `HostUnreachable`           | `StorageNode`    |
+| Provisioning is held because no node-add slot is free           | `Normal`  | `AwaitingSlot`              | `StorageNode`    |
+| The worker is not Ready or is cordoned, so the step is held     | `Warning` | `WorkerAway`                | `StorageNode`    |
+| The worker came back and provisioning starts again              | `Normal`  | `WorkerReturned`            | `StorageNode`    |
+| The node was adopted rather than added                          | `Normal`  | `NodeAdopted`               | `StorageNode`    |
+| The node came online                                            | `Normal`  | `NodeOnline`                | `StorageNode`    |
+| The node's pod reported a scheduling failure                    | `Warning` | `PodSchedulingFailed`       | `StorageNode`    |
+| The operation is waiting for another to release the node's lock | `Normal`  | `OperationQueued`           | `StorageNodeOps` |
+| The operation is holding because the cluster is not ready       | `Warning` | `ClusterNotReady`           | `StorageNodeOps` |
+| The operation acquired the lock and started                     | `Normal`  | `OperationStarted`          | `StorageNodeOps` |
+| The operation finished successfully                             | `Normal`  | `OperationSucceeded`        | `StorageNodeOps` |
+| The operation failed                                            | `Warning` | `OperationFailed`           | `StorageNodeOps` |
+| The operation was canceled                                      | `Normal`  | `OperationAborted`          | `StorageNodeOps` |
+| `spec.abort` arrived at a step that cannot be stopped           | `Warning` | `AbortRefused`              | `StorageNodeOps` |
+| A step's deadline expired                                       | `Warning` | `StepDeadlineExceeded`      | `StorageNodeOps` |
+| A drain is blocked by pinned volumes                            | `Warning` | `DrainBlocked`              | `StorageNodeOps` |
+| A drain is blocked by unmanaged volumes                         | `Warning` | `DrainBlocked`              | `StorageNodeOps` |
+| A drain has no online peer to migrate to                        | `Warning` | `NoMigrationTarget`         | `StorageNodeOps` |
+| A volume migration failed and is being retried                  | `Warning` | `MigrationRetried`          | `StorageNodeOps` |
+| A removal call or its shutdown was refused for now              | `Warning` | `RemovalDeferred`           | `StorageNodeOps` |
+| The removal's admission refused the node while it still serves  | `Warning` | `RemovalNotAdmitted`        | `StorageNodeOps` |
+| The control plane offers no read-only admission check           | `Warning` | `RemovalAdmissionUnchecked` | `StorageNodeOps` |
+| Every volume has been migrated off the node                     | `Normal`  | `DrainCompleted`            | `StorageNodeOps` |
+| The maintenance window is holding for another worker            | `Normal`  | `MaintenanceQueued`         | `StorageNodeOps` |
 
 **`OperationSucceeded` is one reason for all seven actions rather than one each.**
 The action is already in `spec.action` and on a print column, so encoding it in
