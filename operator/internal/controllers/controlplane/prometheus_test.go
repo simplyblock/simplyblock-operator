@@ -6,6 +6,7 @@ package controlplane
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"slices"
@@ -20,9 +21,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/simplyblock/atlas/ptr"
 
@@ -259,5 +262,91 @@ func TestAnUpgradeCopiesTheOldPrometheusBeforeReplacingIt(t *testing.T) {
 	}
 	if err := c.Get(ctx, client.ObjectKeyFromObject(oldClaim), &corev1.PersistentVolumeClaim{}); err != nil {
 		t.Errorf("the old claim was removed: %v", err)
+	}
+}
+
+// openShiftMonitoringClient serves what an OpenShift cluster serves: the
+// prometheus-operator kinds its own monitoring stack installs, which do not
+// include ScrapeConfig, and cert-manager's Certificate. The fake client applies
+// any kind it is given, so the apply of a custom kind the mapper does not serve
+// is refused here the way the API server refuses it. refusedKind is refused as a webhook
+// would refuse it, and nothing is refused that way when it is empty.
+func openShiftMonitoringClient(t *testing.T, refusedKind string, objects ...client.Object) client.Client {
+	t.Helper()
+	mapper := meta.NewDefaultRESTMapper(nil)
+	for _, gvk := range []schema.GroupVersionKind{
+		prometheusGVK, serviceMonitorGVK, podMonitorGVK,
+		{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"},
+	} {
+		mapper.Add(gvk, meta.RESTScopeNamespace)
+	}
+	scheme := testScheme(t)
+	base := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(mapper).WithObjects(objects...).Build()
+	return interceptor.NewClient(base, interceptor.Funcs{
+		Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+			raw, err := json.Marshal(obj)
+			if err != nil {
+				return err
+			}
+			var u unstructured.Unstructured
+			if err := u.UnmarshalJSON(raw); err != nil {
+				return err
+			}
+			gvk := u.GroupVersionKind()
+			if _, err := mapper.RESTMapping(gvk.GroupKind(), gvk.Version); err != nil && !scheme.Recognizes(gvk) {
+				return err
+			}
+			if refusedKind != "" && gvk.Kind == refusedKind {
+				return fmt.Errorf("admission webhook denied the request")
+			}
+			return c.Apply(ctx, obj, opts...)
+		},
+	})
+}
+
+func servingCertificateApplied(t *testing.T, c client.Client) bool {
+	t.Helper()
+	u := &unstructured.Unstructured{}
+	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"})
+	return c.Get(context.Background(), client.ObjectKey{Namespace: testNamespace, Name: ComponentWebAPI}, u) == nil
+}
+
+// Regression: 2026-11-27-ocp-scrapeconfig-crd. OpenShift serves the Prometheus
+// kind and not ScrapeConfig, and the install applied every prometheus-operator
+// object once Prometheus was served. The ScrapeConfig's apply failed on every
+// pass, the ApplyingAPI step never finished, and the management API's serving
+// Certificate behind it was never created, so no control-plane pod started.
+func TestAKindTheClusterDoesNotServeIsLeftOutOfTheInstall(t *testing.T) {
+	cp := localControlPlane()
+	c := openShiftMonitoringClient(t, "", cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.applyEverything(context.Background(), cp); err != nil {
+		t.Fatalf("apply on a cluster without ScrapeConfig: %v", err)
+	}
+	if !servingCertificateApplied(t, c) {
+		t.Error("the management API's serving Certificate was not applied")
+	}
+	monitor := &unstructured.Unstructured{}
+	monitor.SetGroupVersionKind(serviceMonitorGVK)
+	key := client.ObjectKey{Namespace: testNamespace, Name: "simplyblock-fdb-exporter"}
+	if err := c.Get(context.Background(), key, monitor); err != nil {
+		t.Errorf("the ServiceMonitor, whose kind is served, was not applied: %v", err)
+	}
+}
+
+// Regression: 2026-11-27-ocp-scrapeconfig-crd. The serving Certificate was the
+// last object of the step, so any monitoring object the API server refused kept
+// the management API from starting. Monitoring is optional and the API is not.
+func TestARefusedMonitoringObjectDoesNotHoldBackTheServingCertificate(t *testing.T) {
+	cp := localControlPlane()
+	c := openShiftMonitoringClient(t, "ServiceMonitor", cp)
+	r := &ControlPlaneReconciler{Client: c, Scheme: testScheme(t)}
+
+	if err := r.applyEverything(context.Background(), cp); err == nil {
+		t.Error("the refused ServiceMonitor was not reported")
+	}
+	if !servingCertificateApplied(t, c) {
+		t.Error("a refused ServiceMonitor kept the serving Certificate from being applied")
 	}
 }

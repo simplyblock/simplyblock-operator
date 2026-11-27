@@ -45,7 +45,8 @@ const fdbExporterImage = "quay.io/simplyblock-io/foundationdb-exporter:3.1.0"
 // managementAPIObjects is everything the ApplyingAPI step writes, in the order it
 // depends on itself: the account and the configuration, then the roles that name
 // the account, then the workloads that run under it, then the Service in front
-// of the one that serves.
+// of the one that serves, then the serving Certificate, and last the optional
+// monitoring objects.
 func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object {
 	ns := cp.Namespace
 	//nolint:prealloc // the literal is the declaration; the append below is the conditional set
@@ -67,8 +68,12 @@ func managementAPIObjects(cp *simplyblockv1alpha2.ControlPlane) []client.Object 
 		fdbExporterDeployment(cp),
 		fdbExporterService(ns),
 	}
-	objects = append(objects, prometheusObjects(cp)...)
-	return append(objects, servingCertificateObjects(cp)...)
+	// The serving Certificate goes before the monitoring objects. Every pod
+	// above mounts the Secret it issues, and monitoring is optional: an object
+	// the API server refuses stops the step at that object, and it must not
+	// take the management API down with it.
+	objects = append(objects, servingCertificateObjects(cp)...)
+	return append(objects, prometheusObjects(cp)...)
 }
 
 // eksRoleARNAnnotation is the annotation that makes serviceAccountName

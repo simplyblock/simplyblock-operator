@@ -17,6 +17,7 @@ package controlplane
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -269,15 +270,16 @@ func (r *ControlPlaneReconciler) install(
 
 	current := machine.CurrentState()
 
+	// The step is not abandoned once it outlives its deadline. An install that
+	// has outrun its budget is still the only path to a working control plane,
+	// and there is nothing to roll back to: the deadline is a detection
+	// mechanism rather than a recovery one, and what it produces is the event
+	// and the message. The step keeps being performed, so the install continues
+	// once whatever held it is fixed.
+	overdue := ""
 	if machine.TimeoutReached() {
-		message := fmt.Sprintf("step %s outlived its deadline", current)
-		r.emit(cp, corev1.EventTypeWarning, StepDeadlineExceeded, message)
-		// The step is not abandoned. An install that has outrun its budget is
-		// still the only path to a working control plane, and there is nothing
-		// to roll back to: the deadline is a detection mechanism rather than a
-		// recovery one, and what it produces is the event and the message.
-		return ctrl.Result{RequeueAfter: installRetry}, r.report(ctx, cp,
-			simplyblockv1alpha2.ControlPlanePhaseInstalling, message)
+		overdue = fmt.Sprintf("step %s outlived its deadline", current)
+		r.emit(cp, corev1.EventTypeWarning, StepDeadlineExceeded, overdue)
 	}
 
 	done, held, err := r.performInstallStep(ctx, cp, current)
@@ -292,10 +294,19 @@ func (r *ControlPlaneReconciler) install(
 			simplyblockv1alpha2.ControlPlanePhaseInstalling, failure.message)
 	}
 	if err != nil {
+		if overdue != "" {
+			// The error goes to the log through the requeue. The status keeps
+			// saying the step is overdue, which is what an operator acts on.
+			return ctrl.Result{}, errors.Join(err, r.report(ctx, cp,
+				simplyblockv1alpha2.ControlPlanePhaseInstalling, fmt.Sprintf("%s: %v", overdue, err)))
+		}
 		return ctrl.Result{}, err
 	}
 	if !done {
 		r.emit(cp, corev1.EventTypeNormal, AwaitingDependency, held)
+		if overdue != "" {
+			held = fmt.Sprintf("%s: %s", overdue, held)
+		}
 		return ctrl.Result{RequeueAfter: installRetry}, r.report(ctx, cp,
 			simplyblockv1alpha2.ControlPlanePhaseInstalling, held)
 	}
