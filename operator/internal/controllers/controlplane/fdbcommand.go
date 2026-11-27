@@ -2,7 +2,8 @@
 //
 // The window issues every FoundationDB command through a short-lived Job that
 // runs fdbcli from the image the database's own pods run, with the cluster file
-// mounted the way every other FoundationDB consumer mounts it. That keeps
+// mounted the way every other FoundationDB consumer mounts it, and under mutual
+// TLS the client certificate every other consumer carries. That keeps
 // fdbcli at the server's version and keeps the operator's image and role as they
 // are: no fdbcli in the manager, and no pods/exec in its role. The sentinel is
 // a Job too, placed on the worker beside the held pods so that a drain, which
@@ -150,6 +151,10 @@ func fdbCommandJob(
 	worker := ops.Spec.HostMaintenance.WorkerNode
 	labels := windowJobLabels(ops)
 	timeoutSeconds, deadlineSeconds := commandLimits(cmd)
+	// Under mutual TLS the coordinators listen on TLS addresses only, and
+	// fdbcli reaches them with the client certificate every other client of the
+	// database carries.
+	peerTLS := fdbPeerTLS(cp)
 	spec := corev1.PodSpec{
 		RestartPolicy: corev1.RestartPolicyNever,
 		NodeSelector:  foundationDBNodeSelector(cp),
@@ -160,8 +165,9 @@ func fdbCommandJob(
 			ImagePullPolicy: corev1.PullIfNotPresent,
 			Command:         []string{"/bin/sh", "-c", fdbcliScript, "fdbcli"},
 			Args:            []string{exec},
-			Env:             []corev1.EnvVar{{Name: fdbcliTimeoutEnv, Value: strconv.Itoa(timeoutSeconds)}},
-			VolumeMounts:    []corev1.VolumeMount{clusterFileMount()},
+			Env: append([]corev1.EnvVar{{Name: fdbcliTimeoutEnv, Value: strconv.Itoa(timeoutSeconds)}},
+				peerEnvIf(peerTLS)...),
+			VolumeMounts: append([]corev1.VolumeMount{clusterFileMount()}, peerMountIf(peerTLS)...),
 			Resources: corev1.ResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceCPU:    resource.MustParse("50m"),
@@ -173,7 +179,7 @@ func fdbCommandJob(
 				},
 			},
 		}},
-		Volumes: []corev1.Volume{clusterFileVolumeSource()},
+		Volumes: append([]corev1.Volume{clusterFileVolumeSource()}, peerVolumeIf(peerTLS)...),
 	}
 	if !soleNode {
 		spec.Affinity = &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{

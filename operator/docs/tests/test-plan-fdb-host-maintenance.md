@@ -228,10 +228,12 @@ File: `operator/internal/controllers/controlplane/coordinators_test.go` and `ope
 
 File: `operator/internal/controllers/controlplane/fdbcommand_test.go`
 
-| #    | Scenario                                                                                                                                | Type     | Test                                                  |
-|------|-----------------------------------------------------------------------------------------------------------------------------------------|----------|-------------------------------------------------------|
-| U-89 | The Job tolerates `node.kubernetes.io/unschedulable` with effect `NoSchedule` and carries a required node affinity away from the worker | Positive | `TestACommandJobToleratesTheCordonAndAvoidsTheWorker` |
-| U-90 | On a cluster where the worker is the only node matching the selector, the affinity is dropped                                           | Boundary | `TestACommandJobOnTheOnlyNodeCarriesNoAffinity`       |
+| #     | Scenario                                                                                                                                                                                                                                                                                                                                         | Type       | Test                                                                   |
+|-------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------|------------------------------------------------------------------------|
+| U-89  | The Job tolerates `node.kubernetes.io/unschedulable` with effect `NoSchedule` and carries a required node affinity away from the worker                                                                                                                                                                                                          | Positive   | `TestACommandJobToleratesTheCordonAndAvoidsTheWorker`                  |
+| U-90  | On a cluster where the worker is the only node matching the selector, the affinity is dropped                                                                                                                                                                                                                                                    | Boundary   | `TestACommandJobOnTheOnlyNodeCarriesNoAffinity`                        |
+| U-114 | Under mutual TLS the Job carries `FDB_TLS_CERTIFICATE_FILE`, `FDB_TLS_KEY_FILE`, and `FDB_TLS_CA_FILE`, mounts the peer certificate at `/var/fdb/tls`, and takes it from the Secret `simplyblock-foundationdb-tls`. Without them fdbcli refused coordinators that listen on TLS, and every step failed open (2026-11-27-fdbcli-jobs-without-tls) | Regression | `TestACommandJobUnderMutualTLSCarriesTheFoundationDBClientCertificate` |
+| U-115 | Without mutual TLS the Job carries no TLS variable, mount, or volume                                                                                                                                                                                                                                                                             | Negative   | `TestACommandJobWithoutMutualTLSCarriesNoCertificate`                  |
 
 ### Handing the Roles Off (design §5.12)
 
@@ -424,7 +426,7 @@ Struck rows are not counted.
 | §5.1 Trigger             | U-52 … U-60, U-74, I-01, I-04, I-10                                 |
 | §5.2 Holding             | U-23 … U-26, U-81, U-91, I-01, U-99                                 |
 | §5.3 Observing the drain | U-75 … U-82, U-94, U-96 … U-98, I-08, E-11, E-12, M-04, M-05        |
-| §5.4 Commands            | U-17 … U-22, U-89, U-90                                             |
+| §5.4 Commands            | U-17 … U-22, U-89, U-90, U-114, U-115                               |
 | §5.5 Choosing            | U-01 … U-16, U-43, U-45, U-85, E-01, E-05, E-08, E-13               |
 | §5.6 Verifying           | U-41, U-42, I-02, I-05, M-01                                        |
 | §5.7 Maintenance mode    | U-34 … U-39, U-86 … U-88, U-95, E-02, E-04, M-02, U-101             |
