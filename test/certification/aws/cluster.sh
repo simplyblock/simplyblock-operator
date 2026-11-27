@@ -457,7 +457,14 @@ cmd_install_simplyblock() {
 # online. On OpenShift every worker reboots into the storage MachineConfig on
 # the way, one at a time, so this takes most of an hour.
 build_storage_cluster() {
-  local draft cluster phase step
+  local draft cluster phase step active
+  # A rerun of the step, to upgrade the chart, finds the cluster built.
+  active="$(oc_ get storagecluster -n simplyblock \
+    -o jsonpath='{range .items[?(@.status.status=="active")]}{.metadata.name}{"\n"}{end}' 2>/dev/null)"
+  if [[ -n "$active" ]]; then
+    echo "storage cluster $active is active"
+    return 0
+  fi
   ensure_discovery_run
   wait_for "the discovery draft" 1800 discovery_draft_ready
   draft="$(oc_ get clusterdeploymentconfig -n simplyblock -o name | head -1)"
