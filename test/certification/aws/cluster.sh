@@ -284,6 +284,30 @@ EOF
   echo "OpenShift Virtualization $(oc_ get -n openshift-cnv "csv/$(hco_csv | head -1)" -o jsonpath='{.spec.version}') is available"
 }
 
+# Opens TCP between the cluster's nodes. The installer's node security group
+# allows only OpenShift's own ports (the kubelet, 9000-9999, the node ports,
+# the overlay), and simplyblock needs more between its nodes: the SPDK proxy
+# the control plane calls on the worker's address, and the NVMe-oF listeners of
+# every storage node, which other storage nodes and the clients connect to. The
+# rule references the group itself, so nothing outside the cluster gains
+# access, and destroy removes it with the group.
+open_storage_traffic() {
+  command -v aws >/dev/null || die "the AWS CLI is not on PATH"
+  local infra group out
+  infra="$(python3 -I -c 'import json, sys; print(json.load(open(sys.argv[1]))["infraID"])' "$INSTALL_DIR/metadata.json")"
+  group="$(aws ec2 describe-security-groups --region "$REGION" \
+    --filters "Name=group-name,Values=$infra-node" --query 'SecurityGroups[0].GroupId' --output text)"
+  [[ "$group" == sg-* ]] || die "no security group $infra-node in $REGION"
+  if out="$(aws ec2 authorize-security-group-ingress --region "$REGION" --group-id "$group" \
+    --ip-permissions "IpProtocol=tcp,FromPort=0,ToPort=65535,UserIdGroupPairs=[{GroupId=$group,Description=simplyblock storage traffic between nodes}]" 2>&1)"; then
+    echo "opened TCP between the nodes of $group"
+  elif [[ "$out" == *InvalidPermission.Duplicate* ]]; then
+    echo "TCP between the nodes of $group is open"
+  else
+    die "$out"
+  fi
+}
+
 # Red Hat's cert-manager Operator, for the chart's TLS. The chart's default,
 # mutual TLS, needs cert-manager; OpenShift's own service CA serves one-way TLS
 # only, a configuration the certification runs have not used.
@@ -374,6 +398,7 @@ EOF
 # monitor tests.
 cmd_install_simplyblock() {
   require_cluster
+  open_storage_traffic
   install_cert_manager
   grant_openshift_prerequisites
   command -v helm >/dev/null || die "helm is not on PATH"

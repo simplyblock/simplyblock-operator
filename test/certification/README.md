@@ -178,7 +178,11 @@ Every step except `status` logs to `aws/logs/<CLUSTER_NAME>/<step>-<UTC time>.lo
 prints. The logs outlive `destroy`. The kubeadmin password is redacted in them
 and stays only in the installer's `auth/kubeadmin-password`.
 
-`install-simplyblock` installs this checkout's chart with the chart's snapshot
-controller turned off, since OpenShift runs its own. Where cert-manager is
+`install-simplyblock` first opens TCP between the cluster's nodes, in the
+installer's node security group: the group allows only OpenShift's own ports,
+and simplyblock's control plane and NVMe-oF listeners use others. The rule
+admits the group itself and nothing outside it, and needs the AWS CLI. The step
+then installs this checkout's chart with the chart's snapshot controller turned
+off, since OpenShift runs its own. Where cert-manager is
 missing, it installs Red Hat's cert-manager Operator first: the chart's default,
 mutual TLS, needs it.
