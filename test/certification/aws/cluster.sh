@@ -502,7 +502,10 @@ build_storage_cluster() {
     oc_ patch -n simplyblock "$draft" --type merge \
       -p "{\"spec\":{\"approved\":true,\"cluster\":{\"maxSubsystemCount\":$MAX_SUBSYSTEM_COUNT}}}" >/dev/null
   fi
-  wait_for "the storage cluster of $draft" 600 oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}'
+  # The draft creates the storage cluster once the control plane answers, and
+  # a control plane installed together with it first builds the database's
+  # secondary indices, which on these clusters takes longer than ten minutes.
+  wait_for "the storage cluster of $draft" 1800 oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}'
   cluster="$(oc_ get -n simplyblock "$draft" -o jsonpath='{.status.clusterRef}')"
   echo "building storage cluster $cluster"
 
