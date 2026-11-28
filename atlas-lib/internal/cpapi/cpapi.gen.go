@@ -2792,6 +2792,7 @@ type StorageNodeDTO struct {
 	SecondaryNodeId   *openapi_types.UUID     `json:"secondary_node_id"`
 	Site              *string                 `json:"site,omitempty"`
 	SnapshotsMax      int                     `json:"snapshots_max"`
+	Socket            *int                    `json:"socket,omitempty"`
 	SpdkImage         *string                 `json:"spdk_image,omitempty"`
 	SpdkMem           int                     `json:"spdk_mem"`
 	SpdkProxyImage    *string                 `json:"spdk_proxy_image,omitempty"`

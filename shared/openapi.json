@@ -18137,6 +18137,12 @@
             "title": "Site",
             "default": ""
           },
+          "socket": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Socket",
+            "default": 0
+          },
           "spdk_image": {
             "type": "string",
             "title": "Spdk Image",
